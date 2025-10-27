@@ -1,0 +1,14 @@
+/**
+ * File: styles/globals.css
+ * Last edited: 2025-10-27 21:25 Europe/London
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  @apply bg-slate-900 text-slate-100;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
