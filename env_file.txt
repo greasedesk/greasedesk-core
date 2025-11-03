@@ -1,0 +1,6 @@
+# File: .env
+# Last edited: 2025-10-31 16:45 Europe/London
+
+DATABASE_URL="postgresql://neondb_owner:npg_G8cOExde4bBr@ep-autumn-dust-abv8eyvg-pooler.eu-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+# uncomment next line if you use Prisma <5.10
+# DATABASE_URL_UNPOOLED="postgresql://neondb_owner:npg_G8cOExde4bBr@ep-autumn-dust-abv8eyvg.eu-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"

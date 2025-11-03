@@ -1,69 +1,32 @@
 /**
  * File: lib/db.ts
- * Last edited: 2025-10-27 21:25 Europe/London
+ * Last edited: 2025-11-02 at 17:21
  *
- * Placeholder DB adapter.
- * Later this will connect to Neon/Supabase Postgres using DATABASE_URL.
+ * This file initializes the real Prisma Client for the entire application.
+ * It uses a "singleton" pattern to prevent multiple instances
+ * of Prisma Client from being created in the development environment
+ * due to Next.js's hot-reloading.
  */
-export async function getTodayBookingsMock(accountId: string) {
-  // accountId lets us isolate each garage (multi-tenant)
-  return [
-    {
-      id: "jc-1001",
-      time: "08:30",
-      reg: "BJ16 XYZ",
-      vehicle: "BMW 520d",
-      service: "Oil Service + Health Check",
-      status: "booked"
-    },
-    {
-      id: "jc-1002",
-      time: "10:00",
-      reg: "MF70 ABC",
-      vehicle: "MINI F56 Cooper S",
-      service: "Timing chain noise investigation",
-      status: "in_progress"
-    },
-    {
-      id: "jc-1003",
-      time: "13:30",
-      reg: "YK22 TMS",
-      vehicle: "BMW X5 M50d",
-      service: "Brake fluid flush",
-      status: "completed"
-    }
-  ];
-}
+import { PrismaClient } from '@prisma/client';
 
-export async function getJobCardMock(jobCardId: string) {
-  return {
-    id: jobCardId,
-    vehicle: "BMW 520d",
-    reg: "BJ16 XYZ",
-    technician: "Lewis",
-    tasks: [
-      {
-        id: "t1",
-        title: "Oil service – BMW 520d",
-        notes:
-          "Drain oil, replace filter, refill LL-04, reset service computer.",
-        done: false
-      },
-      {
-        id: "t2",
-        title: "Brake fluid flush",
-        notes: "Pressure bleed all four corners, torque check calipers.",
-        done: false
-      }
-    ],
-    intakeSlots: [
-      "front",
-      "left",
-      "rear",
-      "right",
-      "engine_bay",
-      "vin",
-      "mileage"
-    ]
-  };
+// We declare a global variable to hold the Prisma instance.
+// We have to cast 'globalThis' to 'any' to attach our custom property.
+const globalForPrisma = globalThis as any;
+
+// Check if prisma is already attached to the global object.
+// If not, create a new instance and attach it.
+// This is crucial for Next.js hot-reloading.
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    // Optional: uncomment the line below to see your database queries in the terminal
+    // log: ['query'],
+  });
+
+// Export it as the default, which is what our API routes expect.
+export default prisma;
+
+// In development, attach prisma to the global object.
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
 }
