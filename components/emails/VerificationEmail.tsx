@@ -1,6 +1,6 @@
 /**
  * File: components/emails/VerificationEmail.tsx
- * Last edited: 2025-11-02 at 19:55
+ * Last edited: 2025-11-02 at 19:55..
  *
  * This is a React component for our verification email.
  * FIX: Corrected import typo 'Readt' to 'React'

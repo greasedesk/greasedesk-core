@@ -76,7 +76,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <span className="text-xl font-bold text-blue-400">Dashboard</span>
         </header>
 
-        {/* --- Page Content (The children prop) --- */}
+        {/* --- Page Content (The children prop..) --- */}
         <div className="flex-1 p-4 sm:p-6 lg:p-8">
           {children}
         </div>

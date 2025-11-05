@@ -26,7 +26,7 @@ export const prisma =
 // Export it as the default, which is what our API routes expect.
 export default prisma;
 
-// In development, attach prisma to the global object.
+// In development, attach prisma to the global object...
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
