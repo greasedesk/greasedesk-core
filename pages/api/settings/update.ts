@@ -5,9 +5,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '@/lib/db'; 
 import { getServerSession } from 'next-auth'; 
-import { authOptions } from '../../auth/[...nextauth]'; // <-- FIX 1: Corrected path from '../../auth/[...nextauth]'
+import { authOptions } from '@/pages/api/auth/[...nextauth]'; // <-- FIX: Changed to absolute path alias to resolve "Cannot find module" error
 import { Decimal } from '@prisma/client/runtime/library';
-import { Prisma } from '@prisma/client'; // <-- FIX 2: Added Prisma import for 'tx' typing
+import { Prisma } from '@prisma/client'; 
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,6 +15,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   }
 
   // --- 1. Authentication and Authorization ---
+  // The 'user as any' cast is retained to prevent the UserRole error we fixed earlier, 
+  // but the code now relies on the custom types you are currently defining.
   const session = await getServerSession(req, res, authOptions);
     
   const user = session?.user as any; 
@@ -38,7 +40,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     const siteId = user.site_id;
 
     // --- 2. Database Transaction for Atomicity ---
-    // <-- FIX 3: Explicitly type 'tx' as Prisma.TransactionClient
+    // The explicit typing of tx is retained from the pre-emptive fix.
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         
         // 2a. Update the Site record with regional settings and lists
