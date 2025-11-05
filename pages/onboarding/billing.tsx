@@ -111,11 +111,11 @@ export default function BillingPage() {
         <div className="max-w-md w-full bg-gdPanel/80 border border-gdBorder rounded-2xl shadow-card p-8">
           
           <CreditCardIcon />
-
+          
           <h1 className="text-xl font-semibold text-gdText mt-6 mb-4 text-center">
             Start Your Free Trial
           </h1>
-          
+        
           {/* --- NEW PROFESSIONAL COPY --- */}
           <p className="text-gdSubtext text-sm mb-6 text-center">
             Your email is verified! To activate your **60-day free trial** and secure your pricing, please enter your payment details.

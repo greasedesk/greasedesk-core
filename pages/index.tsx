@@ -1,7 +1,7 @@
 /**
  * File: pages/index.tsx
  * Last edited: 2025-11-02 at 18:05
- *
+ *...
  * A modern, graphically-friendly SaaS landing page
  * inspired by Sage, Xero, and Motasoft.
  */

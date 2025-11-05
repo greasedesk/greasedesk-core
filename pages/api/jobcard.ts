@@ -20,7 +20,6 @@ export default async function handler(
     res.status(400).json({ ok: false, error: "Missing job card id" });
     return;
   }
-
   const card = await getJobCardMock(jobCardId);
   res.status(200).json(card);
 }

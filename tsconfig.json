@@ -16,7 +16,7 @@
     "incremental": true,
     "types": ["node"],
 
-    // --- Path Aliases (Fix for Module Not Found Error) ---
+    // --- Path Aliases (Fix for Module Not Found Error) ---...
     "baseUrl": ".", 
     "paths": {
       "@/components/*": ["components/*"],

@@ -3,7 +3,7 @@
  * Last edited: 2025-10-27 21:25 Europe/London
  *
  * Bookings list = today's jobs for the garage.
- * For now we fetch static mock data from /api/bookings.
+ * For now we fetch static mock data from /api/bookings....
  */
 import useSWR from "swr";
 import Layout from "../components/Layout";

@@ -1,6 +1,6 @@
 /**
  * File: tailwind.config.js
- * Last edited: 2025-10-27 21:25 Europe/London
+ * Last edited: 2025-10-27 21:25 Europe/London...
  */
 module.exports = {
   content: [

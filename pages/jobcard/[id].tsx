@@ -14,7 +14,6 @@ export default function JobCardPage() {
   const { id } = router.query;
 
   // later we'll fetch(`/api/jobcard?id=${id}`)
-
   return (
     <Layout title={`Job Card #${id || "…"}`}>
       <div className="p-4 grid gap-4 md:grid-cols-3">

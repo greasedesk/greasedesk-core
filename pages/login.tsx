@@ -14,7 +14,7 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
+    
     // call placeholder API
     const res = await fetch("/api/login", {
       method: "POST",

@@ -92,7 +92,7 @@ model Site {
   // --- NEW CONFIGURATION FIELDS ---
   pricing_display_mode String @default("ex_vat") // New field for Ex VAT/Inc VAT display
   supported_countries  Json?  // New field for list of serviceable countries (Json)
-  supported_currencies Json?  // New field for list of supported currencies (Json)
+  supported_currencies Json?  // New field for list of supported currencies (Json)...
   // --------------------------------
 
   group          Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)

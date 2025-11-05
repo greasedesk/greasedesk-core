@@ -42,7 +42,7 @@ export default async function handle(
       // This prevents creating duplicate billing records.
       return res.status(200).json({ message: 'Billing record already exists.' });
     }
-
+    
     // 3. Create the new billing record (Start the 60-day trial)
     // Your blueprint plan "Core Basic" has 3 months of history.
     

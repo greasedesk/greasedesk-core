@@ -110,7 +110,7 @@ export default async function handle(
         </body>
       </html>
     `;
-
+    
     const { data, error } = await resend.emails.send({
       from: 'Onboarding <onboarding@greasedesk.com>', 
       to: [newUser.email],

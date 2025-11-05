@@ -50,7 +50,7 @@ export const authOptions: NextAuthOptions = {
         if (!user) {
            throw new Error('Login failed. (Password check not yet implemented)');
         }
-        
+
         // 3. Return the user object if login is successful
         // This user object is what gets put into the JWT and session.
         return {

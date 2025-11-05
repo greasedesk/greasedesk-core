@@ -19,7 +19,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     res.status(400).json({ ok: false, error: "Missing email" });
     return;
   }
-
   // TODO: issue session/JWT + set cookie
   res.status(200).json({
     ok: true,

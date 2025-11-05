@@ -1,7 +1,7 @@
 -- ============================================================================
 -- GreaseDesk Core Schema v1.2
 -- This matches the GreaseDesk Core Blueprint v1.2
--- Multi-tenant: all tenant data is isolated by group_id
+-- Multi-tenant: all tenant data is isolated by group_id...
 -- ============================================================================
 
 -- For UUID generation if we want UUID primary keys instead of SERIAL

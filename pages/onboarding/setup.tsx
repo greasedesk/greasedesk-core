@@ -1,7 +1,7 @@
 /**
  * File: pages/onboarding/setup.tsx
  * Description: Step 5 of SaaS Onboarding - Collects Group (Company) and initial Site (Garage) details.
- * NOTE: This is the React component that renders the UI.
+ * NOTE: This is the React component that renders the UI....
  */
 import { useState } from 'react';
 import { useRouter } from 'next/router';

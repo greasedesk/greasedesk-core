@@ -32,7 +32,7 @@ export default function CheckEmailPage() {
   const router = useRouter();
   // Get the email address from the URL query string
   const { email } = router.query;
-
+  
   return (
     <>
       <Head>

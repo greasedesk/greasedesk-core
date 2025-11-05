@@ -20,7 +20,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   if (!user || !user.group_id || !user.site_id) {
       return res.status(401).json({ message: 'Authentication Error: Group/Site context not found in session. Please re-login.' });
   }
-
+  
   try {
     const { 
       defaultVatRate, 

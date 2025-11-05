@@ -12,6 +12,7 @@ import Head from 'next/head';
 
 export default function RegisterPage() {
   const router = useRouter();
+
   
   // Form state
   const [name, setName] = useState('');

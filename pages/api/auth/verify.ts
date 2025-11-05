@@ -61,7 +61,6 @@ export default async function handle(
         302, 
         `${baseUrl}/admin/login?email=${encodeURIComponent(userEmail)}&status=verified&callbackUrl=${encodeURIComponent(callbackUrl)}`
     );
-
   } catch (error) {
     console.error('Email verification error:', error);
     return res.status(500).send('An unexpected error occurred during verification.');
