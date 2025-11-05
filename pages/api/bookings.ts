@@ -6,7 +6,8 @@
  * Right now uses mock data in lib/db.ts.
  */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getTodayBookingsMock } from "../../lib/db";
+// FIX: Changed from named import ({}) to default import, as exported from lib/db
+import getTodayBookingsMock from "../../lib/db"; 
 
 export default async function handler(
   req: NextApiRequest,
