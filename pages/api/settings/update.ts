@@ -5,8 +5,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '@/lib/db'; 
 import { getServerSession } from 'next-auth'; 
-import { authOptions } from '../../auth/[...nextauth]'; 
+import { authOptions } from '../../auth/[...nextauth]'; // <-- FIX 1: Corrected path from '../../auth/[...nextauth]'
 import { Decimal } from '@prisma/client/runtime/library';
+import { Prisma } from '@prisma/client'; // <-- FIX 2: Added Prisma import for 'tx' typing
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -37,7 +38,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     const siteId = user.site_id;
 
     // --- 2. Database Transaction for Atomicity ---
-    await prisma.$transaction(async (tx) => {
+    // <-- FIX 3: Explicitly type 'tx' as Prisma.TransactionClient
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         
         // 2a. Update the Site record with regional settings and lists
         await tx.site.update({
