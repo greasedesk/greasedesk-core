@@ -21,6 +21,7 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         email: { label: 'Email', type: 'text' },
         password: { label: 'Password', type: 'password' },
+      
       },
       async authorize(credentials) {
         // This is where you retrieve the user from the database.
