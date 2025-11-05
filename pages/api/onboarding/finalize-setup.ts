@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/db';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
+import { Prisma } from '@prisma/client'; // <-- FIX 1: Import Prisma namespace for typing
 
 export default async function handle(
   req: NextApiRequest,
@@ -33,7 +34,8 @@ export default async function handle(
     const { groupData, siteData, pcData } = req.body;
 
     // 2. Run a Transaction to Update Group, Create Site, and Create Profit Centre
-    const result = await prisma.$transaction(async (tx) => {
+    // <-- FIX 2: Explicitly type 'tx' as Prisma.TransactionClient
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         
         // A. Update the existing Group record (created during the registration step)
         const updatedGroup = await tx.group.update({
