@@ -43,7 +43,7 @@ export const authOptions: NextAuthOptions = {
         // For now, let's assume we need to implement this.
         // We will add the password hash in the signup step.
         // const isPasswordValid = await compare(credentials.password, user.passwordHash);
-        
+        // New Comment
         // --- TEMPORARY: Remove this once signup is built ---
         // For now, we will just check if a user exists.
         // The real check will be added in the signup step.
