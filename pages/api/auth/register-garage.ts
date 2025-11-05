@@ -9,7 +9,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/db';
 import { hash } from 'bcrypt';
-import { UserRole } from '@prisma/client';
+import { UserRole, Prisma } from '@prisma/client'; // <-- FIX 1: Imported Prisma namespace
 import { Resend } from 'resend';
 import crypto from 'crypto';
 // Removed: import { VerificationEmail } from '../../../components/emails/VerificationEmail';
@@ -42,10 +42,11 @@ export default async function handle(
       return res.status(409).json({ message: 'A user with this email already exists.' });
     }
 
-    // --- 2. Create Group and User (Unchanged) ---
+    // --- 2. Create Group and User (Fixed) ---
     const hashedPassword = await hash(password, 12);
 
-    const { newUser } = await prisma.$transaction(async (tx) => {
+    // <-- FIX 2: Explicitly type 'tx' as Prisma.TransactionClient
+    const { newUser } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newGroup = await tx.group.create({
         data: { group_name: `${name}'s Garage`, billing_email: email.toLowerCase() },
       });
