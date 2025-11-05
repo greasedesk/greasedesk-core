@@ -1,5 +1,5 @@
 /**
- * File: pages/api/admin/settings/update.ts
+ * File: pages/api/admin/settings/update.ts...
  * Description: API route to save core operational and financial defaults for the user's active Site/Group.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
