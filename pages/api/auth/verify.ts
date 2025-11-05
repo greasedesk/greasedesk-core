@@ -8,6 +8,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/db';
+import { Prisma } from '@prisma/client'; // <-- FIX: Import Prisma namespace for typing
 
 export default async function handle(
   req: NextApiRequest,
@@ -41,7 +42,8 @@ export default async function handle(
     // 2. Mark the user as verified and delete the token
     const userEmail = verificationToken.identifier;
     
-    await prisma.$transaction(async (tx) => {
+    // <-- FIX: Explicitly type 'tx' as Prisma.TransactionClient
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.user.update({
         where: { email: userEmail },
         data: { emailVerified: new Date() },
