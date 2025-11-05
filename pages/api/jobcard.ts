@@ -6,7 +6,8 @@
  * Stub for now.
  */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getJobCardMock } from "../../lib/db";
+// FIX: Changed from named import ({}) to default import, as exported from lib/db
+import getJobCardMock from "../../lib/db"; 
 
 export default async function handler(
   req: NextApiRequest,
