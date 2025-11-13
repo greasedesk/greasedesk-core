@@ -1,11 +1,13 @@
 /**
  * File: pages/onboarding/setup.tsx
  * Description: Step 5 of SaaS Onboarding - Collects Group (Company) and initial Site (Garage) details.
- * NOTE: This is the React component that renders the UI....
+ * Last Edited: 2025-11-13 19:42 Europe/London (FIXED - Session refresh and next-step redirect)
  */
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+// 💥 FIX: Import signIn from next-auth/react to refresh session
+import { signIn } from 'next-auth/react'; 
 
 // Define the expected form data shape
 interface SetupData {
@@ -15,6 +17,9 @@ interface SetupData {
   city: string;
   postcode: string;
 }
+
+// Logo Configuration (Assuming it's placed in /public)
+const LOGO_SRC = "/greasedesk-logo-source.png"; 
 
 export default function OnboardingSetupPage() {
   const router = useRouter();
@@ -53,36 +58,58 @@ export default function OnboardingSetupPage() {
         body: JSON.stringify(formData),
       });
 
+      const responseData = await response.json();
+
       if (!response.ok) {
-        // Read the error message provided by the API route
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to complete setup. Please check details.');
+        throw new Error(responseData.message || 'Failed to complete setup. Please check details.');
       }
 
-      // Success! Redirect to the main dashboard
-      await router.push('/admin/dashboard'); 
+      // 💥 FIX 1: Force session refresh without redirecting.
+      // This ensures the user's browser session (JWT) gets the new site_id.
+      await signIn('credentials', { redirect: false });
+
+      // 💥 FIX 2: Redirect to the next step using the URL returned by the API
+      // The API now returns redirectUrl: '/onboarding/rates-settings'
+      if (responseData.redirectUrl) {
+          await router.push(responseData.redirectUrl);
+      } else {
+          // Fallback redirect if API doesn't specify the next page
+          await router.push('/admin/dashboard'); 
+      }
+      
 
     } catch (err: any) {
       setLoading(false);
-      // The error state will be rendered in the red box on the form
       setError(err.message); 
     }
   };
 
   // Tailwind CSS classes for consistent styling
-  const inputClass = "w-full p-3 bg-gdPanel border border-gdBorder rounded-lg focus:ring-blue-500 focus:border-blue-500 text-slate-200 placeholder-slate-400";
+  const inputClass = "w-full p-3 bg-slate-700 border border-slate-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-slate-200 placeholder-slate-400";
   const labelClass = "block text-sm font-medium text-slate-300 mb-1";
-  const panelClass = "bg-slate-700/50 p-4 rounded-xl border border-gdBorder";
+  const panelClass = "bg-slate-700/50 p-4 rounded-xl border border-slate-700";
 
 
-  // The function must return JSX (the UI), not a Promise, which fixes your runtime error.
   return (
     <>
       <Head>
         <title>Garage Setup - GreaseDesk</title>
       </Head>
       <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-xl w-full bg-gdPanel/80 border border-gdBorder rounded-2xl shadow-card p-8">
+        <div className="max-w-xl w-full bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl p-8">
+            
+          {/* 🖼️ LOGO INTEGRATION */}
+          <div className="text-center mb-6">
+              <img
+                  src={LOGO_SRC}
+                  alt="GreaseDesk Logo"
+                  className="mx-auto"
+                  // Set a clear size for the onboarding page display
+                  style={{ width: '200px', height: 'auto' }} 
+              />
+          </div>
+          {/* END LOGO INTEGRATION */}
+
           <h1 className="text-3xl font-bold text-blue-400 mb-2">Final Step: Garage Setup</h1>
           <p className="text-slate-400 mb-8">
             Tell us about your company and your primary garage location to get started.

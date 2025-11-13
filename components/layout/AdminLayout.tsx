@@ -1,12 +1,17 @@
 /**
  * File: components/layout/AdminLayout.tsx
  * Description: Main wrapper for all authenticated pages in the /admin area.
+ * Last Edited: 2025-11-13 19:35 Europe/London (FIXED - Integrated Logo)
  */
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 // ⚠️ You'll need to create a simple TopNav component later
 // import TopNav from '../TopNav'; 
+
+// 🎯 LOGO CONFIGURATION: Must point to the high-res image file in /public
+const LOGO_SRC = "/greasedesk-logo-source.png";
+const LOGO_DISPLAY_WIDTH = "150px"; // Suitable width for the sidebar
 
 // Define the navigation items
 const navItems = [
@@ -28,15 +33,28 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
   const isActive = (href: string) => router.pathname === href;
 
+  // Component to render the logo
+  const Logo = () => (
+    <Link href="/admin/dashboard">
+        <img
+            src={LOGO_SRC}
+            alt="GreaseDesk Logo"
+            // Use style to scale the large source image down crisply
+            style={{ width: LOGO_DISPLAY_WIDTH, height: 'auto' }} 
+            className="mb-8"
+        />
+    </Link>
+  );
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex">
       {/* --- Desktop Sidebar (Fixed) --- */}
       <aside 
         className="hidden md:block w-64 bg-slate-800 border-r border-slate-700 p-4 sticky top-0 h-screen overflow-y-auto shadow-xl"
       >
-        <div className="text-2xl font-black text-blue-400 mb-8">
-          GreaseDesk
-        </div>
+        {/* 💥 FIX: Replaced text with Logo Component */}
+        <Logo /> 
+        
         <nav className="space-y-2">
           {navItems.map((item) => (
             <Link
@@ -73,7 +91,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             >
                 ☰
             </button>
-            <span className="text-xl font-bold text-blue-400">Dashboard</span>
+            {/* 💥 FIX: Replaced Dashboard text with Logo Component for mobile */}
+            <Logo /> 
         </header>
 
         {/* --- Page Content (The children prop..) --- */}
@@ -90,7 +109,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         >
           {/* Mobile Sidebar Content */}
           <div className="w-64 bg-slate-800 h-full p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="text-2xl font-black text-blue-400 mb-8">GreaseDesk</div>
+            {/* 💥 FIX: Replaced text with Logo Component for mobile menu */}
+            <Logo />
             <nav className="space-y-2">
               {navItems.map((item) => (
                 <Link
