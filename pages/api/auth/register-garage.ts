@@ -1,6 +1,6 @@
 /**
  * File: pages/api/auth/register-garage.ts
- * Last edited: 2025-11-13 17:15 Europe/London (FINAL FIX - REMOVED LOCALHOST CHECK)
+ * Last edited: 2025-11-13 18:10 Europe/London (FINAL FIX - REMOVED LOCALHOST FALLBACK & ADDED EMAIL LOGO)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { name, email, password } = (req.body || {}) as Payload;
-
+    // ... (Validation logic remains unchanged) ...
     if (!name || !email || !password) {
       return res
         .status(400)
@@ -62,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-
+    // ... (Prisma transaction logic remains unchanged) ...
     const { user } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
         data: { group_name: `${name}'s Garage`, billing_email: emailNorm },
@@ -91,13 +91,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       data: { identifier: user.email, token, expires },
     });
 
-    // 🛑 FIX: Rely entirely on NEXTAUTH_URL and use the logic once that's set.
-    // We remove the complex local checks which were confusing things.
+    // 🛑 FIX: Use the Vercel variable or force the production domain.
+    // This removes the stubborn 'localhost' fallback.
     const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com'; 
     const verificationLink = `${baseUrl}/api/auth/verify?token=${token}`;
     
-    // Assuming the logo is accessible at the base URL (if needed later)
-    const logoUrl = `${baseUrl}/logo.png`; 
+    // Use the public domain URL for the logo (must be HTTPS)
+    const logoUrl = `${baseUrl}/email-logo.png`; 
     
     const html = `
       <!doctype html>
@@ -105,11 +105,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0;">
           <div style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
               
-              <div style="background-color: #007bff; color: #ffffff; padding: 20px; text-align: center; border-top-left-radius: 8px; border-top-right-radius: 8px;">
-                  <h1 style="margin: 0; font-size: 24px;">Welcome to GreaseDesk</h1>
+              <div style="background-color: #ffffff; padding: 20px; text-align: center; border-top-left-radius: 8px; border-top-right-radius: 8px;">
+                  <img src="${logoUrl}" alt="GreaseDesk Logo" style="max-height: 40px; width: 150px; height: auto;"/>
               </div>
               
-              <div style="padding: 30px;">
+              <div style="padding: 30px; border-top: 5px solid #007bff;">
                   <p style="font-size: 16px; color: #333333; margin-bottom: 20px;">
                       Hi ${user.name || 'there'},
                   </p>
