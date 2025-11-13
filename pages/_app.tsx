@@ -1,12 +1,14 @@
 /**
  * File: pages/_app.tsx
- * Last edited: 2025-11-12 20:32 Europe/London
+ * Last edited: 2025-11-13 18:38 Europe/London (FIXED - ADDED SESSION PROVIDER)
  *
  * App wrapper + global safe Response.json() patch to prevent crashes
  * if any fetch tries to parse empty/non-JSON bodies.
  */
 import type { AppProps } from 'next/app';
 import '@/styles/globals.css';
+// 💥 FIX: Import the SessionProvider
+import { SessionProvider } from 'next-auth/react'; 
 
 declare global {
   interface Window { __gd_json_patched?: boolean }
@@ -30,5 +32,10 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
 }
 
 export default function App({ Component, pageProps }: AppProps) {
-  return <Component {...pageProps} />;
+  // 💥 FIX: Wrap the application in <SessionProvider>
+  return (
+    <SessionProvider session={pageProps.session}>
+      <Component {...pageProps} />
+    </SessionProvider>
+  );
 }
