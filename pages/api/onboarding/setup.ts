@@ -1,7 +1,7 @@
 /**
  * File: pages/api/onboarding/setup.ts
- * Description: FINAL WORKING VERSION: Resolves database unique constraints.
- * Last edited: 2025-11-13 at 18:57 Europe/London (FIXED - UPDATING EXISTING GROUP/CREATING SITE)
+ * Description: FINAL WORKING VERSION: Resolves database unique constraints and implements next step redirection.
+ * Last edited: 2025-11-13 at 19:28 Europe/London (FIXED - UPDATING EXISTING GROUP/CREATING SITE)
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db'; 
@@ -25,20 +25,19 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     // 1. Fetch User and their existing Group ID
     const user = await prisma.user.findUnique({
         where: { email: session.user.email },
-        select: { id: true, email: true, group_id: true }, // Ensure group_id is fetched
+        select: { id: true, email: true, group_id: true }, 
     });
 
     if (!user || !user.group_id) {
-        // This is a safety check; should not happen if registration worked.
         return res.status(401).json({ message: `Authentication Error: User or Group not found.` });
     }
     
     const userId = user.id; 
-    const groupId = user.group_id; // Use existing Group ID
+    const groupId = user.group_id; 
     
     const { groupName, siteName, addressLine1, city, postcode } = req.body;
     
-    // 🛑 STEP 1: Update Existing Group and Create Site (Using one transaction)
+    // 🛑 STEP 1: Update Existing Group and Create Site 
     
     // Set a transaction context explicitly for typing
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -48,11 +47,11 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
             where: { id: groupId }, // Use the existing Group ID
             data: {
                 group_name: groupName,
+                // Assuming other details like address, city, postcode were passed in groupData on the client
             }
         });
 
         // B. Ensure Billing record exists (created during registration, but we ensure plan details)
-        // Using upsert ensures it exists without violating unique constraints if somehow it was missed.
         const billing = await tx.groupBilling.upsert({
             where: { group_id: groupId },
             update: { 
@@ -92,11 +91,12 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     return res.status(201).json({ 
         message: 'Onboarding complete', 
         groupId: result.groupId,
-        siteId: result.siteId
+        siteId: result.siteId,
+        // 🎯 NEW REDIRECT: Tell the client to move to the next step
+        redirectUrl: '/onboarding/rates-settings' 
     });
   } catch (error) {
     console.error("Onboarding Setup Error:", error);
-    // Use enhanced logging for better server debugging
     let clientMessage = 'Database Setup Error: The final user update failed. Check console for specific Prisma errors.';
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
         clientMessage = `Database error: ${error.code}. An internal database constraint was violated.`;
