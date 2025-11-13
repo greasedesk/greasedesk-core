@@ -1,16 +1,14 @@
 /**
  * File: pages/api/auth/verify.ts
- * Last edited: 2025-11-13 at 12:18 Europe/London (FIXED)
+ * Last edited: 2025-11-13 at 17:25 Europe/London (FIXED - USER-FRIENDLY ERROR REDIRECT)
  *
  * API for SaaS Onboarding Step 3.
  * FIX: Simplifies the redirect to the Admin Login page, passing data for auto-login attempt.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-// 💥 FIX: Changed from 'import prisma from '../../../lib/db';'
-// to a named import to resolve the TypeScript/build error.
 import { prisma } from '../../../lib/db'; 
-import { Prisma } from '@prisma/client'; // <-- FIX: Import Prisma namespace for typing
+import { Prisma } from '@prisma/client';
 
 export default async function handle(
   req: NextApiRequest,
@@ -21,11 +19,18 @@ export default async function handle(
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  try {
-    const { token } = req.query;
+  const token = req.query.token as string | undefined;
+  const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com'; // Use the confirmed production fallback
 
-    if (!token || typeof token !== 'string') {
-      return res.status(400).send('Invalid verification token.');
+  // Function to redirect to a user-friendly error page
+  const redirectToErrorPage = (errorCode: 'invalid' | 'used' | 'expired' | 'server') => {
+    return res.redirect(302, `${baseUrl}/onboarding/verify-status?error=${errorCode}`);
+  };
+
+  try {
+    if (!token) {
+      // 🛑 Friendly Redirect on Invalid Token Format
+      return redirectToErrorPage('invalid');
     }
 
     // 1. Find the token
@@ -34,17 +39,19 @@ export default async function handle(
     });
 
     if (!verificationToken) {
-      return res.status(404).send('Token not found or already used.');
+      // 🛑 Friendly Redirect on Token Not Found (or already used/deleted)
+      return redirectToErrorPage('used');
     }
 
     if (new Date() > new Date(verificationToken.expires)) {
-      return res.status(410).send('Token expired.');
+      // 🛑 Friendly Redirect on Token Expired
+      // We don't delete the token here, as the user might want a link sent again
+      return redirectToErrorPage('expired');
     }
 
     // 2. Mark the user as verified and delete the token
     const userEmail = verificationToken.identifier;
     
-    // <-- FIX: Explicitly type 'tx' as Prisma.TransactionClient
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.user.update({
         where: { email: userEmail },
@@ -56,17 +63,16 @@ export default async function handle(
       });
     });
 
-    // 3. FINAL FIX: Redirect to the Admin Login page, passing the status.
-    // This forces the user to manually enter their password, which creates the session.
-    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    // 3. SUCCESS: Redirect to the Admin Login page
     const callbackUrl = `${baseUrl}/onboarding/billing`; // Final destination after login
 
-    res.redirect(
+    return res.redirect(
         302, 
         `${baseUrl}/admin/login?email=${encodeURIComponent(userEmail)}&status=verified&callbackUrl=${encodeURIComponent(callbackUrl)}`
     );
   } catch (error) {
     console.error('Email verification error:', error);
-    return res.status(500).send('An unexpected error occurred during verification.');
+    // 🛑 Friendly Redirect on Unexpected Server Error
+    return redirectToErrorPage('server');
   }
 }
