@@ -1,12 +1,10 @@
 /**
  * File: pages/api/auth/register-garage.ts
- * Last edited: 2025-11-13 16:05 Europe/London (FINAL FIX - SWITCH TO BCRYPTJS)
+ * Last edited: 2025-11-13 17:01 Europe/London (FIXED - PROFESSIONAL EMAIL TEMPLATE)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-// 💥 FIX: Switched from 'import bcrypt from 'bcrypt'' to 'import * as bcrypt from 'bcryptjs'' 
-// to resolve the native build error (No native build was found...).
 import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
 import { Resend } from 'resend';
@@ -95,13 +93,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const verificationLink = `${baseUrl}/api/auth/verify?token=${token}`;
+    
+    // 🌟 UPDATED PROFESSIONAL HTML TEMPLATE
     const html = `
-      <!doctype html><html><body style="font-family:Arial,sans-serif">
-      <h2>Welcome to GreaseDesk</h2>
-      <p>Hi ${user.name || 'there'}, verify your email to start your trial:</p>
-      <p><a href="${verificationLink}">Verify Email</a></p>
-      <p style="word-break:break-all;font-size:12px;color:#555">${verificationLink}</p>
-      </body></html>
+      <!doctype html>
+      <html lang="en">
+      <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0;">
+          <div style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
+              
+              <div style="background-color: #007bff; color: #ffffff; padding: 20px; text-align: center; border-top-left-radius: 8px; border-top-right-radius: 8px;">
+                  <h1 style="margin: 0; font-size: 24px;">Welcome to GreaseDesk</h1>
+              </div>
+              
+              <div style="padding: 30px;">
+                  <p style="font-size: 16px; color: #333333; margin-bottom: 20px;">
+                      Hi ${user.name || 'there'},
+                  </p>
+                  <p style="font-size: 16px; color: #333333; margin-bottom: 30px;">
+                      Thank you for signing up! To activate your **GreaseDesk trial** and continue setting up your garage system, please click the button below to verify your email address.
+                  </p>
+                  
+                  <div style="text-align: center; margin: 30px 0;">
+                      <a href="${verificationLink}" 
+                         style="background-color: #28a745; 
+                                color: #ffffff; 
+                                text-decoration: none; 
+                                padding: 12px 25px; 
+                                border-radius: 5px; 
+                                font-size: 18px; 
+                                font-weight: bold; 
+                                display: inline-block;">
+                          Verify Email Address
+                      </a>
+                  </div>
+                  
+                  <p style="font-size: 14px; color: #666666; margin-top: 25px;">
+                      If the button above does not work, please copy and paste the link below into your web browser:
+                  </p>
+                  <p style="font-size: 12px; color: #999999; word-break: break-all; margin-bottom: 0;">
+                      <a href="${verificationLink}" style="color: #007bff;">${verificationLink}</a>
+                  </p>
+              </div>
+
+              <div style="text-align: center; padding: 15px; font-size: 12px; color: #999999; border-top: 1px solid #eeeeee;">
+                  This email was sent by GreaseDesk.
+              </div>
+          </div>
+      </body>
+      </html>
     `;
 
     try {
