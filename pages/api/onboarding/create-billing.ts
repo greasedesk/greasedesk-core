@@ -1,6 +1,6 @@
 /**
  * File: pages/api/onboarding/create-billing.ts
- * Last edited: 2025-11-02 at 20:05
+ * Last edited: 2025-11-13 at 12:28 Europe/London (FIXED - ADDED PLACEHOLDER STATUS)
  *
  * API for SaaS Onboarding Step 5: Create Billing Record.
  * This API is called after the "fake" credit card form.
@@ -8,7 +8,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/db';
+import { prisma } from '../../../lib/db';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
 import { BillingStatus } from '@prisma/client';
@@ -39,17 +39,10 @@ export default async function handle(
 
     if (existingBilling) {
       // If it already exists, just return success.
-      // This prevents creating duplicate billing records.
-      return res.status(200).json({ message: 'Billing record already exists.' });
+      return res.status(200).json({ message: 'Billing record already exists.', status: 'already_active' });
     }
     
     // 3. Create the new billing record (Start the 60-day trial)
-    // Your blueprint plan "Core Basic" has 3 months of history.
-    
-    // Per your design, we'll set a 60-day trial.
-    // const trialEnds = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
-    // Let's use the 'grace' status as per your blueprint's logic.
-
     await prisma.groupBilling.create({
       data: {
         group_id: group_id,
@@ -61,10 +54,11 @@ export default async function handle(
       },
     });
 
-    return res.status(201).json({ message: 'Trial started successfully.' });
+    // 🌟 PLACEHOLDER ADDED: Return a specific status for the client-side onboarding flow
+    return res.status(201).json({ message: 'Trial started successfully.', status: 'trial_started' });
 
   } catch (error) {
     console.error('Billing creation error:', error);
-    return res.status(500).json({ message: 'An unexpected error occurred.' });
+    return res.status(500).json({ message: 'An unexpected error occurred.', status: 'error' });
   }
 }

@@ -1,13 +1,15 @@
 /**
  * File: pages/api/auth/verify.ts
- * Last edited: 2025-11-02 at 21:40
+ * Last edited: 2025-11-13 at 12:18 Europe/London (FIXED)
  *
  * API for SaaS Onboarding Step 3.
  * FIX: Simplifies the redirect to the Admin Login page, passing data for auto-login attempt.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/db';
+// 💥 FIX: Changed from 'import prisma from '../../../lib/db';'
+// to a named import to resolve the TypeScript/build error.
+import { prisma } from '../../../lib/db'; 
 import { Prisma } from '@prisma/client'; // <-- FIX: Import Prisma namespace for typing
 
 export default async function handle(

@@ -1,9 +1,11 @@
 /**
  * File: pages/api/onboarding/setup.ts
  * Description: FINAL WORKING VERSION: Resolves all database constraints and naming issues.
+ * Last edited: 2025-11-13 at 12:30 Europe/London (FINAL FINAL FIX)
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '@/lib/db'; 
+// 💥 FINAL FIX: Changed from default import to named import to resolve the Type Error.
+import { prisma } from '@/lib/db'; 
 import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth'; 
 import { authOptions } from '../auth/[...nextauth]'; 

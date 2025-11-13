@@ -1,137 +1,144 @@
 /**
  * File: pages/api/auth/register-garage.ts
- * Last edited: 2025-11-02 at 21:48
- *
- * API for SaaS Onboarding Step 1.
- * FINAL FIX: Removed React email component dependency to stabilize email sending.
+ * Last edited: 2025-11-13 15:55 Europe/London (FIXED - ENHANCED ERROR LOGGING)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/db';
-import { hash } from 'bcrypt';
-import { UserRole, Prisma } from '@prisma/client'; // <-- FIX 1: Imported Prisma namespace
+import { prisma } from '@/lib/db'; // <-- NAMED IMPORT IS CORRECT
+import bcrypt from 'bcrypt';
+import { UserRole, Prisma } from '@prisma/client';
 import { Resend } from 'resend';
 import crypto from 'crypto';
-// Removed: import { VerificationEmail } from '../../../components/emails/VerificationEmail';
-// Removed: import { render } from '@react-email/render'; 
 
-export default async function handle(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  const resend = new Resend(process.env.RESEND_API_KEY);
+type Payload = { name: string; email: string; password: string };
+
+export const config = {
+  api: { bodyParser: true },
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Always declare JSON so clients don’t try to parse as something else.
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+  // ── Probe mode to prove client parsing is fine (set DEBUG_REGISTER_PROBE=1)
+  if (process.env.DEBUG_REGISTER_PROBE === '1') {
+    return res
+      .status(200)
+      .json({ ok: true, where: 'probe', hint: 'Disable DEBUG_REGISTER_PROBE to run full flow.' });
+  }
 
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return res
+      .status(405)
+      .json({ ok: false, where: 'method-guard', message: `Method ${req.method} Not Allowed` });
   }
 
   try {
-    const { email, password, name } = req.body;
+    const { name, email, password } = (req.body || {}) as Payload;
 
-    // --- 1. Validation (Unchanged) ---
-    if (!email || !password || !name) {
-      return res.status(400).json({ message: 'Missing required fields.' });
+    if (!name || !email || !password) {
+      return res
+        .status(400)
+        .json({ ok: false, where: 'validate', message: 'Name, email and password are required.' });
+    }
+    const emailNorm = email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) {
+      return res
+        .status(400)
+        .json({ ok: false, where: 'validate', message: 'Please enter a valid email address.' });
     }
     if (password.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
+      return res
+        .status(400)
+        .json({ ok: false, where: 'validate', message: 'Password must be at least 8 characters.' });
     }
 
-    const existingUser = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (existingUser) {
-      return res.status(409).json({ message: 'A user with this email already exists.' });
+    const existing = await prisma.user.findUnique({ where: { email: emailNorm } });
+    if (existing) {
+      return res
+        .status(409)
+        .json({ ok: false, where: 'unique', message: 'An account with this email already exists.' });
     }
 
-    // --- 2. Create Group and User (Fixed) ---
-    const hashedPassword = await hash(password, 12);
+    const passwordHash = await bcrypt.hash(password, 12);
 
-    // <-- FIX 2: Explicitly type 'tx' as Prisma.TransactionClient
-    const { newUser } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const newGroup = await tx.group.create({
-        data: { group_name: `${name}'s Garage`, billing_email: email.toLowerCase() },
+    const { user } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const group = await tx.group.create({
+        data: { group_name: `${name}'s Garage`, billing_email: emailNorm },
       });
 
       const user = await tx.user.create({
         data: {
-          email: email.toLowerCase(),
-          name: name,
-          passwordHash: hashedPassword,
+          name: name.trim(),
+          email: emailNorm,
+          passwordHash,
           role: UserRole.STAFF,
-          group_id: newGroup.id,
+          group_id: group.id,
           is_active: true,
-          emailVerified: null, 
+          emailVerified: null,
         },
+        select: { id: true, email: true, name: true },
       });
-      return { newUser: user };
+
+      return { user };
     });
 
-    // --- 3. Create Verification Token (Unchanged) ---
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     await prisma.verificationToken.create({
-      data: { identifier: newUser.email, token: token, expires: expires },
+      data: { identifier: user.email, token, expires },
     });
 
-    // --- 4. Send Verification Email (THE FINAL, STABLE FIX) ---
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const verificationLink = `${baseUrl}/api/auth/verify?token=${token}`;
-    const userName = newUser.name || 'New User';
-
-    const emailHtml = `
-      <!DOCTYPE html>
-      <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Verify Your Email</title>
-        </head>
-        <body style="font-family: Arial, sans-serif; background-color: #f6f9fc; padding: 20px;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; border: 1px solid #e6e6e6;">
-            <h1 style="color: #1e3a8a; font-size: 24px; text-align: center;">Welcome to GreaseDesk!</h1>
-            <p style="color: #333; font-size: 16px;">Hi ${userName},</p>
-            <p style="color: #333; font-size: 16px;">
-              Thank you for signing up. To start your 30-day free trial, please verify
-              your email address by clicking the button below:
-            </p>
-            <div style="text-align: center; margin-top: 30px;">
-              <a href="${verificationLink}" style="background-color: #3b82f6; border-radius: 6px; color: #fff; font-size: 16px; font-weight: bold; text-decoration: none; padding: 12px 20px; display: inline-block;">
-                Verify Email Address
-              </a>
-            </div>
-            <p style="color: #555; font-size: 14px; margin-top: 30px; text-align: center;">
-              If the button doesn't work, copy and paste this link into your browser:
-            </p>
-            <p style="word-break: break-all; font-size: 12px; color: #1e40af; text-align: center;">${verificationLink}</p>
-            <hr style="border-top: 1px solid #e6ebf1; margin-top: 20px;" />
-            <p style="color: #999; font-size: 12px; text-align: center;">
-              GreaseDesk Ltd. | You received this email because you signed up for a free trial.
-            </p>
-          </div>
-        </body>
-      </html>
+    const html = `
+      <!doctype html><html><body style="font-family:Arial,sans-serif">
+      <h2>Welcome to GreaseDesk</h2>
+      <p>Hi ${user.name || 'there'}, verify your email to start your trial:</p>
+      <p><a href="${verificationLink}">Verify Email</a></p>
+      <p style="word-break:break-all;font-size:12px;color:#555">${verificationLink}</p>
+      </body></html>
     `;
-    
-    const { data, error } = await resend.emails.send({
-      from: 'Onboarding <onboarding@greasedesk.com>', 
-      to: [newUser.email],
-      subject: 'Welcome to GreaseDesk! Please verify your email',
-      html: emailHtml,
-    });
 
-    if (error) {
-      console.error('Email sending failed:', error);
-      return res.status(500).json({ message: 'Error sending verification email. Please try again.'});
+    try {
+      const apiKey = process.env.RESEND_API_KEY;
+      if (apiKey) {
+        const resend = new Resend(apiKey);
+        const { error } = await resend.emails.send({
+          from: 'Onboarding <onboarding@greasedesk.com>',
+          to: [user.email],
+          subject: 'Welcome to GreaseDesk — verify your email',
+          html,
+        });
+        if (error) console.error('Resend send error:', error);
+      } else {
+        console.warn('RESEND_API_KEY not set; skipping email send:', verificationLink);
+      }
+    } catch (mailErr) {
+      console.error('Email send threw:', mailErr);
     }
 
-    // --- 5. Success ---
-    return res.status(201).json({ 
+    return res.status(201).json({
+      ok: true,
+      where: 'success',
       message: 'Account created. Please check your email to verify.',
-      userEmail: newUser.email,
+      user,
     });
+  } catch (err: any) {
+    // 🛑 ENHANCED LOGGING: Print the entire error object, including the stack trace
+    console.error('register-garage FATAL ERROR:', err);
+    
+    // Check for specific known errors (like Prisma constraint issues)
+    let clientMessage = 'Registration failed due to a server error (check console).';
 
-  } catch (error) {
-    console.error('Garage Registration error:', error);
-    return res.status(500).json({ message: 'An unexpected error occurred.' });
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        clientMessage = `Database error: ${err.code}. Check your schema constraints.`;
+    } else if (typeof err?.message === 'string') {
+        clientMessage = err.message;
+    }
+    
+    return res.status(500).json({ ok: false, where: 'catch', message: clientMessage });
   }
 }

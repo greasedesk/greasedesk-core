@@ -1,13 +1,14 @@
 /**
  * File: pages/api/onboarding/finalize-setup.ts
- * Last edited: 2025-11-03 at 08:05
+ * Last edited: 2025-11-13 at 12:28 Europe/London (FINAL FIX)
  *
  * API for SaaS Onboarding Step 5: Final Setup.
  * Creates the Group, Site, and ProfitCentre records.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/db';
+// 💥 FINAL FIX: Changed from default import to named import to resolve the Type Error.
+import { prisma } from '../../../lib/db';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
 import { Prisma } from '@prisma/client'; // <-- FIX 1: Import Prisma namespace for typing

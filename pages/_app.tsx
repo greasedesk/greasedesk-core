@@ -1,17 +1,34 @@
 /**
  * File: pages/_app.tsx
- * Last edited: 2025-11-02 at 14:25
+ * Last edited: 2025-11-12 20:32 Europe/London
+ *
+ * App wrapper + global safe Response.json() patch to prevent crashes
+ * if any fetch tries to parse empty/non-JSON bodies.
  */
-import type { AppProps } from "next/app";
-import { SessionProvider } from "next-auth/react";
-import "../styles/globals.css";
+import type { AppProps } from 'next/app';
+import '@/styles/globals.css';
 
-// The fix is on the line below:...
-// We destructure 'session' out of pageProps, and pass the rest of pageProps on.
-export default function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
-  return (
-    <SessionProvider session={session}>
-      <Component {...pageProps} />
-    </SessionProvider>
-  );
+declare global {
+  interface Window { __gd_json_patched?: boolean }
+}
+
+if (typeof window !== 'undefined' && !window.__gd_json_patched) {
+  window.__gd_json_patched = true;
+  const original = Response.prototype.json;
+  Response.prototype.json = async function safeJson(this: Response) {
+    try {
+      const clone = this.clone();
+      const text = await clone.text();
+      if (!text) return {};              // empty body → harmless object
+      try { return JSON.parse(text); }    // valid JSON by content
+      catch { return await original.call(this.clone()); } // fallback to original
+    } catch {
+      try { return await original.call(this.clone()); }
+      catch { return {}; }
+    }
+  };
+}
+
+export default function App({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />;
 }

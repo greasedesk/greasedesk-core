@@ -1,6 +1,6 @@
 /**
  * File: pages/onboarding/billing.tsx
- * Last edited: 2025-11-02 at 21:50
+ * Last edited: 2025-11-13 at 14:00 Europe/London (FIXED - ADDED SSR BYPASS)
  *
  * SaaS Onboarding Step 4: Billing.
  * FIX: Updated copy to be professional and reassuring ("60-day trial", "contact before billing").
@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { useSession, signIn } from 'next-auth/react';
+import { GetServerSideProps } from 'next'; // <--- IMPORT ADDED
 
 // Simple SVG icon for the credit card
 const CreditCardIcon = () => (
@@ -187,4 +188,10 @@ export default function BillingPage() {
       </main>
     </>
   );
+}
+
+// 🌟 THE CRITICAL BUILD FIX: Force Server-Side Rendering (SSR) to avoid 
+// the static build crash caused by useSession() running prematurely.
+export const getServerSideProps: GetServerSideProps = async () => {
+    return { props: {} };
 }

@@ -1,10 +1,11 @@
 // pages/api/auth/[...nextauth].ts
-// Last Edited on 2025-11-02 at 14:19 
+// Last Edited on 2025-11-13 at 12:05 (FIXED) 
 
 import NextAuth, { type NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { PrismaAdapter } from '@auth/prisma-adapter';
-import prisma from '../../../lib/db'; // Corrected path from root
+// 💥 FIX: Changed to a named import to resolve the TypeScript/build error.
+import { prisma } from '../../../lib/db'; 
 import { compare } from 'bcrypt';
 import { UserRole } from '@prisma/client'; // Import the Role enum
 
@@ -48,6 +49,9 @@ export const authOptions: NextAuthOptions = {
         // For now, we will just check if a user exists.
         // The real check will be added in the signup step.
         if (!user) {
+           // NOTE: The logic here is redundant as `if (!user)` is checked above.
+           // However, to maintain existing code logic, I'm leaving the inner check
+           // though it will never be reached if `user` is null.
            throw new Error('Login failed. (Password check not yet implemented)');
         }
 

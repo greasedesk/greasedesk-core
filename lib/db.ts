@@ -1,6 +1,6 @@
 /**
  * File: lib/db.ts
- * Last edited: 2025-11-02 at 17:21
+ * Last edited: 2025-11-13 at 10:50 (FIXED)
  *
  * This file initializes the real Prisma Client for the entire application.
  * It uses a "singleton" pattern to prevent multiple instances
@@ -23,8 +23,7 @@ export const prisma =
     // log: ['query'],
   });
 
-// Export it as the default, which is what our API routes expect.
-export default prisma;
+// REMOVED: export default prisma; <--- THIS WAS THE CONFLICTING LINE
 
 // In development, attach prisma to the global object...
 if (process.env.NODE_ENV !== 'production') {
