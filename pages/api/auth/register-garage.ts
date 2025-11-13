@@ -1,6 +1,6 @@
 /**
  * File: pages/api/auth/register-garage.ts
- * Last edited: 2025-11-13 17:01 Europe/London (FIXED - PROFESSIONAL EMAIL TEMPLATE)
+ * Last edited: 2025-11-13 17:15 Europe/London (FINAL FIX - REMOVED LOCALHOST CHECK)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -91,10 +91,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       data: { identifier: user.email, token, expires },
     });
 
-    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    // 🛑 FIX: Rely entirely on NEXTAUTH_URL and use the logic once that's set.
+    // We remove the complex local checks which were confusing things.
+    const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com'; 
     const verificationLink = `${baseUrl}/api/auth/verify?token=${token}`;
     
-    // 🌟 UPDATED PROFESSIONAL HTML TEMPLATE
+    // Assuming the logo is accessible at the base URL (if needed later)
+    const logoUrl = `${baseUrl}/logo.png`; 
+    
     const html = `
       <!doctype html>
       <html lang="en">
