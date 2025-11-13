@@ -1,11 +1,13 @@
 /**
  * File: pages/api/auth/register-garage.ts
- * Last edited: 2025-11-13 15:55 Europe/London (FIXED - ENHANCED ERROR LOGGING)
+ * Last edited: 2025-11-13 16:05 Europe/London (FINAL FIX - SWITCH TO BCRYPTJS)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { prisma } from '@/lib/db'; // <-- NAMED IMPORT IS CORRECT
-import bcrypt from 'bcrypt';
+import { prisma } from '@/lib/db';
+// 💥 FIX: Switched from 'import bcrypt from 'bcrypt'' to 'import * as bcrypt from 'bcryptjs'' 
+// to resolve the native build error (No native build was found...).
+import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
 import { Resend } from 'resend';
 import crypto from 'crypto';
@@ -127,10 +129,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       user,
     });
   } catch (err: any) {
-    // 🛑 ENHANCED LOGGING: Print the entire error object, including the stack trace
+    // ENHANCED LOGGING: Now includes Prisma and generic errors
     console.error('register-garage FATAL ERROR:', err);
     
-    // Check for specific known errors (like Prisma constraint issues)
     let clientMessage = 'Registration failed due to a server error (check console).';
 
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
