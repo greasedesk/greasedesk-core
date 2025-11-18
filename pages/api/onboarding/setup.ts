@@ -1,14 +1,23 @@
 /**
  * File: pages/api/onboarding/setup.ts
- * Description: FINAL WORKING VERSION: Resolves database unique constraints and implements next step redirection.
- * Last edited: 2025-11-13 at 19:28 Europe/London (FIXED - UPDATING EXISTING GROUP/CREATING SITE)
+ * Last edited: 2025-11-18 18:25 Europe/London
+ *
+ * Description:
+ * Step 1 of onboarding. Ensures the logged-in user has:
+ *  - A Group (created or updated)
+ *  - A GroupBilling record
+ *  - A primary Site (created or updated)
+ *  - User.group_id and User.site_id set correctly
+ *
+ * This is multi-tenant safe and idempotent: calling it twice will not create
+ * duplicate groups or sites, it will reuse and update existing records.
  */
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { prisma } from '@/lib/db'; 
-import { Prisma } from '@prisma/client';
-import { getServerSession } from 'next-auth'; 
-import { authOptions } from '../auth/[...nextauth]'; 
 
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { prisma } from '@/lib/db';
+import { Prisma } from '@prisma/client';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]';
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -17,90 +26,167 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    
-    if (!session || !session.user || !session.user.email) {
-        return res.status(401).json({ message: 'Authentication Error: Session not found.' });
+
+    if (!session?.user?.id || !session.user.email) {
+      return res.status(401).json({ message: 'Authentication Error: Session not found.' });
     }
 
-    // 1. Fetch User and their existing Group ID
-    const user = await prisma.user.findUnique({
-        where: { email: session.user.email },
-        select: { id: true, email: true, group_id: true }, 
+    // Load the latest user record from DB (never trust token state alone)
+    const dbUser = await prisma.user.findUnique({
+      where: { id: session.user.id as string },
+      select: {
+        id: true,
+        email: true,
+        group_id: true,
+        site_id: true,
+      },
     });
 
-    if (!user || !user.group_id) {
-        return res.status(401).json({ message: `Authentication Error: User or Group not found.` });
+    if (!dbUser) {
+      return res.status(401).json({ message: 'Authentication Error: User not found.' });
     }
-    
-    const userId = user.id; 
-    const groupId = user.group_id; 
-    
-    const { groupName, siteName, addressLine1, city, postcode } = req.body;
-    
-    // 🛑 STEP 1: Update Existing Group and Create Site 
-    
-    // Set a transaction context explicitly for typing
+
+    const { groupName, siteName, addressLine1, city, postcode } = req.body as {
+      groupName?: string;
+      siteName?: string;
+      addressLine1?: string;
+      city?: string;
+      postcode?: string;
+    };
+
+    const fullAddressParts = [addressLine1, city, postcode].filter(Boolean);
+    const fullAddress = fullAddressParts.length ? fullAddressParts.join(', ') : null;
+
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        
-        // A. UPDATE the existing Group record (to add company details)
-        const updatedGroup = await tx.group.update({
-            where: { id: groupId }, // Use the existing Group ID
-            data: {
-                group_name: groupName,
-                // Assuming other details like address, city, postcode were passed in groupData on the client
-            }
+      let groupId = dbUser.group_id;
+      let siteId = dbUser.site_id ?? undefined;
+
+      // A. Ensure Group exists (create if user has no group yet)
+      let group;
+
+      if (groupId) {
+        group = await tx.group.update({
+          where: { id: groupId },
+          data: {
+            group_name: groupName ?? undefined,
+          },
+        });
+      } else {
+        // Upsert by billing_email so re-runs cannot create duplicates
+        group = await tx.group.upsert({
+          where: { billing_email: dbUser.email },
+          update: {
+            group_name: groupName ?? undefined,
+          },
+          create: {
+            group_name:
+              groupName ||
+              (dbUser.email ? `${dbUser.email}'s Garage` : 'New Garage'),
+            billing_email: dbUser.email,
+          },
         });
 
-        // B. Ensure Billing record exists (created during registration, but we ensure plan details)
-        const billing = await tx.groupBilling.upsert({
-            where: { group_id: groupId },
-            update: { 
-                plan_name: "TRIAL", status: "ok", retention_months: 12, included_sites: 1, active_sites_cnt: 1
-            },
-            create: {
-                group_id: groupId,
-                plan_name: "TRIAL", status: "ok", retention_months: 12, included_sites: 1, active_sites_cnt: 1
-            }
-        });
+        groupId = group.id;
 
-        // C. CREATE the first Site record
-        const newSite = await tx.site.create({
-            data: {
-                group_id: groupId,
-                site_name: siteName, 
-                timezone: "Europe/London", 
-                currency_code: "GBP",      
-                locale: "en-GB",           
-                address: `${addressLine1}, ${city}, ${postcode}`,
-                users: { connect: { id: userId } },
-            }
-        });
-        
-        // D. UPDATE the User with their new default Site ID
+        // Link user to the new group
         await tx.user.update({
-            where: { id: userId },
-            data: {
-                site_id: newSite.id,
-            }
+          where: { id: dbUser.id },
+          data: { group_id: groupId },
+        });
+      }
+
+      // B. Ensure GroupBilling record exists
+      await tx.groupBilling.upsert({
+        where: { group_id: groupId },
+        update: {
+          plan_name: 'TRIAL',
+          status: 'ok',
+          retention_months: 12,
+          included_sites: 1,
+          active_sites_cnt: 1,
+        },
+        create: {
+          group_id: groupId,
+          plan_name: 'TRIAL',
+          status: 'ok',
+          retention_months: 12,
+          included_sites: 1,
+          active_sites_cnt: 1,
+        },
+      });
+
+      // C. Ensure Site exists for this group
+      let site;
+
+      if (siteId) {
+        // Update the existing site for this user
+        site = await tx.site.update({
+          where: { id: siteId },
+          data: {
+            site_name: siteName ?? undefined,
+            address: fullAddress ?? undefined,
+          },
+        });
+      } else {
+        // Try to reuse an existing site for this group if one exists
+        const existingSite = await tx.site.findFirst({
+          where: { group_id: groupId },
         });
 
-        return { groupId, siteId: newSite.id };
+        if (existingSite) {
+          site = await tx.site.update({
+            where: { id: existingSite.id },
+            data: {
+              site_name: siteName ?? undefined,
+              address: fullAddress ?? undefined,
+            },
+          });
+        } else {
+          // Create the first site for this group
+          site = await tx.site.create({
+            data: {
+              group_id: groupId,
+              site_name: siteName || 'Main Workshop',
+              timezone: 'Europe/London',
+              currency_code: 'GBP',
+              locale: 'en-GB',
+              address: fullAddress ?? undefined,
+              users: { connect: { id: dbUser.id } },
+            },
+          });
+        }
+
+        siteId = site.id;
+
+        // Update user with default site
+        await tx.user.update({
+          where: { id: dbUser.id },
+          data: { site_id: siteId },
+        });
+      }
+
+      return {
+        groupId,
+        siteId,
+      };
     });
 
-    // Success response...
-    return res.status(201).json({ 
-        message: 'Onboarding complete', 
-        groupId: result.groupId,
-        siteId: result.siteId,
-        // 🎯 NEW REDIRECT: Tell the client to move to the next step
-        redirectUrl: '/onboarding/rates-settings' 
+    return res.status(201).json({
+      message: 'Onboarding setup complete',
+      groupId: result.groupId,
+      siteId: result.siteId,
+      redirectUrl: '/onboarding/rates-settings',
     });
   } catch (error) {
-    console.error("Onboarding Setup Error:", error);
-    let clientMessage = 'Database Setup Error: The final user update failed. Check console for specific Prisma errors.';
+    console.error('Onboarding Setup Error:', error);
+
+    let clientMessage =
+      'Database Setup Error: The onboarding setup failed. Check server logs for details.';
+
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        clientMessage = `Database error: ${error.code}. An internal database constraint was violated.`;
+      clientMessage = `Database error: ${error.code}. An internal database constraint was violated.`;
     }
+
     return res.status(500).json({ message: clientMessage });
   }
 }
