@@ -1,5 +1,5 @@
 // File: prisma/schema.prisma
-// Last edited: 2025-11-10 22:02 Europe/London
+// Last edited: 2025-11-18 15:10 Europe/London
 // Notes:
 // - Normalised whitespace (removed non-breaking spaces that can break prisma fmt).
 // - Prices/taxes now use @db.Decimal(12,2) for consistent SQL types.
@@ -11,7 +11,9 @@
 // ───────────────────────────────────────────────────────────────────────────────
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Explicit binary targets so Prisma doesn't try to fetch a RHEL engine on Vercel
+  binaryTargets = ["native", "debian-openssl-1.1.x"]
 }
 
 datasource db {
