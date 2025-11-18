@@ -1,9 +1,13 @@
 /**
  * File: pages/api/onboarding/update-rates.ts
- * Last edited: 2025-11-18 13:05 Europe/London
+ * Last edited: 2025-11-18 16:45 Europe/London
  *
  * Description: API to save initial site configuration (VAT, Labour, Regional) during onboarding.
+ * NOTE:
+ *  - We now re-fetch the user from the database using session.user.id to get
+ *    the latest group_id / site_id, so we’re not relying on stale JWT fields.
  */
+
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
@@ -23,19 +27,29 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   }
 
   const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
+  const sessionUser = session?.user as any;
 
-  // 1. Authentication and Context Check
-  // We must ensure the user is logged in and has an associated Group and Site (created during setup)
-  if (!user?.group_id || !user?.site_id) {
+  if (!sessionUser?.id) {
+    return res.status(401).json({
+      message: 'Authentication Error: User session not found. Please sign in again.',
+    });
+  }
+
+  // Always load fresh user context from DB so we see the latest group/site
+  const dbUser = await prisma.user.findUnique({
+    where: { id: sessionUser.id as string },
+    select: { group_id: true, site_id: true },
+  });
+
+  if (!dbUser?.group_id || !dbUser?.site_id) {
     return res.status(401).json({
       message:
         'Authentication Error: Group/Site context not found. Please complete previous setup steps.',
     });
   }
 
-  const groupId = user.group_id as string;
-  const siteId = user.site_id as string;
+  const groupId = dbUser.group_id;
+  const siteId = dbUser.site_id;
 
   const {
     defaultVatRate,
