@@ -1,6 +1,6 @@
 /**
  * File: pages/api/onboarding/update-rates.ts
- * Last edited: 2025-11-18 11:52 Europe/London
+ * Last edited: 2025-11-18 13:05 Europe/London
  *
  * Description: API to save initial site configuration (VAT, Labour, Regional) during onboarding.
  */
@@ -29,7 +29,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // We must ensure the user is logged in and has an associated Group and Site (created during setup)
   if (!user?.group_id || !user?.site_id) {
     return res.status(401).json({
-      message: 'Authentication Error: Group/Site context not found. Please complete previous setup steps.',
+      message:
+        'Authentication Error: Group/Site context not found. Please complete previous setup steps.',
     });
   }
 
@@ -65,7 +66,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // B. Update/Upsert Group VAT rate (using a fixed name like 'UK VAT')
+      // B. Update/Upsert Group VAT rate (using deterministic id)
       const vatDec = new Prisma.Decimal(vat.toFixed(2));
       const ukVatId = `${groupId}-UK-VAT`;
 
@@ -83,17 +84,19 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // C. Update/Upsert default labour service for this site
+      // C. Update/Upsert default labour service for this site (also deterministic id)
       const rateDec = new Prisma.Decimal(labour.toFixed(2));
+      const labourServiceId = `${groupId}-${siteId}-LABOUR_HR`;
 
       await tx.serviceCatalogue.upsert({
-        where: { group_id_site_id_service_code: { group_id: groupId, site_id: siteId, service_code: 'LABOUR_HR' } },
+        where: { id: labourServiceId },
         update: {
           default_labour_rate: rateDec,
           default_price: rateDec,
           vat_rate: vatDec,
         },
         create: {
+          id: labourServiceId,
           group_id: groupId,
           site_id: siteId,
           service_code: 'LABOUR_HR',
