@@ -4,6 +4,8 @@
  *
  * App wrapper + global safe Response.json() patch to prevent crashes
  * if any fetch tries to parse empty/non-JSON bodies.
+ * 
+ * xxx
  */
 import type { AppProps } from 'next/app';
 import '@/styles/globals.css';
