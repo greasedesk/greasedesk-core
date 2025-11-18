@@ -1,11 +1,11 @@
 /**
  * File: pages/api/onboarding/update-rates.ts
- * Last edited: 2025-11-18 16:45 Europe/London
+ * Last edited: 2025-11-18 18:27 Europe/London
  *
- * Description: API to save initial site configuration (VAT, Labour, Regional) during onboarding.
- * NOTE:
- *  - We now re-fetch the user from the database using session.user.id to get
- *    the latest group_id / site_id, so we’re not relying on stale JWT fields.
+ * Description:
+ * Saves initial VAT, labour rate, and regional config during onboarding.
+ * Uses fresh DB lookup for tenant context → no stale JWT/session values.
+ * Fully multi-tenant safe (Group + Site are enforced at DB level).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -14,18 +14,14 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 
-type SaveRatesBody = {
-  defaultVatRate: string;
-  defaultLabourRate: string;
-  timezone: string;
-  currencyCode: string;
-};
-
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
+  // ──────────────────────────────────────────────
+  // AUTH + TENANT CONTEXT RESOLUTION
+  // ──────────────────────────────────────────────
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;
 
@@ -35,7 +31,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     });
   }
 
-  // Always load fresh user context from DB so we see the latest group/site
+  // Load FRESH user context from DB (NEVER trust token values)
   const dbUser = await prisma.user.findUnique({
     where: { id: sessionUser.id as string },
     select: { group_id: true, site_id: true },
@@ -51,12 +47,10 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   const groupId = dbUser.group_id;
   const siteId = dbUser.site_id;
 
-  const {
-    defaultVatRate,
-    defaultLabourRate,
-    timezone,
-    currencyCode,
-  } = req.body as SaveRatesBody;
+  // ──────────────────────────────────────────────
+  // INPUT VALIDATION
+  // ──────────────────────────────────────────────
+  const { defaultVatRate, defaultLabourRate, timezone, currencyCode } = req.body;
 
   const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
@@ -68,29 +62,26 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     return res.status(400).json({ message: 'Invalid labour rate' });
   }
 
+  // ──────────────────────────────────────────────
+  // DB UPDATE
+  // ──────────────────────────────────────────────
   try {
-    // 2. Perform Atomic Database Update
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // A. Update Site Regional configuration
+    const vatDec = new Prisma.Decimal(vat.toFixed(2));
+    const rateDec = new Prisma.Decimal(labour.toFixed(2));
+
+    await prisma.$transaction(async (tx) => {
+      // A. Site regional configuration
       await tx.site.update({
         where: { id: siteId },
-        data: {
-          timezone: timezone,
-          currency_code: currencyCode,
-        },
+        data: { timezone, currency_code: currencyCode },
       });
 
-      // B. Update/Upsert Group VAT rate (using deterministic id)
-      const vatDec = new Prisma.Decimal(vat.toFixed(2));
-      const ukVatId = `${groupId}-UK-VAT`;
-
+      // B. VAT rate
       await tx.taxRate.upsert({
-        where: { id: ukVatId },
-        update: {
-          percentage: vatDec,
-        },
+        where: { id: `${groupId}-UK-VAT` },
+        update: { percentage: vatDec },
         create: {
-          id: ukVatId,
+          id: `${groupId}-UK-VAT`,
           group_id: groupId,
           name: 'UK VAT',
           percentage: vatDec,
@@ -98,19 +89,16 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // C. Update/Upsert default labour service for this site (also deterministic id)
-      const rateDec = new Prisma.Decimal(labour.toFixed(2));
-      const labourServiceId = `${groupId}-${siteId}-LABOUR_HR`;
-
+      // C. Default labour service
       await tx.serviceCatalogue.upsert({
-        where: { id: labourServiceId },
+        where: { id: `${groupId}-${siteId}-LABOUR_HR` },
         update: {
           default_labour_rate: rateDec,
           default_price: rateDec,
           vat_rate: vatDec,
         },
         create: {
-          id: labourServiceId,
+          id: `${groupId}-${siteId}-LABOUR_HR`,
           group_id: groupId,
           site_id: siteId,
           service_code: 'LABOUR_HR',
