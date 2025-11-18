@@ -1,13 +1,12 @@
 /**
  * File: pages/onboarding/setup.tsx
- * Description: Step 5 of SaaS Onboarding - Collects Group (Company) and initial Site (Garage) details.
- * Last Edited: 2025-11-13 19:42 Europe/London (FIXED - Session refresh and next-step redirect)
+ * Description: Onboarding – collect Group (Company) and initial Site (Garage) details.
+ * Last Edited: 2025-11-18 18:45 Europe/London
  */
+
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-// 💥 FIX: Import signIn from next-auth/react to refresh session
-import { signIn } from 'next-auth/react'; 
 
 // Define the expected form data shape
 interface SetupData {
@@ -19,7 +18,7 @@ interface SetupData {
 }
 
 // Logo Configuration (Assuming it's placed in /public)
-const LOGO_SRC = "/greasedesk-logo-source.png"; 
+const LOGO_SRC = '/greasedesk-logo-source.png';
 
 export default function OnboardingSetupPage() {
   const router = useRouter();
@@ -51,8 +50,8 @@ export default function OnboardingSetupPage() {
     }
 
     try {
-      // Calls the API route defined in pages/api/onboarding/setup.ts
-      const response = await fetch('/api/onboarding/setup', { 
+      // Call the API route defined in pages/api/onboarding/setup.ts
+      const response = await fetch('/api/onboarding/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
@@ -61,34 +60,26 @@ export default function OnboardingSetupPage() {
       const responseData = await response.json();
 
       if (!response.ok) {
-        throw new Error(responseData.message || 'Failed to complete setup. Please check details.');
+        throw new Error(
+          responseData.message || 'Failed to complete setup. Please check details.'
+        );
       }
 
-      // 💥 FIX 1: Force session refresh without redirecting.
-      // This ensures the user's browser session (JWT) gets the new site_id.
-      await signIn('credentials', { redirect: false });
-
-      // 💥 FIX 2: Redirect to the next step using the URL returned by the API
-      // The API now returns redirectUrl: '/onboarding/rates-settings'
-      if (responseData.redirectUrl) {
-          await router.push(responseData.redirectUrl);
-      } else {
-          // Fallback redirect if API doesn't specify the next page
-          await router.push('/admin/dashboard'); 
-      }
-      
-
+      // Use the redirect URL returned by the API, or fall back to the financial setup step
+      const nextUrl = responseData.redirectUrl || '/onboarding/rates-settings';
+      await router.push(nextUrl);
     } catch (err: any) {
+      setError(err.message || 'Unexpected error while completing setup.');
+    } finally {
       setLoading(false);
-      setError(err.message); 
     }
   };
 
   // Tailwind CSS classes for consistent styling
-  const inputClass = "w-full p-3 bg-slate-700 border border-slate-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-slate-200 placeholder-slate-400";
-  const labelClass = "block text-sm font-medium text-slate-300 mb-1";
-  const panelClass = "bg-slate-700/50 p-4 rounded-xl border border-slate-700";
-
+  const inputClass =
+    'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-slate-200 placeholder-slate-400';
+  const labelClass = 'block text-sm font-medium text-slate-300 mb-1';
+  const panelClass = 'bg-slate-700/50 p-4 rounded-xl border border-slate-700';
 
   return (
     <>
@@ -97,20 +88,19 @@ export default function OnboardingSetupPage() {
       </Head>
       <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
         <div className="max-w-xl w-full bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl p-8">
-            
-          {/* 🖼️ LOGO INTEGRATION */}
+          {/* Logo */}
           <div className="text-center mb-6">
-              <img
-                  src={LOGO_SRC}
-                  alt="GreaseDesk Logo"
-                  className="mx-auto"
-                  // Set a clear size for the onboarding page display
-                  style={{ width: '200px', height: 'auto' }} 
-              />
+            <img
+              src={LOGO_SRC}
+              alt="GreaseDesk Logo"
+              className="mx-auto"
+              style={{ width: '200px', height: 'auto' }}
+            />
           </div>
-          {/* END LOGO INTEGRATION */}
 
-          <h1 className="text-3xl font-bold text-blue-400 mb-2">Final Step: Garage Setup</h1>
+          <h1 className="text-3xl font-bold text-blue-400 mb-2">
+            Step 1: Garage Setup
+          </h1>
           <p className="text-slate-400 mb-8">
             Tell us about your company and your primary garage location to get started.
           </p>
@@ -122,12 +112,15 @@ export default function OnboardingSetupPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            
             {/* Group (Company) Details */}
             <div className={panelClass}>
-              <h2 className="text-xl font-semibold text-white mb-4">Company Details (The Group)</h2>
+              <h2 className="text-xl font-semibold text-white mb-4">
+                Company Details (The Group)
+              </h2>
               <div>
-                <label htmlFor="groupName" className={labelClass}>Company / Group Name</label>
+                <label htmlFor="groupName" className={labelClass}>
+                  Company / Group Name
+                </label>
                 <input
                   type="text"
                   id="groupName"
@@ -144,10 +137,14 @@ export default function OnboardingSetupPage() {
 
             {/* Site (Garage) Details */}
             <div className={panelClass}>
-              <h2 className="text-xl font-semibold text-white mb-4">Primary Garage Location (The Site)</h2>
+              <h2 className="text-xl font-semibold text-white mb-4">
+                Primary Garage Location (The Site)
+              </h2>
               <div className="space-y-4">
                 <div>
-                  <label htmlFor="siteName" className={labelClass}>Garage/Site Name</label>
+                  <label htmlFor="siteName" className={labelClass}>
+                    Garage/Site Name
+                  </label>
                   <input
                     type="text"
                     id="siteName"
@@ -161,7 +158,9 @@ export default function OnboardingSetupPage() {
                   />
                 </div>
                 <div>
-                  <label htmlFor="addressLine1" className={labelClass}>Address Line 1</label>
+                  <label htmlFor="addressLine1" className={labelClass}>
+                    Address Line 1
+                  </label>
                   <input
                     type="text"
                     id="addressLine1"
@@ -175,7 +174,9 @@ export default function OnboardingSetupPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label htmlFor="city" className={labelClass}>City</label>
+                    <label htmlFor="city" className={labelClass}>
+                      City
+                    </label>
                     <input
                       type="text"
                       id="city"
@@ -188,7 +189,9 @@ export default function OnboardingSetupPage() {
                     />
                   </div>
                   <div>
-                    <label htmlFor="postcode" className={labelClass}>Postcode</label>
+                    <label htmlFor="postcode" className={labelClass}>
+                      Postcode
+                    </label>
                     <input
                       type="text"
                       id="postcode"
@@ -210,7 +213,9 @@ export default function OnboardingSetupPage() {
               disabled={loading}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition disabled:opacity-50"
             >
-              {loading ? 'Setting up Garage...' : 'Complete Setup & Go to Dashboard'}
+              {loading
+                ? 'Setting up garage...'
+                : 'Save & Continue to Financial Setup'}
             </button>
           </form>
         </div>
