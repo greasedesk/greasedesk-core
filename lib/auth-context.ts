@@ -1,11 +1,12 @@
 /**
  * File: lib/auth-context.ts
- * Last edited: 2025-11-20 12:10 Europe/London
+ * Last edited: 2025-11-20 12:20 Europe/London
  *
- * Description: Shared helper for API routes to:
- *  - Validate the current NextAuth session
- *  - Load a fresh user record (with group/site ids)
- *  - Throw a clear error if anything is missing
+ * Description:
+ *  Small helper for API routes:
+ *    - Validates the NextAuth session
+ *    - Loads the latest user record (with group_id / site_id)
+ *    - Throws clear errors if anything is missing
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -18,7 +19,6 @@ export type AuthContextUser = {
   email: string | null;
   group_id: string | null;
   site_id: string | null;
-  role: string | null;
 };
 
 export type AuthContext = {
@@ -26,14 +26,6 @@ export type AuthContext = {
   user: AuthContextUser;
 };
 
-/**
- * requireAuthContext
- *
- * Usage in an API route:
- *
- *    const { session, user } = await requireAuthContext(req, res);
- *    // user.group_id / user.site_id are safe to use from here.
- */
 export async function requireAuthContext(
   req: NextApiRequest,
   res: NextApiResponse
@@ -44,23 +36,19 @@ export async function requireAuthContext(
     throw new Error('UNAUTHENTICATED: No valid session found.');
   }
 
-  const dbUser = await prisma.user.findUnique({
+  const user = await prisma.user.findUnique({
     where: { email: session.user.email },
     select: {
       id: true,
       email: true,
       group_id: true,
       site_id: true,
-      role: true,
     },
   });
 
-  if (!dbUser) {
+  if (!user) {
     throw new Error('UNAUTHENTICATED: User record not found.');
   }
 
-  return {
-    session,
-    user: dbUser,
-  };
+  return { session, user };
 }
