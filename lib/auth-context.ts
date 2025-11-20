@@ -1,10 +1,9 @@
 /**
  * File: lib/auth-context.ts
- * Last edited: 2025-11-20 12:25 Europe/London
+ * Last edited: 2025-11-20 12:50 Europe/London
  *
- * Helper: fetches a typed NextAuth session plus the latest group/site
- * context for the current user. Used by API routes instead of duplicating
- * session + user lookup logic everywhere.
+ * Helper: Require an authenticated user and return their core context
+ * (user id, group id, site id) for API routes.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -12,17 +11,16 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 
-export type AuthContext = {
-  session: Awaited<ReturnType<typeof getServerSession>>;
+export interface AuthContext {
+  sessionUserId: string;
+  userId: string;
   groupId: string | null;
   siteId: string | null;
-};
+}
 
 /**
- * Require an authenticated user and return their session plus
- * the latest group/site IDs from the database.
- *
- * Throws an Error if no valid session is found.
+ * Require a valid NextAuth session and resolve the current user record.
+ * Throws if there is no logged-in user.
  */
 export async function requireAuthContext(
   req: NextApiRequest,
@@ -30,18 +28,31 @@ export async function requireAuthContext(
 ): Promise<AuthContext> {
   const session = await getServerSession(req, res, authOptions);
 
-  if (!session?.user?.id) {
-    throw new Error('Authentication Error: user session not found');
+  if (!session?.user) {
+    throw new Error('Not authenticated');
   }
 
-  const dbUser = await prisma.user.findUnique({
-    where: { id: session.user.id as string },
-    select: { group_id: true, site_id: true },
+  const sessionUserId = (session.user as any).id as string | undefined;
+  const sessionEmail = session.user.email ?? undefined;
+
+  // Look up the user either by id (preferred) or by email
+  const user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        sessionUserId ? { id: sessionUserId } : undefined,
+        sessionEmail ? { email: sessionEmail } : undefined,
+      ].filter(Boolean) as any,
+    },
   });
 
+  if (!user) {
+    throw new Error('Authenticated user record not found');
+  }
+
   return {
-    session,
-    groupId: dbUser?.group_id ?? null,
-    siteId: dbUser?.site_id ?? null,
+    sessionUserId: sessionUserId ?? user.id,
+    userId: user.id,
+    groupId: (user as any).group_id ?? null,
+    siteId: (user as any).site_id ?? null,
   };
 }
