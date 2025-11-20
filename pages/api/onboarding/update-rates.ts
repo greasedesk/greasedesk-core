@@ -1,56 +1,130 @@
 /**
  * File: pages/api/onboarding/update-rates.ts
- * Last edited: 2025-11-18 18:27 Europe/London
+ * Last edited: 2025-11-20 10:25 Europe/London
  *
  * Description:
- * Saves initial VAT, labour rate, and regional config during onboarding.
- * Uses fresh DB lookup for tenant context → no stale JWT/session values.
- * Fully multi-tenant safe (Group + Site are enforced at DB level).
+ *  Step 2 – Financial Setup.
+ *  - Loads the current user fresh from the database.
+ *  - Attempts to SELF-HEAL missing group_id/site_id by:
+ *      • finding a Group with billing_email = user.email
+ *      • finding (or later, creating) a Site for that Group
+ *    and writing those IDs back to the User.
+ *  - Once groupId + siteId exist, updates:
+ *      • Site regional settings (timezone, currency)
+ *      • Group VAT TaxRate
+ *      • Default labour ServiceCatalogue entry
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
+import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
+
+type SaveRatesBody = {
+  defaultVatRate: string;
+  defaultLabourRate: string;
+  timezone: string;
+  currencyCode: string;
+};
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
-  // ──────────────────────────────────────────────
-  // AUTH + TENANT CONTEXT RESOLUTION
-  // ──────────────────────────────────────────────
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;
 
-  if (!sessionUser?.id) {
+  if (!sessionUser?.email && !sessionUser?.id) {
     return res.status(401).json({
       message: 'Authentication Error: User session not found. Please sign in again.',
     });
   }
 
-  // Load FRESH user context from DB (NEVER trust token values)
-  const dbUser = await prisma.user.findUnique({
-    where: { id: sessionUser.id as string },
-    select: { group_id: true, site_id: true },
-  });
+  const userIdFromSession = sessionUser.id as string | undefined;
+  const userEmailFromSession = sessionUser.email as string | undefined;
 
-  if (!dbUser?.group_id || !dbUser?.site_id) {
+  // ─────────────────────────────────────────────────────────────
+  // 1. Load user FRESH from the DB (by id, then by email)
+  // ─────────────────────────────────────────────────────────────
+  let dbUser =
+    userIdFromSession
+      ? await prisma.user.findUnique({
+          where: { id: userIdFromSession },
+          select: { id: true, email: true, group_id: true, site_id: true },
+        })
+      : null;
+
+  if (!dbUser && userEmailFromSession) {
+    dbUser = await prisma.user.findUnique({
+      where: { email: userEmailFromSession },
+      select: { id: true, email: true, group_id: true, site_id: true },
+    });
+  }
+
+  if (!dbUser) {
+    return res.status(401).json({
+      message: 'Authentication Error: User not found in database.',
+    });
+  }
+
+  let { id: userId, email: userEmail, group_id: groupId, site_id: siteId } = dbUser;
+
+  // ─────────────────────────────────────────────────────────────
+  // 2. SELF-HEAL MISSING group_id / site_id IF POSSIBLE
+  //    (for older seed data / legacy registrations)
+  // ─────────────────────────────────────────────────────────────
+  const userUpdateData: Prisma.UserUpdateInput = {};
+
+  // Try to recover group_id by matching Group.billing_email to user email
+  if (!groupId && userEmail) {
+    const existingGroup = await prisma.group.findFirst({
+      where: { billing_email: userEmail },
+      select: { id: true },
+    });
+
+    if (existingGroup) {
+      groupId = existingGroup.id;
+      userUpdateData.group_id = existingGroup.id;
+    }
+  }
+
+  // Try to recover site_id by finding the first Site for this group
+  if (!siteId && groupId) {
+    const existingSite = await prisma.site.findFirst({
+      where: { group_id: groupId },
+      orderBy: { created_at: 'asc' },
+      select: { id: true },
+    });
+
+    if (existingSite) {
+      siteId = existingSite.id;
+      userUpdateData.site_id = existingSite.id;
+    }
+  }
+
+  // If we found anything to fix, persist it back to the User
+  if (Object.keys(userUpdateData).length > 0) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: userUpdateData,
+    });
+  }
+
+  // After self-heal, if we STILL don’t have group/site, we must stop.
+  if (!groupId || !siteId) {
     return res.status(401).json({
       message:
         'Authentication Error: Group/Site context not found. Please complete previous setup steps.',
     });
   }
 
-  const groupId = dbUser.group_id;
-  const siteId = dbUser.site_id;
-
-  // ──────────────────────────────────────────────
-  // INPUT VALIDATION
-  // ──────────────────────────────────────────────
-  const { defaultVatRate, defaultLabourRate, timezone, currencyCode } = req.body;
+  // ─────────────────────────────────────────────────────────────
+  // 3. Validate incoming body
+  // ─────────────────────────────────────────────────────────────
+  const { defaultVatRate, defaultLabourRate, timezone, currencyCode } =
+    req.body as SaveRatesBody;
 
   const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
@@ -62,45 +136,53 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     return res.status(400).json({ message: 'Invalid labour rate' });
   }
 
-  // ──────────────────────────────────────────────
-  // DB UPDATE
-  // ──────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // 4. Atomic DB update for Site, TaxRate, ServiceCatalogue
+  // ─────────────────────────────────────────────────────────────
   try {
-    const vatDec = new Prisma.Decimal(vat.toFixed(2));
-    const rateDec = new Prisma.Decimal(labour.toFixed(2));
-
-    await prisma.$transaction(async (tx) => {
-      // A. Site regional configuration
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // A. Site regional settings
       await tx.site.update({
-        where: { id: siteId },
-        data: { timezone, currency_code: currencyCode },
+        where: { id: siteId! },
+        data: {
+          timezone,
+          currency_code: currencyCode,
+        },
       });
 
-      // B. VAT rate
+      // B. Group VAT rate (deterministic id per group)
+      const vatDec = new Prisma.Decimal(vat.toFixed(2));
+      const ukVatId = `${groupId}-UK-VAT`;
+
       await tx.taxRate.upsert({
-        where: { id: `${groupId}-UK-VAT` },
-        update: { percentage: vatDec },
+        where: { id: ukVatId },
+        update: {
+          percentage: vatDec,
+        },
         create: {
-          id: `${groupId}-UK-VAT`,
-          group_id: groupId,
+          id: ukVatId,
+          group_id: groupId!,
           name: 'UK VAT',
           percentage: vatDec,
           valid_from: new Date(),
         },
       });
 
-      // C. Default labour service
+      // C. Default labour service for this site
+      const rateDec = new Prisma.Decimal(labour.toFixed(2));
+      const labourServiceId = `${groupId}-${siteId}-LABOUR_HR`;
+
       await tx.serviceCatalogue.upsert({
-        where: { id: `${groupId}-${siteId}-LABOUR_HR` },
+        where: { id: labourServiceId },
         update: {
           default_labour_rate: rateDec,
           default_price: rateDec,
           vat_rate: vatDec,
         },
         create: {
-          id: `${groupId}-${siteId}-LABOUR_HR`,
-          group_id: groupId,
-          site_id: siteId,
+          id: labourServiceId,
+          group_id: groupId!,
+          site_id: siteId!,
           service_code: 'LABOUR_HR',
           name: 'Labour (per hour)',
           description: 'Standard labour rate per hour (ex VAT).',
