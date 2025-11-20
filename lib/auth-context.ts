@@ -3,7 +3,7 @@
  * Last edited: 2025-11-20 12:50 Europe/London
  *
  * Helper: Require an authenticated user and return their core context
- * (user id, group id, site id) for API routes.
+ * (user id, group id, site id) for API routes...
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
