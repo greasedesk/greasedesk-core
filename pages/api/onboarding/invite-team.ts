@@ -1,98 +1,88 @@
 /**
  * File: pages/api/onboarding/invite-team.ts
- * Helper: Process team member invitations with proper authentication context
+ * Description: API to receive team member invites, create pending user records, and send emails.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import { requireAuthContext } from '@/lib/auth-context';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]';
+import { Prisma, UserRole } from '@prisma/client';
+import crypto from 'crypto';
 
-// Helper type for invitation response
-type InvitationResponse = {
-  success: boolean;
-  message: string;
-  count?: number;
-  error?: string;
-};
+// NOTE: We will skip the actual email sending logic (using Resend) for now 
+// and focus on database creation, but you will integrate the email API here later.
 
-/**
- * API Route: Handle team member invitations
- * Requires authentication and proper context
- */
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<InvitationResponse>
-) {
+interface InvitePayload {
+  invites: { email: string; role: 'STAFF' | 'MECHANIC' }[];
+}
+
+export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, message: 'Method not allowed' });
+    return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
+  // Get session
+  const session = await getServerSession(req, res, authOptions);
+  const user = session?.user as any;
+
+  // 1. Authentication and Context Check
+  if (!user?.group_id || !user?.site_id) {
+    return res.status(401).json({
+      message: 'Unauthorized: Session or site context is missing.',
+    });
+  }
+
+  const groupId = user.group_id;
+  const siteId = user.site_id;
+  const { invites } = req.body as InvitePayload;
+
+  // Validate invites
+  if (!invites || invites.length === 0) {
+    return res.status(400).json({ message: 'No valid invitations provided.' });
+  }
+
+  // Prepare data for batch creation
+  const usersToCreate = invites.map(invite => ({
+    email: invite.email.toLowerCase(),
+    role: invite.role,
+    group_id: groupId,
+    site_id: siteId,
+    // New users start inactive, pending verification/setup
+    is_active: false,
+    emailVerified: null,
+    // Since they don't have a password yet, we use a placeholder:
+    passwordHash: 'INVITE_PENDING', 
+  }));
+
   try {
-    // Require authenticated context
-    const authContext = await requireAuthContext(req, res);
-    
-    // Validate request body
-    const { invites } = req.body;
-    
-    if (!invites || !Array.isArray(invites) || invites.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No valid invitations provided.' 
-      });
-    }
-
-    // Prepare data for batch creation
-    const usersToCreate = invites.map(invite => ({
-      email: invite.email.toLowerCase(),
-      role: invite.role,
-      group_id: authContext.groupId, // Use correct field name
-      site_id: authContext.siteId,
-      is_active: false,
-      emailVerified: null,
-      passwordHash: 'INVITE_PENDING', 
-    }));
-
-    // Transaction to create multiple new User records
+    // 2. Transaction to create multiple new User records
     const createdUsers = await prisma.$transaction(
       usersToCreate.map(data => 
         prisma.user.upsert({
           where: { email: data.email },
           update: { 
+            // If user already exists, update their role/site details based on the admin invite
             role: data.role,
             site_id: data.site_id,
-            group_id: data.group_id, // Use correct field name
+            group_id: groupId,
           },
           create: data,
         })
       )
     );
 
-    // Return success response
+    // 3. (Future Step): Loop through createdUsers and send invitation emails.
     return res.status(200).json({ 
-      success: true, 
       message: 'Invitations processed and pending user accounts created.',
-      count: createdUsers.length 
+      count: createdUsers.length,
     });
 
   } catch (error: any) {
-    // Handle errors
+    // P2002 error here would mean a unique constraint failed (e.g., trying to create a user 
+    // with an existing non-email unique field if added later)
     console.error('Invite Team API Error:', error);
-    
-    // If the error is from the database, check for specific issues
-    if (error.code === 'P2002') {
-      return res.status(409).json({
-        success: false,
-        message: 'Conflict: User with this email already exists.',
-        error: error.message
-      });
-    }
-    
-    // General error
     return res.status(500).json({
-      success: false,
       message: 'Failed to process invitations due to a server error.',
-      error: error.message
     });
   }
 }
