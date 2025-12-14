@@ -1,9 +1,8 @@
+// File: lib/auth-context.ts - Agent Fix: 2025-12-14
+
 /**
- * File: lib/auth-context.ts
- * Last edited: 2025-11-20 12:50 Europe/London
- *
  * Helper: Require an authenticated user and return their core context
- * (user id, group id, site id) for API routes...
+ * (user id, group id, site id, role, garageName) for API routes.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -16,11 +15,13 @@ export interface AuthContext {
   userId: string;
   groupId: string | null;
   siteId: string | null;
+  role: string; // e.g., 'admin', 'owner', 'user', 'mechanic'
+  garageName: string | null; // Added for garage assignment check
 }
 
 /**
- * Require a valid NextAuth session and resolve the current user record.
- * Throws if there is no logged-in user.
+ * Require a valid NextAuth session and resolve the current user record and AuthContext.
+ * Throws if there is no logged-in user or if the user is not assigned to a garage.
  */
 export async function requireAuthContext(
   req: NextApiRequest,
@@ -43,16 +44,33 @@ export async function requireAuthContext(
         sessionEmail ? { email: sessionEmail } : undefined,
       ].filter(Boolean) as any,
     },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      garageId: true,
+      garageName: true,
+      group_id: true,
+      site_id: true,
+    },
   });
 
   if (!user) {
     throw new Error('Authenticated user record not found');
   }
 
+  // ✅ Multi-Tenant Security Check (GreaseDesk Blueprint Requirement)
+  // Throw error if user is not assigned to a garage (Tenant)
+  if (!user.garageName) {
+    throw new Error('User is not assigned to a garage');
+  }
+
   return {
     sessionUserId: sessionUserId ?? user.id,
     userId: user.id,
-    groupId: (user as any).group_id ?? null,
-    siteId: (user as any).site_id ?? null,
+    groupId: user.group_id ?? null,
+    siteId: user.site_id ?? null,
+    role: user.role,
+    garageName: user.garageName,
   };
 }
