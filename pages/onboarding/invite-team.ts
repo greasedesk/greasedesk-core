@@ -1,5 +1,6 @@
 /**
  * File: pages/api/onboarding/invite-team.ts
+ * last edited 
  * Description: API to receive team member invites, create pending user records, and send emails.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -61,7 +62,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
                         // If user already exists, update their role/site details based on the admin invite
                         role: data.role,
                         site_id: data.site_id,
-                        group_id: data.groupId, // Should use groupId from session
+                        group_id: groupId, // FIXED: Using groupId from session context
                     },
                     create: data,
                 })
