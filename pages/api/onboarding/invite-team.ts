@@ -1,103 +1,98 @@
-// File: pages/api/onboarding/invite-teams.ts - Agent Fix: 2025-12-14
+/**
+ * File: pages/api/onboarding/invite-team.ts
+ * Helper: Process team member invitations with proper authentication context
+ */
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { prisma } from '@/lib/db';
+import { requireAuthContext } from '@/lib/auth-context';
 
-import { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient } from '@prisma/client';
-// FIX: Using Absolute Imports (@/lib) to prevent module resolution errors
-import { requireAuthContext, AuthContext } from '@/lib/auth-context'; 
-import { sendTeamInvitationEmail } from '@/lib/email-service'; 
-
-const prisma = new PrismaClient();
-
-// Validate email format
-const isValidEmail = (email: string): boolean => {
-  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return re.test(email);
+// Helper type for invitation response
+type InvitationResponse = {
+  success: boolean;
+  message: string;
+  count?: number;
+  error?: string;
 };
 
-// Central handler for POST requests, accepting AuthContext for security checks
-async function handlePost(req: NextApiRequest, res: NextApiResponse, authContext: AuthContext) {
-  // ✅ Security: Ensure user is admin or owner (multi-tenant SaaS requirement)
-  if (authContext.role !== 'admin' && authContext.role !== 'owner') {
-    return res.status(403).json({ error: 'Insufficient permissions' });
-  }
-  
-  const { email, inviteLink } = req.body;
-  
-  // NOTE: Removed 'garageId' from destructuring as it is derived from AuthContext for security
-  if (!email || !inviteLink) {
-    return res.status(400).json({ error: 'Missing required fields: email, inviteLink' });
-  }
-
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ error: 'Invalid email format' });
-  }
-
-  // Use the group/garage ID from the secure AuthContext
-  const actualGarageId = authContext.groupId;
-  if (!actualGarageId) {
-       return res.status(403).json({ error: 'User is not assigned to a garage or group' });
-  }
-
-  try {
-    // Check if user already exists in the garage (to prevent duplicate invites)
-    const existingMember = await prisma.user.findFirst({
-      where: {
-        email,
-        groupId: actualGarageId, // Use the authenticated group ID
-      },
-    });
-
-    if (existingMember) {
-      return res.status(409).json({ error: 'User already exists in this garage' });
-    }
-
-    // ✅ P.7 Notification System: Send invitation email
-    const success = await sendTeamInvitationEmail(email, authContext.garageName || 'GreaseDesk Garage', inviteLink);
-
-    if (!success) {
-      // This is the error seen on the frontend: "Failed to send invitations"
-      return res.status(500).json({ error: 'Failed to send invitation email' });
-    }
-
-    // Optionally, create a pending invite record in the DB
-    // NOTE: Changed garageId to groupId to match multi-tenant logic
-    await prisma.invite.create({
-      data: {
-        email,
-        groupId: actualGarageId,
-        inviteLink,
-        createdAt: new Date(),
-        status: 'pending',
-      },
-    });
-
-    return res.status(200).json({ message: 'Team invitation sent successfully' });
-  } catch (error) {
-    console.error('Error processing invite:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-}
-
-// Default export: Central handler that performs authentication
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+/**
+ * API Route: Handle team member invitations
+ * Requires authentication and proper context
+ */
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<InvitationResponse>
+) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ success: false, message: 'Method not allowed' });
   }
-  
+
   try {
-    // Replaced API Key check with secure requireAuthContext
+    // Require authenticated context
     const authContext = await requireAuthContext(req, res);
-    return handlePost(req, res, authContext);
+    
+    // Validate request body
+    const { invites } = req.body;
+    
+    if (!invites || !Array.isArray(invites) || invites.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No valid invitations provided.' 
+      });
+    }
+
+    // Prepare data for batch creation
+    const usersToCreate = invites.map(invite => ({
+      email: invite.email.toLowerCase(),
+      role: invite.role,
+      group_id: authContext.groupId, // Use correct field name
+      site_id: authContext.siteId,
+      is_active: false,
+      emailVerified: null,
+      passwordHash: 'INVITE_PENDING', 
+    }));
+
+    // Transaction to create multiple new User records
+    const createdUsers = await prisma.$transaction(
+      usersToCreate.map(data => 
+        prisma.user.upsert({
+          where: { email: data.email },
+          update: { 
+            role: data.role,
+            site_id: data.site_id,
+            group_id: data.group_id, // Use correct field name
+          },
+          create: data,
+        })
+      )
+    );
+
+    // Return success response
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Invitations processed and pending user accounts created.',
+      count: createdUsers.length 
+    });
+
   } catch (error: any) {
-    // Centralized authentication and permission error handling
-    if (error.message === 'Not authenticated') {
-      return res.status(401).json({ error: 'Not authenticated' });
+    // Handle errors
+    console.error('Invite Team API Error:', error);
+    
+    // If the error is from the database, check for specific issues
+    if (error.code === 'P2002') {
+      return res.status(409).json({
+        success: false,
+        message: 'Conflict: User with this email already exists.',
+        error: error.message
+      });
     }
-    if (error.message.includes('not found') || error.message.includes('not assigned to a garage')) {
-        return res.status(403).json({ error: error.message });
-    }
-    console.error('API Handler Error:', error);
-    return res.status(500).json({ error: error.message || 'Internal Server Error' });
+    
+    // General error
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to process invitations due to a server error.',
+      error: error.message
+    });
   }
 }
