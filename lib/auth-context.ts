@@ -1,10 +1,8 @@
 // File: lib/auth-context.ts - Agent Fix: 2025-12-14
-
 /**
  * Helper: Require an authenticated user and return their core context
  * (user id, group id, site id, role, garageName) for API routes.
  */
-
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -28,7 +26,7 @@ export async function requireAuthContext(
   res: NextApiResponse
 ): Promise<AuthContext> {
   const session = await getServerSession(req, res, authOptions);
-
+  
   if (!session?.user) {
     throw new Error('Not authenticated');
   }

@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "title": "DeepSeek Coder (local)",
+      "provider": "ollama",
+      "model": "deepseek-coder"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "DeepSeek Coder (local)",
+    "provider": "ollama",
+    "model": "deepseek-coder"
+  },
+  "defaultModel": {
+    "title": "DeepSeek Coder (local)",
+    "provider": "ollama",
+    "model": "deepseek-coder"
+  },
+  "allowAnonymousTelemetry": false
+}
