@@ -1,3 +1,4 @@
+// pages/api/onboarding/update-rates.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
@@ -18,6 +19,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;
+
   if (!sessionUser?.email && !sessionUser?.id) {
     return res.status(401).json({
       message: 'Authentication Error: User session not found. Please sign in again.',
@@ -37,12 +39,14 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
           select: { id: true, email: true, group_id: true, site_id: true },
         })
       : null;
+
   if (!dbUser && userEmailFromSession) {
     dbUser = await prisma.user.findUnique({
       where: { email: userEmailFromSession },
       select: { id: true, email: true, group_id: true, site_id: true },
     });
   }
+
   if (!dbUser) {
     return res.status(401).json({
       message: 'Authentication Error: User not found in database.',
@@ -63,6 +67,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       where: { billing_email: userEmail },
       select: { id: true },
     });
+
     if (existingGroup) {
       groupId = existingGroup.id;
       // ✅ Removed: userUpdateData.group_id = existingGroup.id;  // → Not allowed in UserUpdateInput
@@ -76,6 +81,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       orderBy: { created_at: 'asc' },
       select: { id: true },
     });
+
     if (existingSite) {
       siteId = existingSite.id;
       // ✅ Removed: userUpdateData.site_id = existingSite.id;  // → Not allowed in UserUpdateInput
@@ -86,7 +92,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // because they are not writable fields in UserUpdateInput.
   // Instead, we only store the recovered IDs in groupId/siteId variables for later use.
   // The current logic is correct: we are just restoring context — not changing user relations.
-  
   // After self-heal, if we STILL don’t have group/site, we must stop.
   if (!groupId || !siteId) {
     return res.status(401).json({
@@ -100,11 +105,14 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // ─────────────────────────────────────────────────────────────
   const { defaultVatRate, defaultLabourRate, timezone, currencyCode } =
     req.body as SaveRatesBody;
+
   const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
+
   if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
     return res.status(400).json({ message: 'Invalid VAT rate' });
   }
+
   if (!Number.isFinite(labour) || labour < 0) {
     return res.status(400).json({ message: 'Invalid labour rate' });
   }
