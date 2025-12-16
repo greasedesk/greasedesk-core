@@ -1,6 +1,7 @@
 /**
  * File: pages/api/onboarding/invite-team.ts
  * Description: API to receive team member invites, create pending user records, and send emails.
+ * final
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
