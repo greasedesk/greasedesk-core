@@ -1,4 +1,5 @@
 // pages/api/onboarding/update-rates.ts
+// Updated 15/12/2025
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
