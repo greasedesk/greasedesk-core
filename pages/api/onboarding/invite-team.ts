@@ -64,7 +64,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
             // If user already exists, update their role/site details based on the admin invite
             role: data.role,
             site_id: data.site_id,
-            group_id: groupId,
+            group_id: data.group_id, // ✅ Use group_id (not groupId)
           },
           create: data,
         })
