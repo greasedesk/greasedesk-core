@@ -56,20 +56,19 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   try {
     // 2. Transaction to create multiple new User records
-    const createdUsers = await prisma.$transaction(
-      usersToCreate.map(data => 
-        prisma.user.upsert({
-          where: { email: data.email },
-          update: { 
-            // If user already exists, update their role/site details based on the admin invite
-            role: data.role,
-            site_id: data.site_id,
-            group_id: data.group_id, // ✅ Use group_id (not groupId)
-          },
-          create: data,
-        })
-      )
-    );
+const createdUsers = await prisma.$transaction(
+  usersToCreate.map(data => 
+    prisma.user.upsert({
+      where: { email: data.email }, // ✅ Only filter by email
+      update: { 
+        role: data.role,
+        site_id: data.site_id,
+        group_id: data.group_id,
+      },
+      create: data,
+    })
+  )
+);
 
     // 3. (Future Step): Loop through createdUsers and send invitation emails.
     return res.status(200).json({ 
