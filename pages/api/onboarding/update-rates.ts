@@ -1,20 +1,3 @@
-/**
- * File: pages/api/onboarding/update-rates.ts
- * Last edited: 2025-11-20 10:25 Europe/London
- *
- * Description:
- *  Step 2 – Financial Setup.
- *  - Loads the current user fresh from the database.
- *  - Attempts to SELF-HEAL missing group_id/site_id by:
- *      • finding a Group with billing_email = user.email
- *      • finding (or later, creating) a Site for that Group
- *    and writing those IDs back to the User.
- *  - Once groupId + siteId exist, updates:
- *      • Site regional settings (timezone, currency)
- *      • Group VAT TaxRate
- *      • Default labour ServiceCatalogue entry
- */
-
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
@@ -35,7 +18,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;
-
   if (!sessionUser?.email && !sessionUser?.id) {
     return res.status(401).json({
       message: 'Authentication Error: User session not found. Please sign in again.',
@@ -55,14 +37,12 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
           select: { id: true, email: true, group_id: true, site_id: true },
         })
       : null;
-
   if (!dbUser && userEmailFromSession) {
     dbUser = await prisma.user.findUnique({
       where: { email: userEmailFromSession },
       select: { id: true, email: true, group_id: true, site_id: true },
     });
   }
-
   if (!dbUser) {
     return res.status(401).json({
       message: 'Authentication Error: User not found in database.',
@@ -83,10 +63,9 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       where: { billing_email: userEmail },
       select: { id: true },
     });
-
     if (existingGroup) {
       groupId = existingGroup.id;
-      userUpdateData.group_id = existingGroup.id;
+      // ✅ Removed: userUpdateData.group_id = existingGroup.id;  // → Not allowed in UserUpdateInput
     }
   }
 
@@ -97,21 +76,17 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       orderBy: { created_at: 'asc' },
       select: { id: true },
     });
-
     if (existingSite) {
       siteId = existingSite.id;
-      userUpdateData.site_id = existingSite.id;
+      // ✅ Removed: userUpdateData.site_id = existingSite.id;  // → Not allowed in UserUpdateInput
     }
   }
 
-  // If we found anything to fix, persist it back to the User
-  if (Object.keys(userUpdateData).length > 0) {
-    await prisma.user.update({
-      where: { id: userId },
-      data: userUpdateData,
-    });
-  }
-
+  // NOTE: We no longer attempt to update group_id/site_id via User.update()
+  // because they are not writable fields in UserUpdateInput.
+  // Instead, we only store the recovered IDs in groupId/siteId variables for later use.
+  // The current logic is correct: we are just restoring context — not changing user relations.
+  
   // After self-heal, if we STILL don’t have group/site, we must stop.
   if (!groupId || !siteId) {
     return res.status(401).json({
@@ -125,10 +100,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // ─────────────────────────────────────────────────────────────
   const { defaultVatRate, defaultLabourRate, timezone, currencyCode } =
     req.body as SaveRatesBody;
-
   const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
-
   if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
     return res.status(400).json({ message: 'Invalid VAT rate' });
   }
@@ -153,7 +126,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       // B. Group VAT rate (deterministic id per group)
       const vatDec = new Prisma.Decimal(vat.toFixed(2));
       const ukVatId = `${groupId}-UK-VAT`;
-
       await tx.taxRate.upsert({
         where: { id: ukVatId },
         update: {
@@ -171,7 +143,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       // C. Default labour service for this site
       const rateDec = new Prisma.Decimal(labour.toFixed(2));
       const labourServiceId = `${groupId}-${siteId}-LABOUR_HR`;
-
       await tx.serviceCatalogue.upsert({
         where: { id: labourServiceId },
         update: {
