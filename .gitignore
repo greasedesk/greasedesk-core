@@ -12,6 +12,8 @@
 .env.production.local
 .env.test.local
 .env.staging.local # Added common staging environment
+env_file.txt        # Never commit ad-hoc env dumps (this file leaked a live DB URL once)
+env_file*.txt       # …and any variant of it
 
 # Build Artifacts
 /public/build

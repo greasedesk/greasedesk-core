@@ -8,6 +8,10 @@
  */
 
 import { defineConfig } from 'prisma/config';
+// Prisma stops auto-loading .env once this config file exists, so load it
+// ourselves. Without this, every Prisma CLI command (db push, migrate, seed)
+// fails with "Environment variable not found: DATABASE_URL".
+import 'dotenv/config';
 
 export default defineConfig({
   // We’re using the default schema path: "prisma/schema.prisma"
