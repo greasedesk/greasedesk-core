@@ -273,7 +273,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const user = session?.user as any;
 
   if (!user?.group_id || !user?.site_id) {
-    return { redirect: { destination: '/login', permanent: false }, props: {} as any };
+    return { redirect: { destination: '/admin/login', permanent: false }, props: {} as any };
   }
 
   const [site, vatRow, labourSvc, group] = await Promise.all([

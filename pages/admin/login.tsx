@@ -20,7 +20,7 @@ export async function getServerSideProps(context: any) {
       error: context.query.error || null,
       email: context.query.email || null,
       status: context.query.status || null, 
-      callbackUrl: context.query.callbackUrl || '/admin/bookings',
+      callbackUrl: context.query.callbackUrl || '/admin/dashboard',
     },
   };
 }
