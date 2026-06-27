@@ -139,3 +139,65 @@ them now costs nothing today and saves a rebuild later.
 - Must tolerate poor workshop signal: works offline, syncs when back online. This shapes how job
   cards are identified — the phone must create/name a card offline and reconcile cleanly when
   signal returns. Bake this into the job-card core, not later.
+
+
+## Job-Card Lifecycle & Spec (ported from the proven WordPress plugin)
+
+The WordPress `GreaseDesk-JobCards` plugin is the **canonical behavioural spec** for the job
+card. Build the SaaS to match it; do not invent behaviour. Port it in deliberate SLICES (see
+build order at the end) — do NOT attempt the whole thing in one go.
+
+### The pipeline (a card moves left to right)
+The workshop portal is organised as tabs, each a stage of one pipeline:
+- **Callbacks** — enquiry received, needs a call + a price. Build the estimate, "Send quote" → moves to Quotes.
+- **Quotes** — quote sent, awaiting customer decision. Customer accepts online, picks a slot → moves to Diary. "Resend quote" nudges; "Promote to Job Card" converts directly.
+- **Job Cards** — booked/scheduled jobs (and "Accepted/unscheduled — no date yet").
+- **Diary** — calendar view: lifts as columns, time-slot rows (9–11, 11–13, 14–16, 16–18), each job a circle (solid = on a job, ring = free), tick = completed, gear = awaiting parts; £ totals per day and per week.
+- **Completed** — finished job cards (booked date, completed date, customer).
+- **Archived** — hidden from live lists; "Restore" brings back.
+- **Search** — find current + completed cards by reg, customer, or phone.
+- **Messages** — per-customer SMS/WhatsApp/portal threads (NOT yet wired in WP — Phase later).
+
+### Job-card status — four stages, each Pending/Done
+Every card tracks four sequential stages, shown as badges:
+1. **Job Card** (the details/estimate) 2. **Intake Photos** 3. **In-Job** (photos + notes) 4. **Complete Photos**
+Plus an overall status (Booked → Completed) and "Mark as Completed" / "Mark as Pending".
+
+### Job-card fields (main tab)
+- Vehicle/customer: registration, customer name, phone, email, VIN, current mileage.
+  **Reg autofill:** if the customer/vehicle is already known, entering the reg autofills their details.
+- **Flags:** Urgent/Priority, Sales Car, Customer Car, MOT (MOT bay needed), DIAG (diagnostic).
+- **Scheduling:** start day, start slot, end day, end slot (multi-day for awaiting-parts), lift
+  assignment, "Held on lift until released (e.g. awaiting parts)". Leave dates blank if accepted
+  but not yet scheduled.
+- **Estimate / Quote builder:** labour lines (description, hourly rate, hrs, VAT, total) + parts
+  lines (description, unit price, qty, VAT, total) → subtotals → VAT % → Total. **When lines exist,
+  the quote total auto-sets the card Value.**
+- **Value (£)**, and "Booked work (from online booking)".
+- **Garage notes (internal — never shown to customer).**
+- **Notes for the customer** — date-stamped, shown newest-first in the customer portal; editable.
+- **Send update to customer** (SMS/Email, optional extra message) — saves card + notifies via portal link.
+- **Messages with customer** — full two-way thread (SMS/WhatsApp/portal).
+- **Referral discounts**, **Invoice (PDF)**, **Service schedule** (due in miles / due by month — feeds reminders), **Status** dropdown, **History** log (date-stamped, who did what).
+- **Customer portal link** per card — shows that customer their vehicles, history, photos.
+
+### Photo stages
+- **Intake Photos:** fixed slots — Front, Left, Rear, Right, Engine Bay, VIN, Mileage, Inside Left,
+  Inside Right, Rear Seats, Boot Area (multiple per slot; high-res view; timestamped).
+- **In-Job:** free-form photos + per-photo captions + in-job notes (e.g. "Draining the oil").
+- **Complete Photos:** same slot set as intake, for the finished state.
+
+### HARD RULE — invoice gate
+**An invoice must NOT be generatable until all four stages AND their required photos are complete.**
+This protects the garage (no invoice without evidence) and enforces correct workflow sequencing.
+Treat as a non-negotiable gate, the same class of rule as the double-booking guard.
+
+### Build order (slices — build one, prove it, then the next)
+1. **Spine:** create / view / list a job card — vehicle+customer fields, the four-stage status,
+   tenant-scoped to `group_id`, using the Settings page as the working pattern. Fix the broken
+   `api/jobcard.ts` and `api/bookings.ts` against the real schema as part of this.
+2. **Estimate/quote builder** — labour + parts lines, VAT, total auto-setting Value.
+3. **Photo stages** — intake / in-job / complete, with the slot model.
+4. **Invoice** — behind the gate above.
+5. **Diary** — lifts/resources + events (see Phase 2 design); fix double-booking.
+6. **Customer messaging / portal** — SMS/WhatsApp threads, portal link.
