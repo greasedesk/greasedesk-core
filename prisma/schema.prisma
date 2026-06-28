@@ -406,11 +406,15 @@ model JobCard {
   stage_injob_done    Boolean @default(false) // 3. In-Job
   stage_complete_done Boolean @default(false) // 4. Complete Photos
 
-  // --- DIARY scheduling: placement on a Resource at a time slot ---
+  // --- DIARY scheduling ---
+  // start_at / end_at are the SOURCE OF TRUTH for scheduling (continuous time).
   resource_id    String?
-  scheduled_date DateTime? @db.Date // the diary day
-  start_slot     Int?              // slot index 0–3
-  end_slot       Int?              // = start_slot for now; range reserved for multi-slot
+  start_at       DateTime? // scheduling start (source of truth)
+  end_at         DateTime? // scheduling end (source of truth)
+  // Legacy slot model — retained until retired in a later slice; no longer read.
+  scheduled_date DateTime? @db.Date
+  start_slot     Int?
+  end_slot       Int?
 
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
@@ -425,6 +429,7 @@ model JobCard {
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
   @@index([resource_id, scheduled_date])
+  @@index([resource_id, start_at])
 }
 
 model JobCardPhoto {

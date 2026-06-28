@@ -1,9 +1,11 @@
 /**
  * File: pages/admin/diary.tsx
- * Per-location diary. Columns = the location's active Resources (ordered by display_order),
- * rows = 4 fixed time slots. Place an unscheduled job card on a resource+slot (guarded against
- * double-booking by /api/diary). Location chosen via ?site=, day via ?date=.
- * Tenant-scoped: site must belong to the caller's group; cards placed on their own site only.
+ * Continuous-time diary. Source of truth = JobCard.start_at / end_at.
+ *   ?view=week (default) → 7 day columns, location-wide, blocks by time with overlap lanes.
+ *   ?view=day            → resource columns for one day, blocks by time.
+ * Place a card = pick card + resource + date + start time + duration. Guard = interval overlap
+ * on the same resource (server, /api/diary). Phase 1: times are wall-clock stored in UTC,
+ * window hardcoded 07:00–18:00.
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
@@ -15,88 +17,141 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
 
-const SLOTS = [
-  { i: 0, label: '09:00–11:00' },
-  { i: 1, label: '11:00–13:00' },
-  { i: 2, label: '14:00–16:00' },
-  { i: 3, label: '16:00–18:00' },
-];
+const WIN_START_HOUR = 7;
+const WIN_END_HOUR = 18;
+const WIN_MIN = (WIN_END_HOUR - WIN_START_HOUR) * 60; // 660 → 1px per minute
+const PX_PER_MIN = 1;
 
 type ResourceCol = { id: string; name: string; type: string };
-type PlacedCard = { id: string; resourceId: string; startSlot: number; endSlot: number; reg: string; customer: string; status: string };
+type DiaryCard = { id: string; resourceId: string; resourceName: string; reg: string; customer: string; status: string; startAt: string; endAt: string };
 type UnscheduledCard = { id: string; reg: string; customer: string };
+type DayCol = { date: string; label: string };
 type PageProps = {
-  siteId: string;
-  siteName: string;
-  date: string;
-  prevDate: string;
-  nextDate: string;
-  resources: ResourceCol[];
-  placed: PlacedCard[];
-  unscheduled: UnscheduledCard[];
+  siteId: string; siteName: string; view: 'week' | 'day'; anchor: string;
+  prev: string; next: string; days: DayCol[];
+  resources: ResourceCol[]; cards: DiaryCard[]; unscheduled: UnscheduledCard[];
 };
 
-function ymd(d: Date) {
-  return d.toISOString().slice(0, 10);
+function ymd(d: Date) { return d.toISOString().slice(0, 10); }
+function dayStartMs(date: string) { return Date.parse(`${date}T00:00:00.000Z`); }
+
+// Compute a card's visible segment (px) within a given day's window; null if not visible.
+function segment(card: { startAt: string; endAt: string }, date: string) {
+  const winStart = dayStartMs(date) + WIN_START_HOUR * 3600000;
+  const winEnd = dayStartMs(date) + WIN_END_HOUR * 3600000;
+  const s = Math.max(Date.parse(card.startAt), winStart);
+  const e = Math.min(Date.parse(card.endAt), winEnd);
+  if (e <= s) return null;
+  return { top: (s - winStart) / 60000 * PX_PER_MIN, height: Math.max(14, (e - s) / 60000 * PX_PER_MIN), s, e };
 }
 
-export default function DiaryPage({ siteId, siteName, date, prevDate, nextDate, resources, placed, unscheduled }: PageProps) {
+// Greedy overlap-lane assignment for a day's segments (Outlook-style side-by-side).
+function assignLanes<T extends { s: number; e: number }>(items: T[]) {
+  const sorted = [...items].sort((a, b) => a.s - b.s);
+  const laneEnds: number[] = [];
+  const out: Array<T & { lane: number; lanes: number }> = [];
+  for (const it of sorted) {
+    let lane = laneEnds.findIndex((end) => end <= it.s);
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(it.e); } else { laneEnds[lane] = it.e; }
+    out.push({ ...it, lane, lanes: 0 });
+  }
+  const total = laneEnds.length || 1;
+  return out.map((o) => ({ ...o, lanes: total }));
+}
+
+const HOURS = Array.from({ length: WIN_END_HOUR - WIN_START_HOUR + 1 }, (_, i) => WIN_START_HOUR + i);
+
+function statusColour(status: string) {
+  if (status === 'completed') return 'bg-green-800 border-green-600';
+  return 'bg-blue-800 border-blue-500';
+}
+
+export default function DiaryPage(props: PageProps) {
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, unscheduled } = props;
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   const [msg, setMsg] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
-  const [openCell, setOpenCell] = useState<string | null>(null); // `${resourceId}:${slot}`
 
-  // Lookup: which card occupies a given resource+slot.
-  const cellCard = (resourceId: string, slot: number) =>
-    placed.find((p) => p.resourceId === resourceId && p.startSlot <= slot && p.endSlot >= slot);
+  // Placement form state
+  const [jobCardId, setJobCardId] = useState('');
+  const [resourceId, setResourceId] = useState(resources[0]?.id ?? '');
+  const [date, setDate] = useState(view === 'day' ? anchor : days[0]?.date ?? anchor);
+  const [time, setTime] = useState('09:00');
+  const [hours, setHours] = useState('2');
 
-  async function place(jobCardId: string, resourceId: string, slot: number) {
+  async function place(e: React.FormEvent) {
+    e.preventDefault();
     setMsg(null);
+    if (!jobCardId || !resourceId) { setMsg({ text: 'Pick a job card and a resource.', type: 'error' }); return; }
+    const startAt = new Date(`${date}T${time}:00.000Z`);
+    const dur = Number(hours);
+    if (!Number.isFinite(dur) || dur <= 0) { setMsg({ text: 'Duration must be a positive number of hours.', type: 'error' }); return; }
+    const endAt = new Date(startAt.getTime() + dur * 3600000);
     const res = await fetch('/api/diary', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobCardId, resourceId, date, startSlot: slot, endSlot: slot }),
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobCardId, resourceId, startAt: startAt.toISOString(), endAt: endAt.toISOString() }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setMsg({ text: data?.message || 'Failed to place job card.', type: 'error' });
-      return;
-    }
-    setOpenCell(null);
+    if (!res.ok) { setMsg({ text: data?.message || 'Failed to place.', type: 'error' }); return; }
     setMsg({ text: 'Job card placed.', type: 'success' });
+    setJobCardId('');
     refresh();
   }
 
-  async function unplace(jobCardId: string) {
+  async function unplace(id: string) {
     setMsg(null);
-    const res = await fetch(`/api/diary?jobCardId=${jobCardId}`, { method: 'DELETE' });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setMsg({ text: data?.message || 'Failed to unplace.', type: 'error' });
-      return;
-    }
+    const res = await fetch(`/api/diary?jobCardId=${id}`, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); setMsg({ text: d?.message || 'Failed to unplace.', type: 'error' }); return; }
     refresh();
   }
+
+  // Build the columns to render: week → days; day → resources (each for the single day).
+  const columns =
+    view === 'week'
+      ? days.map((d) => ({ key: d.date, label: d.label, date: d.date, cards }))
+      : resources.map((r) => ({ key: r.id, label: `${r.name} (${r.type})`, date: anchor, cards: cards.filter((c) => c.resourceId === r.id) }));
+
+  const fmt = (iso: string) => new Date(iso).toISOString().slice(11, 16);
 
   return (
     <AdminLayout>
       <Head><title>Diary - GreaseDesk</title></Head>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h1 className="text-3xl font-bold text-white">Diary — {siteName}</h1>
+        <h1 className="text-2xl font-bold text-white">Diary — {siteName}</h1>
         <div className="flex items-center gap-2">
-          <Link href={`/admin/diary?site=${siteId}&date=${prevDate}`} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200 hover:bg-slate-600">← Prev</Link>
-          <Link href={`/admin/diary?site=${siteId}&date=${ymdToday()}`} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200 hover:bg-slate-600">Today</Link>
-          <span className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white font-medium">{date}</span>
-          <Link href={`/admin/diary?site=${siteId}&date=${nextDate}`} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200 hover:bg-slate-600">Next →</Link>
+          <div className="flex rounded-lg overflow-hidden border border-slate-600">
+            <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'week' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Week</Link>
+            <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'day' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Day</Link>
+          </div>
+          <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200 hover:bg-slate-600">←</Link>
+          <span className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white">{view === 'week' ? `Week of ${days[0]?.date}` : anchor}</span>
+          <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} className="px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200 hover:bg-slate-600">→</Link>
         </div>
       </div>
 
-      {msg && (
-        <div className={`p-3 rounded-lg mb-4 text-sm ${msg.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>
-          {msg.text}
+      {msg && <div className={`p-3 rounded-lg mb-4 text-sm ${msg.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>{msg.text}</div>}
+
+      {/* Placement form */}
+      <form onSubmit={place} className="bg-slate-800 border border-slate-700 rounded-xl p-3 mb-4 flex flex-wrap items-end gap-2">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Job card</label>
+          <select value={jobCardId} onChange={(e) => setJobCardId(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm min-w-[180px]">
+            <option value="">Unscheduled… ({unscheduled.length})</option>
+            {unscheduled.map((u) => <option key={u.id} value={u.id}>{u.reg} — {u.customer}</option>)}
+          </select>
         </div>
-      )}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Resource</label>
+          <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm">
+            {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </div>
+        <div><label className="block text-xs text-slate-400 mb-1">Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm" /></div>
+        <div><label className="block text-xs text-slate-400 mb-1">Start</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm" /></div>
+        <div><label className="block text-xs text-slate-400 mb-1">Hours</label><input type="number" step="0.5" min="0.5" value={hours} onChange={(e) => setHours(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm w-20" /></div>
+        <button type="submit" className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm">Place</button>
+      </form>
 
       {resources.length === 0 ? (
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">
@@ -104,79 +159,54 @@ export default function DiaryPage({ siteId, siteName, date, prevDate, nextDate, 
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="border-collapse">
-            <thead>
-              <tr>
-                <th className="p-2 text-xs uppercase text-slate-500 text-left w-28">Slot</th>
-                {resources.map((r) => (
-                  <th key={r.id} className="p-2 text-sm text-white text-left min-w-[180px] border-b border-slate-700">
-                    {r.name} <span className="text-slate-500 text-xs">({r.type})</span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {SLOTS.map((slot) => (
-                <tr key={slot.i}>
-                  <td className="p-2 text-xs text-slate-400 align-top whitespace-nowrap">{slot.label}</td>
-                  {resources.map((r) => {
-                    const card = cellCard(r.id, slot.i);
-                    const key = `${r.id}:${slot.i}`;
-                    return (
-                      <td key={key} className="p-1 align-top border border-slate-800">
-                        {card ? (
-                          <div className="bg-slate-700 border border-slate-600 rounded-lg p-2 text-sm">
-                            <div className="font-semibold text-white">{card.reg}</div>
-                            <div className="text-slate-300 text-xs">{card.customer}</div>
-                            <div className="flex items-center justify-between mt-1">
-                              <span className="text-xs text-slate-400 capitalize">{card.status}</span>
-                              <button onClick={() => unplace(card.id)} className="text-xs text-red-400 hover:underline">Unplace</button>
-                            </div>
-                          </div>
-                        ) : openCell === key ? (
-                          <div className="p-1">
-                            <select
-                              autoFocus
-                              defaultValue=""
-                              onChange={(e) => e.target.value && place(e.target.value, r.id, slot.i)}
-                              className="w-full p-1.5 bg-slate-700 border border-slate-600 rounded text-white text-xs"
-                            >
-                              <option value="" disabled>Pick a job card…</option>
-                              {unscheduled.map((u) => (
-                                <option key={u.id} value={u.id}>{u.reg} — {u.customer}</option>
-                              ))}
-                            </select>
-                            <button onClick={() => setOpenCell(null)} className="text-xs text-slate-400 hover:text-white mt-1">Cancel</button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => { setMsg(null); setOpenCell(key); }}
-                            className="w-full h-14 text-slate-500 hover:text-slate-200 hover:bg-slate-800 rounded-lg text-sm"
-                          >
-                            + Place
-                          </button>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
+          <div className="flex min-w-max">
+            {/* Time axis */}
+            <div className="w-16 shrink-0 pt-7">
+              {HOURS.map((h) => (
+                <div key={h} style={{ height: 60 * PX_PER_MIN }} className="text-xs text-slate-500 text-right pr-2 -mt-2">{String(h).padStart(2, '0')}:00</div>
               ))}
-            </tbody>
-          </table>
+            </div>
+            {/* Columns */}
+            {columns.map((col) => {
+              const segs = col.cards
+                .map((c) => { const sg = segment(c, col.date); return sg ? { ...sg, card: c } : null; })
+                .filter(Boolean) as Array<{ top: number; height: number; s: number; e: number; card: DiaryCard }>;
+              const laid = view === 'week' ? assignLanes(segs) : segs.map((x) => ({ ...x, lane: 0, lanes: 1 }));
+              return (
+                <div key={col.key} className="w-48 shrink-0 border-l border-slate-800">
+                  <div className="h-7 text-sm text-white text-center font-medium truncate px-1">{col.label}</div>
+                  <div className="relative bg-slate-900/40" style={{ height: WIN_MIN * PX_PER_MIN }}>
+                    {HOURS.slice(1).map((h, i) => (
+                      <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-slate-800/70" />
+                    ))}
+                    {laid.map((x) => {
+                      const widthPct = 100 / x.lanes;
+                      return (
+                        <div
+                          key={x.card.id}
+                          style={{ top: x.top, height: x.height, left: `${x.lane * widthPct}%`, width: `calc(${widthPct}% - 2px)` }}
+                          className={`absolute rounded-md border px-1.5 py-1 text-[11px] text-white overflow-hidden ${statusColour(x.card.status)}`}
+                          title={`${x.card.reg} — ${x.card.customer} (${fmt(x.card.startAt)}–${fmt(x.card.endAt)})`}
+                        >
+                          <div className="font-semibold truncate">{x.card.reg}</div>
+                          <div className="truncate text-slate-200">{x.card.customer}</div>
+                          {view === 'week' && <div className="truncate text-slate-300">{x.card.resourceName}</div>}
+                          <div className="flex items-center justify-between mt-0.5">
+                            <Link href={`/admin/jobcards/${x.card.id}`} className="underline text-slate-200">view</Link>
+                            <button onClick={() => unplace(x.card.id)} className="text-red-300 hover:text-red-200">unplace</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
-
-      <div className="mt-6 text-sm text-slate-400">
-        Unscheduled job cards at this location: <span className="text-slate-200 font-medium">{unscheduled.length}</span>
-        {unscheduled.length === 0 && ' — create one in Job Cards, or they may all be placed.'}
-      </div>
     </AdminLayout>
   );
-}
-
-// Client-side "today" for the Today button (avoids SSR/CSR drift on the label only).
-function ymdToday() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
@@ -187,49 +217,67 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
   const groupId = user.group_id as string;
 
-  // Selected location (must belong to the group); fall back to the session site.
   const requestedSite = (ctx.query.site as string) || user.site_id;
   const site = await prisma.site.findFirst({ where: { id: requestedSite, group_id: groupId }, select: { id: true, site_name: true } });
-  if (!site) {
-    return { redirect: { destination: '/admin/diary', permanent: false } };
+  if (!site) return { redirect: { destination: '/admin/diary', permanent: false } };
+
+  const view: 'week' | 'day' = ctx.query.view === 'day' ? 'day' : 'week';
+  const dateParam = (ctx.query.date as string) || '';
+  const anchorObj = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? new Date(`${dateParam}T00:00:00.000Z`) : new Date(`${ymd(new Date())}T00:00:00.000Z`);
+  const anchor = ymd(anchorObj);
+
+  let rangeStart: Date, rangeEnd: Date, days: DayCol[], prev: string, next: string;
+  const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (view === 'week') {
+    // Week starts Monday (UTC).
+    const dow = anchorObj.getUTCDay(); // 0=Sun
+    const mondayOffset = (dow + 6) % 7;
+    const weekStart = new Date(anchorObj.getTime() - mondayOffset * 86400000);
+    rangeStart = weekStart;
+    rangeEnd = new Date(weekStart.getTime() + 7 * 86400000);
+    days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart.getTime() + i * 86400000);
+      return { date: ymd(d), label: `${DAY_LABELS[d.getUTCDay()]} ${d.getUTCDate()}` };
+    });
+    prev = ymd(new Date(anchorObj.getTime() - 7 * 86400000));
+    next = ymd(new Date(anchorObj.getTime() + 7 * 86400000));
+  } else {
+    rangeStart = anchorObj;
+    rangeEnd = new Date(anchorObj.getTime() + 86400000);
+    days = [{ date: anchor, label: anchor }];
+    prev = ymd(new Date(anchorObj.getTime() - 86400000));
+    next = ymd(new Date(anchorObj.getTime() + 86400000));
   }
 
-  // Day
-  const dateParam = (ctx.query.date as string) || '';
-  const valid = /^\d{4}-\d{2}-\d{2}$/.test(dateParam);
-  const dateObj = valid ? new Date(`${dateParam}T00:00:00.000Z`) : new Date(`${ymd(new Date())}T00:00:00.000Z`);
-  const date = ymd(dateObj);
-  const prevDate = ymd(new Date(dateObj.getTime() - 86400000));
-  const nextDate = ymd(new Date(dateObj.getTime() + 86400000));
-
   type ResRow = { id: string; name: string; type: string };
-  type PlacedRow = { id: string; resource_id: string | null; start_slot: number | null; end_slot: number | null; status: string; vehicle: { registration: string | null } | null; customer: { name: string } | null };
+  type CardRow = { id: string; resource_id: string | null; start_at: Date | null; end_at: Date | null; status: string; resource: { name: string } | null; vehicle: { registration: string | null } | null; customer: { name: string } | null };
   type UnRow = { id: string; vehicle: { registration: string | null } | null; customer: { name: string } | null };
 
-  const [resourceRows, placedRows, unschedRows] = await Promise.all([
+  const [resourceRows, cardRows, unschedRows] = await Promise.all([
     prisma.resource.findMany({ where: { site_id: site.id, is_active: true }, orderBy: { display_order: 'asc' }, select: { id: true, name: true, type: true } }) as Promise<ResRow[]>,
     prisma.jobCard.findMany({
-      where: { site_id: site.id, scheduled_date: dateObj, resource_id: { not: null } },
-      select: { id: true, resource_id: true, start_slot: true, end_slot: true, status: true, vehicle: { select: { registration: true } }, customer: { select: { name: true } } },
-    }) as Promise<PlacedRow[]>,
+      where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
+      select: { id: true, resource_id: true, start_at: true, end_at: true, status: true, resource: { select: { name: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } } },
+    }) as Promise<CardRow[]>,
     prisma.jobCard.findMany({
-      where: { site_id: site.id, resource_id: null, archived_at: null },
+      where: { site_id: site.id, OR: [{ start_at: null }, { resource_id: null }], archived_at: null },
       orderBy: { created_at: 'desc' },
       select: { id: true, vehicle: { select: { registration: true } }, customer: { select: { name: true } } },
     }) as Promise<UnRow[]>,
   ]);
 
   const resources: ResourceCol[] = resourceRows.map((r: ResRow) => ({ id: r.id, name: r.name, type: r.type }));
-  const placed: PlacedCard[] = placedRows.map((p: PlacedRow) => ({
-    id: p.id,
-    resourceId: p.resource_id as string,
-    startSlot: p.start_slot ?? 0,
-    endSlot: p.end_slot ?? 0,
-    reg: p.vehicle?.registration ?? '—',
-    customer: p.customer?.name ?? '—',
-    status: p.status,
+  const cards: DiaryCard[] = cardRows.map((c: CardRow) => ({
+    id: c.id,
+    resourceId: c.resource_id as string,
+    resourceName: c.resource?.name ?? '—',
+    reg: c.vehicle?.registration ?? '—',
+    customer: c.customer?.name ?? '—',
+    status: c.status,
+    startAt: (c.start_at as Date).toISOString(),
+    endAt: (c.end_at as Date).toISOString(),
   }));
   const unscheduled: UnscheduledCard[] = unschedRows.map((u: UnRow) => ({ id: u.id, reg: u.vehicle?.registration ?? '—', customer: u.customer?.name ?? '—' }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, date, prevDate, nextDate, resources, placed, unscheduled } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, unscheduled } };
 };
