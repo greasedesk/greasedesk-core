@@ -5,8 +5,8 @@ import NextAuth, { type NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 // 💥 FIX: Changed to a named import to resolve the TypeScript/build error.
-import { prisma } from '../../../lib/db'; 
-import { compare } from 'bcrypt';
+import { prisma } from '../../../lib/db';
+import * as bcrypt from 'bcryptjs';
 import { UserRole } from '@prisma/client'; // Import the Role enum
 
 export const authOptions: NextAuthOptions = {
@@ -25,43 +25,33 @@ export const authOptions: NextAuthOptions = {
       
       },
       async authorize(credentials) {
-        // This is where you retrieve the user from the database.
         if (!credentials?.email || !credentials.password) {
           throw new Error('Please enter an email and password.');
         }
 
-        // 1. Find the user by email
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
-        });
+        // One generic failure for every auth-failure reason — never reveal which check failed
+        // (no-such-email and wrong-password must be indistinguishable to the client).
+        const FAIL = new Error('Invalid email or password.');
 
-        if (!user) {
-          throw new Error('No user found with this email.');
-        }
+        const user = await prisma.user.findUnique({ where: { email: credentials.email } });
+        if (!user) throw FAIL;
 
-        // 2. Check if the user has a password.
-        // This is a placeholder for when we add password hashing.
-        // For now, let's assume we need to implement this.
-        // We will add the password hash in the signup step.
-        // const isPasswordValid = await compare(credentials.password, user.passwordHash);
-        // New Comment
-        // --- TEMPORARY: Remove this once signup is built ---
-        // For now, we will just check if a user exists.
-        // The real check will be added in the signup step.
-        if (!user) {
-           // NOTE: The logic here is redundant as `if (!user)` is checked above.
-           // However, to maintain existing code logic, I'm leaving the inner check
-           // though it will never be reached if `user` is null.
-           throw new Error('Login failed. (Password check not yet implemented)');
-        }
+        // No usable password hash yet (never set, or still the invite placeholder) → cannot log in.
+        if (!user.passwordHash || user.passwordHash === 'INVITE_PENDING') throw FAIL;
 
-        // 3. Return the user object if login is successful
-        // This user object is what gets put into the JWT and session.
+        // Inactive accounts cannot log in.
+        if (!user.is_active) throw FAIL;
+
+        // Verify the supplied password against the stored bcrypt hash.
+        const ok = await bcrypt.compare(credentials.password, user.passwordHash);
+        if (!ok) throw FAIL;
+
+        // Returned object is put into the JWT / session.
         return {
           id: user.id,
           email: user.email,
           name: user.name,
-          role: user.role, // Pass our custom role to the session
+          role: user.role,
           site_id: user.site_id,
           group_id: user.group_id,
         };
