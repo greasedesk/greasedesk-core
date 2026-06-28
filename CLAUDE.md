@@ -201,3 +201,98 @@ Treat as a non-negotiable gate, the same class of rule as the double-booking gua
 4. **Invoice** — behind the gate above.
 5. **Diary** — lifts/resources + events (see Phase 2 design); fix double-booking.
 6. **Customer messaging / portal** — SMS/WhatsApp threads, portal link.
+
+
+## Tenancy & Access Architecture (settled design — build slices against this)
+
+This is the spine the whole SaaS hangs off. Capture it correctly before building; then
+build in deliberate slices. Provision the structure now (schema), defer the UI where noted.
+
+### The hierarchy
+```
+Group (tenant; the business; the BILLING entity)
+  └─ Site  (a node; one is Head Office)
+       ├─ Site (child)              ← parent/child via optional parent_site_id on Site
+       ├─ Profit Centre (optional)  ← a TYPED business unit; a site may have zero or many
+       │     └─ Resource            ← lift / MOT bay / spray booth (the diary's columns)
+       └─ ...
+```
+
+### Group = tenant = billing entity
+- The Group is the tenant and the unit that is billed.
+- **Billing is driven by site count.** Number of sites is declared at signup (see onboarding)
+  and changes billing. Adding a site later (in admin) must also update billing — site creation
+  has a billing hook. (Billing itself is a later module; the data model must anticipate it now:
+  Group = billing entity, Sites = billable units.)
+
+### Site = a node in the hierarchy; "Head Office" is a ROLE a site plays
+- One site per Group is **Head Office**, set at signup (it is the billing/reporting anchor and
+  the parent of child sites). More sites can be added later in admin.
+- Sites form a parent/child tree: Head Office is the parent; branches are children
+  (optional `parent_site_id` on Site — additive schema change, provision now).
+- **A site is OPTIONALLY operational and/or administrative — these are independent:**
+  - *Operational* = it trades: has Profit Centres + Resources, a diary, job cards. (Every child
+    site; and Head Office IF it also trades.)
+  - *Administrative* = Head Office capability: cross-site reporting + tenant admin.
+  - **Head Office may have ZERO profit centres** — a purely administrative head office (central
+    office over branches, no workshop of its own) is a valid, supported configuration. Never bake
+    in "Head Office always trades."
+
+### Profit Centre = a TYPED business unit (per site)
+- Examples of type: Repairs, MOT, Spraybooth, Car Sales (future).
+- **Typed deliberately**, drawn from a shared category list, so cross-site reporting can slice by
+  category ("Repairs P&L across all sites"). A free-text label would make this impossible.
+- A Profit Centre belongs to exactly one Site. A Site may have zero or many.
+
+### Resource = a physical unit within a Profit Centre
+- A lift, MOT bay, or spray booth. Belongs to exactly one Profit Centre.
+- Fields: name (e.g. "Lift 2"), type (lift / MOT bay / spray booth), and a display order
+  (for diary column ordering).
+- **These are the diary's columns** — the diary groups by Profit Centre, then shows each Resource
+  as a column. (Ties to the diary's `resource_type` concept in the Phase 2 design.)
+
+### Permission model — TWO axes (this is what the `can()` helper must encode)
+The long-standing `can(user, action, siteId)` helper must express permission on two independent axes:
+1. **Scope** — which site(s) a user can touch: their own site, or all sites under the Group.
+2. **Mode** — what they may do there: *operational* (create/edit job cards, run the diary) vs
+   *reporting* (read P&L, no edits).
+
+Resulting roles (illustrative):
+- **Child-site user:** own-site scope; operational + reporting on that site.
+- **Head-office user:** all-sites scope, but **reporting mode only** on other sites
+  (consolidated P&L, cross-site slice-and-dice) — NOT operational control of child sites.
+  Plus operational on Head Office's own site IF it trades; plus tenant admin.
+- A purely-administrative Head Office user = all-sites *reporting* + tenant admin, zero operational.
+
+**Key rule: Head Office gets reporting visibility into child sites, NOT operational visibility.**
+Head office can see a child site's numbers; it cannot reach in and edit that child's job cards or
+diary. Do not collapse these two into one "admin sees everything" permission.
+
+### Onboarding (signup wizard) — provision the above
+- Existing wizard: Step 1 account → Step 2 financial (currency/VAT/labour) → Step 3 team invites.
+- **Add a step: "How many sites?"** with a clear instruction that the FIRST site is treated as
+  Head Office, and more sites can be added later in admin. This captures the billing input and
+  establishes the Head Office node.
+- Profit centres/resources are managed in the **admin area** (editable forever), not forced into
+  the wizard — though the wizard may later seed them. The admin page is the real prerequisite for
+  the diary; the wizard step is a nicety.
+
+### Reporting (later module) — design now so it's possible
+- Cross-site "slice and dice": profit per functional area (e.g. Repairs) across multiple sites.
+- Made possible by typed Profit Centres (category is the slice dimension) + the Group hierarchy.
+- Not built now; the typing + hierarchy above are the provision that keeps it possible.
+
+### Car Sales (later module) — provision now
+- Car Sales is just another **Profit Centre type** (the job card already has a "Sales Car" flag).
+- No Car Sales code now; designing Profit Centres as typed business units is the whole provision —
+  it drops in later as a new type without structural change.
+
+### Build order off this spec
+1. **Admin: Profit Centres & Resources** for a single site (typed profit centres; resources within).
+   Schema provisions multi-site (Site.parent_site_id) + Head Office flag now; admin UI stays
+   single-site for this slice.
+2. **Onboarding "how many sites" step** + Head Office designation (billing anchor).
+3. **Diary** (renders Profit Centre → Resource columns; double-booking guard).
+4. **`can()` two-axis permission model** (scope × mode) — enables safe multi-site + head-office reporting.
+5. **Multi-site management UI** (add/manage child sites in admin).
+6. Later modules: Reporting (cross-site P&L), Car Sales, billing.
