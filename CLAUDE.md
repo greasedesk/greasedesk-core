@@ -296,3 +296,74 @@ diary. Do not collapse these two into one "admin sees everything" permission.
 4. **`can()` two-axis permission model** (scope × mode) — enables safe multi-site + head-office reporting.
 5. **Multi-site management UI** (add/manage child sites in admin).
 6. Later modules: Reporting (cross-site P&L), Car Sales, billing.
+
+
+## Navigation Shell & HQ-as-Group Refinement (settled design — supersedes "one site is Head Office")
+
+This refines the Tenancy & Access Architecture above. Where that section says "one Site is Head
+Office," read it through this lens: **HQ / consolidated reporting lives at the GROUP level, not at a
+Site.** Every physical location — including the head-office workshop — is just a Site.
+
+### The core refinement
+- **"HQ" = the Group's consolidated reporting view ("All Sites").** It is NOT a special Site.
+- **Every physical location is an ordinary Site** — including the location that happens to be head
+  office. Example: HQ = "TMBS" (the business / reporting entity); "Great Bridge" = a Site (the
+  workshop). Same building, but distinct concepts: TMBS is the reporting layer, Great Bridge is a
+  location tab.
+- This removes the awkward "empty head-office site." A **purely administrative HQ** is simply a
+  Group whose "All Sites" reporting view has no operational Site of its own — no placeholder site
+  needed.
+- Consequence for schema: the parent/child `parent_site_id` is still useful for site grouping, but
+  the reporting/billing anchor is the **Group**, not a designated "head office" Site. Drop the
+  notion of a special head-office Site flag; HQ is the Group.
+
+### Navigation shell (the same shape for 1 site or 100)
+The navigation IS the hierarchy (Group → Site → Profit Centre), which is why it scales without
+special-casing:
+
+- **Top bar = `[ All Sites ]` + one tab per Site (location).**
+  - `[ All Sites ]` is the Group-level consolidated **reporting** home — the default landing for an
+    HQ user. Shows cross-site P&L and the slice-and-dice by functional area (Repairs across all
+    sites, etc.).
+  - Selecting a specific location tab drops into **that Site's operational view**.
+- **Side bar = the functional areas (Profit Centres) within the selected location.**
+  - Repairs, MOT, Spraybooth, … for that Site. From 1 to however many.
+- **Single-site case is not special-cased:** a one-location garage simply sees
+  `[ All Sites ] [ Great Bridge ]` — two tabs — and the sidebar is Great Bridge's profit centres.
+  Identical structure, fewer items.
+
+### What this means operationally vs reporting (ties to the two-axis permission model)
+- **All Sites view** = Group-level, **reporting mode only** (consolidated P&L; no operating a
+  workshop from here).
+- **A location tab** = that Site's **operational** view (diary, job cards) for users with
+  operational scope there, and/or that Site's local reporting.
+- Head-office reporting visibility into child sites = being able to land on `All Sites` and on each
+  location tab in **reporting mode**, without operational control of locations that aren't yours.
+
+### Onboarding — declare locations, then per-location setup fork
+At signup, after the account step:
+1. **"How many locations?"** — with a clear note that this drives billing and more can be added
+   later in admin. (Billing input lives at the Group.)
+2. **HQ operation type** — ask up front whether HQ itself trades (has an operational location of
+   its own) or is purely administrative (reporting only). Decides whether the wizard shows a
+   profit-centre setup step for HQ's own location.
+3. **Per declared location, a setup fork:**
+   - **Set up centrally now** — HQ configures that location's profit centres + resources during
+     onboarding (or later from the per-site admin page).
+   - **Delegate to a site manager** — capture the manager's name + email; they receive an invite to
+     set up their own location. HQ retains *visibility* of that location's setup either way.
+4. **Financial rates** and **team invites** as today (team invites skippable).
+
+### Per-site admin page (needed regardless of the delegation choice)
+- HQ gets a **per-location admin page** to view/manage each Site's setup (profit centres, resources,
+  team) — because even when setup is delegated, HQ wants visibility of every location's
+  configuration. This is an extra admin menu item that appears for multi-site Groups.
+- Fits the permission model: HQ has reporting/visibility into every site's *configuration*, not just
+  its P&L; operational control of a delegated site stays with that site's manager.
+
+### Net effect on the build order
+- Build order item 1 (Profit Centres & Resources admin) is unchanged, but the navigation shell
+  (top bar = locations, sidebar = profit centres, All Sites = Group reporting home) becomes the
+  frame it slots into. Build the shell as the app's primary navigation; everything renders inside it.
+- Schema: anchor reporting/billing on **Group**; Sites are plain locations (keep `parent_site_id`
+  for grouping if useful, but no special head-office Site).
