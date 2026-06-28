@@ -360,6 +360,19 @@ model JobCard {
   signed_off_at          DateTime?
   created_at             DateTime  @default(now())
 
+  // --- SLICE 1: flags (main tab) ---
+  flag_urgent       Boolean @default(false) // Urgent / Priority
+  flag_sales_car    Boolean @default(false)
+  flag_customer_car Boolean @default(false)
+  flag_mot          Boolean @default(false) // MOT bay needed
+  flag_diag         Boolean @default(false) // Diagnostic
+
+  // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
+  stage_details_done  Boolean @default(false) // 1. Job Card (details/estimate)
+  stage_intake_done   Boolean @default(false) // 2. Intake Photos
+  stage_injob_done    Boolean @default(false) // 3. In-Job
+  stage_complete_done Boolean @default(false) // 4. Complete Photos
+
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
   profit_centre     ProfitCentre   @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)

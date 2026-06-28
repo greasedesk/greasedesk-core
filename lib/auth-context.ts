@@ -1,7 +1,10 @@
-// File: lib/auth-context.ts - Agent Fix: 2025-12-14
+// File: lib/auth-context.ts
 /**
  * Helper: Require an authenticated user and return their core context
  * (user id, group id, site id, role, garageName) for API routes.
+ *
+ * NOTE: References REAL User fields only. The `User` model has no garageId/garageName
+ * columns — the garage name is derived from the linked Group (group.group_name).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
@@ -13,20 +16,20 @@ export interface AuthContext {
   userId: string;
   groupId: string | null;
   siteId: string | null;
-  role: string; // e.g., 'admin', 'owner', 'user', 'mechanic'
-  garageName: string | null; // Added for garage assignment check
+  role: string; // UserRole enum value (e.g. 'STAFF', 'CUSTOMER')
+  garageName: string | null; // derived from the linked Group
 }
 
 /**
  * Require a valid NextAuth session and resolve the current user record and AuthContext.
- * Throws if there is no logged-in user or if the user is not assigned to a garage.
+ * Throws if there is no logged-in user or if the user is not assigned to a tenant (group).
  */
 export async function requireAuthContext(
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<AuthContext> {
   const session = await getServerSession(req, res, authOptions);
-  
+
   if (!session?.user) {
     throw new Error('Not authenticated');
   }
@@ -34,7 +37,7 @@ export async function requireAuthContext(
   const sessionUserId = (session.user as any).id as string | undefined;
   const sessionEmail = session.user.email ?? undefined;
 
-  // Look up the user either by id (preferred) or by email
+  // Look up the user either by id (preferred) or by email.
   const user = await prisma.user.findFirst({
     where: {
       OR: [
@@ -46,10 +49,9 @@ export async function requireAuthContext(
       id: true,
       email: true,
       role: true,
-      garageId: true,
-      garageName: true,
       group_id: true,
       site_id: true,
+      group: { select: { group_name: true } },
     },
   });
 
@@ -57,9 +59,8 @@ export async function requireAuthContext(
     throw new Error('Authenticated user record not found');
   }
 
-  // ✅ Multi-Tenant Security Check (GreaseDesk Blueprint Requirement)
-  // Throw error if user is not assigned to a garage (Tenant)
-  if (!user.garageName) {
+  // Multi-tenant security check: the user must belong to a tenant (Group).
+  if (!user.group_id) {
     throw new Error('User is not assigned to a garage');
   }
 
@@ -69,6 +70,6 @@ export async function requireAuthContext(
     groupId: user.group_id ?? null,
     siteId: user.site_id ?? null,
     role: user.role,
-    garageName: user.garageName,
+    garageName: user.group?.group_name ?? null,
   };
 }
