@@ -53,10 +53,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (!(await ownSite(site_id))) return res.status(404).json({ message: 'Location not found.' });
     const order = parseOrder(display_order);
-    // Auto-assign a colour by cycling the palette per site, so the swatch is never empty
-    // and successive lifts look distinct. (Overridable via the PATCH colour picker.)
-    const existingCount = await prisma.resource.count({ where: { site_id } });
-    const colour = RESOURCE_PALETTE[existingCount % RESOURCE_PALETTE.length];
+    // Auto-assign the FIRST UNUSED palette colour for this site, so the swatch is never empty
+    // and a new lift differs from its siblings. Robust to deletes/re-adds (unlike count-based).
+    // Falls back to count-cycling only if all palette colours are already in use.
+    // (Overridable via the PATCH colour picker.)
+    const used = new Set(
+      ((await prisma.resource.findMany({ where: { site_id }, select: { colour: true } })) as Array<{ colour: string | null }>)
+        .map((r) => r.colour)
+        .filter(Boolean) as string[]
+    );
+    const colour =
+      RESOURCE_PALETTE.find((c) => !used.has(c)) ??
+      RESOURCE_PALETTE[(await prisma.resource.count({ where: { site_id } })) % RESOURCE_PALETTE.length];
     const created = await prisma.resource.create({
       data: { site_id, name: cleanName, type: type as ResourceType, colour, ...(order !== null ? { display_order: order } : {}) },
       select: { id: true },

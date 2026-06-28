@@ -119,7 +119,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       </aside>
 
       {/* --- Main Content Area --- */}
-      <main className="flex-1 flex flex-col">
+      {/* min-w-0 lets this flex child shrink so wide content (e.g. the diary grid) scrolls
+          within its own overflow-x container instead of forcing page-wide horizontal scroll
+          (which would push the sticky sidebar off-screen). */}
+      <main className="flex-1 flex flex-col min-w-0">
         {/* --- Mobile Header and Top Nav Placeholder --- */}
         <header className="bg-slate-800 border-b border-slate-700 p-4 md:hidden flex justify-between items-center sticky top-0 z-10">
             <button 
