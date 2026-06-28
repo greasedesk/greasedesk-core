@@ -141,6 +141,7 @@ model Site {
   profit_centres ProfitCentre[]
   resources      Resource[]
   users          User[]
+  user_assignments UserSite[]
   customers      Customer[]
   bookings       Booking[]
   job_cards      JobCard[]
@@ -192,6 +193,19 @@ model Resource {
   @@index([site_id])
 }
 
+// Many-to-many: which Site(s) a User is assigned to. Assignment only (no roles/enforcement yet).
+// User.site_id remains the user's single active/default site; this is the broader assignment set.
+model UserSite {
+  user_id String
+  site_id String
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  site Site @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, site_id])
+  @@index([site_id])
+}
+
 model Role {
   id          String  @id @default(uuid())
   group_id    String
@@ -234,6 +248,7 @@ model User {
   group           Group?         @relation(fields: [group_id], references: [id], onDelete: SetNull)
   site            Site?          @relation(fields: [site_id], references: [id], onDelete: SetNull)
   staffRole       Role?          @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  site_assignments UserSite[]
   job_cards       JobCard[]      @relation("JobCardMechanic")
   audit_logs      AuditLog[]
   job_card_photos JobCardPhoto[] @relation("JobCardPhotoUploader")

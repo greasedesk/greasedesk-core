@@ -1,59 +1,190 @@
 /**
  * File: pages/admin/settings/users.tsx
- * Settings → Users. Read-only list of the tenant's users for now (management is a later slice).
+ * Settings → Users. Manage the group's users and which site(s) each is assigned to
+ * (many-to-many). Assignment only — no roles / no visibility enforcement yet.
+ * CRUD via /api/users. Group-scoped; remove is guarded (not self, not last user).
  */
-import React from 'react';
+import React, { useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 
-type UserRow = { id: string; email: string; role: string; isActive: boolean };
-type PageProps = { users: UserRow[] };
+type SiteOpt = { id: string; name: string };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[] };
+type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null };
 
-export default function UsersSettings({ users }: PageProps) {
+const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
+
+async function mutate(url: string, method: string, body: any): Promise<string | null> {
+  try {
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    return res.ok ? null : data?.message || 'Request failed.';
+  } catch {
+    return 'Network error.';
+  }
+}
+
+function SiteCheboxes({ sites, selected, onToggle }: { sites: SiteOpt[]; selected: string[]; onToggle: (id: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {sites.map((s) => (
+        <label key={s.id} className="flex items-center gap-1 text-xs text-slate-200 bg-slate-700 border border-slate-600 rounded px-2 py-1">
+          <input type="checkbox" checked={selected.includes(s.id)} onChange={() => onToggle(s.id)} />
+          {s.name}
+        </label>
+      ))}
+      {sites.length === 0 && <span className="text-xs text-slate-500">No locations yet.</span>}
+    </div>
+  );
+}
+
+function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [siteIds, setSiteIds] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toggle = (id: string) => setSiteIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    const error = await mutate('/api/users', 'POST', { name, email, siteIds });
+    setBusy(false);
+    if (error) return setErr(error);
+    setName(''); setEmail(''); setSiteIds([]);
+    onChanged();
+  }
+
+  return (
+    <form onSubmit={submit} className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-6 space-y-3">
+      <h2 className="text-lg font-semibold text-white">Add a user</h2>
+      <div className="flex flex-wrap gap-3">
+        <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-48`} /></div>
+        <div><label className="block text-xs text-slate-400 mb-1">Email *</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={`${inputClass} w-64`} /></div>
+      </div>
+      <div>
+        <label className="block text-xs text-slate-400 mb-1">Assign to location(s)</label>
+        <SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} />
+      </div>
+      {err && <div className="bg-red-700 text-red-100 p-2 rounded text-sm">{err}</div>}
+      <div className="flex items-center gap-3">
+        <button type="submit" disabled={busy} className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+          {busy ? 'Adding…' : 'Add user'}
+        </button>
+        <span className="text-xs text-amber-300">The user is created as <strong>pending</strong> — no invite email is sent yet (coming with the auth slice).</span>
+      </div>
+    </form>
+  );
+}
+
+function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(user.name ?? '');
+  const [siteIds, setSiteIds] = useState<string[]>(user.siteIds);
+  const [err, setErr] = useState<string | null>(null);
+  const isSelf = selfId === user.id;
+  const toggle = (id: string) => setSiteIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const nameFor = (id: string) => sites.find((s) => s.id === id)?.name ?? '—';
+
+  async function save() {
+    const error = await mutate('/api/users', 'PATCH', { id: user.id, name, siteIds });
+    if (error) return setErr(error);
+    setEditing(false);
+    onChanged();
+  }
+  async function remove() {
+    const error = await mutate('/api/users', 'DELETE', { id: user.id });
+    if (error) return setErr(error); // 409 guard surfaced
+    onChanged();
+  }
+
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-white font-medium">
+            {user.name || <span className="text-slate-400 italic">No name</span>}
+            {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700">you</span>}
+            {!user.isActive && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700">pending</span>}
+          </div>
+          <div className="text-slate-400 text-sm">{user.email}</div>
+          {!editing && (
+            <div className="text-slate-300 text-sm mt-1">
+              Sites: {user.siteIds.length ? user.siteIds.map(nameFor).join(', ') : <span className="text-slate-500">none</span>}
+            </div>
+          )}
+        </div>
+        {!editing && (
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
+            <button onClick={remove} disabled={isSelf} title={isSelf ? 'You cannot remove yourself' : 'Remove user'} className={`text-xs ${isSelf ? 'text-slate-600 cursor-not-allowed' : 'text-red-400 hover:underline'}`}>Remove</button>
+          </div>
+        )}
+      </div>
+
+      {editing && (
+        <div className="mt-3 space-y-3">
+          <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
+          <div><label className="block text-xs text-slate-400 mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
+          <div className="flex items-center gap-2">
+            <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
+            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); }} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
+          </div>
+        </div>
+      )}
+      {err && <div className="text-red-400 text-xs mt-2">{err}</div>}
+    </div>
+  );
+}
+
+export default function UsersSettings({ users, sites, selfId }: PageProps) {
+  const router = useRouter();
+  const refresh = () => router.replace(router.asPath);
   return (
     <SettingsLayout>
       <Head><title>Users - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Users in this account. Inviting and editing users is a later slice.</p>
+      <p className="text-slate-400 mb-6">Manage your users and which location(s) each is assigned to. Assignment is recorded but not yet enforced for visibility — that’s a later slice. Roles are not configured yet.</p>
 
-      <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden max-w-3xl">
-        <table className="w-full text-left text-sm text-slate-200">
-          <thead className="bg-slate-900/60 text-xs uppercase text-slate-400">
-            <tr><th className="px-4 py-3">Email</th><th className="px-4 py-3">Role</th><th className="px-4 py-3">Status</th></tr>
-          </thead>
-          <tbody>
-            {users.length === 0 && <tr><td colSpan={3} className="px-4 py-6 text-center text-slate-400">No users.</td></tr>}
-            {users.map((u) => (
-              <tr key={u.id} className="border-t border-slate-700">
-                <td className="px-4 py-3">{u.email}</td>
-                <td className="px-4 py-3">{u.role}</td>
-                <td className="px-4 py-3">{u.isActive ? 'Active' : 'Inactive'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <AddUser sites={sites} onChanged={refresh} />
+
+      {users.length === 0 ? (
+        <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">No users.</div>
+      ) : (
+        users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} onChanged={refresh} />)
+      )}
     </SettingsLayout>
   );
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
-  const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  const sUser = session?.user as any;
+  if (!sUser?.group_id || !sUser?.site_id) {
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
 
-  type UserDbRow = { id: string; email: string; role: string; is_active: boolean };
-  const rows = (await prisma.user.findMany({
-    where: { group_id: user.group_id },
-    orderBy: { email: 'asc' },
-    select: { id: true, email: true, role: true, is_active: true },
-  })) as UserDbRow[];
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; site_assignments: { site_id: string }[] };
+  const [userRows, siteRows] = await Promise.all([
+    prisma.user.findMany({
+      where: { group_id: sUser.group_id },
+      orderBy: { email: 'asc' },
+      select: { id: true, name: true, email: true, is_active: true, site_assignments: { select: { site_id: true } } },
+    }) as Promise<UserDbRow[]>,
+    prisma.site.findMany({ where: { group_id: sUser.group_id }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
+  ]);
 
-  const users: UserRow[] = rows.map((u: UserDbRow) => ({ id: u.id, email: u.email, role: u.role, isActive: u.is_active }));
-  return { props: { users } };
+  const users: UserRow[] = userRows.map((u: UserDbRow) => ({
+    id: u.id, name: u.name, email: u.email, isActive: u.is_active,
+    siteIds: u.site_assignments.map((a) => a.site_id),
+  }));
+  const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
+
+  return { props: { users, sites, selfId: (sUser.id as string) ?? null } };
 };

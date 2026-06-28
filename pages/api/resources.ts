@@ -12,7 +12,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { ResourceType } from '@prisma/client';
-import { isValidPaletteColour } from '@/lib/diary-colours';
+import { isValidPaletteColour, RESOURCE_PALETTE } from '@/lib/diary-colours';
 
 const VALID_TYPES = Object.values(ResourceType) as string[];
 
@@ -53,8 +53,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (!(await ownSite(site_id))) return res.status(404).json({ message: 'Location not found.' });
     const order = parseOrder(display_order);
+    // Auto-assign a colour by cycling the palette per site, so the swatch is never empty
+    // and successive lifts look distinct. (Overridable via the PATCH colour picker.)
+    const existingCount = await prisma.resource.count({ where: { site_id } });
+    const colour = RESOURCE_PALETTE[existingCount % RESOURCE_PALETTE.length];
     const created = await prisma.resource.create({
-      data: { site_id, name: cleanName, type: type as ResourceType, ...(order !== null ? { display_order: order } : {}) },
+      data: { site_id, name: cleanName, type: type as ResourceType, colour, ...(order !== null ? { display_order: order } : {}) },
       select: { id: true },
     });
     return res.status(201).json({ id: created.id, message: 'Resource created.' });
