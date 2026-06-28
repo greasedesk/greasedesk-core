@@ -42,6 +42,22 @@ enum ItemType {
   misc
 }
 
+// Shared, system-defined category for a Profit Centre (typed business unit).
+// Cross-site reporting slices by this. Add new values via migration as needed.
+enum ProfitCentreCategory {
+  repairs
+  mot
+  spraybooth
+  car_sales
+}
+
+// Physical unit within a Profit Centre; these become the diary's columns.
+enum ResourceType {
+  lift
+  mot_bay
+  spray_booth
+}
+
 // ───────────────────────────────────────────────────────────────────────────────
 // Core multi-tenant models
 // ───────────────────────────────────────────────────────────────────────────────
@@ -144,18 +160,34 @@ model SiteFeature {
 }
 
 model ProfitCentre {
-  id         String   @id @default(uuid())
+  id         String                @id @default(uuid())
   site_id    String
   name       String
-  type       String?
-  is_active  Boolean  @default(true)
-  created_at DateTime @default(now())
+  type       String?               // legacy free-text; superseded by `category` (kept for non-destructive add)
+  category   ProfitCentreCategory? // typed business unit (nullable so the add is non-destructive)
+  is_active  Boolean               @default(true)
+  created_at DateTime              @default(now())
 
-  site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  site      Site       @relation(fields: [site_id], references: [id], onDelete: Cascade)
   job_cards JobCard[]
   bookings  Booking[]
+  resources Resource[]
 
   @@index([site_id])
+}
+
+model Resource {
+  id               String       @id @default(uuid())
+  profit_centre_id String
+  name             String       // e.g. "Lift 2"
+  type             ResourceType // lift / mot_bay / spray_booth
+  display_order    Int          @default(0) // diary column ordering
+  is_active        Boolean      @default(true)
+  created_at       DateTime     @default(now())
+
+  profit_centre ProfitCentre @relation(fields: [profit_centre_id], references: [id], onDelete: Cascade)
+
+  @@index([profit_centre_id])
 }
 
 model Role {

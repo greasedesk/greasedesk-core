@@ -21,6 +21,7 @@ const navItems = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
   { name: 'Bookings', href: '/admin/bookings', icon: '🗓️', ready: false },
   { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
+  { name: 'Profit Centres', href: '/admin/profit-centres', icon: '🏭', ready: true },
   { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
   { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
   { name: 'Settings', href: '/admin/settings', icon: '⚙️', ready: true },
