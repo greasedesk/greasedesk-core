@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
+import { getVisibility } from '@/lib/site-visibility';
 
 type CreateJobCardBody = {
   registration: string;
@@ -43,14 +44,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const groupId = user.group_id as string;
   const siteId = user.site_id as string;
+  const vis = await getVisibility(user.id as string); // visible sites
 
   if (req.method === 'GET') {
     const id = req.query.id as string | undefined;
     if (!id) return res.status(400).json({ message: 'Missing job card id' });
 
-    // Tenant scope: only return the card if it belongs to the caller's group.
+    // Visibility scope: only return the card if it sits on a site the caller may see.
     const card = await prisma.jobCard.findFirst({
-      where: { id, group_id: groupId },
+      where: { id, site_id: { in: vis.siteIds } },
       include: { customer: true, vehicle: true, photos: true, items: true },
     });
 
@@ -66,6 +68,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!registration) return res.status(400).json({ message: 'Registration is required.' });
     if (!customerName) return res.status(400).json({ message: 'Customer name is required.' });
+
+    // A user may only create a job card on a site they can access.
+    if (!vis.siteIds.includes(siteId)) {
+      return res.status(403).json({ message: 'You are not assigned to this location.' });
+    }
 
     let mileage: number | null = null;
     if (body.mileage !== undefined && body.mileage !== null && `${body.mileage}`.trim() !== '') {

@@ -13,26 +13,27 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { ResourceType } from '@prisma/client';
 import { isValidPaletteColour, RESOURCE_PALETTE } from '@/lib/diary-colours';
+import { getVisibility } from '@/lib/site-visibility';
 
 const VALID_TYPES = Object.values(ResourceType) as string[];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id) {
     return res.status(401).json({ message: 'Authentication Error: Group/Site context not found.' });
   }
-  const groupId = user.group_id as string;
+  const vis = await getVisibility(user.id as string);
 
-  // A Site is in scope if it belongs to the caller's group.
+  // A Site is in scope only if the caller may see it (ADMIN → all group sites; STANDARD → assigned).
   async function ownSite(siteId: string) {
-    if (!siteId) return null;
-    return prisma.site.findFirst({ where: { id: siteId, group_id: groupId }, select: { id: true } });
+    if (!siteId || !vis.siteIds.includes(siteId)) return null;
+    return prisma.site.findFirst({ where: { id: siteId }, select: { id: true } });
   }
-  // A Resource is in scope if its Site belongs to the caller's group.
+  // A Resource is in scope if its Site is visible to the caller.
   async function ownResource(id: string) {
     if (!id) return null;
-    return prisma.resource.findFirst({ where: { id, site: { group_id: groupId } }, select: { id: true } });
+    return prisma.resource.findFirst({ where: { id, site_id: { in: vis.siteIds } }, select: { id: true } });
   }
   function parseOrder(v: unknown): number | null {
     if (v === undefined || v === null || `${v}`.trim() === '') return null;

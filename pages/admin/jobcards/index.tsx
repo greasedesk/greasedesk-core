@@ -13,6 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
+import { getVisibility } from '@/lib/site-visibility';
 
 type Stages = {
   details: boolean;
@@ -30,7 +31,7 @@ type JobCardRow = {
   stages: Stages;
 };
 
-type PageProps = { cards: JobCardRow[] };
+type PageProps = { cards: JobCardRow[]; noSites: boolean };
 
 const STAGE_LABELS: Array<[keyof Stages, string]> = [
   ['details', 'Job Card'],
@@ -59,7 +60,7 @@ function StageBadges({ stages }: { stages: Stages }) {
   );
 }
 
-export default function JobCardsListPage({ cards }: PageProps) {
+export default function JobCardsListPage({ cards, noSites }: PageProps) {
   return (
     <AdminLayout>
       <Head>
@@ -91,7 +92,9 @@ export default function JobCardsListPage({ cards }: PageProps) {
             {cards.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
-                  No job cards yet. Create the first one.
+                  {noSites
+                    ? "You're not currently assigned to a location — contact your admin."
+                    : 'No job cards yet. Create the first one.'}
                 </td>
               </tr>
             )}
@@ -143,8 +146,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     vehicle: { registration: string } | null;
   };
 
+  const vis = await getVisibility(user.id as string); // role/assignment site visibility
+
   const rows = (await prisma.jobCard.findMany({
-    where: { group_id: user.group_id }, // tenant scope
+    where: { site_id: { in: vis.siteIds } }, // visible sites only
     orderBy: { created_at: 'desc' },
     include: {
       customer: { select: { name: true } },
@@ -166,5 +171,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     },
   }));
 
-  return { props: { cards } };
+  return { props: { cards, noSites: vis.siteIds.length === 0 } };
 };

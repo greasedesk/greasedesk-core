@@ -19,6 +19,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
 import { resolveColour, blockTint } from '@/lib/diary-colours';
+import { getVisibility } from '@/lib/site-visibility';
 
 const WIN_START_HOUR = 7;
 const WIN_END_HOUR = 18;
@@ -34,6 +35,7 @@ type PageProps = {
   siteId: string; siteName: string; view: 'week' | 'day'; anchor: string;
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; unscheduled: UnscheduledCard[];
+  noSites?: boolean;
 };
 
 function ymd(d: Date) { return d.toISOString().slice(0, 10); }
@@ -66,7 +68,7 @@ const HOURS = Array.from({ length: WIN_END_HOUR - WIN_START_HOUR + 1 }, (_, i) =
 const tooltip = (c: DiaryCard) => `${c.reg} · ${c.customer} · ${c.resourceName} · ${fmt(c.startAt)}–${fmt(c.endAt)}`;
 
 export default function DiaryPage(props: PageProps) {
-  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, unscheduled } = props;
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, unscheduled, noSites } = props;
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   const [msg, setMsg] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
@@ -78,6 +80,17 @@ export default function DiaryPage(props: PageProps) {
 
   const laneMode = resources.length <= LANE_THRESHOLD; // week view
   const laneIndex = new Map(resources.map((r, i) => [r.id, i]));
+
+  if (noSites) {
+    return (
+      <AdminLayout>
+        <Head><title>Diary - GreaseDesk</title></Head>
+        <div className="bg-white text-slate-800 rounded-xl border border-slate-200 p-8 text-center shadow">
+          You’re not currently assigned to a location — contact your admin.
+        </div>
+      </AdminLayout>
+    );
+  }
 
   async function place(e: React.FormEvent) {
     e.preventDefault();
@@ -243,13 +256,21 @@ export default function DiaryPage(props: PageProps) {
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id) {
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
-  const groupId = user.group_id as string;
 
-  const requestedSite = (ctx.query.site as string) || user.site_id;
-  const site = await prisma.site.findFirst({ where: { id: requestedSite, group_id: groupId }, select: { id: true, site_name: true } });
+  const vis = await getVisibility(user.id as string);
+  // Edge case: STANDARD user with no assigned sites (e.g. their only site was deleted).
+  if (vis.siteIds.length === 0) {
+    const today = ymd(new Date());
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], unscheduled: [], noSites: true } };
+  }
+
+  // Resolve the requested site to one the caller may access (default to their first visible site).
+  const wanted = (ctx.query.site as string) || user.site_id;
+  const resolvedId = wanted && vis.siteIds.includes(wanted) ? wanted : vis.siteIds[0];
+  const site = await prisma.site.findFirst({ where: { id: resolvedId }, select: { id: true, site_name: true } });
   if (!site) return { redirect: { destination: '/admin/diary', permanent: false } };
 
   const view: 'week' | 'day' = ctx.query.view === 'day' ? 'day' : 'week';

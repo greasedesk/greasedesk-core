@@ -14,6 +14,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { ProfitCentreCategory } from '@prisma/client';
+import { getVisibility } from '@/lib/site-visibility';
 
 const VALID_CATEGORIES = Object.values(ProfitCentreCategory) as string[];
 
@@ -21,16 +22,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   const user = session?.user as any;
 
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id || !user?.site_id) {
     return res.status(401).json({ message: 'Authentication Error: Group/Site context not found.' });
   }
 
-  const groupId = user.group_id as string;
   const siteId = user.site_id as string;
 
-  // Ownership: confirm the caller's site belongs to their group.
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { group_id: true } });
-  if (!site || site.group_id !== groupId) {
+  // Visibility: the caller's active site must be one they may access (defends a stale session).
+  const vis = await getVisibility(user.id as string);
+  if (!vis.siteIds.includes(siteId)) {
     return res.status(403).json({ message: 'You do not have permission for this site.' });
   }
 

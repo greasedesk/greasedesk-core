@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
+import { getVisibility } from '@/lib/site-visibility';
 
 function parseDateTime(s: unknown): Date | null {
   if (typeof s !== 'string' || !s) return null;
@@ -26,10 +27,10 @@ function parseDateTime(s: unknown): Date | null {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id) {
     return res.status(401).json({ message: 'Authentication Error: Group/Site context not found.' });
   }
-  const groupId = user.group_id as string;
+  const vis = await getVisibility(user.id as string); // visible sites
 
   if (req.method === 'PATCH') {
     const { jobCardId, resourceId, startAt, endAt } = (req.body || {}) as {
@@ -45,11 +46,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const card = await tx.jobCard.findFirst({ where: { id: jobCardId, group_id: groupId }, select: { id: true, site_id: true } });
+        // Visibility scope: the card must sit on a site the caller may access.
+        const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true, site_id: true } });
         if (!card) throw new Error('CARD_NOT_FOUND');
 
+        // The target resource must also be on a site the caller may access.
         const resource = await tx.resource.findFirst({
-          where: { id: resourceId, site: { group_id: groupId } },
+          where: { id: resourceId, site_id: { in: vis.siteIds } },
           select: { id: true, site_id: true },
         });
         if (!resource) throw new Error('RESOURCE_NOT_FOUND');
@@ -89,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const jobCardId = (req.query.jobCardId as string) || (req.body && (req.body.jobCardId as string));
     if (!jobCardId) return res.status(400).json({ message: 'Missing jobCardId.' });
-    const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, group_id: groupId }, select: { id: true } });
+    const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true } });
     if (!card) return res.status(404).json({ message: 'Job card not found.' });
     await prisma.jobCard.update({
       where: { id: jobCardId },

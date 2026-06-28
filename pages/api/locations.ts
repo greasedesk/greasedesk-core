@@ -15,25 +15,27 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { getVisibility } from '@/lib/site-visibility';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id) {
     return res.status(401).json({ message: 'Not authenticated.' });
   }
   const groupId = user.group_id as string;
-  const currentSiteId = user.site_id as string;
+  const currentSiteId = (user.site_id as string) ?? null;
+  const vis = await getVisibility(user.id as string); // visible sites + admin-ness
 
-  // A Site is in scope if it belongs to the caller's group.
-  async function ownSite(id: string) {
-    if (!id) return null;
+  // A Site is in scope only if the caller may see it (ADMIN → all group sites; STANDARD → assigned).
+  async function visibleSite(id: string) {
+    if (!id || !vis.siteIds.includes(id)) return null;
     return prisma.site.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
   }
 
   if (req.method === 'GET') {
     const sites = await prisma.site.findMany({
-      where: { group_id: groupId },
+      where: { group_id: groupId, id: { in: vis.siteIds } }, // visible only
       orderBy: { site_name: 'asc' },
       select: { id: true, site_name: true },
     });
@@ -41,6 +43,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
+    // Creating a new (billable) location is an ADMIN-only action.
+    if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can add a location.' });
     const { site_name, address } = (req.body || {}) as { site_name?: string; address?: string };
     const cleanName = (site_name || '').trim();
     if (!cleanName) return res.status(400).json({ message: 'Location name is required.' });
@@ -62,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       id?: string; site_name?: string; address?: string; is_active?: boolean;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownSite(id))) return res.status(404).json({ message: 'Location not found.' });
+    if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });
 
     const data: any = {};
     if (site_name !== undefined) {
@@ -80,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const id = (req.query.id as string) || (req.body && (req.body.id as string));
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownSite(id))) return res.status(404).json({ message: 'Location not found.' });
+    if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });
 
     if (id === currentSiteId) {
       return res.status(409).json({ message: 'You cannot delete the location you are currently signed in to.' });

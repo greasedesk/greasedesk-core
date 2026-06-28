@@ -13,6 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
+import { getVisibility } from '@/lib/site-visibility';
 
 type Stage = { label: string; done: boolean };
 type Flag = { label: string; on: boolean };
@@ -124,10 +125,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   const id = ctx.params?.id as string;
+  const vis = await getVisibility(user.id as string);
 
-  // Ownership: only resolve cards within the caller's group.
+  // Visibility: only resolve a card on a site the caller may access (else 404, no leak).
   const row = await prisma.jobCard.findFirst({
-    where: { id, group_id: user.group_id },
+    where: { id, site_id: { in: vis.siteIds } },
     include: {
       customer: { select: { name: true, phone: true, email: true } },
       vehicle: { select: { registration: true, vin: true, mileage_at_create: true } },

@@ -14,16 +14,24 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, UserRole } from '@prisma/client';
+import { getVisibility } from '@/lib/site-visibility';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;
-  if (!sessionUser?.group_id || !sessionUser?.site_id) {
+  if (!sessionUser?.id || !sessionUser?.group_id || !sessionUser?.site_id) {
     return res.status(401).json({ message: 'Authentication Error: Group/Site context not found.' });
   }
   const groupId = sessionUser.group_id as string;
   const sessionSiteId = sessionUser.site_id as string;
-  const sessionUserId = sessionUser.id as string | undefined;
+  const sessionUserId = sessionUser.id as string;
+
+  // STEP 3: user management is ADMIN-only. A STANDARD caller is refused (also makes STANDARD
+  // users anchored — they cannot reassign themselves because they cannot call this API).
+  const callerVis = await getVisibility(sessionUserId);
+  if (!callerVis.isAdmin) {
+    return res.status(403).json({ message: 'Only an admin can manage users.' });
+  }
 
   // Keep only site ids that belong to the caller's group.
   async function groupSiteIds(ids: string[]): Promise<string[]> {
@@ -43,6 +51,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (existing) return res.status(409).json({ message: 'A user with that email already exists.' });
 
     const validSites = await groupSiteIds(siteIds || []);
+    // STEP 4 invariant: new users are STANDARD → must have at least one site.
+    if (validSites.length === 0) {
+      return res.status(400).json({ message: 'A standard user must be assigned at least one location.' });
+    }
     const defaultSite = validSites[0] ?? sessionSiteId;
 
     try {
@@ -75,7 +87,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') {
     const { id, name, siteIds, role } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    const target = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_owner: true } });
+    const target = await prisma.user.findFirst({
+      where: { id, group_id: groupId },
+      select: { id: true, is_owner: true, role: true, _count: { select: { site_assignments: true } } },
+    });
     if (!target) return res.status(404).json({ message: 'User not found.' });
 
     if (role !== undefined) {
@@ -88,6 +103,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // STEP 4 invariant: a STANDARD user must always keep ≥1 site.
+    const effectiveRole = target.is_owner ? 'ADMIN' : (role ?? target.role);
+    const nextSites: string[] | null = siteIds !== undefined ? await groupSiteIds(siteIds) : null;
+    const effectiveSiteCount = nextSites !== null ? nextSites.length : target._count.site_assignments;
+    if (effectiveRole === 'STANDARD' && effectiveSiteCount === 0) {
+      return res.status(400).json({ message: 'A standard user must keep at least one location.' });
+    }
+
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         if (name !== undefined) {
@@ -98,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await tx.user.update({ where: { id }, data: { role: role as UserRole } });
         }
         if (siteIds !== undefined) {
-          const validSites = await groupSiteIds(siteIds);
+          const validSites = nextSites as string[];
           await tx.userSite.deleteMany({ where: { user_id: id } });
           if (validSites.length) {
             await tx.userSite.createMany({ data: validSites.map((sid) => ({ user_id: id, site_id: sid })) });

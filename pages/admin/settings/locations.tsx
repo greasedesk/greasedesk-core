@@ -16,6 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
+import { getVisibility } from '@/lib/site-visibility';
 
 const RESOURCE_TYPE_OPTIONS = [
   { value: 'lift', label: 'Lift' },
@@ -33,7 +34,7 @@ type LocationView = {
   isCurrent: boolean;
   resources: ResourceView[];
 };
-type PageProps = { locations: LocationView[] };
+type PageProps = { locations: LocationView[]; isAdmin: boolean };
 
 const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
 
@@ -261,7 +262,7 @@ function LocationCard({ loc, onChanged }: { loc: LocationView; onChanged: () => 
   );
 }
 
-export default function LocationsSettings({ locations }: PageProps) {
+export default function LocationsSettings({ locations, isAdmin }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
 
@@ -270,9 +271,16 @@ export default function LocationsSettings({ locations }: PageProps) {
       <Head><title>Locations & Resources - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
 
-      <AddLocation onChanged={refresh} />
+      {/* Adding a (billable) location is admin-only. */}
+      {isAdmin && <AddLocation onChanged={refresh} />}
 
-      {locations.map((loc) => <LocationCard key={loc.id} loc={loc} onChanged={refresh} />)}
+      {locations.length === 0 ? (
+        <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">
+          You’re not currently assigned to a location — contact your admin.
+        </div>
+      ) : (
+        locations.map((loc) => <LocationCard key={loc.id} loc={loc} onChanged={refresh} />)
+      )}
     </SettingsLayout>
   );
 }
@@ -280,15 +288,17 @@ export default function LocationsSettings({ locations }: PageProps) {
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
+  if (!user?.id || !user?.group_id) {
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
+
+  const vis = await getVisibility(user.id as string);
 
   type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
   type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; resources: ResDbRow[] };
 
   const sites = (await prisma.site.findMany({
-    where: { group_id: user.group_id }, // HQ visibility across the group's locations
+    where: { id: { in: vis.siteIds } }, // visible sites only
     orderBy: { site_name: 'asc' },
     include: { resources: { orderBy: { display_order: 'asc' } } },
   })) as SiteDbRow[];
@@ -302,5 +312,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
   }));
 
-  return { props: { locations } };
+  return { props: { locations, isAdmin: vis.isAdmin } };
 };
