@@ -12,6 +12,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { ResourceType } from '@prisma/client';
+import { isValidPaletteColour } from '@/lib/diary-colours';
 
 const VALID_TYPES = Object.values(ResourceType) as string[];
 
@@ -60,15 +61,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, type, display_order, is_active } = (req.body || {}) as {
-      id?: string; name?: string; type?: string; display_order?: number | string; is_active?: boolean;
+    const { id, name, type, display_order, is_active, colour } = (req.body || {}) as {
+      id?: string; name?: string; type?: string; display_order?: number | string; is_active?: boolean; colour?: string | null;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     if (!(await ownResource(id))) return res.status(404).json({ message: 'Resource not found.' });
     if (type !== undefined && !VALID_TYPES.includes(type)) {
       return res.status(400).json({ message: `Type must be one of: ${VALID_TYPES.join(', ')}.` });
     }
+    if (colour !== undefined && colour !== null && !isValidPaletteColour(colour)) {
+      return res.status(400).json({ message: 'Colour must be one of the curated palette values.' });
+    }
     const data: any = {};
+    if (colour !== undefined) data.colour = colour; // string (palette) or null to clear
     if (name !== undefined) {
       const cleanName = name.trim();
       if (!cleanName) return res.status(400).json({ message: 'Name cannot be empty.' });

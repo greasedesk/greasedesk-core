@@ -15,6 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
+import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
 
 const RESOURCE_TYPE_OPTIONS = [
   { value: 'lift', label: 'Lift' },
@@ -23,7 +24,7 @@ const RESOURCE_TYPE_OPTIONS = [
 ];
 const typeLabel = (v: string) => RESOURCE_TYPE_OPTIONS.find((o) => o.value === v)?.label ?? v;
 
-type ResourceView = { id: string; name: string; type: string; display_order: number; is_active: boolean };
+type ResourceView = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
 type LocationView = {
   id: string;
   name: string;
@@ -49,6 +50,7 @@ async function mutate(url: string, method: string, body: any): Promise<string | 
 // --- Resource row (edit / delete) ---
 function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [name, setName] = useState(resource.name);
   const [type, setType] = useState(resource.type);
   const [order, setOrder] = useState(String(resource.display_order));
@@ -63,6 +65,12 @@ function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChange
   async function remove() {
     const error = await mutate('/api/resources', 'DELETE', { id: resource.id });
     if (error) return setErr(error);
+    onChanged();
+  }
+  async function setColour(colour: string | null) {
+    const error = await mutate('/api/resources', 'PATCH', { id: resource.id, colour });
+    if (error) return setErr(error);
+    setPicking(false);
     onChanged();
   }
 
@@ -81,18 +89,41 @@ function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChange
     );
   }
   return (
-    <div className="flex items-center justify-between py-2 border-t border-slate-700 text-sm">
-      <div>
-        <span className="font-medium text-slate-100">{resource.name}</span>
-        <span className="text-slate-400 ml-2">· {typeLabel(resource.type)}</span>
-        <span className="text-slate-500 ml-2">· order {resource.display_order}</span>
-        {!resource.is_active && <span className="text-amber-400 ml-2">· inactive</span>}
+    <div className="py-2 border-t border-slate-700 text-sm">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center">
+          {/* Current colour swatch — click to pick */}
+          <button
+            onClick={() => setPicking((v) => !v)}
+            title="Set lift colour"
+            className="w-4 h-4 rounded-sm border border-slate-500 mr-2 shrink-0"
+            style={{ backgroundColor: resolveColour(resource.colour) }}
+          />
+          <span className="font-medium text-slate-100">{resource.name}</span>
+          <span className="text-slate-400 ml-2">· {typeLabel(resource.type)}</span>
+          <span className="text-slate-500 ml-2">· order {resource.display_order}</span>
+          {!resource.is_active && <span className="text-amber-400 ml-2">· inactive</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
+          <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
+          {err && <span className="text-red-400 text-xs">{err}</span>}
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
-        <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
-        {err && <span className="text-red-400 text-xs">{err}</span>}
-      </div>
+      {picking && (
+        <div className="flex items-center flex-wrap gap-1.5 mt-2 ml-6">
+          {RESOURCE_PALETTE.map((c) => (
+            <button
+              key={c}
+              onClick={() => setColour(c)}
+              title={c}
+              className={`w-5 h-5 rounded-full border ${resource.colour === c ? 'border-white ring-2 ring-white/50' : 'border-slate-500'}`}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+          <button onClick={() => setColour(null)} className="text-xs text-slate-400 hover:text-white ml-1 underline">Default</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -253,7 +284,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
 
-  type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean };
+  type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
   type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; resources: ResDbRow[] };
 
   const sites = (await prisma.site.findMany({
@@ -268,7 +299,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     address: s.address,
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
-    resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active })),
+    resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
   }));
 
   return { props: { locations } };

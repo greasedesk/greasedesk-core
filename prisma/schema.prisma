@@ -182,6 +182,7 @@ model Resource {
   name          String       // e.g. "Lift 2"
   type          ResourceType // lift / mot_bay / spray_booth
   display_order Int          @default(0) // diary column ordering
+  colour        String?      // curated palette hex (e.g. "#3B82F6"); null → default neutral
   is_active     Boolean      @default(true)
   created_at    DateTime     @default(now())
 
