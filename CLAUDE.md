@@ -205,6 +205,9 @@ Treat as a non-negotiable gate, the same class of rule as the double-booking gua
 
 ## Tenancy & Access Architecture (settled design — build slices against this)
 
+> **Refined by the "Navigation Shell & HQ-as-Group Refinement" section below.** Where they conflict
+> (head-office-as-a-Site, `parent_site_id` as the reporting/billing anchor), the refinement wins.
+
 This is the spine the whole SaaS hangs off. Capture it correctly before building; then
 build in deliberate slices. Provision the structure now (schema), defer the UI where noted.
 
