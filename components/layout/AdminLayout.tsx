@@ -19,7 +19,7 @@ const LOGO_DISPLAY_WIDTH = "150px"; // Suitable width for the sidebar
 // the nav until the slice ships. Flip ready to true when the page exists.
 const navItems = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
-  { name: 'Bookings', href: '/admin/bookings', icon: '🗓️', ready: false },
+  { name: 'Diary', href: '/admin/diary', icon: '🗓️', ready: true },
   { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
   { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
   { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
@@ -133,24 +133,30 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <Logo />
         </header>
 
-        {/* --- Location top bar (one tab per Site; the current one is highlighted) --- */}
+        {/* --- Location top bar: each tab opens that location's diary --- */}
         {locations.length > 0 && (
           <div className="bg-slate-800 border-b border-slate-700 px-4 sm:px-6 lg:px-8 py-2 flex items-center gap-2 overflow-x-auto">
             <span className="text-xs uppercase text-slate-500 mr-1">Locations:</span>
             {locations.map((loc) => {
-              const current = loc.id === currentSiteId;
+              // On the diary, the active tab follows ?site; elsewhere, the session's site.
+              const selected =
+                router.pathname === '/admin/diary'
+                  ? (router.query.site as string) ?? currentSiteId
+                  : currentSiteId;
+              const active = loc.id === selected;
               return (
-                <span
+                <Link
                   key={loc.id}
-                  className={`text-sm px-3 py-1 rounded-lg border whitespace-nowrap ${
-                    current
+                  href={`/admin/diary?site=${loc.id}`}
+                  className={`text-sm px-3 py-1 rounded-lg border whitespace-nowrap transition-colors ${
+                    active
                       ? 'bg-blue-600 text-white border-blue-400'
-                      : 'bg-slate-700 text-slate-300 border-slate-600'
+                      : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'
                   }`}
-                  title={current ? 'Current location' : 'Location switching is a later slice'}
+                  title={`Open ${loc.site_name}'s diary`}
                 >
                   {loc.site_name}
-                </span>
+                </Link>
               );
             })}
           </div>

@@ -185,7 +185,8 @@ model Resource {
   is_active     Boolean      @default(true)
   created_at    DateTime     @default(now())
 
-  site Site @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  job_cards JobCard[]
 
   @@index([site_id])
 }
@@ -405,17 +406,25 @@ model JobCard {
   stage_injob_done    Boolean @default(false) // 3. In-Job
   stage_complete_done Boolean @default(false) // 4. Complete Photos
 
+  // --- DIARY scheduling: placement on a Resource at a time slot ---
+  resource_id    String?
+  scheduled_date DateTime? @db.Date // the diary day
+  start_slot     Int?              // slot index 0–3
+  end_slot       Int?              // = start_slot for now; range reserved for multi-slot
+
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
   profit_centre     ProfitCentre?  @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
   customer          Customer       @relation(fields: [customer_id], references: [id], onDelete: NoAction)
   vehicle           Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   mechanic_assigned User?          @relation("JobCardMechanic", fields: [mechanic_assigned_id], references: [id], onDelete: SetNull)
+  resource          Resource?      @relation(fields: [resource_id], references: [id], onDelete: SetNull)
   photos            JobCardPhoto[]
   items             JobCardItem[]
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
+  @@index([resource_id, scheduled_date])
 }
 
 model JobCardPhoto {
