@@ -139,6 +139,7 @@ model Site {
   group          Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
   features       SiteFeature[]
   profit_centres ProfitCentre[]
+  resources      Resource[]
   users          User[]
   customers      Customer[]
   bookings       Booking[]
@@ -171,23 +172,22 @@ model ProfitCentre {
   site      Site       @relation(fields: [site_id], references: [id], onDelete: Cascade)
   job_cards JobCard[]
   bookings  Booking[]
-  resources Resource[]
 
   @@index([site_id])
 }
 
 model Resource {
-  id               String       @id @default(uuid())
-  profit_centre_id String
-  name             String       // e.g. "Lift 2"
-  type             ResourceType // lift / mot_bay / spray_booth
-  display_order    Int          @default(0) // diary column ordering
-  is_active        Boolean      @default(true)
-  created_at       DateTime     @default(now())
+  id            String       @id @default(uuid())
+  site_id       String       // belongs to a Site (Location); operational tree is Group → Site → Resource
+  name          String       // e.g. "Lift 2"
+  type          ResourceType // lift / mot_bay / spray_booth
+  display_order Int          @default(0) // diary column ordering
+  is_active     Boolean      @default(true)
+  created_at    DateTime     @default(now())
 
-  profit_centre ProfitCentre @relation(fields: [profit_centre_id], references: [id], onDelete: Cascade)
+  site Site @relation(fields: [site_id], references: [id], onDelete: Cascade)
 
-  @@index([profit_centre_id])
+  @@index([site_id])
 }
 
 model Role {
@@ -349,7 +349,7 @@ model Booking {
   id               String    @id @default(uuid())
   group_id         String
   site_id          String
-  profit_centre_id String
+  profit_centre_id String?   // reporting tag (optional); operational link is site_id (+ resource, later)
   customer_id      String
   vehicle_id       String
   booking_date     DateTime
@@ -363,7 +363,7 @@ model Booking {
 
   group         Group             @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site          Site              @relation(fields: [site_id], references: [id], onDelete: NoAction)
-  profit_centre ProfitCentre      @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
+  profit_centre ProfitCentre?     @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
   customer      Customer          @relation(fields: [customer_id], references: [id], onDelete: NoAction)
   vehicle       Vehicle           @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   service       ServiceCatalogue? @relation(fields: [service_id], references: [id], onDelete: SetNull)
@@ -375,7 +375,7 @@ model JobCard {
   id                     String    @id @default(uuid())
   group_id               String
   site_id                String
-  profit_centre_id       String
+  profit_centre_id       String?   // reporting tag (optional); operational link is site_id (+ resource, later)
   customer_id            String
   vehicle_id             String
   status                 String    @default("open")
@@ -407,7 +407,7 @@ model JobCard {
 
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
-  profit_centre     ProfitCentre   @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
+  profit_centre     ProfitCentre?  @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
   customer          Customer       @relation(fields: [customer_id], references: [id], onDelete: NoAction)
   vehicle           Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   mechanic_assigned User?          @relation("JobCardMechanic", fields: [mechanic_assigned_id], references: [id], onDelete: SetNull)

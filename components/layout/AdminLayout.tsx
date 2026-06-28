@@ -3,7 +3,7 @@
  * Description: Main wrapper for all authenticated pages in the /admin area.
  * Last Edited: 2025-11-13 19:35 Europe/London (FIXED - Integrated Logo)
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { signOut } from 'next-auth/react';
@@ -21,7 +21,6 @@ const navItems = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
   { name: 'Bookings', href: '/admin/bookings', icon: '🗓️', ready: false },
   { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
-  { name: 'Profit Centres', href: '/admin/profit-centres', icon: '🏭', ready: true },
   { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
   { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
   { name: 'Settings', href: '/admin/settings', icon: '⚙️', ready: true },
@@ -36,6 +35,25 @@ interface AdminLayoutProps {
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [locations, setLocations] = useState<Array<{ id: string; site_name: string }>>([]);
+  const [currentSiteId, setCurrentSiteId] = useState<string | null>(null);
+
+  // Top-bar location navigation: the group's Sites (locations) + the current one.
+  useEffect(() => {
+    let active = true;
+    fetch('/api/locations')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active && d) {
+          setLocations(d.locations || []);
+          setCurrentSiteId(d.currentSiteId || null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const isActive = (href: string) => router.pathname === href;
 
@@ -101,8 +119,31 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 ☰
             </button>
             {/* 💥 FIX: Replaced Dashboard text with Logo Component for mobile */}
-            <Logo /> 
+            <Logo />
         </header>
+
+        {/* --- Location top bar (one tab per Site; the current one is highlighted) --- */}
+        {locations.length > 0 && (
+          <div className="bg-slate-800 border-b border-slate-700 px-4 sm:px-6 lg:px-8 py-2 flex items-center gap-2 overflow-x-auto">
+            <span className="text-xs uppercase text-slate-500 mr-1">Locations:</span>
+            {locations.map((loc) => {
+              const current = loc.id === currentSiteId;
+              return (
+                <span
+                  key={loc.id}
+                  className={`text-sm px-3 py-1 rounded-lg border whitespace-nowrap ${
+                    current
+                      ? 'bg-blue-600 text-white border-blue-400'
+                      : 'bg-slate-700 text-slate-300 border-slate-600'
+                  }`}
+                  title={current ? 'Current location' : 'Location switching is a later slice'}
+                >
+                  {loc.site_name}
+                </span>
+              );
+            })}
+          </div>
+        )}
 
         {/* --- Page Content (The children prop..) --- */}
         <div className="flex-1 p-4 sm:p-6 lg:p-8">

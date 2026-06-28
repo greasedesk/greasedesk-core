@@ -85,13 +85,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error('FORBIDDEN_SITE');
         }
 
-        // JobCard requires a profit centre; use the site's first one (seeded "Workshop").
-        const profitCentre = await tx.profitCentre.findFirst({
-          where: { site_id: siteId },
-          select: { id: true },
-        });
-        if (!profitCentre) throw new Error('NO_PROFIT_CENTRE');
-
         // Find-or-create Vehicle by registration within the tenant; reuse its customer.
         let vehicle = await tx.vehicle.findFirst({
           where: { group_id: groupId, registration },
@@ -134,7 +127,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           data: {
             group_id: groupId,
             site_id: siteId,
-            profit_centre_id: profitCentre.id,
             customer_id: customerId,
             vehicle_id: vehicleId,
             odometer_in: mileage,
@@ -152,11 +144,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (error: any) {
       if (error?.message === 'FORBIDDEN_SITE') {
         return res.status(403).json({ message: 'You do not have permission to use this site.' });
-      }
-      if (error?.message === 'NO_PROFIT_CENTRE') {
-        return res
-          .status(400)
-          .json({ message: 'No profit centre is configured for this site. Add one before creating job cards.' });
       }
       console.error('Job Card Create Error:', error);
       return res.status(500).json({ message: 'Failed to create job card. Check logs for details.' });

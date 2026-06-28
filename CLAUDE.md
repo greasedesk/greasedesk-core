@@ -307,6 +307,9 @@ This refines the Tenancy & Access Architecture above. Where that section says "o
 Office," read it through this lens: **HQ / consolidated reporting lives at the GROUP level, not at a
 Site.** Every physical location — including the head-office workshop — is just a Site.
 
+> **Further refined by "Operational Model — Location→Resource, Profit Centre as Tag" below**: Resources
+> belong to Locations (Sites), and Profit Centre is a reporting tag — not a container for resources.
+
 ### The core refinement
 - **"HQ" = the Group's consolidated reporting view ("All Sites").** It is NOT a special Site.
 - **Every physical location is an ordinary Site** — including the location that happens to be head
@@ -370,3 +373,32 @@ At signup, after the account step:
   frame it slots into. Build the shell as the app's primary navigation; everything renders inside it.
 - Schema: anchor reporting/billing on **Group**; Sites are plain locations (keep `parent_site_id`
   for grouping if useful, but no special head-office Site).
+
+
+## Operational Model — Location→Resource, Profit Centre as Tag (supersedes "Resource under Profit Centre")
+
+This supersedes the earlier "### Resource = a physical unit within a Profit Centre" and the diary's
+"groups by Profit Centre → Resource" wording. The operational tree is now **three levels**:
+
+```
+Group (tenant / HQ)
+  └─ Site  (a Location — the physical branch; "Location" is the UI name for Site)
+       └─ Resource  (lift / MOT bay / spray booth — the diary's columns)
+```
+
+- **Resources belong to a Site (Location), not to a Profit Centre.** `Resource.site_id`.
+- **Profit Centre is a reporting TAG, not an operational container.** It is a typed tag
+  (`ProfitCentreCategory`: repairs / mot / spraybooth / car_sales) applied to **job cards &
+  bookings** via their (now nullable) `profit_centre_id`. It owns no resources and is not required
+  to operate. P&L reporting slices by the tag's category across sites.
+- **Job cards/bookings no longer require a profit centre.** `JobCard.profit_centre_id` and
+  `Booking.profit_centre_id` are nullable; onboarding no longer auto-creates a "Workshop" PC.
+
+### Navigation & Settings shape (built)
+- **Top bar = locations** (one tab per Site; current highlighted). Switching between locations is a
+  later slice; `[ All Sites ]` reporting home is also later.
+- **Settings is split into sub-sections:** **Financial** (regional/VAT/labour + Profit Centre
+  *tags*), **Locations & Resources** (resources per location), **Users** (read-only list for now),
+  **Licences & Subscriptions** (read-only plan/billable-unit view).
+- The standalone `/admin/profit-centres` page is gone; profit-centre tags live under Settings →
+  Financial, resources under Settings → Locations & Resources.
