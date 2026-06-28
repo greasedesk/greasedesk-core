@@ -9,9 +9,9 @@ import { useRouter } from 'next/router';
 import AdminLayout from '@/components/layout/AdminLayout';
 
 const SUBNAV = [
-  { name: 'Financial', href: '/admin/settings/financial' },
   { name: 'Locations & Resources', href: '/admin/settings/locations' },
   { name: 'Users', href: '/admin/settings/users' },
+  { name: 'Financial', href: '/admin/settings/financial' },
   { name: 'Licences & Subscriptions', href: '/admin/settings/licences' },
 ];
 

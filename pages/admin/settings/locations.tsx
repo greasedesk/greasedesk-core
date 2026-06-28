@@ -1,9 +1,11 @@
 /**
  * File: pages/admin/settings/locations.tsx
- * Settings → Locations & Resources. Operational structure: each Location (Site) has
- * Resources (lifts / MOT bays / spray booths). Resource CRUD via /api/resources.
- * Lists all locations in the caller's group (HQ visibility); adding new locations is a
- * later slice — this manages resources within existing locations.
+ * Settings → Locations & Resources. Manage Locations (Sites) and the Resources within each.
+ * Operational structure: Group → Site (Location) → Resource. Tenant-scoped to the group.
+ * Location CRUD via /api/locations; resource CRUD via /api/resources.
+ *
+ * NOTE (billing): adding a Location is a billable event (sites are billable units per CLAUDE.md).
+ * Billing is not built; the hook is marked in /api/locations.ts (TODO(billing)).
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
@@ -22,7 +24,14 @@ const RESOURCE_TYPE_OPTIONS = [
 const typeLabel = (v: string) => RESOURCE_TYPE_OPTIONS.find((o) => o.value === v)?.label ?? v;
 
 type ResourceView = { id: string; name: string; type: string; display_order: number; is_active: boolean };
-type LocationView = { id: string; name: string; isCurrent: boolean; resources: ResourceView[] };
+type LocationView = {
+  id: string;
+  name: string;
+  address: string | null;
+  isActive: boolean;
+  isCurrent: boolean;
+  resources: ResourceView[];
+};
 type PageProps = { locations: LocationView[] };
 
 const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
@@ -37,6 +46,7 @@ async function mutate(url: string, method: string, body: any): Promise<string | 
   }
 }
 
+// --- Resource row (edit / delete) ---
 function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(resource.name);
@@ -121,6 +131,105 @@ function AddResource({ siteId, onChanged }: { siteId: string; onChanged: () => v
   );
 }
 
+// --- Add a Location (Site) ---
+function AddLocation({ onChanged }: { onChanged: () => void }) {
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    const error = await mutate('/api/locations', 'POST', { site_name: name, address });
+    setBusy(false);
+    if (error) return setErr(error);
+    setName('');
+    setAddress('');
+    onChanged();
+  }
+  return (
+    <form onSubmit={submit} className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-6 flex flex-wrap items-end gap-3">
+      <div className="flex-1 min-w-[160px]">
+        <label className="block text-xs text-slate-400 mb-1">New location name</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Great Bridge" className={`${inputClass} w-full`} />
+      </div>
+      <div className="flex-1 min-w-[160px]">
+        <label className="block text-xs text-slate-400 mb-1">Address (optional)</label>
+        <input value={address} onChange={(e) => setAddress(e.target.value)} className={`${inputClass} w-full`} />
+      </div>
+      <button type="submit" disabled={busy} className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+        {busy ? 'Adding…' : 'Add Location'}
+      </button>
+      {err && <p className="text-red-400 text-xs w-full">{err}</p>}
+      <p className="text-xs text-slate-500 w-full">A new location starts with no resources. Note: locations are billable — adding one will affect billing once that module exists.</p>
+    </form>
+  );
+}
+
+// --- Location card (edit / delete + its resources) ---
+function LocationCard({ loc, onChanged }: { loc: LocationView; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(loc.name);
+  const [address, setAddress] = useState(loc.address ?? '');
+  const [active, setActive] = useState(loc.isActive);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    const error = await mutate('/api/locations', 'PATCH', { id: loc.id, site_name: name, address, is_active: active });
+    if (error) return setErr(error);
+    setEditing(false);
+    onChanged();
+  }
+  async function remove() {
+    const error = await mutate('/api/locations', 'DELETE', { id: loc.id });
+    if (error) return setErr(error); // e.g. 409 guard (has data / current / last)
+    onChanged();
+  }
+
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-4">
+      <div className="flex items-start justify-between">
+        {editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-44`} placeholder="Name" />
+            <input value={address} onChange={(e) => setAddress(e.target.value)} className={`${inputClass} w-56`} placeholder="Address" />
+            <label className="text-xs text-slate-300 flex items-center gap-1">
+              <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
+            </label>
+            <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
+            <button onClick={() => setEditing(false)} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
+          </div>
+        ) : (
+          <div>
+            <h2 className="text-lg font-semibold text-white">
+              {loc.name}
+              {loc.isCurrent && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700 align-middle">current</span>}
+              {!loc.isActive && <span className="ml-2 text-xs text-amber-400 align-middle">inactive</span>}
+            </h2>
+            {loc.address && <p className="text-slate-400 text-sm mt-0.5">{loc.address}</p>}
+          </div>
+        )}
+        {!editing && (
+          <div className="flex items-center gap-3">
+            <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
+            <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
+          </div>
+        )}
+      </div>
+      {err && <p className="text-red-400 text-xs mt-1">{err}</p>}
+
+      <div className="mt-4">
+        <div className="text-xs uppercase text-slate-400">Resources</div>
+        {loc.resources.length === 0 && <p className="text-slate-500 text-sm py-2">No resources yet.</p>}
+        {loc.resources.map((r) => <ResourceRow key={r.id} resource={r} onChanged={onChanged} />)}
+        <AddResource siteId={loc.id} onChanged={onChanged} />
+      </div>
+    </div>
+  );
+}
+
 export default function LocationsSettings({ locations }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
@@ -128,22 +237,11 @@ export default function LocationsSettings({ locations }: PageProps) {
   return (
     <SettingsLayout>
       <Head><title>Locations & Resources - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Each location’s physical resources (lifts, MOT bays, spray booths). These become the diary’s columns.</p>
+      <p className="text-slate-400 mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
 
-      {locations.map((loc) => (
-        <div key={loc.id} className="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-4">
-          <h2 className="text-lg font-semibold text-white">
-            {loc.name}
-            {loc.isCurrent && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700">current</span>}
-          </h2>
-          <div className="mt-3">
-            <div className="text-xs uppercase text-slate-400">Resources</div>
-            {loc.resources.length === 0 && <p className="text-slate-500 text-sm py-2">No resources yet.</p>}
-            {loc.resources.map((r) => <ResourceRow key={r.id} resource={r} onChanged={refresh} />)}
-            <AddResource siteId={loc.id} onChanged={refresh} />
-          </div>
-        </div>
-      ))}
+      <AddLocation onChanged={refresh} />
+
+      {locations.map((loc) => <LocationCard key={loc.id} loc={loc} onChanged={refresh} />)}
     </SettingsLayout>
   );
 }
@@ -156,7 +254,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean };
-  type SiteDbRow = { id: string; site_name: string; resources: ResDbRow[] };
+  type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; resources: ResDbRow[] };
 
   const sites = (await prisma.site.findMany({
     where: { group_id: user.group_id }, // HQ visibility across the group's locations
@@ -167,6 +265,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const locations: LocationView[] = sites.map((s: SiteDbRow) => ({
     id: s.id,
     name: s.site_name,
+    address: s.address,
+    isActive: s.is_active,
     isCurrent: s.id === user.site_id,
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active })),
   }));

@@ -23,7 +23,7 @@ const navItems = [
   { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
   { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
   { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
-  { name: 'Settings', href: '/admin/settings', icon: '⚙️', ready: true },
+  // Settings lives at the bottom of the sidebar (see below), not in the main list.
 ];
 
 const visibleNavItems = navItems.filter((item) => item.ready);
@@ -96,11 +96,22 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           ))}
         </nav>
         
-        {/* Future Site Switcher can go here */}
-        <div className="absolute bottom-4 w-full pr-8">
+        {/* Settings (cog) sits at the bottom, directly above Sign Out. */}
+        <div className="absolute bottom-4 left-0 w-full px-4 space-y-1">
+            <Link
+                href="/admin/settings"
+                className={`flex items-center p-3 rounded-lg transition-colors duration-200 ${
+                  router.pathname.startsWith('/admin/settings')
+                    ? 'bg-blue-600 text-white font-semibold'
+                    : 'text-slate-300 hover:bg-slate-700'
+                }`}
+            >
+                <span className="mr-3 text-lg">⚙️</span>
+                Settings
+            </Link>
             <button
                 onClick={() => signOut({ callbackUrl: '/admin/login' })}
-                className="w-full py-2 text-sm text-slate-400 hover:text-red-400 transition"
+                className="w-full text-left p-3 rounded-lg text-sm text-slate-400 hover:text-red-400 transition"
             >
                 Sign Out
             </button>
@@ -178,9 +189,21 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </Link>
               ))}
             </nav>
+            <Link
+              href="/admin/settings"
+              onClick={() => setIsSidebarOpen(false)}
+              className={`flex items-center mt-4 p-3 rounded-lg transition-colors duration-200 ${
+                router.pathname.startsWith('/admin/settings')
+                  ? 'bg-blue-600 text-white font-semibold'
+                  : 'text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              <span className="mr-3 text-lg">⚙️</span>
+              Settings
+            </Link>
             <button
               onClick={() => { setIsSidebarOpen(false); signOut({ callbackUrl: '/admin/login' }); }}
-              className="w-full mt-4 p-3 text-left text-sm text-slate-400 hover:text-red-400 transition"
+              className="w-full p-3 text-left text-sm text-slate-400 hover:text-red-400 transition"
             >
               Sign Out
             </button>
