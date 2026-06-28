@@ -16,6 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 // 💥 FIX: Changed from 'import prisma from '@/lib/db';'
 // to a named import to resolve the TypeScript/build error.
 import { prisma } from '@/lib/db';
+import AdminLayout from '@/components/layout/AdminLayout';
 
 type SiteSettings = {
   groupName: string;
@@ -102,7 +103,7 @@ export default function AdminSettingsPage({ initial }: PageProps) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4 sm:p-8">
+    <AdminLayout>
       <Head>
         <title>System Settings - GreaseDesk</title>
       </Head>
@@ -263,7 +264,7 @@ export default function AdminSettingsPage({ initial }: PageProps) {
           </button>
         </form>
       </div>
-    </div>
+    </AdminLayout>
   );
 }
 

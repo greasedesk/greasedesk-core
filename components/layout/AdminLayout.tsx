@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { signOut } from 'next-auth/react';
 // ⚠️ You'll need to create a simple TopNav component later
 // import TopNav from '../TopNav'; 
 
@@ -13,15 +14,19 @@ import { useRouter } from 'next/router';
 const LOGO_SRC = "/greasedesk-logo-source.png";
 const LOGO_DISPLAY_WIDTH = "150px"; // Suitable width for the sidebar
 
-// Define the navigation items
+// Define the navigation items.
+// `ready: false` items are routes whose pages aren't built yet — they're hidden from
+// the nav until the slice ships. Flip ready to true when the page exists.
 const navItems = [
-  { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠' },
-  { name: 'Bookings', href: '/admin/bookings', icon: '🗓️' },
-  { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️' },
-  { name: 'Customers', href: '/admin/customers', icon: '👤' },
-  { name: 'Reports', href: '/admin/reports', icon: '📊' },
-  { name: 'Settings', href: '/admin/settings', icon: '⚙️' },
+  { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
+  { name: 'Bookings', href: '/admin/bookings', icon: '🗓️', ready: false },
+  { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
+  { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
+  { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
+  { name: 'Settings', href: '/admin/settings', icon: '⚙️', ready: true },
 ];
+
+const visibleNavItems = navItems.filter((item) => item.ready);
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -56,7 +61,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         <Logo /> 
         
         <nav className="space-y-2">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <Link
               key={item.name}
               href={item.href}
@@ -72,9 +77,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           ))}
         </nav>
         
-        {/* Future Site Switcher / Logout can go here */}
+        {/* Future Site Switcher can go here */}
         <div className="absolute bottom-4 w-full pr-8">
-            <button className="w-full py-2 text-sm text-slate-400 hover:text-red-400 transition">
+            <button
+                onClick={() => signOut({ callbackUrl: '/admin/login' })}
+                className="w-full py-2 text-sm text-slate-400 hover:text-red-400 transition"
+            >
                 Sign Out
             </button>
         </div>
@@ -112,7 +120,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             {/* 💥 FIX: Replaced text with Logo Component for mobile menu */}
             <Logo />
             <nav className="space-y-2">
-              {navItems.map((item) => (
+              {visibleNavItems.map((item) => (
                 <Link
                   key={item.name}
                   href={item.href}
@@ -128,6 +136,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </Link>
               ))}
             </nav>
+            <button
+              onClick={() => { setIsSidebarOpen(false); signOut({ callbackUrl: '/admin/login' }); }}
+              className="w-full mt-4 p-3 text-left text-sm text-slate-400 hover:text-red-400 transition"
+            >
+              Sign Out
+            </button>
           </div>
         </div>
       )}

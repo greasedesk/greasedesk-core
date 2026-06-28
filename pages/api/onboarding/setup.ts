@@ -165,6 +165,19 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         });
       }
 
+      // D. Ensure a default Profit Centre exists for this site.
+      // JobCards require a profit_centre_id, so every Group+Site needs at least one.
+      // Idempotent: only creates "Workshop" if the site has none yet.
+      const existingPc = await tx.profitCentre.findFirst({
+        where: { site_id: siteId },
+        select: { id: true },
+      });
+      if (!existingPc) {
+        await tx.profitCentre.create({
+          data: { site_id: siteId, name: 'Workshop', is_active: true },
+        });
+      }
+
       return {
         groupId,
         siteId,
