@@ -89,7 +89,7 @@ async function main() {
     }
   });
 
-  // ---- 4) Admin user (STAFF) ----
+  // ---- 4) Admin user (ADMIN + owner) ----
   let user = await prisma.user.findUnique({ where: { email: adminEmail }});
   if (!user) {
     user = await prisma.user.create({
@@ -97,7 +97,8 @@ async function main() {
         email: adminEmail,
         name: adminName,
         passwordHash: passHash,     // leave null if auth flow does not need it
-        role: 'STAFF',
+        role: 'ADMIN',
+        is_owner: true,
         group_id: group.id,
         site_id: site.id,
         role_id: role.id,

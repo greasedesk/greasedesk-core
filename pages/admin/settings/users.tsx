@@ -14,8 +14,16 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[] };
-type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: 'ADMIN' | 'STANDARD'; isOwner: boolean };
+type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean };
+
+function RoleBadge({ role }: { role: 'ADMIN' | 'STANDARD' }) {
+  return (
+    <span className={`ml-2 text-xs px-2 py-0.5 rounded-full border ${role === 'ADMIN' ? 'bg-purple-900 text-purple-200 border-purple-700' : 'bg-slate-700 text-slate-300 border-slate-600'}`}>
+      {role}
+    </span>
+  );
+}
 
 const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
 
@@ -84,17 +92,22 @@ function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void
   );
 }
 
-function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; onChanged: () => void }) {
+function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name ?? '');
   const [siteIds, setSiteIds] = useState<string[]>(user.siteIds);
+  const [role, setRole] = useState<'ADMIN' | 'STANDARD'>(user.role);
   const [err, setErr] = useState<string | null>(null);
   const isSelf = selfId === user.id;
   const toggle = (id: string) => setSiteIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const nameFor = (id: string) => sites.find((s) => s.id === id)?.name ?? '—';
+  // The owner's role is locked; only an ADMIN may change a (non-owner) user's role.
+  const canEditRole = isAdmin && !user.isOwner;
 
   async function save() {
-    const error = await mutate('/api/users', 'PATCH', { id: user.id, name, siteIds });
+    const body: any = { id: user.id, name, siteIds };
+    if (canEditRole) body.role = role;
+    const error = await mutate('/api/users', 'PATCH', body);
     if (error) return setErr(error);
     setEditing(false);
     onChanged();
@@ -105,12 +118,17 @@ function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: Si
     onChanged();
   }
 
+  const removeDisabled = isSelf || user.isOwner;
+  const removeTitle = user.isOwner ? 'The owner account cannot be removed' : isSelf ? 'You cannot remove yourself' : 'Remove user';
+
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-white font-medium">
+          <div className="text-white font-medium flex flex-wrap items-center">
             {user.name || <span className="text-slate-400 italic">No name</span>}
+            <RoleBadge role={user.role} />
+            {user.isOwner && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700">owner</span>}
             {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700">you</span>}
             {!user.isActive && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700">pending</span>}
           </div>
@@ -124,7 +142,7 @@ function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: Si
         {!editing && (
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
-            <button onClick={remove} disabled={isSelf} title={isSelf ? 'You cannot remove yourself' : 'Remove user'} className={`text-xs ${isSelf ? 'text-slate-600 cursor-not-allowed' : 'text-red-400 hover:underline'}`}>Remove</button>
+            <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-slate-600 cursor-not-allowed' : 'text-red-400 hover:underline'}`}>Remove</button>
           </div>
         )}
       </div>
@@ -132,10 +150,24 @@ function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: Si
       {editing && (
         <div className="mt-3 space-y-3">
           <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
+          {canEditRole ? (
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Role</label>
+              <select value={role} onChange={(e) => setRole(e.target.value as 'ADMIN' | 'STANDARD')} className={inputClass}>
+                <option value="STANDARD">Standard</option>
+                <option value="ADMIN">Admin</option>
+              </select>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">
+              Role: <span className="text-slate-200">{user.role}</span>
+              {user.isOwner ? ' (owner — locked)' : !isAdmin ? ' (only an admin can change roles)' : ''}
+            </div>
+          )}
           <div><label className="block text-xs text-slate-400 mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
           <div className="flex items-center gap-2">
             <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
-            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); }} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
+            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setRole(user.role); }} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
           </div>
         </div>
       )}
@@ -144,20 +176,23 @@ function UserCard({ user, sites, selfId, onChanged }: { user: UserRow; sites: Si
   );
 }
 
-export default function UsersSettings({ users, sites, selfId }: PageProps) {
+export default function UsersSettings({ users, sites, selfId, isAdmin }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   return (
     <SettingsLayout>
       <Head><title>Users - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Manage your users and which location(s) each is assigned to. Assignment is recorded but not yet enforced for visibility — that’s a later slice. Roles are not configured yet.</p>
+      <p className="text-slate-400 mb-6">
+        Manage your users, their role (Admin / Standard), and which location(s) each is assigned to.
+        Site visibility is not yet enforced by role — that’s a later slice. {isAdmin ? '' : 'Only an admin can change roles.'}
+      </p>
 
       <AddUser sites={sites} onChanged={refresh} />
 
       {users.length === 0 ? (
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">No users.</div>
       ) : (
-        users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} onChanged={refresh} />)
+        users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} isAdmin={isAdmin} onChanged={refresh} />)
       )}
     </SettingsLayout>
   );
@@ -170,21 +205,25 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
 
-  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; site_assignments: { site_id: string }[] };
-  const [userRows, siteRows] = await Promise.all([
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: 'ADMIN' | 'STANDARD'; is_owner: boolean; site_assignments: { site_id: string }[] };
+  const selfId = (sUser.id as string) ?? null;
+  const [userRows, siteRows, selfRow] = await Promise.all([
     prisma.user.findMany({
       where: { group_id: sUser.group_id },
       orderBy: { email: 'asc' },
-      select: { id: true, name: true, email: true, is_active: true, site_assignments: { select: { site_id: true } } },
+      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
     prisma.site.findMany({ where: { group_id: sUser.group_id }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
+    // Read the current user's role from the DB (not the possibly-stale session token).
+    selfId ? prisma.user.findUnique({ where: { id: selfId }, select: { role: true } }) : Promise.resolve(null),
   ]);
 
   const users: UserRow[] = userRows.map((u: UserDbRow) => ({
-    id: u.id, name: u.name, email: u.email, isActive: u.is_active,
+    id: u.id, name: u.name, email: u.email, isActive: u.is_active, role: u.role, isOwner: u.is_owner,
     siteIds: u.site_assignments.map((a) => a.site_id),
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
+  const isAdmin = (selfRow as { role?: string } | null)?.role === 'ADMIN';
 
-  return { props: { users, sites, selfId: (sUser.id as string) ?? null } };
+  return { props: { users, sites, selfId, isAdmin } };
 };

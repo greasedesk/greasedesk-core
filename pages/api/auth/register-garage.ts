@@ -73,7 +73,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           name: name.trim(),
           email: emailNorm,
           passwordHash,
-          role: UserRole.STAFF,
+          role: UserRole.ADMIN, // primary subscriber
+          is_owner: true,       // immutable owner of the new group
           group_id: group.id,
           is_active: true,
           emailVerified: null,

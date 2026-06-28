@@ -14,7 +14,9 @@ import crypto from 'crypto';
 // and focus on database creation, but you will integrate the email API here later.
 
 interface InvitePayload {
-  invites: { email: string; role: 'STAFF' | 'MECHANIC' }[];
+  // Role on invite is ignored — invited members are always STANDARD (ADMIN is granted
+  // deliberately via Settings → Users).
+  invites: { email: string; role?: string }[];
 }
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
@@ -45,14 +47,14 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // Prepare data for batch creation
   const usersToCreate = invites.map(invite => ({
     email: invite.email.toLowerCase(),
-    role: invite.role,
+    role: UserRole.STANDARD, // invited members are always STANDARD
     group_id: groupId,
     site_id: siteId,
     // New users start inactive, pending verification/setup
     is_active: false,
     emailVerified: null,
     // Since they don't have a password yet, we use a placeholder:
-    passwordHash: 'INVITE_PENDING', 
+    passwordHash: 'INVITE_PENDING',
   }));
 
   try {
@@ -61,8 +63,8 @@ const createdUsers = await prisma.$transaction(
   usersToCreate.map(data => 
     prisma.user.upsert({
       where: { email: data.email }, // ✅ Only filter by email
-      update: { 
-        role: data.role,
+      update: {
+        // Do NOT touch role on re-invite (never demote an existing ADMIN/owner).
         site_id: data.site_id,
         group_id: data.group_id,
       },

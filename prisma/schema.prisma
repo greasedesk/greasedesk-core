@@ -26,8 +26,8 @@ datasource db {
 // ───────────────────────────────────────────────────────────────────────────────
 
 enum UserRole {
-  STAFF
-  CUSTOMER
+  ADMIN
+  STANDARD
 }
 
 enum BillingStatus {
@@ -230,7 +230,7 @@ model User {
   emailVerified DateTime?
   image         String?
   passwordHash  String?
-  role          UserRole  @default(STAFF)
+  role          UserRole  @default(STANDARD)
 
   // --- FIXED GREASEDESK FIELDS ---
   // Optional at creation time; enforced in app layer when linking staff.
@@ -238,6 +238,7 @@ model User {
   site_id    String?
   role_id    String?
   is_active  Boolean  @default(true)
+  is_owner   Boolean  @default(false) // immutable: marks the one primary-subscriber per group
   created_at DateTime @default(now())
 
   // +++ CUSTOMER PORTAL LINK ---

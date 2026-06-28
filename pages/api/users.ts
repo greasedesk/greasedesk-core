@@ -13,7 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -30,10 +30,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!Array.isArray(ids) || ids.length === 0) return [];
     const rows = await prisma.site.findMany({ where: { id: { in: ids }, group_id: groupId }, select: { id: true } });
     return (rows as Array<{ id: string }>).map((r) => r.id);
-  }
-  async function ownUser(id: string) {
-    if (!id) return null;
-    return prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
   }
 
   if (req.method === 'POST') {
@@ -57,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             email: cleanEmail,
             group_id: groupId,
             site_id: defaultSite,
-            role: 'STAFF',
+            role: 'STANDARD',            // invited/added users default to STANDARD; ADMIN is granted via edit
             is_active: false,            // pending — matches existing invite stub
             passwordHash: 'INVITE_PENDING',
           },
@@ -77,14 +73,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, siteIds } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[] };
+    const { id, name, siteIds, role } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownUser(id))) return res.status(404).json({ message: 'User not found.' });
+    const target = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_owner: true } });
+    if (!target) return res.status(404).json({ message: 'User not found.' });
+
+    if (role !== undefined) {
+      if (role !== 'ADMIN' && role !== 'STANDARD') {
+        return res.status(400).json({ message: 'Role must be ADMIN or STANDARD.' });
+      }
+      // Owner is immutable: locked to ADMIN, cannot be demoted.
+      if (target.is_owner && role !== 'ADMIN') {
+        return res.status(409).json({ message: 'The owner account is locked to ADMIN and cannot be demoted.' });
+      }
+    }
 
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         if (name !== undefined) {
           await tx.user.update({ where: { id }, data: { name: name.trim() || null } });
+        }
+        // Role change only applies to non-owners (owner stays ADMIN).
+        if (role !== undefined && !target.is_owner) {
+          await tx.user.update({ where: { id }, data: { role: role as UserRole } });
         }
         if (siteIds !== undefined) {
           const validSites = await groupSiteIds(siteIds);
@@ -109,11 +120,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const id = (req.query.id as string) || (req.body && (req.body.id as string));
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownUser(id))) return res.status(404).json({ message: 'User not found.' });
+    const target = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_owner: true } });
+    if (!target) return res.status(404).json({ message: 'User not found.' });
 
     // Lockout guards.
     if (sessionUserId && id === sessionUserId) {
       return res.status(409).json({ message: 'You cannot remove your own account.' });
+    }
+    if (target.is_owner) {
+      return res.status(409).json({ message: 'The owner account cannot be removed.' });
     }
     const count = await prisma.user.count({ where: { group_id: groupId } });
     if (count <= 1) {
