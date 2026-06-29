@@ -30,6 +30,13 @@ enum UserRole {
   STANDARD
 }
 
+enum TenantStatus {
+  trial
+  active
+  suspended
+  cancelled
+}
+
 enum BillingStatus {
   ok
   grace
@@ -72,6 +79,12 @@ model Group {
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
   created_at       DateTime @default(now())
+
+  // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
+  // sequence via a column default (atomic / collision-safe). Never updated by any API.
+  ref           String       @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
+  status        TenantStatus @default(trial)  // tenant lifecycle (console-managed later)
+  trial_ends_at DateTime?                     // set on signup to now + TRIAL_DAYS
 
   billing    GroupBilling?
   features   GroupFeature[]

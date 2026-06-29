@@ -14,7 +14,22 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { getVisibility } from '@/lib/site-visibility';
 
 type Company = { group_name: string; company_number: string | null; vat_number: string | null };
-type PageProps = { email: string; company: Company; isAdmin: boolean };
+type Account = { ref: string; status: string; trialEndsAt: string | null };
+type PageProps = { email: string; company: Company; account: Account; isAdmin: boolean };
+
+function AccountRef({ account }: { account: Account }) {
+  const ends = account.trialEndsAt ? new Date(account.trialEndsAt).toLocaleDateString('en-GB') : '—';
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-white mb-4">Account</h2>
+      <div className="space-y-2 text-sm">
+        <div><span className="text-slate-400">Reference: </span><span className="text-slate-100 font-mono">{account.ref}</span> <span className="text-slate-500 text-xs">(permanent)</span></div>
+        <div><span className="text-slate-400">Status: </span><span className="text-slate-100 capitalize">{account.status}</span></div>
+        <div><span className="text-slate-400">Trial ends: </span><span className="text-slate-100">{ends}</span></div>
+      </div>
+    </div>
+  );
+}
 
 const inputClass = 'w-full p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
 const labelClass = 'block text-xs text-slate-400 mb-1';
@@ -112,11 +127,12 @@ function CompanyDetails({ company, isAdmin }: { company: Company; isAdmin: boole
   );
 }
 
-export default function ProfileSettings({ email, company, isAdmin }: PageProps) {
+export default function ProfileSettings({ email, company, account, isAdmin }: PageProps) {
   return (
     <SettingsLayout>
       <Head><title>Profile - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Signed in as <strong>{email}</strong> · {company.group_name}</p>
+      <p className="text-slate-400 mb-6">Signed in as <strong>{email}</strong> · {company.group_name} ({account.ref})</p>
+      <AccountRef account={account} />
       <ChangePassword />
       <CompanyDetails company={company} isAdmin={isAdmin} />
     </SettingsLayout>
@@ -132,13 +148,23 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const [vis, group] = await Promise.all([
     getVisibility(sUser.id as string),
-    prisma.group.findUnique({ where: { id: sUser.group_id }, select: { group_name: true, company_number: true, vat_number: true } }) as Promise<Company | null>,
+    prisma.group.findUnique({
+      where: { id: sUser.group_id },
+      select: { group_name: true, company_number: true, vat_number: true, ref: true, status: true, trial_ends_at: true },
+    }) as Promise<(Company & { ref: string; status: string; trial_ends_at: Date | null }) | null>,
   ]);
 
   return {
     props: {
       email: (sUser.email as string) ?? '',
-      company: group ?? { group_name: 'Your company', company_number: null, vat_number: null },
+      company: group
+        ? { group_name: group.group_name, company_number: group.company_number, vat_number: group.vat_number }
+        : { group_name: 'Your company', company_number: null, vat_number: null },
+      account: {
+        ref: group?.ref ?? '—',
+        status: group?.status ?? 'trial',
+        trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
+      },
       isAdmin: vis.isAdmin,
     },
   };

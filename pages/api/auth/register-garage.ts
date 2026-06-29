@@ -9,6 +9,7 @@ import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
 import { Resend } from 'resend';
 import crypto from 'crypto';
+import { trialEndsFromNow } from '@/lib/trial';
 
 type Payload = { name: string; email: string; password: string };
 
@@ -65,7 +66,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ... (Prisma transaction logic remains unchanged) ...
     const { user } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
-        data: { group_name: `${name}'s Garage`, billing_email: emailNorm },
+        // ref is auto-assigned by the DB sequence default; status defaults to 'trial'.
+        data: { group_name: `${name}'s Garage`, billing_email: emailNorm, trial_ends_at: trialEndsFromNow() },
       });
 
       const user = await tx.user.create({
