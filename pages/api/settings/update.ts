@@ -18,6 +18,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
+import { requireAdminApi } from '@/lib/admin-guard';
 
 type SaveSettingsBody = {
   defaultVatRate: number | string;
@@ -32,6 +33,9 @@ type SaveSettingsBody = {
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST')
     return res.status(405).json({ message: 'Method Not Allowed' });
+
+  // ADMIN-ONLY: financial settings must not be writable by STANDARD users.
+  if (!(await requireAdminApi(req, res))) return;
 
   const session = await getServerSession(req, res, authOptions);
   const user = session?.user as any;

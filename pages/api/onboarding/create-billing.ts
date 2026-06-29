@@ -12,6 +12,7 @@ import { prisma } from '../../../lib/db';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '../auth/[...nextauth]';
 import { BillingStatus } from '@prisma/client';
+import { requireAdminApi } from '@/lib/admin-guard';
 
 export default async function handle(
   req: NextApiRequest,
@@ -21,6 +22,9 @@ export default async function handle(
     res.setHeader('Allow', ['POST']);
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
+
+  // ADMIN-ONLY: billing/config writes are not permitted for STANDARD users.
+  if (!(await requireAdminApi(req, res))) return;
 
   try {
     // 1. Get the logged-in user's session (SECURE)

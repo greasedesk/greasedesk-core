@@ -9,6 +9,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { Prisma, UserRole } from '@prisma/client';
 import crypto from 'crypto';
+import { requireAdminApi } from '@/lib/admin-guard';
 
 // NOTE: We will skip the actual email sending logic (using Resend) for now 
 // and focus on database creation, but you will integrate the email API here later.
@@ -23,6 +24,9 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
+
+  // ADMIN-ONLY: creating/inviting users is user-management — STANDARD users may not.
+  if (!(await requireAdminApi(req, res))) return;
 
   // Get session
   const session = await getServerSession(req, res, authOptions);

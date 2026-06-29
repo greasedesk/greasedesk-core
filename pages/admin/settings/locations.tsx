@@ -267,7 +267,7 @@ export default function LocationsSettings({ locations, isAdmin }: PageProps) {
   const refresh = () => router.replace(router.asPath);
 
   return (
-    <SettingsLayout>
+    <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Locations & Resources - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
 

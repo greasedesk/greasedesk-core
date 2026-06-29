@@ -211,7 +211,7 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
 
 export default function ProfileSettings({ email, isSelf, canSeeEmergency, isAdmin, profile, company, account }: PageProps) {
   return (
-    <SettingsLayout>
+    <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Profile - GreaseDesk</title></Head>
       {isSelf ? (
         <p className="text-slate-400 mb-6">Signed in as <strong>{email}</strong>{account ? ` · ${account.ref}` : ''}</p>

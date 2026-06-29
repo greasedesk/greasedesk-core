@@ -6,10 +6,9 @@
 import React from 'react';
 import Head from 'next/head';
 import { GetServerSideProps } from 'next';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
+import { requireAdminPage } from '@/lib/admin-guard';
 
 type PageProps = {
   groupName: string;
@@ -17,6 +16,7 @@ type PageProps = {
   status: string | null;
   includedSites: number | null;
   siteCount: number;
+  isAdmin: boolean;
 };
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -28,9 +28,9 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function LicencesSettings({ groupName, plan, status, includedSites, siteCount }: PageProps) {
+export default function LicencesSettings({ groupName, plan, status, includedSites, siteCount, isAdmin }: PageProps) {
   return (
-    <SettingsLayout>
+    <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Licences & Subscriptions - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">Your plan and billable units. Billing is driven by the number of locations. Management is a later module.</p>
 
@@ -46,16 +46,15 @@ export default function LicencesSettings({ groupName, plan, status, includedSite
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  const session = await getServerSession(ctx.req, ctx.res, authOptions);
-  const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
-    return { redirect: { destination: '/admin/login', permanent: false } };
-  }
+  // ADMIN-ONLY: billing/plan information is not exposed to STANDARD users.
+  const gate = await requireAdminPage(ctx);
+  if (!gate.ok) return { redirect: gate.redirect };
+  const { vis } = gate;
 
   const [group, billing, siteCount] = await Promise.all([
-    prisma.group.findUnique({ where: { id: user.group_id }, select: { group_name: true } }),
-    prisma.groupBilling.findUnique({ where: { group_id: user.group_id }, select: { plan_name: true, status: true, included_sites: true } }),
-    prisma.site.count({ where: { group_id: user.group_id } }),
+    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true } }),
+    prisma.groupBilling.findUnique({ where: { group_id: vis.groupId }, select: { plan_name: true, status: true, included_sites: true } }),
+    prisma.site.count({ where: { group_id: vis.groupId } }),
   ]);
 
   return {
@@ -65,6 +64,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       status: billing?.status ?? null,
       includedSites: billing?.included_sites ?? null,
       siteCount,
+      isAdmin: true,
     },
   };
 };

@@ -9,10 +9,9 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
+import { requireAdminPage } from '@/lib/admin-guard';
 
 type SiteOpt = { id: string; name: string };
 type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: 'ADMIN' | 'STANDARD'; isOwner: boolean };
@@ -140,7 +139,7 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
             </div>
           )}
         </div>
-        {!editing && (
+        {isAdmin && !editing && (
           <div className="flex items-center gap-3 shrink-0">
             <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-blue-400 hover:underline">Profile</Link>
             <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
@@ -149,7 +148,7 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
         )}
       </div>
 
-      {editing && (
+      {isAdmin && editing && (
         <div className="mt-3 space-y-3">
           <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
           {canEditRole ? (
@@ -182,14 +181,14 @@ export default function UsersSettings({ users, sites, selfId, isAdmin }: PagePro
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   return (
-    <SettingsLayout>
+    <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Users - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">
         Manage your users, their role (Admin / Standard), and which location(s) each is assigned to.
         Site visibility is not yet enforced by role — that’s a later slice. {isAdmin ? '' : 'Only an admin can change roles.'}
       </p>
 
-      <AddUser sites={sites} onChanged={refresh} />
+      {isAdmin && <AddUser sites={sites} onChanged={refresh} />}
 
       {users.length === 0 ? (
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">No users.</div>
@@ -201,23 +200,21 @@ export default function UsersSettings({ users, sites, selfId, isAdmin }: PagePro
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  const session = await getServerSession(ctx.req, ctx.res, authOptions);
-  const sUser = session?.user as any;
-  if (!sUser?.group_id || !sUser?.site_id) {
-    return { redirect: { destination: '/admin/login', permanent: false } };
-  }
+  // ADMIN-ONLY: the roster (other users' details) is never served to a STANDARD user — the page
+  // redirects before any user query runs. /api/users also refuses non-admins on every method.
+  const gate = await requireAdminPage(ctx);
+  if (!gate.ok) return { redirect: gate.redirect };
+  const { vis } = gate;
 
   type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: 'ADMIN' | 'STANDARD'; is_owner: boolean; site_assignments: { site_id: string }[] };
-  const selfId = (sUser.id as string) ?? null;
-  const [userRows, siteRows, selfRow] = await Promise.all([
+  const selfId = vis.userId;
+  const [userRows, siteRows] = await Promise.all([
     prisma.user.findMany({
-      where: { group_id: sUser.group_id },
+      where: { group_id: vis.groupId },
       orderBy: { email: 'asc' },
       select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
-    prisma.site.findMany({ where: { group_id: sUser.group_id }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
-    // Read the current user's role from the DB (not the possibly-stale session token).
-    selfId ? prisma.user.findUnique({ where: { id: selfId }, select: { role: true } }) : Promise.resolve(null),
+    prisma.site.findMany({ where: { group_id: vis.groupId }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
   ]);
 
   const users: UserRow[] = userRows.map((u: UserDbRow) => ({
@@ -225,7 +222,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     siteIds: u.site_assignments.map((a) => a.site_id),
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
-  const isAdmin = (selfRow as { role?: string } | null)?.role === 'ADMIN';
 
-  return { props: { users, sites, selfId, isAdmin } };
+  return { props: { users, sites, selfId, isAdmin: vis.isAdmin } };
 };

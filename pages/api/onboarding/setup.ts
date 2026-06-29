@@ -19,11 +19,15 @@ import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { trialEndsFromNow } from '@/lib/trial';
+import { requireAdminApi } from '@/lib/admin-guard';
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
+
+  // ADMIN-ONLY: tenant (group/site) config writes are not permitted for STANDARD users.
+  if (!(await requireAdminApi(req, res))) return;
 
   try {
     const session = await getServerSession(req, res, authOptions);

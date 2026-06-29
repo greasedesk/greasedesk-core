@@ -5,6 +5,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
+import { requireAdminApi } from '@/lib/admin-guard';
 
 type SaveRatesBody = {
   defaultVatRate: string;
@@ -17,6 +18,9 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
+
+  // ADMIN-ONLY: rate/config writes are not permitted for STANDARD users.
+  if (!(await requireAdminApi(req, res))) return;
 
   const session = await getServerSession(req, res, authOptions);
   const sessionUser = session?.user as any;

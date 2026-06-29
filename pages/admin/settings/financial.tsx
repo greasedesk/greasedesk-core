@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
+import { requireAdminPage } from '@/lib/admin-guard';
 
 type SiteSettings = {
   siteName: string;
@@ -23,7 +24,7 @@ type SiteSettings = {
   supportedCurrencies: string[];
 };
 type PcTag = { id: string; name: string; category: string | null };
-type PageProps = { initial: SiteSettings; profitCentres: PcTag[] };
+type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; isAdmin: boolean };
 
 const ALL_COUNTRIES = ['United Kingdom', 'Ireland', 'Germany', 'France', 'Spain', 'Australia', 'United States'];
 const ALL_CURRENCIES = ['GBP', 'EUR', 'USD', 'AUD'];
@@ -128,7 +129,7 @@ function ProfitCentreTags({ tags }: { tags: PcTag[] }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres }: PageProps) {
+export default function FinancialSettings({ initial, profitCentres, isAdmin }: PageProps) {
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
@@ -178,7 +179,7 @@ export default function FinancialSettings({ initial, profitCentres }: PageProps)
   }
 
   return (
-    <SettingsLayout>
+    <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Financial Settings - GreaseDesk</title></Head>
 
       <div className="max-w-4xl mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl border border-slate-700">
@@ -254,6 +255,9 @@ export default function FinancialSettings({ initial, profitCentres }: PageProps)
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
+  // ADMIN-ONLY: financial settings (rates/VAT/currency/PC tags) are not editable by STANDARD users.
+  const gate = await requireAdminPage(ctx);
+  if (!gate.ok) return { redirect: gate.redirect };
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.group_id || !user?.site_id) {
@@ -285,5 +289,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
 
-  return { props: { initial, profitCentres } };
+  return { props: { initial, profitCentres, isAdmin: true } };
 };

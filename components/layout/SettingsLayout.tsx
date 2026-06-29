@@ -1,28 +1,30 @@
 /**
  * File: components/layout/SettingsLayout.tsx
- * Wraps AdminLayout and renders the Settings sub-navigation:
- * Financial · Locations & Resources · Users · Licences & Subscriptions.
+ * Wraps AdminLayout and renders the Settings sub-navigation. Admin-only tabs are hidden from
+ * STANDARD users (pass isAdmin). Page-level access is still enforced by requireAdminPage on each
+ * admin-only page's getServerSideProps — this just keeps the nav honest.
  */
 import React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import AdminLayout from '@/components/layout/AdminLayout';
 
-const SUBNAV = [
+const SUBNAV: Array<{ name: string; href: string; adminOnly?: boolean }> = [
   { name: 'Locations & Resources', href: '/admin/settings/locations' },
-  { name: 'Users', href: '/admin/settings/users' },
-  { name: 'Financial', href: '/admin/settings/financial' },
-  { name: 'Licences & Subscriptions', href: '/admin/settings/licences' },
+  { name: 'Users', href: '/admin/settings/users', adminOnly: true },
+  { name: 'Financial', href: '/admin/settings/financial', adminOnly: true },
+  { name: 'Licences & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
   { name: 'Profile', href: '/admin/settings/profile' },
 ];
 
-export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+export default function SettingsLayout({ isAdmin = false, children }: { isAdmin?: boolean; children: React.ReactNode }) {
   const router = useRouter();
+  const tabs = SUBNAV.filter((s) => !s.adminOnly || isAdmin);
   return (
     <AdminLayout>
       <h1 className="text-3xl font-bold text-white mb-4">Settings</h1>
       <div className="flex flex-wrap gap-1 border-b border-slate-700 mb-6">
-        {SUBNAV.map((s) => {
+        {tabs.map((s) => {
           const active = router.pathname === s.href;
           return (
             <Link
