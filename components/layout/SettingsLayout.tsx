@@ -13,6 +13,7 @@ const SUBNAV = [
   { name: 'Users', href: '/admin/settings/users' },
   { name: 'Financial', href: '/admin/settings/financial' },
   { name: 'Licences & Subscriptions', href: '/admin/settings/licences' },
+  { name: 'Profile', href: '/admin/settings/profile' },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
