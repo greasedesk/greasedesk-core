@@ -14,7 +14,7 @@ import { daysLeft } from '@/lib/trial';
 
 type PageProps = {
   groupName: string;
-  ref: string;
+  accountRef: string;
   status: string;
   trialEndsAt: string | null;
 };
@@ -36,7 +36,7 @@ function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: str
   return <div className={`rounded-xl border p-4 mb-6 ${tone}`}>{text}</div>;
 }
 
-export default function AdminDashboard({ groupName, ref, status, trialEndsAt }: PageProps) {
+export default function AdminDashboard({ groupName, accountRef, status, trialEndsAt }: PageProps) {
   return (
     <AdminLayout>
       <Head>
@@ -44,7 +44,7 @@ export default function AdminDashboard({ groupName, ref, status, trialEndsAt }: 
       </Head>
 
       <h1 className="text-4xl font-bold text-blue-400 mb-1">Welcome Back!</h1>
-      <p className="text-slate-400 mb-6">{groupName} · <span className="font-mono">{ref}</span></p>
+      <p className="text-slate-400 mb-6">{groupName} · <span className="font-mono">{accountRef}</span></p>
 
       <TrialBanner status={status} trialEndsAt={trialEndsAt} />
 
@@ -81,7 +81,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   return {
     props: {
       groupName: group?.group_name ?? 'Your garage',
-      ref: group?.ref ?? '—',
+      accountRef: group?.ref ?? '—',
       status: group?.status ?? 'trial',
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
     },
