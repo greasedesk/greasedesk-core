@@ -15,6 +15,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, UserRole } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
+import { makeInviteToken } from '@/lib/tokens';
+import { sendTeamInvitationEmail } from '@/lib/email-service';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -57,6 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const defaultSite = validSites[0] ?? sessionSiteId;
 
+    const invite = makeInviteToken(); // raw emailed; only the hash is stored
     try {
       const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const u = await tx.user.create({
@@ -66,8 +69,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             group_id: groupId,
             site_id: defaultSite,
             role: 'STANDARD',            // invited/added users default to STANDARD; ADMIN is granted via edit
-            is_active: false,            // pending — matches existing invite stub
+            is_active: false,            // pending until they set a password via the invite link
             passwordHash: 'INVITE_PENDING',
+            invite_token_hash: invite.hash,
+            invite_token_expires: invite.expires,
+            invite_token_used_at: null,
           },
           select: { id: true },
         });
@@ -76,8 +82,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         return u;
       });
-      // NOTE: invite email is intentionally NOT sent yet (stub, matches current behaviour).
-      return res.status(201).json({ id: created.id, message: 'User created (pending — no email sent).' });
+
+      // Send the invite email with the RAW token (never stored). Log-fallback if Resend is unset.
+      const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com';
+      const inviteLink = `${baseUrl}/set-password?token=${invite.raw}`;
+      const group = await prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true } });
+      const sent = await sendTeamInvitationEmail(cleanEmail, group?.group_name ?? 'GreaseDesk', inviteLink);
+      if (!sent) console.warn('Invite email not sent (Resend unset?) — link:', inviteLink);
+
+      return res.status(201).json({
+        id: created.id,
+        message: sent ? 'User invited — a set-password email has been sent.' : 'User created (pending — email not sent; check server logs for the link).',
+      });
     } catch (e) {
       console.error('User create error:', e);
       return res.status(500).json({ message: 'Failed to create user.' });

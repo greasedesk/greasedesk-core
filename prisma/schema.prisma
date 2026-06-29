@@ -254,6 +254,24 @@ model User {
   is_owner   Boolean  @default(false) // immutable: marks the one primary-subscriber per group
   created_at DateTime @default(now())
 
+  // --- INVITE / SET-PASSWORD TOKEN (single-use; SHA-256 of a high-entropy random token) ---
+  invite_token_hash    String?
+  invite_token_expires DateTime?
+  invite_token_used_at DateTime?
+
+  // --- PROFILE FIELDS (all optional; name + email above are the existing identity fields) ---
+  job_title                  String?
+  start_date                 DateTime? @db.Date
+  phone                      String?
+  address                    String?
+  driving_licence_categories String?
+  next_of_kin_name           String?
+  next_of_kin_relationship   String?
+  next_of_kin_phone          String?
+  emergency_note             String?   // voluntary safety note — visible to admin/owner + the user only
+  certifications             String?
+  working_hours              String?
+
   // +++ CUSTOMER PORTAL LINK ---
   customerId String?   @unique
   customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)

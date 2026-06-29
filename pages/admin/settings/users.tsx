@@ -6,6 +6,7 @@
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
@@ -141,6 +142,7 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
         </div>
         {!editing && (
           <div className="flex items-center gap-3 shrink-0">
+            <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-blue-400 hover:underline">Profile</Link>
             <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
             <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-slate-600 cursor-not-allowed' : 'text-red-400 hover:underline'}`}>Remove</button>
           </div>
