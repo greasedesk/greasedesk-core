@@ -9,17 +9,22 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import AdminLayout from '@/components/layout/AdminLayout';
 
-const SUBNAV: Array<{ name: string; href: string; adminOnly?: boolean }> = [
-  { name: 'Locations & Resources', href: '/admin/settings/locations' },
-  { name: 'Users', href: '/admin/settings/users', adminOnly: true },
+// adminOnly → ADMIN/owner only; managerOk → ADMIN or SITE_MANAGER; neither → everyone.
+const SUBNAV: Array<{ name: string; href: string; adminOnly?: boolean; managerOk?: boolean }> = [
+  { name: 'Locations & Resources', href: '/admin/settings/locations', managerOk: true },
+  { name: 'Users', href: '/admin/settings/users', managerOk: true },
   { name: 'Financial', href: '/admin/settings/financial', adminOnly: true },
   { name: 'Licences & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
   { name: 'Profile', href: '/admin/settings/profile' },
 ];
 
-export default function SettingsLayout({ isAdmin = false, children }: { isAdmin?: boolean; children: React.ReactNode }) {
+export default function SettingsLayout({ isAdmin = false, isManager = false, children }: { isAdmin?: boolean; isManager?: boolean; children: React.ReactNode }) {
   const router = useRouter();
-  const tabs = SUBNAV.filter((s) => !s.adminOnly || isAdmin);
+  const tabs = SUBNAV.filter((s) => {
+    if (s.adminOnly) return isAdmin;
+    if (s.managerOk) return isAdmin || isManager;
+    return true;
+  });
   return (
     <AdminLayout>
       <h1 className="text-3xl font-bold text-white mb-4">Settings</h1>

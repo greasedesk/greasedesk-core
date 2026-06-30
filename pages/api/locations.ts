@@ -62,6 +62,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
+    // Editing a location (a billable unit) is admin/owner-only — site managers manage resources, not locations.
+    if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can edit a location.' });
     const { id, site_name, address, is_active } = (req.body || {}) as {
       id?: string; site_name?: string; address?: string; is_active?: boolean;
     };
@@ -82,6 +84,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'DELETE') {
+    // Deleting a location (a billable unit) is admin/owner-only.
+    if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can delete a location.' });
     const id = (req.query.id as string) || (req.body && (req.body.id as string));
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });

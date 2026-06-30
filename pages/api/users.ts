@@ -28,18 +28,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sessionSiteId = sessionUser.site_id as string;
   const sessionUserId = sessionUser.id as string;
 
-  // STEP 3: user management is ADMIN-only. A STANDARD caller is refused (also makes STANDARD
-  // users anchored — they cannot reassign themselves because they cannot call this API).
+  // User management is for ADMIN (full) and SITE_MANAGER (STANDARD users at their own sites only).
+  // STANDARD users have no access (also anchors them — they can't reassign themselves).
   const callerVis = await getVisibility(sessionUserId);
-  if (!callerVis.isAdmin) {
-    return res.status(403).json({ message: 'Only an admin can manage users.' });
+  if (callerVis.role === 'STANDARD') {
+    return res.status(403).json({ message: 'You do not have access to user management.' });
   }
+  const isManagerOnly = !callerVis.isAdmin; // SITE_MANAGER: graded — scoped to their sites + STANDARD targets
 
   // Keep only site ids that belong to the caller's group.
   async function groupSiteIds(ids: string[]): Promise<string[]> {
     if (!Array.isArray(ids) || ids.length === 0) return [];
     const rows = await prisma.site.findMany({ where: { id: { in: ids }, group_id: groupId }, select: { id: true } });
     return (rows as Array<{ id: string }>).map((r) => r.id);
+  }
+  // A site-manager may only assign sites they themselves manage.
+  const managerScopeOk = (ids: string[]) => !isManagerOnly || ids.every((id) => callerVis.siteIds.includes(id));
+  // A site-manager may only act on STANDARD, non-owner targets who sit at one of their sites.
+  function managerMayTarget(t: { role: string; is_owner: boolean; site_assignments: Array<{ site_id: string }> }): boolean {
+    if (!isManagerOnly) return true;
+    if (t.is_owner || t.role !== 'STANDARD') return false;
+    return t.site_assignments.some((a) => callerVis.siteIds.includes(a.site_id));
   }
 
   if (req.method === 'POST') {
@@ -56,6 +65,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // STEP 4 invariant: new users are STANDARD → must have at least one site.
     if (validSites.length === 0) {
       return res.status(400).json({ message: 'A standard user must be assigned at least one location.' });
+    }
+    // A site-manager can only invite into their own sites.
+    if (!managerScopeOk(validSites)) {
+      return res.status(403).json({ message: 'Site managers can only invite users to their own locations.' });
     }
     const defaultSite = validSites[0] ?? sessionSiteId;
 
@@ -105,13 +118,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     const target = await prisma.user.findFirst({
       where: { id, group_id: groupId },
-      select: { id: true, is_owner: true, role: true, _count: { select: { site_assignments: true } } },
+      select: { id: true, is_owner: true, role: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
     });
     if (!target) return res.status(404).json({ message: 'User not found.' });
 
+    // Site managers may only manage STANDARD users at their own sites.
+    if (!managerMayTarget(target)) {
+      return res.status(403).json({ message: 'Site managers can only manage standard users at their own locations.' });
+    }
+
     if (role !== undefined) {
-      if (role !== 'ADMIN' && role !== 'STANDARD') {
-        return res.status(400).json({ message: 'Role must be ADMIN or STANDARD.' });
+      if (role !== 'ADMIN' && role !== 'SITE_MANAGER' && role !== 'STANDARD') {
+        return res.status(400).json({ message: 'Role must be ADMIN, SITE_MANAGER or STANDARD.' });
+      }
+      // Escalation guard: a site manager can never grant SITE_MANAGER or ADMIN.
+      if (isManagerOnly && role !== 'STANDARD') {
+        return res.status(403).json({ message: 'Site managers cannot grant the site-manager or admin role.' });
       }
       // Owner is immutable: locked to ADMIN, cannot be demoted.
       if (target.is_owner && role !== 'ADMIN') {
@@ -119,12 +141,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // STEP 4 invariant: a STANDARD user must always keep ≥1 site.
-    const effectiveRole = target.is_owner ? 'ADMIN' : (role ?? target.role);
     const nextSites: string[] | null = siteIds !== undefined ? await groupSiteIds(siteIds) : null;
+    if (nextSites !== null && !managerScopeOk(nextSites)) {
+      return res.status(403).json({ message: 'Site managers can only assign their own locations.' });
+    }
+    // Invariant: any non-admin role (STANDARD or SITE_MANAGER) must keep ≥1 site.
+    const effectiveRole = target.is_owner ? 'ADMIN' : (role ?? target.role);
     const effectiveSiteCount = nextSites !== null ? nextSites.length : target._count.site_assignments;
-    if (effectiveRole === 'STANDARD' && effectiveSiteCount === 0) {
-      return res.status(400).json({ message: 'A standard user must keep at least one location.' });
+    if (effectiveRole !== 'ADMIN' && effectiveSiteCount === 0) {
+      return res.status(400).json({ message: 'A standard or site-manager user must keep at least one location.' });
     }
 
     try {
@@ -159,8 +184,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const id = (req.query.id as string) || (req.body && (req.body.id as string));
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    const target = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_owner: true } });
+    const target = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_owner: true, role: true, site_assignments: { select: { site_id: true } } } });
     if (!target) return res.status(404).json({ message: 'User not found.' });
+
+    // Site managers may only remove STANDARD users at their own sites.
+    if (!managerMayTarget(target)) {
+      return res.status(403).json({ message: 'Site managers can only remove standard users at their own locations.' });
+    }
 
     // Lockout guards.
     if (sessionUserId && id === sessionUserId) {

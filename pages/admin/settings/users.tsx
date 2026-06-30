@@ -11,18 +11,22 @@ import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
-import { requireAdminPage } from '@/lib/admin-guard';
+import { requireSiteManagerPage } from '@/lib/admin-guard';
 
+type Role = 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: 'ADMIN' | 'STANDARD'; isOwner: boolean };
-type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean };
+type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean };
 
-function RoleBadge({ role }: { role: 'ADMIN' | 'STANDARD' }) {
-  return (
-    <span className={`ml-2 text-xs px-2 py-0.5 rounded-full border ${role === 'ADMIN' ? 'bg-purple-900 text-purple-200 border-purple-700' : 'bg-slate-700 text-slate-300 border-slate-600'}`}>
-      {role}
-    </span>
-  );
+const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE MANAGER', STANDARD: 'STANDARD' };
+
+function RoleBadge({ role }: { role: Role }) {
+  const cls = role === 'ADMIN'
+    ? 'bg-purple-900 text-purple-200 border-purple-700'
+    : role === 'SITE_MANAGER'
+      ? 'bg-indigo-900 text-indigo-200 border-indigo-700'
+      : 'bg-slate-700 text-slate-300 border-slate-600';
+  return <span className={`ml-2 text-xs px-2 py-0.5 rounded-full border ${cls}`}>{ROLE_LABEL[role]}</span>;
 }
 
 const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
@@ -92,16 +96,19 @@ function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void
   );
 }
 
-function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; onChanged: () => void }) {
+function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name ?? '');
   const [siteIds, setSiteIds] = useState<string[]>(user.siteIds);
-  const [role, setRole] = useState<'ADMIN' | 'STANDARD'>(user.role);
+  const [role, setRole] = useState<Role>(user.role);
   const [err, setErr] = useState<string | null>(null);
   const isSelf = selfId === user.id;
   const toggle = (id: string) => setSiteIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const nameFor = (id: string) => sites.find((s) => s.id === id)?.name ?? '—';
-  // The owner's role is locked; only an ADMIN may change a (non-owner) user's role.
+  // Who may act on THIS user: admin → anyone; site-manager → only a STANDARD non-owner (the roster
+  // they're shown is already scoped to their sites; the server re-checks).
+  const canManage = isAdmin || (isManager && user.role === 'STANDARD' && !user.isOwner);
+  // The owner's role is locked; only an ADMIN may change a (non-owner) user's role / grant tiers.
   const canEditRole = isAdmin && !user.isOwner;
 
   async function save() {
@@ -139,7 +146,7 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
             </div>
           )}
         </div>
-        {isAdmin && !editing && (
+        {canManage && !editing && (
           <div className="flex items-center gap-3 shrink-0">
             <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-blue-400 hover:underline">Profile</Link>
             <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
@@ -148,21 +155,22 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
         )}
       </div>
 
-      {isAdmin && editing && (
+      {canManage && editing && (
         <div className="mt-3 space-y-3">
           <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
           {canEditRole ? (
             <div>
               <label className="block text-xs text-slate-400 mb-1">Role</label>
-              <select value={role} onChange={(e) => setRole(e.target.value as 'ADMIN' | 'STANDARD')} className={inputClass}>
+              <select value={role} onChange={(e) => setRole(e.target.value as Role)} className={inputClass}>
                 <option value="STANDARD">Standard</option>
+                <option value="SITE_MANAGER">Site manager</option>
                 <option value="ADMIN">Admin</option>
               </select>
             </div>
           ) : (
             <div className="text-xs text-slate-400">
-              Role: <span className="text-slate-200">{user.role}</span>
-              {user.isOwner ? ' (owner — locked)' : !isAdmin ? ' (only an admin can change roles)' : ''}
+              Role: <span className="text-slate-200">{ROLE_LABEL[user.role]}</span>
+              {user.isOwner ? ' (owner — locked)' : ' (only an admin can change roles)'}
             </div>
           )}
           <div><label className="block text-xs text-slate-400 mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
@@ -177,44 +185,53 @@ function UserCard({ user, sites, selfId, isAdmin, onChanged }: { user: UserRow; 
   );
 }
 
-export default function UsersSettings({ users, sites, selfId, isAdmin }: PageProps) {
+export default function UsersSettings({ users, sites, selfId, isAdmin, isManager }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   return (
-    <SettingsLayout isAdmin={isAdmin}>
+    <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Users - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">
-        Manage your users, their role (Admin / Standard), and which location(s) each is assigned to.
-        Site visibility is not yet enforced by role — that’s a later slice. {isAdmin ? '' : 'Only an admin can change roles.'}
+        {isAdmin
+          ? 'Manage your users, their role (Admin / Site manager / Standard), and which location(s) each is assigned to.'
+          : 'Manage the standard users at your location(s) and which location(s) each is assigned to. Only an admin can grant the site-manager or admin role.'}
       </p>
 
-      {isAdmin && <AddUser sites={sites} onChanged={refresh} />}
+      {(isAdmin || isManager) && <AddUser sites={sites} onChanged={refresh} />}
 
       {users.length === 0 ? (
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">No users.</div>
       ) : (
-        users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} isAdmin={isAdmin} onChanged={refresh} />)
+        users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} isAdmin={isAdmin} isManager={isManager} onChanged={refresh} />)
       )}
     </SettingsLayout>
   );
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  // ADMIN-ONLY: the roster (other users' details) is never served to a STANDARD user — the page
-  // redirects before any user query runs. /api/users also refuses non-admins on every method.
-  const gate = await requireAdminPage(ctx);
+  // ADMIN or SITE_MANAGER only — STANDARD users are redirected (never receive the roster).
+  // /api/users also refuses STANDARD on every method. Managers see only STANDARD users at THEIR
+  // sites, and only their own sites in the assignment pickers.
+  const gate = await requireSiteManagerPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
   const { vis } = gate;
+  const isAdmin = vis.isAdmin;
 
-  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: 'ADMIN' | 'STANDARD'; is_owner: boolean; site_assignments: { site_id: string }[] };
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; site_assignments: { site_id: string }[] };
   const selfId = vis.userId;
+  const userWhere = isAdmin
+    ? { group_id: vis.groupId }
+    : { group_id: vis.groupId, role: 'STANDARD' as Role, site_assignments: { some: { site_id: { in: vis.siteIds } } } };
+  const siteWhere = isAdmin
+    ? { group_id: vis.groupId }
+    : { group_id: vis.groupId, id: { in: vis.siteIds } };
   const [userRows, siteRows] = await Promise.all([
     prisma.user.findMany({
-      where: { group_id: vis.groupId },
+      where: userWhere,
       orderBy: { email: 'asc' },
       select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
-    prisma.site.findMany({ where: { group_id: vis.groupId }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
+    prisma.site.findMany({ where: siteWhere, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
   ]);
 
   const users: UserRow[] = userRows.map((u: UserDbRow) => ({
@@ -223,5 +240,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
 
-  return { props: { users, sites, selfId, isAdmin: vis.isAdmin } };
+  return { props: { users, sites, selfId, isAdmin, isManager: vis.role === 'SITE_MANAGER' } };
 };

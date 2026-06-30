@@ -14,9 +14,9 @@ import { prisma } from '@/lib/db';
 export type Visibility = {
   userId: string;
   groupId: string | null;
-  role: 'ADMIN' | 'STANDARD';
+  role: 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
   isOwner: boolean;
-  isAdmin: boolean;      // ADMIN or owner → sees all group sites
+  isAdmin: boolean;      // ADMIN or owner → sees all group sites (SITE_MANAGER is NOT admin)
   siteIds: string[];     // the sites this user may see/act on
 };
 
@@ -27,7 +27,7 @@ export async function getVisibility(userId: string): Promise<Visibility> {
   const user = (await prisma.user.findUnique({
     where: { id: userId },
     select: { group_id: true, role: true, is_owner: true, site_assignments: { select: { site_id: true } } },
-  })) as { group_id: string | null; role: 'ADMIN' | 'STANDARD'; is_owner: boolean; site_assignments: Array<{ site_id: string }> } | null;
+  })) as { group_id: string | null; role: 'ADMIN' | 'SITE_MANAGER' | 'STANDARD'; is_owner: boolean; site_assignments: Array<{ site_id: string }> } | null;
 
   if (!user) return empty;
   const isAdmin = user.role === 'ADMIN' || user.is_owner;

@@ -16,7 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
-import { getVisibility } from '@/lib/site-visibility';
+import { requireSiteManagerPage } from '@/lib/admin-guard';
 
 const RESOURCE_TYPE_OPTIONS = [
   { value: 'lift', label: 'Lift' },
@@ -34,7 +34,7 @@ type LocationView = {
   isCurrent: boolean;
   resources: ResourceView[];
 };
-type PageProps = { locations: LocationView[]; isAdmin: boolean };
+type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean };
 
 const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
 
@@ -201,7 +201,7 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
 }
 
 // --- Location card (edit / delete + its resources) ---
-function LocationCard({ loc, onChanged }: { loc: LocationView; onChanged: () => void }) {
+function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin: boolean; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(loc.name);
   const [address, setAddress] = useState(loc.address ?? '');
@@ -243,7 +243,8 @@ function LocationCard({ loc, onChanged }: { loc: LocationView; onChanged: () => 
             {loc.address && <p className="text-slate-400 text-sm mt-0.5">{loc.address}</p>}
           </div>
         )}
-        {!editing && (
+        {/* Editing/removing a location is admin-only; site managers manage resources below. */}
+        {!editing && isAdmin && (
           <div className="flex items-center gap-3">
             <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
             <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
@@ -262,12 +263,12 @@ function LocationCard({ loc, onChanged }: { loc: LocationView; onChanged: () => 
   );
 }
 
-export default function LocationsSettings({ locations, isAdmin }: PageProps) {
+export default function LocationsSettings({ locations, isAdmin, isManager }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
 
   return (
-    <SettingsLayout isAdmin={isAdmin}>
+    <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Locations & Resources - GreaseDesk</title></Head>
       <p className="text-slate-400 mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
 
@@ -279,20 +280,19 @@ export default function LocationsSettings({ locations, isAdmin }: PageProps) {
           You’re not currently assigned to a location — contact your admin.
         </div>
       ) : (
-        locations.map((loc) => <LocationCard key={loc.id} loc={loc} onChanged={refresh} />)
+        locations.map((loc) => <LocationCard key={loc.id} loc={loc} isAdmin={isAdmin} onChanged={refresh} />)
       )}
     </SettingsLayout>
   );
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
+  // ADMIN or SITE_MANAGER only — STANDARD users have no Locations & Resources access.
+  const gate = await requireSiteManagerPage(ctx);
+  if (!gate.ok) return { redirect: gate.redirect };
+  const { vis } = gate;
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
-  if (!user?.id || !user?.group_id) {
-    return { redirect: { destination: '/admin/login', permanent: false } };
-  }
-
-  const vis = await getVisibility(user.id as string);
 
   type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
   type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; resources: ResDbRow[] };
@@ -312,5 +312,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
   }));
 
-  return { props: { locations, isAdmin: vis.isAdmin } };
+  return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER' } };
 };

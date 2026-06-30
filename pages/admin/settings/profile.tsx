@@ -28,6 +28,7 @@ type PageProps = {
   isSelf: boolean;
   canSeeEmergency: boolean;
   isAdmin: boolean;
+  isManager: boolean;
   profile: Profile;
   company: Company | null; // self view only
   account: Account | null; // self view only
@@ -209,9 +210,9 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
   );
 }
 
-export default function ProfileSettings({ email, isSelf, canSeeEmergency, isAdmin, profile, company, account }: PageProps) {
+export default function ProfileSettings({ email, isSelf, canSeeEmergency, isAdmin, isManager, profile, company, account }: PageProps) {
   return (
-    <SettingsLayout isAdmin={isAdmin}>
+    <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Profile - GreaseDesk</title></Head>
       {isSelf ? (
         <p className="text-slate-400 mb-6">Signed in as <strong>{email}</strong>{account ? ` · ${account.ref}` : ''}</p>
@@ -278,6 +279,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   return {
-    props: { email: s(sUser.email), isSelf, canSeeEmergency, isAdmin: vis.isAdmin, profile, company, account },
+    props: { email: s(sUser.email), isSelf, canSeeEmergency, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER', profile, company, account },
   };
 };

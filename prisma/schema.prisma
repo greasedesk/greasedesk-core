@@ -27,6 +27,7 @@ datasource db {
 
 enum UserRole {
   ADMIN
+  SITE_MANAGER
   STANDARD
 }
 

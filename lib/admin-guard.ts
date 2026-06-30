@@ -32,3 +32,34 @@ export async function requireAdminApi(req: NextApiRequest, res: NextApiResponse)
   if (!vis.isAdmin) { res.status(403).json({ message: 'Admin access required.' }); return null; }
   return vis;
 }
+
+// ---- graded (site-manager) authority -------------------------------------------------
+// "Can this user manage THIS site?" — true for ADMIN/owner on any of their group's sites,
+// true for SITE_MANAGER on their assigned sites, false for STANDARD. THE one place this is decided.
+export function canManageSite(vis: Visibility, siteId: string | null | undefined): boolean {
+  if (!siteId) return false;
+  return vis.role !== 'STANDARD' && vis.siteIds.includes(siteId);
+}
+
+// API guard: caller must be able to manage `siteId` (admin or site-manager-for-that-site).
+export async function requireManageSiteApi(req: NextApiRequest, res: NextApiResponse, siteId: string | null | undefined): Promise<Visibility | null> {
+  const session = await getServerSession(req, res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) { res.status(401).json({ message: 'Not authenticated.' }); return null; }
+  const vis = await getVisibility(u.id as string);
+  if (!canManageSite(vis, siteId)) { res.status(403).json({ message: 'You do not manage this location.' }); return null; }
+  return vis;
+}
+
+// SSR guard for pages open to ADMIN or SITE_MANAGER (Locations & Resources, Users). STANDARD is
+// redirected to the dashboard. Returns vis so the page can branch admin-vs-manager.
+export async function requireSiteManagerPage(
+  ctx: GetServerSidePropsContext
+): Promise<{ ok: true; vis: Visibility } | RedirectResult> {
+  const session = await getServerSession(ctx.req, ctx.res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
+  const vis = await getVisibility(u.id as string);
+  if (vis.role === 'STANDARD') return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
+  return { ok: true, vis };
+}

@@ -14,6 +14,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { ResourceType } from '@prisma/client';
 import { isValidPaletteColour, RESOURCE_PALETTE } from '@/lib/diary-colours';
 import { getVisibility } from '@/lib/site-visibility';
+import { canManageSite } from '@/lib/admin-guard';
 
 const VALID_TYPES = Object.values(ResourceType) as string[];
 
@@ -25,15 +26,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const vis = await getVisibility(user.id as string);
 
-  // A Site is in scope only if the caller may see it (ADMIN → all group sites; STANDARD → assigned).
-  async function ownSite(siteId: string) {
-    if (!siteId || !vis.siteIds.includes(siteId)) return null;
-    return prisma.site.findFirst({ where: { id: siteId }, select: { id: true } });
+  // Resources are managed by ADMIN (any site) or SITE_MANAGER (their assigned sites). STANDARD
+  // users (mechanics) have no resource management at all.
+  if (vis.role === 'STANDARD') {
+    return res.status(403).json({ message: 'You do not have access to manage resources.' });
   }
-  // A Resource is in scope if its Site is visible to the caller.
-  async function ownResource(id: string) {
-    if (!id) return null;
-    return prisma.resource.findFirst({ where: { id, site_id: { in: vis.siteIds } }, select: { id: true } });
+
+  // Site authority for the caller: 'ok' → may manage; 'forbidden' → exists in their group but they
+  // don't manage it (→ 403); 'missing' → not in their group / nonexistent (→ 404, no info leak).
+  async function siteAuth(siteId: string): Promise<'ok' | 'forbidden' | 'missing'> {
+    if (canManageSite(vis, siteId)) return 'ok';
+    const exists = await prisma.site.findFirst({ where: { id: siteId, group_id: user.group_id }, select: { id: true } });
+    return exists ? 'forbidden' : 'missing';
+  }
+  // Same grading for a resource (via its site).
+  async function resourceAuth(id: string): Promise<{ status: 'ok' | 'forbidden' | 'missing'; id?: string }> {
+    if (!id) return { status: 'missing' };
+    const r = (await prisma.resource.findFirst({ where: { id }, select: { id: true, site_id: true } })) as { id: string; site_id: string } | null;
+    if (!r) return { status: 'missing' };
+    if (canManageSite(vis, r.site_id)) return { status: 'ok', id: r.id };
+    const inGroup = await prisma.site.findFirst({ where: { id: r.site_id, group_id: user.group_id }, select: { id: true } });
+    return inGroup ? { status: 'forbidden' } : { status: 'missing' };
   }
   function parseOrder(v: unknown): number | null {
     if (v === undefined || v === null || `${v}`.trim() === '') return null;
@@ -52,7 +65,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!type || !VALID_TYPES.includes(type)) {
       return res.status(400).json({ message: `Type must be one of: ${VALID_TYPES.join(', ')}.` });
     }
-    if (!(await ownSite(site_id))) return res.status(404).json({ message: 'Location not found.' });
+    const sa = await siteAuth(site_id);
+    if (sa === 'forbidden') return res.status(403).json({ message: 'You do not manage this location.' });
+    if (sa === 'missing') return res.status(404).json({ message: 'Location not found.' });
     const order = parseOrder(display_order);
     // Auto-assign the FIRST UNUSED palette colour for this site, so the swatch is never empty
     // and a new lift differs from its siblings. Robust to deletes/re-adds (unlike count-based).
@@ -78,7 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       id?: string; name?: string; type?: string; display_order?: number | string; is_active?: boolean; colour?: string | null;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownResource(id))) return res.status(404).json({ message: 'Resource not found.' });
+    const ra = await resourceAuth(id);
+    if (ra.status === 'forbidden') return res.status(403).json({ message: 'You do not manage this location.' });
+    if (ra.status === 'missing') return res.status(404).json({ message: 'Resource not found.' });
     if (type !== undefined && !VALID_TYPES.includes(type)) {
       return res.status(400).json({ message: `Type must be one of: ${VALID_TYPES.join(', ')}.` });
     }
@@ -106,7 +123,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const id = (req.query.id as string) || (req.body && (req.body.id as string));
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    if (!(await ownResource(id))) return res.status(404).json({ message: 'Resource not found.' });
+    const ra = await resourceAuth(id);
+    if (ra.status === 'forbidden') return res.status(403).json({ message: 'You do not manage this location.' });
+    if (ra.status === 'missing') return res.status(404).json({ message: 'Resource not found.' });
     await prisma.resource.delete({ where: { id } });
     return res.status(200).json({ message: 'Resource deleted.' });
   }
