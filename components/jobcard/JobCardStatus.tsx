@@ -4,7 +4,7 @@
  * (lib/jobcard-status.ts) to offer only valid+permitted next-transitions; the API re-enforces.
  * Light theme/tokens, i18n-native (jobcard namespace), mobile-first (full-width tap targets).
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { JobStatus, StageKey, STAGE_KEYS, nextTransitions } from '@/lib/jobcard-status';
@@ -38,22 +38,53 @@ export default function JobCardStatus({ jobCardId, status, stages, hasEstimate, 
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const allStagesDone = STAGE_KEYS.every((k) => stages[k]);
+  // Display from local state so a successful action reflects IMMEDIATELY (driven by the API's
+  // authoritative response), independent of the SSR re-fetch. Re-sync when fresh props arrive.
+  const [statusState, setStatusState] = useState<JobStatus>(status);
+  const [stagesState, setStagesState] = useState<Stages>(stages);
+  useEffect(() => { setStatusState(status); }, [status]);
+  useEffect(() => { setStagesState(stages); }, [stages.details, stages.intake, stages.injob, stages.complete]);
 
-  async function go(url: string, body: any, errKey: string) {
-    setBusy(JSON.stringify(body)); setErr(null);
+  const allStagesDone = STAGE_KEYS.every((k) => stagesState[k]);
+
+  async function transitionTo(to: JobStatus) {
+    setBusy(`s:${to}`); setErr(null);
     try {
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch('/api/jobcard-status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId, to }),
+      });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(data?.message || t(errKey)); setBusy(null); return; }
+      if (!res.ok) { setErr(data?.message || t('action.error')); return; }
+      setStatusState(data.status as JobStatus);   // authoritative new status → immediate re-render
+      router.replace(router.asPath);               // refresh sibling SSR-derived bits (best-effort)
+    } catch {
+      setErr(t('action.error'));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleStage(stage: StageKey, done: boolean) {
+    setBusy(`st:${stage}`); setErr(null);
+    try {
+      const res = await fetch('/api/jobcard-stage', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId, stage, done }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('stage.error')); return; }
+      setStagesState(data.stages as Stages);       // authoritative stages → immediate re-render
       router.replace(router.asPath);
     } catch {
-      setErr(t(errKey)); setBusy(null);
+      setErr(t('stage.error'));
+    } finally {
+      setBusy(null);
     }
   }
 
   // Only transitions this user is permitted to perform; gated-but-unmet ones render disabled + reason.
-  const transitions = nextTransitions(status)
+  const transitions = nextTransitions(statusState)
     .filter((tr) => (tr.kind === 'operational' ? canOperate : canManage))
     .map((tr) => {
       let gateOk = true;
@@ -68,7 +99,7 @@ export default function JobCardStatus({ jobCardId, status, stages, hasEstimate, 
       {/* Status pill + transition actions */}
       <div className="flex flex-wrap items-center gap-3 mb-2">
         <span className="text-xs uppercase text-muted">{t('status.label')}</span>
-        <span className={`text-sm font-medium px-3 py-1 rounded-full ${STATUS_TONE[status]}`}>{t(`status.${status}`)}</span>
+        <span className={`text-sm font-medium px-3 py-1 rounded-full ${STATUS_TONE[statusState]}`}>{t(`status.${statusState}`)}</span>
       </div>
       {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
 
@@ -81,7 +112,7 @@ export default function JobCardStatus({ jobCardId, status, stages, hasEstimate, 
             return (
               <button
                 key={tr.to}
-                onClick={() => go('/api/jobcard-status', { jobCardId, to: tr.to }, 'action.error')}
+                onClick={() => transitionTo(tr.to)}
                 disabled={!gateOk || busy !== null}
                 title={!gateOk ? reason ?? undefined : undefined}
                 className={`${base} ${tone}`}
@@ -103,19 +134,19 @@ export default function JobCardStatus({ jobCardId, status, stages, hasEstimate, 
           {STAGE_KEYS.map((k) => (
             <label
               key={k}
-              className={`flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-3 ${stages[k] ? 'bg-ok-soft' : 'bg-surface-muted'} ${canOperate ? 'cursor-pointer' : 'opacity-70'}`}
+              className={`flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-3 ${stagesState[k] ? 'bg-ok-soft' : 'bg-surface-muted'} ${canOperate ? 'cursor-pointer' : 'opacity-70'}`}
             >
               <span className="flex items-center gap-2 text-sm text-ink">
                 <input
                   type="checkbox"
                   className="w-5 h-5 accent-[color:var(--accent)]"
-                  checked={stages[k]}
+                  checked={stagesState[k]}
                   disabled={!canOperate || busy !== null}
-                  onChange={(e) => go('/api/jobcard-stage', { jobCardId, stage: k, done: e.target.checked }, 'stage.error')}
+                  onChange={(e) => toggleStage(k, e.target.checked)}
                 />
                 {t(`stage.${k}`)}
               </span>
-              <span className={`text-xs ${stages[k] ? 'text-ok' : 'text-muted'}`}>{stages[k] ? t('stage.done') : t('stage.pending')}</span>
+              <span className={`text-xs ${stagesState[k] ? 'text-ok' : 'text-muted'}`}>{stagesState[k] ? t('stage.done') : t('stage.pending')}</span>
             </label>
           ))}
         </div>
