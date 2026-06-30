@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { signOut } from 'next-auth/react';
+import { useTranslation } from 'next-i18next';
 // ⚠️ You'll need to create a simple TopNav component later
 // import TopNav from '../TopNav'; 
 
@@ -17,12 +18,13 @@ const LOGO_DISPLAY_WIDTH = "150px"; // Suitable width for the sidebar
 // Define the navigation items.
 // `ready: false` items are routes whose pages aren't built yet — they're hidden from
 // the nav until the slice ships. Flip ready to true when the page exists.
+// `key` is a stable i18n key (translated via t(`nav.${key}`)); display text lives in locale files.
 const navItems = [
-  { name: 'Dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
-  { name: 'Diary', href: '/admin/diary', icon: '🗓️', ready: true },
-  { name: 'Job Cards', href: '/admin/jobcards', icon: '🛠️', ready: true },
-  { name: 'Customers', href: '/admin/customers', icon: '👤', ready: false },
-  { name: 'Reports', href: '/admin/reports', icon: '📊', ready: false },
+  { key: 'dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
+  { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true },
+  { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true },
+  { key: 'customers', href: '/admin/customers', icon: '👤', ready: false },
+  { key: 'reports', href: '/admin/reports', icon: '📊', ready: false },
   // Settings lives at the bottom of the sidebar (see below), not in the main list.
 ];
 
@@ -34,6 +36,7 @@ interface AdminLayoutProps {
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const router = useRouter();
+  const { t } = useTranslation('common');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [locations, setLocations] = useState<Array<{ id: string; site_name: string }>>([]);
   const [currentSiteId, setCurrentSiteId] = useState<string | null>(null);
@@ -82,7 +85,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         <nav className="space-y-2">
           {visibleNavItems.map((item) => (
             <Link
-              key={item.name}
+              key={item.key}
               href={item.href}
               className={`flex items-center p-3 rounded-lg transition-colors duration-200 ${
                 isActive(item.href) 
@@ -91,7 +94,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               }`}
             >
               <span className="mr-3 text-lg">{item.icon}</span>
-              {item.name}
+              {t(`nav.${item.key}`)}
             </Link>
           ))}
         </nav>
@@ -107,13 +110,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 }`}
             >
                 <span className="mr-3 text-lg">⚙️</span>
-                Settings
+                {t('nav.settings')}
             </Link>
             <button
                 onClick={() => signOut({ callbackUrl: '/admin/login' })}
                 className="w-full text-left p-3 rounded-lg text-sm text-slate-400 hover:text-red-400 transition"
             >
-                Sign Out
+                {t('nav.signOut')}
             </button>
         </div>
       </aside>
@@ -128,7 +131,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <button 
                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                 className="text-white p-2 rounded-md hover:bg-slate-700 transition"
-                aria-label="Toggle Menu"
+                aria-label={t('nav.toggleMenu')}
             >
                 ☰
             </button>
@@ -139,7 +142,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         {/* --- Location top bar: each tab opens that location's diary --- */}
         {locations.length > 0 && (
           <div className="bg-slate-800 border-b border-slate-700 px-4 sm:px-6 lg:px-8 py-2 flex items-center gap-2 overflow-x-auto">
-            <span className="text-xs uppercase text-slate-500 mr-1">Locations:</span>
+            <span className="text-xs uppercase text-slate-500 mr-1">{t('nav.locationsLabel')}</span>
             {locations.map((loc) => {
               // On the diary, the active tab follows ?site; elsewhere, the session's site.
               const selected =
@@ -156,7 +159,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                       ? 'bg-blue-600 text-white border-blue-400'
                       : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'
                   }`}
-                  title={`Open ${loc.site_name}'s diary`}
+                  title={t('nav.openDiary', { name: loc.site_name })}
                 >
                   {loc.site_name}
                 </Link>
@@ -184,17 +187,17 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <nav className="space-y-2">
               {visibleNavItems.map((item) => (
                 <Link
-                  key={item.name}
+                  key={item.key}
                   href={item.href}
                   onClick={() => setIsSidebarOpen(false)}
                   className={`flex items-center p-3 rounded-lg transition-colors duration-200 ${
-                    isActive(item.href) 
-                      ? 'bg-blue-600 text-white font-semibold' 
+                    isActive(item.href)
+                      ? 'bg-blue-600 text-white font-semibold'
                       : 'text-slate-300 hover:bg-slate-700'
                   }`}
                 >
                   <span className="mr-3 text-lg">{item.icon}</span>
-                  {item.name}
+                  {t(`nav.${item.key}`)}
                 </Link>
               ))}
             </nav>
@@ -208,13 +211,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               }`}
             >
               <span className="mr-3 text-lg">⚙️</span>
-              Settings
+              {t('nav.settings')}
             </Link>
             <button
               onClick={() => { setIsSidebarOpen(false); signOut({ callbackUrl: '/admin/login' }); }}
               className="w-full p-3 text-left text-sm text-slate-400 hover:text-red-400 transition"
             >
-              Sign Out
+              {t('nav.signOut')}
             </button>
           </div>
         </div>

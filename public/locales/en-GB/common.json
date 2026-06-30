@@ -1,0 +1,20 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "diary": "Diary",
+    "jobCards": "Job Cards",
+    "customers": "Customers",
+    "reports": "Reports",
+    "settings": "Settings",
+    "signOut": "Sign Out",
+    "toggleMenu": "Toggle Menu",
+    "locationsLabel": "Locations:",
+    "openDiary": "Open {{name}}'s diary"
+  },
+  "dashboard": {
+    "welcome": "Welcome Back!",
+    "liveJobCards": "Live Job Cards",
+    "todaysBookings": "Today's Bookings",
+    "revenueToday": "Revenue (Today)"
+  }
+}

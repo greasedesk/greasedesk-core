@@ -1,16 +1,19 @@
 /**
  * File: pages/_app.tsx
- * Last edited: 2025-11-13 18:38 Europe/London (FIXED - ADDED SESSION PROVIDER)
- *
- * App wrapper + global safe Response.json() patch to prevent crashes
- * if any fetch tries to parse empty/non-JSON bodies.
- * 
- * xxx
+ * App wrapper. Wires next-i18next (appWithTranslation) and loads the 'common' namespace
+ * APP-WIDE via getInitialProps so the shell (AdminLayout) is translated on every page without
+ * each page calling serverSideTranslations. Pages needing EXTRA namespaces use lib/gssp-i18n.
+ * Also keeps the global safe Response.json() patch.
  */
-import type { AppProps } from 'next/app';
+import App, { AppContext, AppProps } from 'next/app';
 import '@/styles/globals.css';
-// 💥 FIX: Import the SessionProvider
-import { SessionProvider } from 'next-auth/react'; 
+import { SessionProvider } from 'next-auth/react';
+import { appWithTranslation } from 'next-i18next';
+// NOTE: serverSideTranslations (server-only, uses `fs`) is dynamically imported inside the
+// server branch of getInitialProps below — importing it at top level would pull `fs` into the
+// client bundle (_app ships to the client).
+// @ts-ignore — JS config (no type declarations); shape is the next-i18next UserConfig.
+import nextI18NextConfig from '../next-i18next.config';
 
 declare global {
   interface Window { __gd_json_patched?: boolean }
@@ -33,11 +36,29 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
   };
 }
 
-export default function App({ Component, pageProps }: AppProps) {
-  // 💥 FIX: Wrap the application in <SessionProvider>
+function GreaseDeskApp({ Component, pageProps }: AppProps) {
   return (
     <SessionProvider session={pageProps.session}>
       <Component {...pageProps} />
     </SessionProvider>
   );
 }
+
+const GreaseDeskAppWithI18n = appWithTranslation(GreaseDeskApp, nextI18NextConfig);
+
+// Load 'common' for every page on the server. On client navigations i18next already has it cached,
+// so we skip the (server-only) filesystem read. (This opts the app out of Automatic Static
+// Optimization — irrelevant here: every page already uses getServerSideProps.)
+// Attached to the WRAPPED component so Next reliably finds getInitialProps on the default export.
+(GreaseDeskAppWithI18n as any).getInitialProps = async (appCtx: AppContext) => {
+  const appProps = await App.getInitialProps(appCtx);
+  if (typeof window === 'undefined') {
+    const { serverSideTranslations } = await import('next-i18next/serverSideTranslations');
+    const locale = appCtx.ctx.locale || nextI18NextConfig.i18n.defaultLocale;
+    const i18nProps = await serverSideTranslations(locale, ['common'], nextI18NextConfig as any);
+    return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps } };
+  }
+  return appProps;
+};
+
+export default GreaseDeskAppWithI18n;
