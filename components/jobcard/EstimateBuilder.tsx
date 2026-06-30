@@ -5,6 +5,9 @@
  * pure chokepoint lib/quote-totals.ts (same maths the API persists); money via formatMoney.
  * Mobile-first: each line is a stacked touch card on a phone, an aligned row at sm+.
  * Read-only when the viewer can't edit pricing (STANDARD).
+ *
+ * Note: LineRow is defined at MODULE SCOPE (not inside the component) and rows are keyed by a
+ * stable per-line _uid — otherwise React remounts each input every keystroke and focus is lost.
  */
 import React, { useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
@@ -21,6 +24,12 @@ export type EstimateLine = {
   vatable: boolean;
 };
 
+// Internal row = a line plus a stable client id used as the React key.
+type Row = EstimateLine & { _uid: string };
+
+let _seq = 0;
+const uid = () => `row-${_seq++}`;
+
 type Props = {
   jobCardId: string;
   canEdit: boolean;
@@ -33,12 +42,64 @@ type Props = {
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs text-muted mb-1';
 
-const blank = (item_type: QuoteItemType): EstimateLine => ({ item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true });
+const blank = (item_type: QuoteItemType): Row => ({ _uid: uid(), item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true });
+
+// ---- module-scope row component (stable identity → inputs keep focus) ----
+type RowProps = {
+  row: Row;
+  idx: number;
+  kind: 'labour' | 'part';
+  canEdit: boolean;
+  lineTotal: string;
+  t: (k: string) => string;
+  onChange: (idx: number, patch: Partial<EstimateLine>) => void;
+  onRemove: (idx: number) => void;
+};
+
+function LineRow({ row, idx, kind, canEdit, lineTotal, t, onChange, onRemove }: RowProps) {
+  return (
+    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
+      <div className="sm:flex-1">
+        <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
+        <input className={inputCls} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
+          disabled={!canEdit} onChange={(e) => onChange(idx, { description: e.target.value })} />
+      </div>
+      <div className="sm:w-24">
+        <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
+        <input className={inputCls} type="number" inputMode="decimal" step="0.01" value={row.unit_price}
+          disabled={!canEdit} onChange={(e) => onChange(idx, { unit_price: e.target.value })} />
+      </div>
+      <div className="sm:w-20">
+        <label className={labelCls}>{kind === 'labour' ? t('estimate.hours') : t('estimate.qty')}</label>
+        <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
+          disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
+      </div>
+      <div className="sm:w-24">
+        <label className={labelCls}>{t('estimate.cost')}</label>
+        <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.unit_cost}
+          disabled={!canEdit} onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
+      </div>
+      <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
+        <input type="checkbox" className="w-5 h-5" checked={row.vatable} disabled={!canEdit}
+          onChange={(e) => onChange(idx, { vatable: e.target.checked })} />
+        {t('estimate.vat')}
+      </label>
+      <div className="sm:w-24 text-right">
+        <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
+        <div className="text-ink font-medium tabular-nums py-2">{lineTotal}</div>
+      </div>
+      {canEdit && (
+        <button onClick={() => onRemove(idx)} aria-label={t('estimate.remove')}
+          className="text-danger hover:text-danger text-sm px-2 py-2 self-end">✕</button>
+      )}
+    </div>
+  );
+}
 
 export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines }: Props) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
-  const [lines, setLines] = useState<EstimateLine[]>(initialLines);
+  const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [vatRate, setVatRate] = useState<string>(String(initialVatRate));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -68,9 +129,10 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
   async function save() {
     setBusy(true); setMsg(null);
     try {
+      const items = lines.map(({ _uid, ...rest }) => rest); // strip the client-only id
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items: lines }),
+        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('estimate.saveError'), ok: false }); setBusy(false); return; }
@@ -82,48 +144,10 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
     setBusy(false);
   }
 
-  // Each line carries its original index so per-line totals map back to totals.lines[idx].
+  // Each row carries its original index so per-line totals map back to totals.lines[idx].
   const withIdx = lines.map((l, idx) => ({ l, idx }));
   const labour = withIdx.filter((x) => x.l.item_type === 'labour');
   const parts = withIdx.filter((x) => x.l.item_type !== 'labour');
-
-  const LineCard = ({ l, idx, kind }: { l: EstimateLine; idx: number; kind: 'labour' | 'part' }) => (
-    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
-      <div className="sm:flex-1">
-        <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
-        <input className={inputCls} placeholder={t('estimate.descriptionPlaceholder')} value={l.description}
-          disabled={!canEdit} onChange={(e) => update(idx, { description: e.target.value })} />
-      </div>
-      <div className="sm:w-24">
-        <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
-        <input className={inputCls} type="number" inputMode="decimal" step="0.01" value={l.unit_price}
-          disabled={!canEdit} onChange={(e) => update(idx, { unit_price: e.target.value })} />
-      </div>
-      <div className="sm:w-20">
-        <label className={labelCls}>{kind === 'labour' ? t('estimate.hours') : t('estimate.qty')}</label>
-        <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={l.qty}
-          disabled={!canEdit} onChange={(e) => update(idx, { qty: e.target.value })} />
-      </div>
-      <div className="sm:w-24">
-        <label className={labelCls}>{t('estimate.cost')}</label>
-        <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={l.unit_cost}
-          disabled={!canEdit} onChange={(e) => update(idx, { unit_cost: e.target.value })} />
-      </div>
-      <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
-        <input type="checkbox" className="w-5 h-5" checked={l.vatable} disabled={!canEdit}
-          onChange={(e) => update(idx, { vatable: e.target.checked })} />
-        {t('estimate.vat')}
-      </label>
-      <div className="sm:w-24 text-right">
-        <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
-        <div className="text-ink font-medium tabular-nums py-2">{fmt(totals.lines[idx]?.line_total_pennies ?? 0)}</div>
-      </div>
-      {canEdit && (
-        <button onClick={() => remove(idx)} aria-label={t('estimate.remove')}
-          className="text-danger hover:text-danger text-sm px-2 py-2 self-end">✕</button>
-      )}
-    </div>
-  );
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 mt-6">
@@ -134,13 +158,19 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       {/* Labour */}
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
       {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
-      {labour.map(({ l, idx }) => <LineCard key={idx} l={l} idx={idx} kind="labour" />)}
+      {labour.map(({ l, idx }) => (
+        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit}
+          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
+      ))}
       {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
 
       {/* Parts */}
       <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
       {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
-      {parts.map(({ l, idx }) => <LineCard key={idx} l={l} idx={idx} kind="part" />)}
+      {parts.map(({ l, idx }) => (
+        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit}
+          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
+      ))}
       {canEdit && (
         <div className="mb-4">
           <button onClick={() => add('part')} className="text-xs text-accent hover:underline">+ {t('estimate.addParts')}</button>
