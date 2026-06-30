@@ -472,6 +472,8 @@ model JobCard {
 
   // --- DIARY scheduling ---
   // start_at / end_at are the SOURCE OF TRUTH for scheduling (continuous time).
+  held_on_lift   Boolean   @default(false) // job occupying a lift open-endedly (e.g. awaiting parts)
+  garage_notes   String?                    // internal staff notes on the job
   resource_id    String?
   start_at       DateTime? // scheduling start (source of truth)
   end_at         DateTime? // scheduling end (source of truth)

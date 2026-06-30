@@ -66,5 +66,33 @@
     "pending": "Pending",
     "hint": "Tick each stage as it’s completed. All four are required before invoicing.",
     "error": "Could not update the stage."
+  },
+  "booking": {
+    "title": "Booking",
+    "unscheduled": "Not yet scheduled. Leave blank if accepted but not booked.",
+    "lift": "Lift / resource",
+    "selectLift": "Select a lift",
+    "start": "Start",
+    "end": "End",
+    "heldOnLift": "Held on lift (until released, e.g. awaiting parts)",
+    "book": "Book onto diary",
+    "rebook": "Update booking",
+    "unbook": "Unbook",
+    "booked": "Booked",
+    "booking": "Booking…",
+    "needLiftAndTimes": "Choose a lift, a start and an end.",
+    "endAfterStart": "End must be after start.",
+    "saved": "Booked onto the diary.",
+    "removed": "Removed from the diary.",
+    "error": "Could not save the booking.",
+    "readOnly": "Only a manager or admin can schedule a job."
+  },
+  "notes": {
+    "title": "Garage notes",
+    "placeholder": "Internal notes about this job (parts on order, customer comments, etc.)",
+    "save": "Save notes",
+    "saving": "Saving…",
+    "saved": "Notes saved.",
+    "error": "Could not save the notes."
   }
 }

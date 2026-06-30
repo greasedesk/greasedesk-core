@@ -17,6 +17,8 @@ import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import EstimateBuilder, { EstimateLine } from '@/components/jobcard/EstimateBuilder';
 import JobCardStatus from '@/components/jobcard/JobCardStatus';
+import JobCardBooking, { CardBooking } from '@/components/jobcard/JobCardBooking';
+import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 
 type Flag = { label: string; on: boolean };
@@ -45,6 +47,9 @@ type PageProps = {
   lines: EstimateLine[];
   stages: Record<StageKey, boolean>;
   hasEstimate: boolean;
+  resources: Array<{ id: string; name: string }>;
+  booking: CardBooking;
+  garageNotes: string;
 };
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -56,7 +61,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate, currency, locale, vatRate, lines, stages, hasEstimate }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate, currency, locale, vatRate, lines, stages, hasEstimate, resources, booking, garageNotes }: PageProps) {
   return (
     <AdminLayout>
       <Head>
@@ -82,6 +87,9 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate
         canManage={canEdit}
         canOperate={canOperate}
       />
+
+      {/* Booking — schedule onto the diary (same storage + double-booking guard) */}
+      <JobCardBooking jobCardId={jobCardId} canManage={canEdit} resources={resources} booking={booking} />
 
       {/* Vehicle + customer */}
       <div className="bg-surface border border-line rounded-xl p-5 mb-5">
@@ -113,6 +121,10 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate
           <p className="text-muted text-sm">No flags set.</p>
         )}
       </div>
+
+      {/* Garage notes (operational — any site-assigned user) */}
+      <div className="mt-5" />
+      <JobCardNotes jobCardId={jobCardId} canEdit={canOperate} initialNotes={garageNotes} />
 
       {/* Estimate / quote builder (i18n-native; money via formatMoney) */}
       <EstimateBuilder
@@ -152,8 +164,19 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
 
   // Money formats against the card's site; editing pricing requires site authority (else view-only).
   const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null;
-  const canEdit = canManageSite(vis, row.site_id);     // commercial (pricing/lifecycle)
-  const canOperate = canAccessSite(vis, row.site_id);  // operational (stage toggles, start work)
+  const canEdit = canManageSite(vis, row.site_id);     // commercial (pricing/lifecycle/scheduling)
+  const canOperate = canAccessSite(vis, row.site_id);  // operational (stage toggles, start work, notes)
+
+  // Lifts/resources on the card's site (for booking) + the current booking from the SAME storage the diary uses.
+  const resources = ((await prisma.resource.findMany({
+    where: { site_id: row.site_id, is_active: true },
+    orderBy: { display_order: 'asc' },
+    select: { id: true, name: true },
+  })) as Array<{ id: string; name: string }>);
+  const booking: CardBooking = (row.resource_id && row.start_at && row.end_at)
+    ? { resourceId: row.resource_id, startAt: (row.start_at as Date).toISOString(), endAt: (row.end_at as Date).toISOString(), heldOnLift: !!row.held_on_lift }
+    : null;
+
   const num = (d: any) => (d == null ? 0 : Number(d));
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
@@ -200,6 +223,9 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
         complete: !!row.stage_complete_done,
       },
       hasEstimate: (row.items as any[]).length > 0,
+      resources,
+      booking,
+      garageNotes: row.garage_notes ?? '',
     },
   };
 });

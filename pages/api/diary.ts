@@ -17,6 +17,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
+import { canManageSite } from '@/lib/admin-guard';
 
 function parseDateTime(s: unknown): Date | null {
   if (typeof s !== 'string' || !s) return null;
@@ -33,8 +34,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(user.id as string); // visible sites
 
   if (req.method === 'PATCH') {
-    const { jobCardId, resourceId, startAt, endAt } = (req.body || {}) as {
-      jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string;
+    const { jobCardId, resourceId, startAt, endAt, heldOnLift } = (req.body || {}) as {
+      jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; heldOnLift?: boolean;
     };
     if (!jobCardId || !resourceId) {
       return res.status(400).json({ message: 'jobCardId and resourceId are required.' });
@@ -49,6 +50,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Visibility scope: the card must sit on a site the caller may access.
         const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true, site_id: true } });
         if (!card) throw new Error('CARD_NOT_FOUND');
+
+        // Scheduling = resource allocation = commercial: manager/admin only (one rule for diary + card).
+        if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
 
         // The target resource must also be on a site the caller may access.
         const resource = await tx.resource.findFirst({
@@ -72,13 +76,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await tx.jobCard.update({
           where: { id: jobCardId },
-          data: { resource_id: resourceId, start_at: start, end_at: end },
+          data: {
+            resource_id: resourceId, start_at: start, end_at: end,
+            ...(heldOnLift !== undefined ? { held_on_lift: !!heldOnLift } : {}),
+          },
         });
       });
       return res.status(200).json({ message: 'Job card placed.' });
     } catch (err: any) {
       const m = err?.message || '';
       if (m === 'CARD_NOT_FOUND') return res.status(404).json({ message: 'Job card not found.' });
+      if (m === 'FORBIDDEN') return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m.startsWith('CLASH:')) {
@@ -92,11 +100,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const jobCardId = (req.query.jobCardId as string) || (req.body && (req.body.jobCardId as string));
     if (!jobCardId) return res.status(400).json({ message: 'Missing jobCardId.' });
-    const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true } });
+    const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true, site_id: true } });
     if (!card) return res.status(404).json({ message: 'Job card not found.' });
+    // Unscheduling is also resource allocation → manager/admin only.
+    if (!canManageSite(vis, card.site_id)) return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
     await prisma.jobCard.update({
       where: { id: jobCardId },
-      data: { resource_id: null, start_at: null, end_at: null, scheduled_date: null, start_slot: null, end_slot: null },
+      data: { resource_id: null, start_at: null, end_at: null, held_on_lift: false, scheduled_date: null, start_slot: null, end_slot: null },
     });
     return res.status(200).json({ message: 'Job card unplaced.' });
   }
