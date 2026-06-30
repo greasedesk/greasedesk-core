@@ -36,7 +36,7 @@ type LocationView = {
 };
 type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean };
 
-const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
+const inputClass = 'p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 
 async function mutate(url: string, method: string, body: any): Promise<string | null> {
   try {
@@ -77,38 +77,38 @@ function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChange
 
   if (editing) {
     return (
-      <div className="flex flex-wrap items-center gap-2 py-2 border-t border-slate-700">
+      <div className="flex flex-wrap items-center gap-2 py-2 border-t border-line">
         <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-40`} />
         <select value={type} onChange={(e) => setType(e.target.value)} className={inputClass}>
           {RESOURCE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
         <input value={order} onChange={(e) => setOrder(e.target.value)} type="number" className={`${inputClass} w-20`} title="Display order" />
-        <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
-        <button onClick={() => setEditing(false)} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
-        {err && <span className="text-red-400 text-xs">{err}</span>}
+        <button onClick={save} className="text-xs bg-ok hover:bg-ok text-white rounded px-3 py-1.5">Save</button>
+        <button onClick={() => setEditing(false)} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
+        {err && <span className="text-danger text-xs">{err}</span>}
       </div>
     );
   }
   return (
-    <div className="py-2 border-t border-slate-700 text-sm">
+    <div className="py-2 border-t border-line text-sm">
       <div className="flex items-center justify-between">
         <div className="flex items-center">
           {/* Current colour swatch — click to pick */}
           <button
             onClick={() => setPicking((v) => !v)}
             title="Set lift colour"
-            className="w-4 h-4 rounded-sm border border-slate-500 mr-2 shrink-0"
+            className="w-4 h-4 rounded-sm border border-line mr-2 shrink-0"
             style={{ backgroundColor: resolveColour(resource.colour) }}
           />
-          <span className="font-medium text-slate-100">{resource.name}</span>
-          <span className="text-slate-400 ml-2">· {typeLabel(resource.type)}</span>
-          <span className="text-slate-500 ml-2">· order {resource.display_order}</span>
-          {!resource.is_active && <span className="text-amber-400 ml-2">· inactive</span>}
+          <span className="font-medium text-ink">{resource.name}</span>
+          <span className="text-muted ml-2">· {typeLabel(resource.type)}</span>
+          <span className="text-muted ml-2">· order {resource.display_order}</span>
+          {!resource.is_active && <span className="text-warn ml-2">· inactive</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
-          <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
-          {err && <span className="text-red-400 text-xs">{err}</span>}
+          <button onClick={() => setEditing(true)} className="text-xs text-accent hover:underline">Edit</button>
+          <button onClick={remove} className="text-xs text-danger hover:underline">Remove</button>
+          {err && <span className="text-danger text-xs">{err}</span>}
         </div>
       </div>
       {picking && (
@@ -118,11 +118,11 @@ function ResourceRow({ resource, onChanged }: { resource: ResourceView; onChange
               key={c}
               onClick={() => setColour(c)}
               title={c}
-              className={`w-5 h-5 rounded-full border ${resource.colour === c ? 'border-white ring-2 ring-white/50' : 'border-slate-500'}`}
+              className={`w-5 h-5 rounded-full border ${resource.colour === c ? 'border-white ring-2 ring-white/50' : 'border-line'}`}
               style={{ backgroundColor: c }}
             />
           ))}
-          <button onClick={() => setColour(null)} className="text-xs text-slate-400 hover:text-white ml-1 underline">Default</button>
+          <button onClick={() => setColour(null)} className="text-xs text-muted hover:text-ink ml-1 underline">Default</button>
         </div>
       )}
     </div>
@@ -149,16 +149,16 @@ function AddResource({ siteId, onChanged }: { siteId: string; onChanged: () => v
     onChanged();
   }
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-2 mt-3 pt-3 border-t border-slate-700">
+    <form onSubmit={submit} className="flex flex-wrap items-end gap-2 mt-3 pt-3 border-t border-line">
       <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Resource (e.g. Lift 2)" className={`${inputClass} flex-1 min-w-[140px]`} />
       <select value={type} onChange={(e) => setType(e.target.value)} className={inputClass}>
         {RESOURCE_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
       <input value={order} onChange={(e) => setOrder(e.target.value)} type="number" className={`${inputClass} w-20`} title="Display order" />
-      <button type="submit" disabled={busy} className="text-xs bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded px-3 py-1.5 disabled:opacity-50">
+      <button type="submit" disabled={busy} className="text-xs bg-accent hover:bg-accent-hover text-white font-semibold rounded px-3 py-1.5 disabled:opacity-50">
         {busy ? 'Adding…' : '+ Resource'}
       </button>
-      {err && <span className="text-red-400 text-xs">{err}</span>}
+      {err && <span className="text-danger text-xs">{err}</span>}
     </form>
   );
 }
@@ -182,20 +182,20 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
     onChanged();
   }
   return (
-    <form onSubmit={submit} className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-6 flex flex-wrap items-end gap-3">
+    <form onSubmit={submit} className="bg-surface border border-line rounded-xl p-4 mb-6 flex flex-wrap items-end gap-3">
       <div className="flex-1 min-w-[160px]">
-        <label className="block text-xs text-slate-400 mb-1">New location name</label>
+        <label className="block text-xs text-muted mb-1">New location name</label>
         <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Great Bridge" className={`${inputClass} w-full`} />
       </div>
       <div className="flex-1 min-w-[160px]">
-        <label className="block text-xs text-slate-400 mb-1">Address (optional)</label>
+        <label className="block text-xs text-muted mb-1">Address (optional)</label>
         <input value={address} onChange={(e) => setAddress(e.target.value)} className={`${inputClass} w-full`} />
       </div>
-      <button type="submit" disabled={busy} className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+      <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
         {busy ? 'Adding…' : 'Add Location'}
       </button>
-      {err && <p className="text-red-400 text-xs w-full">{err}</p>}
-      <p className="text-xs text-slate-500 w-full">A new location starts with no resources. Note: locations are billable — adding one will affect billing once that module exists.</p>
+      {err && <p className="text-danger text-xs w-full">{err}</p>}
+      <p className="text-xs text-muted w-full">A new location starts with no resources. Note: locations are billable — adding one will affect billing once that module exists.</p>
     </form>
   );
 }
@@ -221,41 +221,41 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
   }
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-4">
+    <div className="bg-surface border border-line rounded-xl p-5 mb-4">
       <div className="flex items-start justify-between">
         {editing ? (
           <div className="flex flex-wrap items-center gap-2">
             <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-44`} placeholder="Name" />
             <input value={address} onChange={(e) => setAddress(e.target.value)} className={`${inputClass} w-56`} placeholder="Address" />
-            <label className="text-xs text-slate-300 flex items-center gap-1">
+            <label className="text-xs text-muted flex items-center gap-1">
               <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
             </label>
-            <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
-            <button onClick={() => setEditing(false)} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
+            <button onClick={save} className="text-xs bg-ok hover:bg-ok text-white rounded px-3 py-1.5">Save</button>
+            <button onClick={() => setEditing(false)} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
           </div>
         ) : (
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 className="text-lg font-semibold text-ink">
               {loc.name}
-              {loc.isCurrent && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700 align-middle">current</span>}
-              {!loc.isActive && <span className="ml-2 text-xs text-amber-400 align-middle">inactive</span>}
+              {loc.isCurrent && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-accent-soft text-accent border border-accent align-middle">current</span>}
+              {!loc.isActive && <span className="ml-2 text-xs text-warn align-middle">inactive</span>}
             </h2>
-            {loc.address && <p className="text-slate-400 text-sm mt-0.5">{loc.address}</p>}
+            {loc.address && <p className="text-muted text-sm mt-0.5">{loc.address}</p>}
           </div>
         )}
         {/* Editing/removing a location is admin-only; site managers manage resources below. */}
         {!editing && isAdmin && (
           <div className="flex items-center gap-3">
-            <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
-            <button onClick={remove} className="text-xs text-red-400 hover:underline">Remove</button>
+            <button onClick={() => setEditing(true)} className="text-xs text-accent hover:underline">Edit</button>
+            <button onClick={remove} className="text-xs text-danger hover:underline">Remove</button>
           </div>
         )}
       </div>
-      {err && <p className="text-red-400 text-xs mt-1">{err}</p>}
+      {err && <p className="text-danger text-xs mt-1">{err}</p>}
 
       <div className="mt-4">
-        <div className="text-xs uppercase text-slate-400">Resources</div>
-        {loc.resources.length === 0 && <p className="text-slate-500 text-sm py-2">No resources yet.</p>}
+        <div className="text-xs uppercase text-muted">Resources</div>
+        {loc.resources.length === 0 && <p className="text-muted text-sm py-2">No resources yet.</p>}
         {loc.resources.map((r) => <ResourceRow key={r.id} resource={r} onChanged={onChanged} />)}
         <AddResource siteId={loc.id} onChanged={onChanged} />
       </div>
@@ -270,13 +270,13 @@ export default function LocationsSettings({ locations, isAdmin, isManager }: Pag
   return (
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Locations & Resources - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
+      <p className="text-muted mb-6">Your locations and each location’s physical resources (lifts, MOT bays, spray booths). Resources become the diary’s columns.</p>
 
       {/* Adding a (billable) location is admin-only. */}
       {isAdmin && <AddLocation onChanged={refresh} />}
 
       {locations.length === 0 ? (
-        <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">
+        <div className="bg-surface border border-line rounded-xl p-8 text-center text-muted">
           You’re not currently assigned to a location — contact your admin.
         </div>
       ) : (

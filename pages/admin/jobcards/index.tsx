@@ -48,8 +48,8 @@ function StageBadges({ stages }: { stages: Stages }) {
           key={key}
           className={`text-xs px-2 py-0.5 rounded-full border ${
             stages[key]
-              ? 'bg-green-800 text-green-100 border-green-600'
-              : 'bg-slate-700 text-slate-300 border-slate-600'
+              ? 'bg-ok-soft text-ok border-line'
+              : 'bg-surface-muted text-muted border-line'
           }`}
           title={stages[key] ? `${label}: Done` : `${label}: Pending`}
         >
@@ -68,18 +68,18 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
       </Head>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-white">Job Cards</h1>
+        <h1 className="text-3xl font-bold text-ink">Job Cards</h1>
         <Link
           href="/admin/jobcards/new"
-          className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm"
+          className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm"
         >
           + New Job Card
         </Link>
       </div>
 
-      <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
-        <table className="w-full text-left text-sm text-slate-200">
-          <thead className="bg-slate-900/60 text-xs uppercase text-slate-400">
+      <div className="bg-surface border border-line rounded-xl overflow-hidden">
+        <table className="w-full text-left text-sm text-ink">
+          <thead className="bg-surface-muted text-xs uppercase text-muted">
             <tr>
               <th className="px-4 py-3">Reg</th>
               <th className="px-4 py-3">Customer</th>
@@ -91,7 +91,7 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
           <tbody>
             {cards.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={5} className="px-4 py-8 text-center text-muted">
                   {noSites
                     ? "You're not currently assigned to a location — contact your admin."
                     : 'No job cards yet. Create the first one.'}
@@ -99,22 +99,22 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
               </tr>
             )}
             {cards.map((c) => (
-              <tr key={c.id} className="border-t border-slate-700 hover:bg-slate-700/30">
+              <tr key={c.id} className="border-t border-line hover:bg-surface-muted">
                 <td className="px-4 py-3 font-semibold">
-                  <Link href={`/admin/jobcards/${c.id}`} className="text-blue-400 hover:underline">
+                  <Link href={`/admin/jobcards/${c.id}`} className="text-accent hover:underline">
                     {c.registration}
                   </Link>
                 </td>
                 <td className="px-4 py-3">{c.customerName}</td>
                 <td className="px-4 py-3">
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 capitalize">
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted border border-line capitalize">
                     {c.status}
                   </span>
                 </td>
                 <td className="px-4 py-3">
                   <StageBadges stages={c.stages} />
                 </td>
-                <td className="px-4 py-3 text-slate-400">
+                <td className="px-4 py-3 text-muted">
                   {new Date(c.createdAt).toLocaleDateString('en-GB')}
                 </td>
               </tr>

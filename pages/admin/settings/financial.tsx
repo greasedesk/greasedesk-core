@@ -37,11 +37,11 @@ const CATEGORY_OPTIONS = [
 const categoryLabel = (v: string | null) => CATEGORY_OPTIONS.find((o) => o.value === v)?.label ?? (v ?? '—');
 
 const inputClass =
-  'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:ring-blue-500 focus:border-blue-500 transition';
-const labelClass = 'block text-sm font-medium text-slate-300 mb-1 mt-3';
+  'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
+const labelClass = 'block text-sm font-medium text-muted mb-1 mt-3';
 const selectMultipleClass =
-  'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white h-32 focus:ring-blue-500 focus:border-blue-500 transition';
-const sectionHeaderClass = 'text-xl font-bold text-blue-400 border-b border-slate-700 pb-2 mb-4';
+  'w-full p-3 bg-surface border border-line rounded-lg text-ink h-32 focus:ring-accent focus:border-accent transition';
+const sectionHeaderClass = 'text-xl font-bold text-accent border-b border-line pb-2 mb-4';
 
 async function mutate(url: string, method: string, body: any): Promise<string | null> {
   try {
@@ -85,43 +85,43 @@ function ProfitCentreTags({ tags }: { tags: PcTag[] }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto bg-slate-800 p-6 rounded-xl border border-slate-700 mt-6">
+    <div className="max-w-4xl mx-auto bg-surface p-6 rounded-xl border border-line mt-6">
       <h2 className={sectionHeaderClass}>Profit Centre Tags (reporting)</h2>
-      <p className="text-slate-400 text-sm mb-4">
+      <p className="text-muted text-sm mb-4">
         Typed tags applied to job cards &amp; bookings for P&amp;L reporting. They are not operational — the
         operational structure is Locations &amp; Resources.
       </p>
-      {err && <div className="bg-red-700 text-red-100 p-2 rounded text-sm mb-3">{err}</div>}
+      {err && <div className="bg-danger text-white p-2 rounded text-sm mb-3">{err}</div>}
 
       {tags.length === 0 ? (
-        <p className="text-slate-500 text-sm mb-4">No tags yet.</p>
+        <p className="text-muted text-sm mb-4">No tags yet.</p>
       ) : (
         <div className="space-y-2 mb-4">
           {tags.map((t) => (
-            <div key={t.id} className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-2">
-              <span className="text-slate-100 font-medium">{t.name}</span>
+            <div key={t.id} className="flex items-center justify-between bg-surface-muted rounded-lg px-3 py-2">
+              <span className="text-ink font-medium">{t.name}</span>
               <div className="flex items-center gap-3">
                 <select
                   value={t.category ?? 'repairs'}
                   onChange={(e) => changeCategory(t.id, e.target.value)}
-                  className="p-1.5 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                  className="p-1.5 bg-surface border border-line rounded text-ink text-xs"
                   title={`Category: ${categoryLabel(t.category)}`}
                 >
                   {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-                <button onClick={() => remove(t.id)} className="text-xs text-red-400 hover:underline">Remove</button>
+                <button onClick={() => remove(t.id)} className="text-xs text-danger hover:underline">Remove</button>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      <form onSubmit={add} className="flex flex-wrap items-end gap-2 pt-3 border-t border-slate-700">
-        <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Tag name (e.g. Repairs)" className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm flex-1 min-w-[160px]" />
-        <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm">
+      <form onSubmit={add} className="flex flex-wrap items-end gap-2 pt-3 border-t border-line">
+        <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Tag name (e.g. Repairs)" className="p-2 bg-surface border border-line rounded text-ink text-sm flex-1 min-w-[160px]" />
+        <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm">
           {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
-        <button type="submit" disabled={busy} className="text-sm bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded px-3 py-2 disabled:opacity-50">
+        <button type="submit" disabled={busy} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded px-3 py-2 disabled:opacity-50">
           {busy ? 'Adding…' : 'Add Tag'}
         </button>
       </form>
@@ -182,11 +182,11 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
     <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Financial Settings - GreaseDesk</title></Head>
 
-      <div className="max-w-4xl mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl border border-slate-700">
-        <p className="text-slate-400 mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>.</p>
+      <div className="max-w-4xl mx-auto bg-surface p-6 sm:p-8 rounded-xl border border-line">
+        <p className="text-muted mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>.</p>
 
         {message.text && (
-          <div className={`p-3 rounded-lg mb-4 text-sm ${message.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>
+          <div className={`p-3 rounded-lg mb-4 text-sm ${message.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>
             {message.text}
           </div>
         )}
@@ -200,14 +200,14 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
                 <select id="supportedCountries" name="supportedCountries" multiple value={settings.supportedCountries} onChange={handleChange} className={selectMultipleClass}>
                   {ALL_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <p className="text-xs text-slate-500 mt-1">Hold Ctrl/Cmd to select multiple.</p>
+                <p className="text-xs text-muted mt-1">Hold Ctrl/Cmd to select multiple.</p>
               </div>
               <div>
                 <label htmlFor="supportedCurrencies" className={labelClass}>Supported Currencies</label>
                 <select id="supportedCurrencies" name="supportedCurrencies" multiple value={settings.supportedCurrencies} onChange={handleChange} className={selectMultipleClass}>
                   {ALL_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <p className="text-xs text-slate-500 mt-1">Hold Ctrl/Cmd to select multiple.</p>
+                <p className="text-xs text-muted mt-1">Hold Ctrl/Cmd to select multiple.</p>
               </div>
               <div>
                 <label htmlFor="timezone" className={labelClass}>Timezone</label>
@@ -220,7 +220,7 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
             </div>
           </div>
 
-          <hr className="border-slate-700" />
+          <hr className="border-line" />
 
           <div>
             <h2 className={sectionHeaderClass}>Pricing &amp; Financial Rates</h2>
@@ -243,7 +243,7 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
             </div>
           </div>
 
-          <button type="submit" disabled={isSaving} className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition disabled:opacity-50 mt-6">
+          <button type="submit" disabled={isSaving} className="w-full py-3 bg-ok hover:bg-ok text-white font-semibold rounded-lg transition disabled:opacity-50 mt-6">
             {isSaving ? 'Saving Changes…' : 'Save Financial Settings'}
           </button>
         </form>

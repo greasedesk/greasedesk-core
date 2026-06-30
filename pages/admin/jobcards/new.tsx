@@ -16,8 +16,8 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import AdminLayout from '@/components/layout/AdminLayout';
 
 const inputClass =
-  'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:ring-blue-500 focus:border-blue-500 transition';
-const labelClass = 'block text-sm font-medium text-slate-300 mb-1';
+  'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
+const labelClass = 'block text-sm font-medium text-muted mb-1';
 
 type Flags = {
   flag_urgent: boolean;
@@ -92,17 +92,17 @@ export default function NewJobCardPage() {
 
       <div className="max-w-3xl">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold text-white">New Job Card</h1>
-          <Link href="/admin/jobcards" className="text-sm text-slate-400 hover:text-white">
+          <h1 className="text-3xl font-bold text-ink">New Job Card</h1>
+          <Link href="/admin/jobcards" className="text-sm text-muted hover:text-ink">
             ← Back to list
           </Link>
         </div>
 
         {error && (
-          <div className="bg-red-700 text-red-100 p-3 rounded-lg mb-4 text-sm">{error}</div>
+          <div className="bg-danger text-white p-3 rounded-lg mb-4 text-sm">{error}</div>
         )}
 
-        <form onSubmit={handleSubmit} className="bg-slate-800 border border-slate-700 rounded-xl p-6 space-y-5">
+        <form onSubmit={handleSubmit} className="bg-surface border border-line rounded-xl p-6 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Registration *</label>
@@ -147,8 +147,8 @@ export default function NewJobCardPage() {
                   onClick={() => toggleFlag(key)}
                   className={`text-sm px-3 py-1.5 rounded-lg border transition ${
                     flags[key]
-                      ? 'bg-blue-600 text-white border-blue-400'
-                      : 'bg-slate-700 text-slate-300 border-slate-600 hover:border-slate-400'
+                      ? 'bg-accent text-white border-accent'
+                      : 'bg-surface-muted text-muted border-line hover:border-line'
                   }`}
                 >
                   {label}
@@ -161,7 +161,7 @@ export default function NewJobCardPage() {
             <button
               type="submit"
               disabled={saving}
-              className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-5 py-2.5 disabled:opacity-50"
+              className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-5 py-2.5 disabled:opacity-50"
             >
               {saving ? 'Creating…' : 'Create Job Card'}
             </button>

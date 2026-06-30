@@ -85,7 +85,7 @@ export default function DiaryPage(props: PageProps) {
     return (
       <AdminLayout>
         <Head><title>Diary - GreaseDesk</title></Head>
-        <div className="bg-white text-slate-800 rounded-xl border border-slate-200 p-8 text-center shadow">
+        <div className="bg-surface text-ink rounded-xl border border-line p-8 text-center shadow">
           You’re not currently assigned to a location — contact your admin.
         </div>
       </AdminLayout>
@@ -120,12 +120,12 @@ export default function DiaryPage(props: PageProps) {
     return (
       <div
         style={{ ...style, backgroundColor: blockTint(colour), borderLeft: `4px solid ${colour}` }}
-        className="absolute rounded-md px-1.5 py-0.5 text-[11px] text-slate-800 overflow-hidden shadow-sm"
+        className="absolute rounded-md px-1.5 py-0.5 text-[11px] text-ink overflow-hidden shadow-sm"
         title={tooltip(c)}
       >
         <div className="flex items-center justify-between gap-1">
           <Link href={`/admin/jobcards/${c.id}`} className="font-semibold truncate hover:underline">{c.reg}</Link>
-          <button onClick={() => unplace(c.id)} className="text-slate-500 hover:text-red-600 leading-none shrink-0" title="Unplace">✕</button>
+          <button onClick={() => unplace(c.id)} className="text-muted hover:text-danger leading-none shrink-0" title="Unplace">✕</button>
         </div>
       </div>
     );
@@ -141,58 +141,58 @@ export default function DiaryPage(props: PageProps) {
     <AdminLayout>
       <Head><title>Diary - GreaseDesk</title></Head>
 
-      <div className="bg-white text-slate-800 rounded-xl border border-slate-200 p-4 shadow">
+      <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h1 className="text-2xl font-bold text-slate-900">Diary — {siteName}</h1>
+          <h1 className="text-2xl font-bold text-ink">Diary — {siteName}</h1>
           <div className="flex items-center gap-2">
-            <div className="flex rounded-lg overflow-hidden border border-slate-300">
-              <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'week' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>Week</Link>
-              <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'day' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}`}>Day</Link>
+            <div className="flex rounded-lg overflow-hidden border border-line">
+              <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>Week</Link>
+              <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>Day</Link>
             </div>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} className="px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-200">←</Link>
-            <span className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800">{view === 'week' ? `Week of ${days[0]?.date}` : anchor}</span>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} className="px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-200">→</Link>
+            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface-muted">←</Link>
+            <span className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">{view === 'week' ? `Week of ${days[0]?.date}` : anchor}</span>
+            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface-muted">→</Link>
           </div>
         </div>
 
-        {msg && <div className={`p-3 rounded-lg mb-4 text-sm ${msg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{msg.text}</div>}
+        {msg && <div className={`p-3 rounded-lg mb-4 text-sm ${msg.type === 'success' ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         {/* Placement form (light) */}
-        <form onSubmit={place} className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4 flex flex-wrap items-end gap-2">
+        <form onSubmit={place} className="bg-surface-muted border border-line rounded-lg p-3 mb-4 flex flex-wrap items-end gap-2">
           <div>
-            <label className="block text-xs text-slate-500 mb-1">Job card</label>
-            <select value={jobCardId} onChange={(e) => setJobCardId(e.target.value)} className="p-2 bg-white border border-slate-300 rounded text-slate-800 text-sm min-w-[180px]">
+            <label className="block text-xs text-muted mb-1">Job card</label>
+            <select value={jobCardId} onChange={(e) => setJobCardId(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm min-w-[180px]">
               <option value="">Unscheduled… ({unscheduled.length})</option>
               {unscheduled.map((u) => <option key={u.id} value={u.id}>{u.reg} — {u.customer}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs text-slate-500 mb-1">Resource</label>
-            <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} className="p-2 bg-white border border-slate-300 rounded text-slate-800 text-sm">
+            <label className="block text-xs text-muted mb-1">Resource</label>
+            <select value={resourceId} onChange={(e) => setResourceId(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm">
               {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </div>
-          <div><label className="block text-xs text-slate-500 mb-1">Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="p-2 bg-white border border-slate-300 rounded text-slate-800 text-sm" /></div>
-          <div><label className="block text-xs text-slate-500 mb-1">Start</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="p-2 bg-white border border-slate-300 rounded text-slate-800 text-sm" /></div>
-          <div><label className="block text-xs text-slate-500 mb-1">Hours</label><input type="number" step="0.5" min="0.5" value={hours} onChange={(e) => setHours(e.target.value)} className="p-2 bg-white border border-slate-300 rounded text-slate-800 text-sm w-20" /></div>
-          <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg px-4 py-2 text-sm">Place</button>
+          <div><label className="block text-xs text-muted mb-1">Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm" /></div>
+          <div><label className="block text-xs text-muted mb-1">Start</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm" /></div>
+          <div><label className="block text-xs text-muted mb-1">Hours</label><input type="number" step="0.5" min="0.5" value={hours} onChange={(e) => setHours(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm w-20" /></div>
+          <button type="submit" className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm">Place</button>
         </form>
 
         {resources.length === 0 ? (
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center text-slate-500">
+          <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">
             This location has no resources. Add some in Settings → Locations &amp; Resources.
           </div>
         ) : (
           <>
             {view === 'week' && !laneMode && (
-              <p className="text-xs text-slate-500 mb-2">{resources.length} lifts — showing jobs as coloured dots (one colour per lift). Switch to Day view for full blocks.</p>
+              <p className="text-xs text-muted mb-2">{resources.length} lifts — showing jobs as coloured dots (one colour per lift). Switch to Day view for full blocks.</p>
             )}
             <div className="overflow-x-auto">
               <div className="flex min-w-max">
                 {/* Time axis */}
                 <div className="w-16 shrink-0 pt-7">
                   {HOURS.map((h) => (
-                    <div key={h} style={{ height: 60 * PX_PER_MIN }} className="text-xs text-slate-400 text-right pr-2 -mt-2">{String(h).padStart(2, '0')}:00</div>
+                    <div key={h} style={{ height: 60 * PX_PER_MIN }} className="text-xs text-muted text-right pr-2 -mt-2">{String(h).padStart(2, '0')}:00</div>
                   ))}
                 </div>
                 {/* Columns */}
@@ -204,11 +204,11 @@ export default function DiaryPage(props: PageProps) {
                   });
                   const dotsMode = view === 'week' && !laneMode;
                   return (
-                    <div key={col.key} className="w-52 shrink-0 border-l border-slate-200">
-                      <div className="h-7 text-sm text-slate-700 text-center font-medium truncate px-1">{col.label}</div>
-                      <div className="relative bg-white" style={{ height: WIN_MIN * PX_PER_MIN }}>
+                    <div key={col.key} className="w-52 shrink-0 border-l border-line">
+                      <div className="h-7 text-sm text-ink text-center font-medium truncate px-1">{col.label}</div>
+                      <div className="relative bg-surface" style={{ height: WIN_MIN * PX_PER_MIN }}>
                         {HOURS.slice(1).map((h, i) => (
-                          <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-slate-100" />
+                          <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                         ))}
 
                         {/* DOTS mode (week, >4 lifts) */}

@@ -22,14 +22,14 @@ const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE M
 
 function RoleBadge({ role }: { role: Role }) {
   const cls = role === 'ADMIN'
-    ? 'bg-purple-900 text-purple-200 border-purple-700'
+    ? 'bg-accent-soft text-accent border-line'
     : role === 'SITE_MANAGER'
-      ? 'bg-indigo-900 text-indigo-200 border-indigo-700'
-      : 'bg-slate-700 text-slate-300 border-slate-600';
+      ? 'bg-warn-soft text-warn border-line'
+      : 'bg-surface-muted text-muted border-line';
   return <span className={`ml-2 text-xs px-2 py-0.5 rounded-full border ${cls}`}>{ROLE_LABEL[role]}</span>;
 }
 
-const inputClass = 'p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
+const inputClass = 'p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 
 async function mutate(url: string, method: string, body: any): Promise<string | null> {
   try {
@@ -45,12 +45,12 @@ function SiteCheboxes({ sites, selected, onToggle }: { sites: SiteOpt[]; selecte
   return (
     <div className="flex flex-wrap gap-2">
       {sites.map((s) => (
-        <label key={s.id} className="flex items-center gap-1 text-xs text-slate-200 bg-slate-700 border border-slate-600 rounded px-2 py-1">
+        <label key={s.id} className="flex items-center gap-1 text-xs text-ink bg-surface-muted border border-line rounded px-2 py-1">
           <input type="checkbox" checked={selected.includes(s.id)} onChange={() => onToggle(s.id)} />
           {s.name}
         </label>
       ))}
-      {sites.length === 0 && <span className="text-xs text-slate-500">No locations yet.</span>}
+      {sites.length === 0 && <span className="text-xs text-muted">No locations yet.</span>}
     </div>
   );
 }
@@ -75,22 +75,22 @@ function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void
   }
 
   return (
-    <form onSubmit={submit} className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-6 space-y-3">
-      <h2 className="text-lg font-semibold text-white">Add a user</h2>
+    <form onSubmit={submit} className="bg-surface border border-line rounded-xl p-4 mb-6 space-y-3">
+      <h2 className="text-lg font-semibold text-ink">Add a user</h2>
       <div className="flex flex-wrap gap-3">
-        <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-48`} /></div>
-        <div><label className="block text-xs text-slate-400 mb-1">Email *</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={`${inputClass} w-64`} /></div>
+        <div><label className="block text-xs text-muted mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-48`} /></div>
+        <div><label className="block text-xs text-muted mb-1">Email *</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={`${inputClass} w-64`} /></div>
       </div>
       <div>
-        <label className="block text-xs text-slate-400 mb-1">Assign to location(s)</label>
+        <label className="block text-xs text-muted mb-1">Assign to location(s)</label>
         <SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} />
       </div>
-      {err && <div className="bg-red-700 text-red-100 p-2 rounded text-sm">{err}</div>}
+      {err && <div className="bg-danger text-white p-2 rounded text-sm">{err}</div>}
       <div className="flex items-center gap-3">
-        <button type="submit" disabled={busy} className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+        <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
           {busy ? 'Adding…' : 'Add user'}
         </button>
-        <span className="text-xs text-amber-300">The user is created as <strong>pending</strong> — no invite email is sent yet (coming with the auth slice).</span>
+        <span className="text-xs text-warn">The user is created as <strong>pending</strong> — no invite email is sent yet (coming with the auth slice).</span>
       </div>
     </form>
   );
@@ -129,38 +129,38 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
   const removeTitle = user.isOwner ? 'The owner account cannot be removed' : isSelf ? 'You cannot remove yourself' : 'Remove user';
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-3">
+    <div className="bg-surface border border-line rounded-xl p-4 mb-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-white font-medium flex flex-wrap items-center">
-            {user.name || <span className="text-slate-400 italic">No name</span>}
+          <div className="text-ink font-medium flex flex-wrap items-center">
+            {user.name || <span className="text-muted italic">No name</span>}
             <RoleBadge role={user.role} />
-            {user.isOwner && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-200 border border-emerald-700">owner</span>}
-            {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-200 border border-blue-700">you</span>}
-            {!user.isActive && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-900 text-amber-200 border border-amber-700">pending</span>}
+            {user.isOwner && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-ok-soft text-ok border border-line">owner</span>}
+            {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-accent-soft text-accent border border-line">you</span>}
+            {!user.isActive && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-warn-soft text-warn border border-line">pending</span>}
           </div>
-          <div className="text-slate-400 text-sm">{user.email}</div>
+          <div className="text-muted text-sm">{user.email}</div>
           {!editing && (
-            <div className="text-slate-300 text-sm mt-1">
-              Sites: {user.siteIds.length ? user.siteIds.map(nameFor).join(', ') : <span className="text-slate-500">none</span>}
+            <div className="text-muted text-sm mt-1">
+              Sites: {user.siteIds.length ? user.siteIds.map(nameFor).join(', ') : <span className="text-muted">none</span>}
             </div>
           )}
         </div>
         {canManage && !editing && (
           <div className="flex items-center gap-3 shrink-0">
-            <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-blue-400 hover:underline">Profile</Link>
-            <button onClick={() => setEditing(true)} className="text-xs text-blue-400 hover:underline">Edit</button>
-            <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-slate-600 cursor-not-allowed' : 'text-red-400 hover:underline'}`}>Remove</button>
+            <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-accent hover:underline">Profile</Link>
+            <button onClick={() => setEditing(true)} className="text-xs text-accent hover:underline">Edit</button>
+            <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-muted cursor-not-allowed' : 'text-danger hover:underline'}`}>Remove</button>
           </div>
         )}
       </div>
 
       {canManage && editing && (
         <div className="mt-3 space-y-3">
-          <div><label className="block text-xs text-slate-400 mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
+          <div><label className="block text-xs text-muted mb-1">Name</label><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-64`} /></div>
           {canEditRole ? (
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Role</label>
+              <label className="block text-xs text-muted mb-1">Role</label>
               <select value={role} onChange={(e) => setRole(e.target.value as Role)} className={inputClass}>
                 <option value="STANDARD">Standard</option>
                 <option value="SITE_MANAGER">Site manager</option>
@@ -168,19 +168,19 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
               </select>
             </div>
           ) : (
-            <div className="text-xs text-slate-400">
-              Role: <span className="text-slate-200">{ROLE_LABEL[user.role]}</span>
+            <div className="text-xs text-muted">
+              Role: <span className="text-ink">{ROLE_LABEL[user.role]}</span>
               {user.isOwner ? ' (owner — locked)' : ' (only an admin can change roles)'}
             </div>
           )}
-          <div><label className="block text-xs text-slate-400 mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
+          <div><label className="block text-xs text-muted mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
           <div className="flex items-center gap-2">
-            <button onClick={save} className="text-xs bg-green-600 hover:bg-green-500 text-white rounded px-3 py-1.5">Save</button>
-            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setRole(user.role); }} className="text-xs text-slate-400 hover:text-white px-2">Cancel</button>
+            <button onClick={save} className="text-xs bg-ok hover:bg-ok text-white rounded px-3 py-1.5">Save</button>
+            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setRole(user.role); }} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
           </div>
         </div>
       )}
-      {err && <div className="text-red-400 text-xs mt-2">{err}</div>}
+      {err && <div className="text-danger text-xs mt-2">{err}</div>}
     </div>
   );
 }
@@ -191,7 +191,7 @@ export default function UsersSettings({ users, sites, selfId, isAdmin, isManager
   return (
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Users - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">
+      <p className="text-muted mb-6">
         {isAdmin
           ? 'Manage your users, their role (Admin / Site manager / Standard), and which location(s) each is assigned to.'
           : 'Manage the standard users at your location(s) and which location(s) each is assigned to. Only an admin can grant the site-manager or admin role.'}
@@ -200,7 +200,7 @@ export default function UsersSettings({ users, sites, selfId, isAdmin, isManager
       {(isAdmin || isManager) && <AddUser sites={sites} onChanged={refresh} />}
 
       {users.length === 0 ? (
-        <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">No users.</div>
+        <div className="bg-surface border border-line rounded-xl p-8 text-center text-muted">No users.</div>
       ) : (
         users.map((u) => <UserCard key={u.id} user={u} sites={sites} selfId={selfId} isAdmin={isAdmin} isManager={isManager} onChanged={refresh} />)
       )}

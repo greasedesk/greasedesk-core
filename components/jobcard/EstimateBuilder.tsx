@@ -30,8 +30,8 @@ type Props = {
   initialLines: EstimateLine[];
 };
 
-const inputCls = 'w-full p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
-const labelCls = 'block text-xs text-slate-400 mb-1';
+const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+const labelCls = 'block text-xs text-muted mb-1';
 
 const blank = (item_type: QuoteItemType): EstimateLine => ({ item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true });
 
@@ -88,7 +88,7 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
   const parts = withIdx.filter((x) => x.l.item_type !== 'labour');
 
   const LineCard = ({ l, idx, kind }: { l: EstimateLine; idx: number; kind: 'labour' | 'part' }) => (
-    <div className="bg-slate-900/40 border border-slate-700 rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
+    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
       <div className="sm:flex-1">
         <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
         <input className={inputCls} placeholder={t('estimate.descriptionPlaceholder')} value={l.description}
@@ -109,63 +109,63 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={l.unit_cost}
           disabled={!canEdit} onChange={(e) => update(idx, { unit_cost: e.target.value })} />
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-300 sm:w-16 py-2">
+      <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
         <input type="checkbox" className="w-5 h-5" checked={l.vatable} disabled={!canEdit}
           onChange={(e) => update(idx, { vatable: e.target.checked })} />
         {t('estimate.vat')}
       </label>
       <div className="sm:w-24 text-right">
         <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
-        <div className="text-white font-medium tabular-nums py-2">{fmt(totals.lines[idx]?.line_total_pennies ?? 0)}</div>
+        <div className="text-ink font-medium tabular-nums py-2">{fmt(totals.lines[idx]?.line_total_pennies ?? 0)}</div>
       </div>
       {canEdit && (
         <button onClick={() => remove(idx)} aria-label={t('estimate.remove')}
-          className="text-red-400 hover:text-red-300 text-sm px-2 py-2 self-end">✕</button>
+          className="text-danger hover:text-danger text-sm px-2 py-2 self-end">✕</button>
       )}
     </div>
   );
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 mt-6">
-      <h2 className="text-lg font-semibold text-white mb-1">{t('estimate.title')}</h2>
-      {!canEdit && <p className="text-amber-300 text-sm mb-3">{t('estimate.readOnly')}</p>}
-      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>{msg.text}</div>}
+    <div className="bg-surface border border-line rounded-xl p-5 mt-6">
+      <h2 className="text-lg font-semibold text-ink mb-1">{t('estimate.title')}</h2>
+      {!canEdit && <p className="text-warn text-sm mb-3">{t('estimate.readOnly')}</p>}
+      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
       {/* Labour */}
-      <h3 className="text-sm font-semibold text-slate-200 mt-2 mb-2">{t('estimate.labour')}</h3>
-      {labour.length === 0 && <p className="text-slate-500 text-sm mb-2">{t('estimate.emptyLabour')}</p>}
+      <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
+      {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
       {labour.map(({ l, idx }) => <LineCard key={idx} l={l} idx={idx} kind="labour" />)}
-      {canEdit && <button onClick={() => add('labour')} className="text-xs text-blue-400 hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
+      {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
 
       {/* Parts */}
-      <h3 className="text-sm font-semibold text-slate-200 mt-4 mb-2">{t('estimate.parts')}</h3>
-      {parts.length === 0 && <p className="text-slate-500 text-sm mb-2">{t('estimate.emptyParts')}</p>}
+      <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
+      {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
       {parts.map(({ l, idx }) => <LineCard key={idx} l={l} idx={idx} kind="part" />)}
       {canEdit && (
         <div className="mb-4">
-          <button onClick={() => add('part')} className="text-xs text-blue-400 hover:underline">+ {t('estimate.addParts')}</button>
-          <p className="text-xs text-slate-500 mt-1">{t('estimate.discountHint')}</p>
+          <button onClick={() => add('part')} className="text-xs text-accent hover:underline">+ {t('estimate.addParts')}</button>
+          <p className="text-xs text-muted mt-1">{t('estimate.discountHint')}</p>
         </div>
       )}
 
       {/* VAT rate + summary */}
-      <div className="border-t border-slate-700 mt-4 pt-4 flex flex-col sm:flex-row sm:justify-between gap-4">
+      <div className="border-t border-line mt-4 pt-4 flex flex-col sm:flex-row sm:justify-between gap-4">
         <div className="sm:w-40">
           <label className={labelCls}>{t('estimate.vatRate')}</label>
           <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" max="100" value={vatRate}
             disabled={!canEdit} onChange={(e) => setVatRate(e.target.value)} />
         </div>
         <div className="text-sm space-y-1 sm:w-64">
-          <div className="flex justify-between"><span className="text-slate-400">{t('estimate.summaryLabour')}</span><span className="text-slate-100 tabular-nums">{fmt(totals.labour_pennies)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">{t('estimate.summaryParts')}</span><span className="text-slate-100 tabular-nums">{fmt(totals.parts_pennies)}</span></div>
-          <div className="flex justify-between"><span className="text-slate-400">{t('estimate.summaryVat')}</span><span className="text-slate-100 tabular-nums">{fmt(totals.vat_pennies)}</span></div>
-          <div className="flex justify-between text-base font-semibold border-t border-slate-700 pt-1"><span className="text-white">{t('estimate.summaryTotal')}</span><span className="text-white tabular-nums">{fmt(totals.total_pennies)}</span></div>
+          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryLabour')}</span><span className="text-ink tabular-nums">{fmt(totals.labour_pennies)}</span></div>
+          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryParts')}</span><span className="text-ink tabular-nums">{fmt(totals.parts_pennies)}</span></div>
+          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryVat')}</span><span className="text-ink tabular-nums">{fmt(totals.vat_pennies)}</span></div>
+          <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('estimate.summaryTotal')}</span><span className="text-ink tabular-nums">{fmt(totals.total_pennies)}</span></div>
         </div>
       </div>
 
       {canEdit && (
         <div className="mt-4">
-          <button onClick={save} disabled={busy} className="bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 w-full sm:w-auto">
+          <button onClick={save} disabled={busy} className="bg-ok hover:bg-ok text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 w-full sm:w-auto">
             {busy ? t('estimate.saving') : t('estimate.save')}
           </button>
         </div>

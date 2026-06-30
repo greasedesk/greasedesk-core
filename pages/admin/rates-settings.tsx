@@ -34,8 +34,8 @@ const TIMEZONES = [
   { value: 'Europe/Paris', label: 'Paris (CET)' },
 ];
 
-const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500 transition';
-const labelClass = 'block text-sm font-medium text-slate-300 mb-1 mt-3';
+const inputClass = 'w-full p-3 bg-surface border border-line rounded-lg text-ink focus:ring-accent focus:border-accent transition';
+const labelClass = 'block text-sm font-medium text-muted mb-1 mt-3';
 
 export default function AdminRatesSettingsPage({ initial }: PageProps) {
   const [data, setData] = useState<SiteRates>(initial);
@@ -82,22 +82,22 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
 
       <div className="max-w-3xl">
         <h1 className="text-2xl font-bold mb-2">Rates & Regional Settings</h1>
-        <p className="text-slate-400 mb-6">Modify default VAT, labour rates, and regional settings for your current site.</p>
+        <p className="text-muted mb-6">Modify default VAT, labour rates, and regional settings for your current site.</p>
 
         {message.text && (
           <div
             className={`p-3 rounded-lg mb-4 text-sm ${
-              message.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'
+              message.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'
             }`}
           >
             {message.text}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="bg-slate-800 p-6 rounded-xl shadow-lg border border-slate-700">
-          
+        <form onSubmit={handleSubmit} className="bg-surface p-6 rounded-xl shadow-lg border border-line">
+
           <h2 className="text-xl font-semibold mt-4 mb-2">Regional Settings</h2>
-          <hr className="border-slate-700 mb-4" />
+          <hr className="border-line mb-4" />
           <label htmlFor="currencyCode" className={labelClass}>Primary Currency Code (e.g., GBP, EUR)</label>
           <input
             id="currencyCode"
@@ -122,7 +122,7 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
           </select>
 
           <h2 className="text-xl font-semibold mt-8 mb-2">Default Financial Rates</h2>
-          <hr className="border-slate-700 mb-4" />
+          <hr className="border-line mb-4" />
 
           <label htmlFor="defaultVatRate" className={labelClass}>Default VAT Rate (%)</label>
           <input
@@ -151,7 +151,7 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
           <button
             type="submit"
             disabled={isSaving}
-            className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition disabled:opacity-50 mt-8"
+            className="w-full py-3 bg-ok hover:bg-ok text-white font-semibold rounded-lg transition disabled:opacity-50 mt-8"
           >
             {isSaving ? 'Saving Changes...' : 'Save Settings'}
           </button>

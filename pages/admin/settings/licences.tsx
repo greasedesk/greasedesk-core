@@ -21,9 +21,9 @@ type PageProps = {
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex justify-between py-2 border-b border-slate-700">
-      <span className="text-slate-400">{label}</span>
-      <span className="text-slate-100 font-medium">{value ?? '—'}</span>
+    <div className="flex justify-between py-2 border-b border-line">
+      <span className="text-muted">{label}</span>
+      <span className="text-ink font-medium">{value ?? '—'}</span>
     </div>
   );
 }
@@ -32,9 +32,9 @@ export default function LicencesSettings({ groupName, plan, status, includedSite
   return (
     <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Licences & Subscriptions - GreaseDesk</title></Head>
-      <p className="text-slate-400 mb-6">Your plan and billable units. Billing is driven by the number of locations. Management is a later module.</p>
+      <p className="text-muted mb-6">Your plan and billable units. Billing is driven by the number of locations. Management is a later module.</p>
 
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-xl">
+      <div className="bg-surface border border-line rounded-xl p-6 max-w-xl">
         <Row label="Account" value={groupName} />
         <Row label="Plan" value={plan} />
         <Row label="Status" value={status} />

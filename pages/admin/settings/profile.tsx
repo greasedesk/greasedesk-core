@@ -34,8 +34,8 @@ type PageProps = {
   account: Account | null; // self view only
 };
 
-const inputClass = 'w-full p-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:ring-blue-500 focus:border-blue-500';
-const labelClass = 'block text-xs text-slate-400 mb-1';
+const inputClass = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+const labelClass = 'block text-xs text-muted mb-1';
 
 async function post(url: string, method: string, body: any): Promise<string | null> {
   try {
@@ -49,12 +49,12 @@ async function post(url: string, method: string, body: any): Promise<string | nu
 function AccountRef({ account }: { account: Account }) {
   const ends = account.trialEndsAt ? new Date(account.trialEndsAt).toLocaleDateString('en-GB') : '—';
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mb-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Account</h2>
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-ink mb-4">Account</h2>
       <div className="space-y-2 text-sm">
-        <div><span className="text-slate-400">Reference: </span><span className="text-slate-100 font-mono">{account.ref}</span> <span className="text-slate-500 text-xs">(permanent)</span></div>
-        <div><span className="text-slate-400">Status: </span><span className="text-slate-100 capitalize">{account.status}</span></div>
-        <div><span className="text-slate-400">Trial ends: </span><span className="text-slate-100">{ends}</span></div>
+        <div><span className="text-muted">Reference: </span><span className="text-ink font-mono">{account.ref}</span> <span className="text-muted text-xs">(permanent)</span></div>
+        <div><span className="text-muted">Status: </span><span className="text-ink capitalize">{account.status}</span></div>
+        <div><span className="text-muted">Trial ends: </span><span className="text-ink">{ends}</span></div>
       </div>
     </div>
   );
@@ -72,14 +72,14 @@ function ChangePassword() {
     setCur(''); setNw(''); setCf(''); setMsg({ text: 'Password changed.', type: 'success' });
   }
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mb-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Change password</h2>
-      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>{msg.text}</div>}
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-ink mb-4">Change password</h2>
+      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>{msg.text}</div>}
       <form onSubmit={submit} className="space-y-3">
         <div><label className={labelClass}>Current password</label><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} required className={inputClass} /></div>
         <div><label className={labelClass}>New password (min 8 characters)</label><input type="password" value={nw} onChange={(e) => setNw(e.target.value)} required className={inputClass} /></div>
         <div><label className={labelClass}>Confirm new password</label><input type="password" value={cf} onChange={(e) => setCf(e.target.value)} required className={inputClass} /></div>
-        <button type="submit" disabled={busy} className="bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Change password'}</button>
+        <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Change password'}</button>
       </form>
     </div>
   );
@@ -101,26 +101,26 @@ function CompanyDetails({ company, isAdmin }: { company: Company; isAdmin: boole
   }
   if (!isAdmin) {
     return (
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mb-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Company</h2>
+      <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+        <h2 className="text-lg font-semibold text-ink mb-4">Company</h2>
         <div className="space-y-2 text-sm">
-          <div><span className="text-slate-400">Name: </span><span className="text-slate-100">{company.group_name}</span></div>
-          <div><span className="text-slate-400">Company number: </span><span className="text-slate-100">{company.company_number || '—'}</span></div>
-          <div><span className="text-slate-400">VAT number: </span><span className="text-slate-100">{company.vat_number || '—'}</span></div>
+          <div><span className="text-muted">Name: </span><span className="text-ink">{company.group_name}</span></div>
+          <div><span className="text-muted">Company number: </span><span className="text-ink">{company.company_number || '—'}</span></div>
+          <div><span className="text-muted">VAT number: </span><span className="text-ink">{company.vat_number || '—'}</span></div>
         </div>
-        <p className="text-xs text-slate-500 mt-3">Only an admin can edit company details.</p>
+        <p className="text-xs text-muted mt-3">Only an admin can edit company details.</p>
       </div>
     );
   }
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-md mb-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Company details</h2>
-      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>{msg.text}</div>}
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-ink mb-4">Company details</h2>
+      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>{msg.text}</div>}
       <form onSubmit={save} className="space-y-3">
         <div><label className={labelClass}>Company name *</label><input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} /></div>
         <div><label className={labelClass}>Company number</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} /></div>
         <div><label className={labelClass}>VAT number</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
-        <button type="submit" disabled={busy} className="bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save company details'}</button>
+        <button type="submit" disabled={busy} className="bg-ok hover:bg-ok text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save company details'}</button>
       </form>
     </div>
   );
@@ -156,13 +156,13 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
   }
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-2xl">
-      <div className="flex flex-wrap gap-1 border-b border-slate-700 mb-5">
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-2xl">
+      <div className="flex flex-wrap gap-1 border-b border-line mb-5">
         {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm rounded-t-lg ${tab === t ? 'bg-slate-700 text-white border-b-2 border-blue-500 font-semibold' : 'text-slate-400 hover:text-white'}`}>{t}</button>
+          <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm rounded-t-lg ${tab === t ? 'bg-surface-muted text-ink border-b-2 border-accent font-semibold' : 'text-muted hover:text-ink'}`}>{t}</button>
         ))}
       </div>
-      {msg && <div className={`p-2 rounded mb-4 text-sm ${msg.type === 'success' ? 'bg-green-700 text-green-100' : 'bg-red-700 text-red-100'}`}>{msg.text}</div>}
+      {msg && <div className={`p-2 rounded mb-4 text-sm ${msg.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>{msg.text}</div>}
 
       {tab === 'Overview' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -198,12 +198,12 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
       )}
 
       {tab === 'Leave & Absence' && (
-        <div className="text-slate-400 text-sm py-6 text-center">Leave &amp; absence tracking — coming soon.</div>
+        <div className="text-muted text-sm py-6 text-center">Leave &amp; absence tracking — coming soon.</div>
       )}
 
       {tab !== 'Leave & Absence' && (
         <div className="mt-5">
-          <button onClick={save} disabled={busy} className="bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={busy} className="bg-ok hover:bg-ok text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
         </div>
       )}
     </div>
@@ -215,9 +215,9 @@ export default function ProfileSettings({ email, isSelf, canSeeEmergency, isAdmi
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Profile - GreaseDesk</title></Head>
       {isSelf ? (
-        <p className="text-slate-400 mb-6">Signed in as <strong>{email}</strong>{account ? ` · ${account.ref}` : ''}</p>
+        <p className="text-muted mb-6">Signed in as <strong>{email}</strong>{account ? ` · ${account.ref}` : ''}</p>
       ) : (
-        <p className="text-slate-400 mb-6">Editing <strong>{profile.name || profile.email}</strong> (admin)</p>
+        <p className="text-muted mb-6">Editing <strong>{profile.name || profile.email}</strong> (admin)</p>
       )}
 
       {isSelf && account && <AccountRef account={account} />}

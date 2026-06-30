@@ -47,8 +47,8 @@ type PageProps = {
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-xs uppercase text-slate-400 mb-1">{label}</div>
-      <div className="text-slate-100">{value || '—'}</div>
+      <div className="text-xs uppercase text-muted mb-1">{label}</div>
+      <div className="text-ink">{value || '—'}</div>
     </div>
   );
 }
@@ -62,28 +62,28 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, 
 
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-white">{card.registration}</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-3xl font-bold text-ink">{card.registration}</h1>
+          <p className="text-muted text-sm mt-1">
             Created {new Date(card.createdAt).toLocaleString('en-GB')} · Status:{' '}
             <span className="capitalize">{card.status}</span>
           </p>
         </div>
-        <Link href="/admin/jobcards" className="text-sm text-slate-400 hover:text-white">
+        <Link href="/admin/jobcards" className="text-sm text-muted hover:text-ink">
           ← Back to list
         </Link>
       </div>
 
       {/* Four-stage status */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-5">
-        <h2 className="text-lg font-semibold text-white mb-3">Status (four stages)</h2>
+      <div className="bg-surface border border-line rounded-xl p-5 mb-5">
+        <h2 className="text-lg font-semibold text-ink mb-3">Status (four stages)</h2>
         <div className="flex flex-wrap gap-2">
           {card.stages.map((s) => (
             <span
               key={s.label}
               className={`text-sm px-3 py-1 rounded-full border ${
                 s.done
-                  ? 'bg-green-800 text-green-100 border-green-600'
-                  : 'bg-slate-700 text-slate-300 border-slate-600'
+                  ? 'bg-ok-soft text-ok border-line'
+                  : 'bg-surface-muted text-muted border-line'
               }`}
             >
               {s.label}: {s.done ? 'Done' : 'Pending'}
@@ -93,8 +93,8 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, 
       </div>
 
       {/* Vehicle + customer */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-5">
-        <h2 className="text-lg font-semibold text-white mb-4">Vehicle &amp; Customer</h2>
+      <div className="bg-surface border border-line rounded-xl p-5 mb-5">
+        <h2 className="text-lg font-semibold text-ink mb-4">Vehicle &amp; Customer</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Field label="Registration" value={card.registration} />
           <Field label="VIN" value={card.vin} />
@@ -106,20 +106,20 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, 
       </div>
 
       {/* Flags */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
-        <h2 className="text-lg font-semibold text-white mb-3">Flags</h2>
+      <div className="bg-surface border border-line rounded-xl p-5">
+        <h2 className="text-lg font-semibold text-ink mb-3">Flags</h2>
         {card.flags.some((f) => f.on) ? (
           <div className="flex flex-wrap gap-2">
             {card.flags
               .filter((f) => f.on)
               .map((f) => (
-                <span key={f.label} className="text-sm px-3 py-1 rounded-lg bg-blue-600 text-white border border-blue-400">
+                <span key={f.label} className="text-sm px-3 py-1 rounded-lg bg-accent text-white border border-accent">
                   {f.label}
                 </span>
               ))}
           </div>
         ) : (
-          <p className="text-slate-400 text-sm">No flags set.</p>
+          <p className="text-muted text-sm">No flags set.</p>
         )}
       </div>
 

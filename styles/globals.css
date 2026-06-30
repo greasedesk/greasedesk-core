@@ -1,14 +1,58 @@
 /**
  * File: styles/globals.css
- * Last edited: 2025-10-27 21:25 Europe/London
+ * Centralised theme tokens (CSS variables) — colours defined ONCE here, referenced via the
+ * semantic Tailwind names in tailwind.config.js (bg-surface, text-ink, bg-accent, …). A second
+ * theme later = override these same variables under :root[data-theme="..."]. Never hardcode hex
+ * or raw slate/blue classes in components.
  */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Dark navy rail (brand-derived) */
+  --sidebar-bg: #0B1E3B;
+  --sidebar-fg: #C7D2E1;
+  --sidebar-fg-active: #FFFFFF;
+  --sidebar-muted: #7C8AA3;
+  --sidebar-border: #1C3257;
+
+  /* Light workspace */
+  --content-bg: #F4F6FA;
+  --surface: #FFFFFF;
+  --surface-muted: #EDF1F7;
+  --border: #DCE3ED;
+  --text: #0F1E33;
+  --text-muted: #5A6A82;
+
+  /* Brand accent (blue) */
+  --accent: #2563EB;
+  --accent-hover: #1D4ED8;
+  --accent-soft: #E8F0FE;
+
+  /* Status (on light) */
+  --ok: #15803D;        --ok-soft: #E7F4EC;
+  --warn: #B45309;      --warn-soft: #FBF0DD;
+  --danger: #B91C1C;    --danger-soft: #FBEAEA;
+}
+
+/* Scaffold for a future all-dark theme (not wired to a selector yet — proves the token swap). */
+:root[data-theme="dark"] {
+  --content-bg: #0F172A;
+  --surface: #1E293B;
+  --surface-muted: #243244;
+  --border: #334155;
+  --text: #F1F5F9;
+  --text-muted: #94A3B8;
+  --accent-soft: #1E3A5F;
+  --ok-soft: #0F2E1C;
+  --warn-soft: #3A2A0C;
+  --danger-soft: #3A1414;
+}
+
 html,
 body {
-  @apply bg-slate-900 text-slate-100;
+  @apply bg-content text-ink;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", Roboto,
     "Helvetica Neue", Arial, sans-serif;
 }
