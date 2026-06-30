@@ -33,9 +33,17 @@ export async function requireAdminApi(req: NextApiRequest, res: NextApiResponse)
   return vis;
 }
 
-// ---- graded (site-manager) authority -------------------------------------------------
-// "Can this user manage THIS site?" — true for ADMIN/owner on any of their group's sites,
-// true for SITE_MANAGER on their assigned sites, false for STANDARD. THE one place this is decided.
+// ---- site authority chokepoints ------------------------------------------------------
+// OPERATIONAL — "can this user TOUCH this site at all?" — true for any role (incl. STANDARD
+// mechanics) assigned to the site, plus site_manager/admin. Broader than canManageSite.
+// Use for operational job-card actions (stage toggles, starting work).
+export function canAccessSite(vis: Visibility, siteId: string | null | undefined): boolean {
+  if (!siteId) return false;
+  return vis.siteIds.includes(siteId);
+}
+
+// COMMERCIAL — "can this user MANAGE this site?" — ADMIN/owner on any group site, SITE_MANAGER
+// on their assigned sites, NEVER STANDARD. Use for pricing / money / lifecycle decisions.
 export function canManageSite(vis: Visibility, siteId: string | null | undefined): boolean {
   if (!siteId) return false;
   return vis.role !== 'STANDARD' && vis.siteIds.includes(siteId);

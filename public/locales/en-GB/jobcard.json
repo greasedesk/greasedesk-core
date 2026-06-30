@@ -30,5 +30,41 @@
     "emptyParts": "No parts lines yet.",
     "discountHint": "Tip: enter a negative unit price for a discount line."
   },
-  "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc" }
+  "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc" },
+  "status": {
+    "label": "Status",
+    "draft": "Draft",
+    "quoted": "Quoted",
+    "accepted": "Accepted",
+    "declined": "Declined",
+    "in_progress": "In progress",
+    "invoiced": "Invoiced",
+    "paid": "Paid",
+    "done": "Done",
+    "cancelled": "Cancelled"
+  },
+  "action": {
+    "quoted": "Mark as quoted",
+    "accepted": "Mark accepted",
+    "declined": "Mark declined",
+    "in_progress": "Start work",
+    "invoiced": "Mark invoiced",
+    "paid": "Mark paid",
+    "done": "Mark done",
+    "cancelled": "Cancel job",
+    "draft": "Reopen",
+    "working": "Working…",
+    "error": "Could not update the status."
+  },
+  "stage": {
+    "title": "Stages",
+    "details": "Job card",
+    "intake": "Intake photos",
+    "injob": "In-job",
+    "complete": "Complete photos",
+    "done": "Done",
+    "pending": "Pending",
+    "hint": "Tick each stage as it’s completed. All four are required before invoicing.",
+    "error": "Could not update the stage."
+  }
 }

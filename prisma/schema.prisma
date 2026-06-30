@@ -31,6 +31,20 @@ enum UserRole {
   STANDARD
 }
 
+// Job card lifecycle — stable lowercase keys; translated for display (never shown raw).
+// Transitions + per-transition authority live in lib/jobcard-status.ts (the one place).
+enum JobCardStatus {
+  draft
+  quoted
+  accepted
+  declined
+  in_progress
+  invoiced
+  paid
+  done
+  cancelled
+}
+
 enum TenantStatus {
   trial
   active
@@ -428,7 +442,7 @@ model JobCard {
   profit_centre_id       String?   // reporting tag (optional); operational link is site_id (+ resource, later)
   customer_id            String
   vehicle_id             String
-  status                 String    @default("open")
+  status                 JobCardStatus @default(draft)
   mechanic_assigned_id   String?
   odometer_in            Int?
   odometer_out           Int?

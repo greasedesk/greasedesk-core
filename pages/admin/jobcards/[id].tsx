@@ -13,16 +13,17 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
 import { getVisibility } from '@/lib/site-visibility';
-import { canManageSite } from '@/lib/admin-guard';
+import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import EstimateBuilder, { EstimateLine } from '@/components/jobcard/EstimateBuilder';
+import JobCardStatus from '@/components/jobcard/JobCardStatus';
+import { JobStatus, StageKey } from '@/lib/jobcard-status';
 
-type Stage = { label: string; done: boolean };
 type Flag = { label: string; on: boolean };
 
 type CardProps = {
   id: string;
-  status: string;
+  status: JobStatus;
   createdAt: string;
   registration: string;
   vin: string | null;
@@ -30,7 +31,6 @@ type CardProps = {
   customerName: string;
   phone: string | null;
   email: string | null;
-  stages: Stage[];
   flags: Flag[];
 };
 
@@ -38,10 +38,13 @@ type PageProps = {
   card: CardProps;
   jobCardId: string;
   canEdit: boolean;
+  canOperate: boolean;
   currency: string;
   locale: string;
   vatRate: number;
   lines: EstimateLine[];
+  stages: Record<StageKey, boolean>;
+  hasEstimate: boolean;
 };
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -53,7 +56,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, locale, vatRate, lines }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate, currency, locale, vatRate, lines, stages, hasEstimate }: PageProps) {
   return (
     <AdminLayout>
       <Head>
@@ -63,34 +66,22 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-ink">{card.registration}</h1>
-          <p className="text-muted text-sm mt-1">
-            Created {new Date(card.createdAt).toLocaleString('en-GB')} · Status:{' '}
-            <span className="capitalize">{card.status}</span>
-          </p>
+          <p className="text-muted text-sm mt-1">Created {new Date(card.createdAt).toLocaleString('en-GB')}</p>
         </div>
         <Link href="/admin/jobcards" className="text-sm text-muted hover:text-ink">
           ← Back to list
         </Link>
       </div>
 
-      {/* Four-stage status */}
-      <div className="bg-surface border border-line rounded-xl p-5 mb-5">
-        <h2 className="text-lg font-semibold text-ink mb-3">Status (four stages)</h2>
-        <div className="flex flex-wrap gap-2">
-          {card.stages.map((s) => (
-            <span
-              key={s.label}
-              className={`text-sm px-3 py-1 rounded-full border ${
-                s.done
-                  ? 'bg-ok-soft text-ok border-line'
-                  : 'bg-surface-muted text-muted border-line'
-              }`}
-            >
-              {s.label}: {s.done ? 'Done' : 'Pending'}
-            </span>
-          ))}
-        </div>
-      </div>
+      {/* Lifecycle status + the four operational stage toggles */}
+      <JobCardStatus
+        jobCardId={jobCardId}
+        status={card.status}
+        stages={stages}
+        hasEstimate={hasEstimate}
+        canManage={canEdit}
+        canOperate={canOperate}
+      />
 
       {/* Vehicle + customer */}
       <div className="bg-surface border border-line rounded-xl p-5 mb-5">
@@ -161,7 +152,8 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
 
   // Money formats against the card's site; editing pricing requires site authority (else view-only).
   const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null;
-  const canEdit = canManageSite(vis, row.site_id);
+  const canEdit = canManageSite(vis, row.site_id);     // commercial (pricing/lifecycle)
+  const canOperate = canAccessSite(vis, row.site_id);  // operational (stage toggles, start work)
   const num = (d: any) => (d == null ? 0 : Number(d));
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
@@ -182,12 +174,6 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     customerName: row.customer?.name ?? '—',
     phone: row.customer?.phone ?? null,
     email: row.customer?.email ?? null,
-    stages: [
-      { label: 'Job Card', done: row.stage_details_done },
-      { label: 'Intake Photos', done: row.stage_intake_done },
-      { label: 'In-Job', done: row.stage_injob_done },
-      { label: 'Complete Photos', done: row.stage_complete_done },
-    ],
     flags: [
       { label: 'Urgent / Priority', on: row.flag_urgent },
       { label: 'Sales Car', on: row.flag_sales_car },
@@ -202,10 +188,18 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       card,
       jobCardId: row.id,
       canEdit,
+      canOperate,
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
       vatRate: num(row.vat_rate) || 20,
       lines,
+      stages: {
+        details: !!row.stage_details_done,
+        intake: !!row.stage_intake_done,
+        injob: !!row.stage_injob_done,
+        complete: !!row.stage_complete_done,
+      },
+      hasEstimate: (row.items as any[]).length > 0,
     },
   };
 });
