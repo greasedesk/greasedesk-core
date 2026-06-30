@@ -57,8 +57,9 @@ and the expanded `Booking` (start/end time, service/resource). Money is `Decimal
 ### Conventions to enforce
 - Standardise auth on `lib/auth-context.ts` (`requireAuthContext`). Remove the parallel inline
   `getServerSession` pattern (e.g. in `bookings.ts`).
-- There is **no permission enforcement** yet. `roles.permissions` (JSON) exists but nothing reads
-  it. Implement a single `can(user, action, siteId)` helper and route all checks through it.
+- Permission enforcement IS built: route through the chokepoints in "Engineering Disciplines"
+  (`getVisibility`, `canManageSite`, `requireAdminPage/Api`). The richer two-axis `can()` (below)
+  is the future target; the legacy `roles.permissions` JSON is still unused.
 - Every query and route must be tenant-scoped by `group_id` (and `site_id` where relevant).
   Treat a missing scope as a bug.
 
@@ -66,6 +67,63 @@ and the expanded `Booking` (start/end time, service/resource). Money is `Decimal
 The old `env_file.txt` held a live Neon credential in a public repo. That credential is now dead
 (its database no longer exists) and the file has been removed; `.gitignore` blocks `env_file*.txt`.
 Going forward: secrets live in `.env` (gitignored) and the Vercel dashboard only — never committed.
+
+
+## Engineering Disciplines (standing rules — enforce on every slice)
+
+### i18n (mandatory for ALL new UI)
+- All visible text via `t('key')` from `public/locales/<locale>/<ns>.json`. ZERO inline
+  English in components — finished code has no user-facing English outside locale files.
+- A whole sentence is ONE key with `{{placeholders}}` — never concatenate translated fragments.
+- Pluralisation via i18next plural keys (`_one`/`_other`), never `count === 1` logic.
+- Money ONLY via `formatMoney` (lib/format-money.ts) — never a hardcoded `£` or hand-formatting.
+- Dates/numbers via locale-aware `Intl` helpers, never hardcoded formats.
+- Enums/statuses/item-types are stored as stable lowercase keys (`in_progress`, `labour`) and
+  translated for display via `t()`. NEVER render an English string straight from the DB.
+- Locale/currency follow the tenant via `resolveTenantProfile`. Setup: next-i18next **v15**
+  (NOT v16 — App-Router-first); `common` namespace loads app-wide via `_app`.
+
+### Mobile-first (the product ships as a native store app)
+- GreaseDesk will ship as a native App Store / Play Store app delivered via a Capacitor-style
+  WRAPPER around this one Next.js codebase — NOT a separate native rebuild. One codebase,
+  native shell, both stores.
+- Therefore every new screen MUST be built mobile-responsive and touch-first from line one —
+  finger-friendly targets, layouts that work on a phone viewport. The wrapped app IS these
+  screens; desktop-only screens = rework later.
+- Native features (camera, push) are DESIGNED-FOR now, built in the wrapper slice later.
+  Job-card photo stages assume phone-camera capture, not just file upload.
+
+### Chokepoints — route through the one, never scatter
+Protected/computed surfaces go through the single existing helper; new surfaces EXTEND it,
+they never add parallel role/site/money/country logic:
+- `getVisibility` (lib/site-visibility.ts) — auth scope (group + sites).
+- `canManageSite` (lib/admin-guard.ts) — site-level authority.
+- `requireAdminPage` / `requireAdminApi` (lib/admin-guard.ts) — admin gating (pages + APIs).
+- `formatMoney` (lib/format-money.ts) — money. `resolveTenantProfile` (lib/locale-profiles.ts)
+  — country→locale/profile. Tenant `group_id` resolution — one function (see Tenancy below).
+
+### Roles (the BUILT model — enforced server-side, not just UI)
+- **ADMIN / owner** — all sites, everything. Owner is immutable (cannot be demoted or removed).
+- **SITE_MANAGER** — at ASSIGNED sites only: manage resources + manage/invite STANDARD users.
+  CANNOT grant SITE_MANAGER/ADMIN, create locations, or access Financial/Licences.
+- **STANDARD** — Settings = own Profile only.
+- This is today's concrete implementation; the two-axis `can()` (scope × mode) design below is
+  the richer target it grows into — not a contradiction.
+
+### Schema & migrations
+- Plan first: SHOW the migration SQL and get approval BEFORE running it.
+- Additive / non-destructive — the local `.env` DB IS prod; never destructive against live data.
+- Enum changes: hand-written type-rebuild (CREATE new type → cast → drop → rename), NOT
+  `prisma migrate` auto-gen.
+- Data backfills ship as COMMITTED migrations, never ad-hoc node scripts (those never reach prod).
+
+### Deployment verification (learned the hard way)
+- Some bugs are invisible to ALL local runs (dev AND `npm run start`): Vercel's serverless
+  filesystem is built from `@vercel/nft` traces, not your local disk. next-i18next read locale
+  files from a `process.cwd()` path nft couldn't trace → missing on Vercel → raw keys. Fixed with
+  `experimental.outputFileTracingIncludes: { '/**': ['./public/locales/**'] }`.
+- RULE: i18n/locale loading and ANY runtime file reads must be verified via `.next/server/**/*.nft.json`
+  trace inspection OR a deployed/preview check — never trusted from local runs alone.
 
 
 ## Tenancy, Routing & Future Architecture (settled design decisions)
