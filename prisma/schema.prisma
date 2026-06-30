@@ -436,6 +436,7 @@ model JobCard {
   labour_cost_numeric    Decimal?  @default(0) @db.Decimal(12, 2)
   parts_bill_numeric     Decimal?  @default(0) @db.Decimal(12, 2)
   parts_cost_numeric     Decimal?  @default(0) @db.Decimal(12, 2)
+  vat_rate               Decimal   @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?
   archived_at            DateTime?
   signed_off_by_customer Boolean   @default(false)

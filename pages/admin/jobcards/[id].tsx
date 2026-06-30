@@ -8,12 +8,14 @@
 import React from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
 import { getVisibility } from '@/lib/site-visibility';
+import { canManageSite } from '@/lib/admin-guard';
+import { withI18n } from '@/lib/gssp-i18n';
+import EstimateBuilder, { EstimateLine } from '@/components/jobcard/EstimateBuilder';
 
 type Stage = { label: string; done: boolean };
 type Flag = { label: string; on: boolean };
@@ -32,7 +34,15 @@ type CardProps = {
   flags: Flag[];
 };
 
-type PageProps = { card: CardProps };
+type PageProps = {
+  card: CardProps;
+  jobCardId: string;
+  canEdit: boolean;
+  currency: string;
+  locale: string;
+  vatRate: number;
+  lines: EstimateLine[];
+};
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -43,7 +53,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, currency, locale, vatRate, lines }: PageProps) {
   return (
     <AdminLayout>
       <Head>
@@ -112,11 +122,21 @@ export default function JobCardDetailPage({ card }: PageProps) {
           <p className="text-slate-400 text-sm">No flags set.</p>
         )}
       </div>
+
+      {/* Estimate / quote builder (i18n-native; money via formatMoney) */}
+      <EstimateBuilder
+        jobCardId={jobCardId}
+        canEdit={canEdit}
+        currency={currency}
+        locale={locale}
+        initialVatRate={vatRate}
+        initialLines={lines}
+      />
     </AdminLayout>
   );
 }
 
-export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
+export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
 
@@ -128,15 +148,29 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const vis = await getVisibility(user.id as string);
 
   // Visibility: only resolve a card on a site the caller may access (else 404, no leak).
-  const row = await prisma.jobCard.findFirst({
+  const row = (await prisma.jobCard.findFirst({
     where: { id, site_id: { in: vis.siteIds } },
     include: {
       customer: { select: { name: true, phone: true, email: true } },
       vehicle: { select: { registration: true, vin: true, mileage_at_create: true } },
+      items: { orderBy: { created_at: 'asc' } },
     },
-  });
+  })) as any;
 
   if (!row) return { notFound: true };
+
+  // Money formats against the card's site; editing pricing requires site authority (else view-only).
+  const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null;
+  const canEdit = canManageSite(vis, row.site_id);
+  const num = (d: any) => (d == null ? 0 : Number(d));
+  const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
+    item_type: it.item_type,
+    description: it.description ?? '',
+    qty: String(num(it.qty)),
+    unit_price: String(num(it.unit_price)),
+    unit_cost: num(it.unit_cost) ? String(num(it.unit_cost)) : '',
+    vatable: num(it.vat_rate) > 0,
+  }));
 
   const card: CardProps = {
     id: row.id,
@@ -163,5 +197,15 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     ],
   };
 
-  return { props: { card } };
-};
+  return {
+    props: {
+      card,
+      jobCardId: row.id,
+      canEdit,
+      currency: site?.currency_code ?? 'GBP',
+      locale: site?.locale ?? 'en-GB',
+      vatRate: num(row.vat_rate) || 20,
+      lines,
+    },
+  };
+});
