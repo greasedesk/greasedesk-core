@@ -415,7 +415,8 @@ function EditNoteDialog({ note, resources, onClose, onDone }: {
   const [confirmDel, setConfirmDel] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const fieldBase = 'p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const inputCls = `w-full ${fieldBase}`;
   const labelCls = 'block text-xs text-muted mb-1';
 
   async function save() {
@@ -441,17 +442,22 @@ function EditNoteDialog({ note, resources, onClose, onDone }: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold text-ink mb-4">{t('editNote.title')}</h2>
         {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
         <div className="space-y-3">
           <div><label className={labelCls}>{t('create.noteTitle')}</label><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><label className={labelCls}>{t('create.start')}</label>
-              <div className="flex gap-2"><input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} /><input type="time" className={inputCls} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div>
+          {/* Start/end stacked; date flexes, time is a fixed narrow field — fits inside the box at all widths. */}
+          <div><label className={labelCls}>{t('create.start')}</label>
+            <div className="flex gap-2">
+              <input type="date" className={`${fieldBase} flex-1 min-w-0`} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <input type="time" className={`${fieldBase} w-24 shrink-0`} value={startTime} onChange={(e) => setStartTime(e.target.value)} />
             </div>
-            <div><label className={labelCls}>{t('create.end')}</label>
-              <div className="flex gap-2"><input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} /><input type="time" className={inputCls} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div>
+          </div>
+          <div><label className={labelCls}>{t('create.end')}</label>
+            <div className="flex gap-2">
+              <input type="date" className={`${fieldBase} flex-1 min-w-0`} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <input type="time" className={`${fieldBase} w-24 shrink-0`} value={endTime} onChange={(e) => setEndTime(e.target.value)} />
             </div>
           </div>
           <div><label className={labelCls}>{t('create.lift')}</label>
