@@ -8,14 +8,15 @@ import React, { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { GetServerSideProps } from 'next';
+import { useTranslation } from 'next-i18next';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireSiteManagerPage } from '@/lib/admin-guard';
+import { withI18n } from '@/lib/gssp-i18n';
 
 type Role = 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null };
 type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean };
 
 const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE MANAGER', STANDARD: 'STANDARD' };
@@ -56,6 +57,7 @@ function SiteCheboxes({ sites, selected, onToggle }: { sites: SiteOpt[]; selecte
 }
 
 function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void }) {
+  const { t } = useTranslation('users');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [siteIds, setSiteIds] = useState<string[]>([]);
@@ -90,16 +92,18 @@ function AddUser({ sites, onChanged }: { sites: SiteOpt[]; onChanged: () => void
         <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
           {busy ? 'Adding…' : 'Add user'}
         </button>
-        <span className="text-xs text-warn">The user is created as <strong>pending</strong> — no invite email is sent yet (coming with the auth slice).</span>
+        <span className="text-xs text-muted">{t('inviteInfo')}</span>
       </div>
     </form>
   );
 }
 
 function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user: UserRow; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean; onChanged: () => void }) {
+  const { t } = useTranslation('users');
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name ?? '');
   const [siteIds, setSiteIds] = useState<string[]>(user.siteIds);
+  const [primary, setPrimary] = useState<string>(user.primarySiteId ?? '');
   const [role, setRole] = useState<Role>(user.role);
   const [err, setErr] = useState<string | null>(null);
   const isSelf = selfId === user.id;
@@ -114,6 +118,8 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
   async function save() {
     const body: any = { id: user.id, name, siteIds };
     if (canEditRole) body.role = role;
+    // Primary must be one of the selected sites; else fall back to auto (first assigned).
+    body.primarySiteId = siteIds.includes(primary) ? primary : null;
     const error = await mutate('/api/users', 'PATCH', body);
     if (error) return setErr(error);
     setEditing(false);
@@ -174,9 +180,18 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
             </div>
           )}
           <div><label className="block text-xs text-muted mb-1">Assigned location(s)</label><SiteCheboxes sites={sites} selected={siteIds} onToggle={toggle} /></div>
+          {siteIds.length > 1 && (
+            <div>
+              <label className="block text-xs text-muted mb-1">{t('primary.label')}</label>
+              <select value={siteIds.includes(primary) ? primary : ''} onChange={(e) => setPrimary(e.target.value)} className={inputClass}>
+                <option value="">{t('primary.auto')}</option>
+                {siteIds.map((id) => <option key={id} value={id}>{nameFor(id)}</option>)}
+              </select>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <button onClick={save} className="text-xs bg-ok hover:bg-ok text-white rounded px-3 py-1.5">Save</button>
-            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setRole(user.role); }} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
+            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setPrimary(user.primarySiteId ?? ''); setRole(user.role); }} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
           </div>
         </div>
       )}
@@ -208,7 +223,7 @@ export default function UsersSettings({ users, sites, selfId, isAdmin, isManager
   );
 }
 
-export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
+export const getServerSideProps = withI18n(['users'])(async (ctx) => {
   // ADMIN or SITE_MANAGER only — STANDARD users are redirected (never receive the roster).
   // /api/users also refuses STANDARD on every method. Managers see only STANDARD users at THEIR
   // sites, and only their own sites in the assignment pickers.
@@ -217,7 +232,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const { vis } = gate;
   const isAdmin = vis.isAdmin;
 
-  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; site_assignments: { site_id: string }[] };
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; primary_site_id: string | null; site_assignments: { site_id: string }[] };
   const selfId = vis.userId;
   const userWhere = isAdmin
     ? { group_id: vis.groupId }
@@ -229,7 +244,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     prisma.user.findMany({
       where: userWhere,
       orderBy: { email: 'asc' },
-      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, site_assignments: { select: { site_id: true } } },
+      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, primary_site_id: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
     prisma.site.findMany({ where: siteWhere, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
   ]);
@@ -237,8 +252,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const users: UserRow[] = userRows.map((u: UserDbRow) => ({
     id: u.id, name: u.name, email: u.email, isActive: u.is_active, role: u.role, isOwner: u.is_owner,
     siteIds: u.site_assignments.map((a) => a.site_id),
+    primarySiteId: u.primary_site_id ?? null,
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
 
   return { props: { users, sites, selfId, isAdmin, isManager: vis.role === 'SITE_MANAGER' } };
-};
+});

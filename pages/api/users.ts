@@ -114,11 +114,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, siteIds, role } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string };
+    const { id, name, siteIds, role, primarySiteId } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     const target = await prisma.user.findFirst({
       where: { id, group_id: groupId },
-      select: { id: true, is_owner: true, role: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
+      select: { id: true, is_owner: true, role: true, primary_site_id: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
     });
     if (!target) return res.status(404).json({ message: 'User not found.' });
 
@@ -152,6 +152,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: 'A standard or site-manager user must keep at least one location.' });
     }
 
+    // Primary site (admin-set landing/default) must be one of the user's (effective) assigned sites.
+    const effSites = nextSites ?? target.site_assignments.map((a: { site_id: string }) => a.site_id);
+    if (primarySiteId !== undefined && primarySiteId && !effSites.includes(primarySiteId)) {
+      return res.status(400).json({ message: 'The primary site must be one of the user’s assigned locations.' });
+    }
+
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         if (name !== undefined) {
@@ -172,6 +178,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (validSites.length && current && !validSites.includes(current.site_id ?? '')) {
             await tx.user.update({ where: { id }, data: { site_id: validSites[0] } });
           }
+        }
+        // Primary site: set explicitly (also aligns the home site_id), or clear if a reassignment
+        // left the old primary unassigned.
+        if (primarySiteId !== undefined) {
+          const val = primarySiteId || null;
+          await tx.user.update({ where: { id }, data: { primary_site_id: val, ...(val ? { site_id: val } : {}) } });
+        } else if (siteIds !== undefined && target.primary_site_id && !(nextSites as string[]).includes(target.primary_site_id)) {
+          await tx.user.update({ where: { id }, data: { primary_site_id: null } });
         }
       });
       return res.status(200).json({ message: 'User updated.' });

@@ -272,6 +272,7 @@ model User {
   // Optional at creation time; enforced in app layer when linking staff.
   group_id   String?
   site_id    String?
+  primary_site_id String? // admin-set landing/default site (must be one of the user's assigned sites)
   role_id    String?
   is_active  Boolean  @default(true)
   is_owner   Boolean  @default(false) // immutable: marks the one primary-subscriber per group

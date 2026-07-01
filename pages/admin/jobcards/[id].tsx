@@ -8,6 +8,8 @@
 import React from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useTranslation } from 'next-i18next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
@@ -62,6 +64,13 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate, currency, locale, vatRate, lines, stages, hasEstimate, resources, booking, garageNotes }: PageProps) {
+  const router = useRouter();
+  const { t } = useTranslation('jobcard');
+  // Context-aware back link: return to wherever the card was opened from (diary preserves week/day+date).
+  const q = router.query;
+  const back = q.from === 'diary'
+    ? { href: `/admin/diary?site=${q.site ?? ''}&view=${q.view ?? 'week'}&date=${q.date ?? ''}`, label: t('back.diary') }
+    : { href: '/admin/jobcards', label: t('back.list') };
   return (
     <AdminLayout>
       <Head>
@@ -73,8 +82,8 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate
           <h1 className="text-3xl font-bold text-ink">{card.registration}</h1>
           <p className="text-muted text-sm mt-1">Created {new Date(card.createdAt).toLocaleString('en-GB')}</p>
         </div>
-        <Link href="/admin/jobcards" className="text-sm text-muted hover:text-ink">
-          ← Back to list
+        <Link href={back.href} className="text-sm text-muted hover:text-ink">
+          {back.label}
         </Link>
       </div>
 

@@ -52,7 +52,8 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           name: user.name,
           role: user.role,
-          site_id: user.site_id,
+          // Land on the admin-set primary site; fall back to the user's home site.
+          site_id: user.primary_site_id ?? user.site_id,
           group_id: user.group_id,
         };
       },

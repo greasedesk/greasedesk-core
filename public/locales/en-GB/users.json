@@ -1,0 +1,7 @@
+{
+  "inviteInfo": "Adding a user sends them an invite email to set their password.",
+  "primary": {
+    "label": "Primary site (where they land)",
+    "auto": "First assigned (default)"
+  }
+}

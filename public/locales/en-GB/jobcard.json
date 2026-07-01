@@ -30,6 +30,7 @@
     "emptyParts": "No parts lines yet.",
     "discountHint": "Tip: enter a negative unit price for a discount line."
   },
+  "back": { "diary": "← Back to diary", "list": "← Back to list" },
   "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc" },
   "status": {
     "label": "Status",

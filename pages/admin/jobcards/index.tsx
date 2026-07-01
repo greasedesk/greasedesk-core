@@ -101,7 +101,7 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
             {cards.map((c) => (
               <tr key={c.id} className="border-t border-line hover:bg-surface-muted">
                 <td className="px-4 py-3 font-semibold">
-                  <Link href={`/admin/jobcards/${c.id}`} className="text-accent hover:underline">
+                  <Link href={`/admin/jobcards/${c.id}?from=list`} className="text-accent hover:underline">
                     {c.registration}
                   </Link>
                 </td>

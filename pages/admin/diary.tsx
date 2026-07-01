@@ -76,7 +76,8 @@ export default function DiaryPage(props: PageProps) {
   }
   const minToISO = (date: string, min: number) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}:00.000Z`;
 
-  function openCard(id: string) { router.push(`/admin/jobcards/${id}`); }
+  const cardHref = (id: string) => `/admin/jobcards/${id}?from=diary&site=${siteId}&view=${view}&date=${anchor}`;
+  function openCard(id: string) { router.push(cardHref(id)); }
   function onBlockClick(card: DiaryCard, e: React.MouseEvent) {
     e.stopPropagation();
     const x = e.clientX, y = e.clientY;
@@ -254,7 +255,7 @@ export default function DiaryPage(props: PageProps) {
               <div><span className="text-muted">{t('peek.status')}: </span><span className="text-ink">{t(`status.${peek.card.status}`)}</span></div>
               <div><span className="text-muted">{t('peek.value')}: </span><span className="text-ink font-medium">{formatMoney(peek.card.valuePennies, { currency, locale })}</span></div>
             </div>
-            <Link href={`/admin/jobcards/${peek.card.id}`} className="mt-2 inline-block text-accent hover:underline font-medium">{t('peek.open')} →</Link>
+            <Link href={cardHref(peek.card.id)} className="mt-2 inline-block text-accent hover:underline font-medium">{t('peek.open')} →</Link>
           </div>
         </>
       )}
