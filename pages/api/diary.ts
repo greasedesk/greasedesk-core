@@ -18,6 +18,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
+import { placeJobCard } from '@/lib/diary-booking';
 
 function parseDateTime(s: unknown): Date | null {
   if (typeof s !== 'string' || !s) return null;
@@ -47,40 +48,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // Visibility scope: the card must sit on a site the caller may access.
-        const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { id: true, site_id: true } });
-        if (!card) throw new Error('CARD_NOT_FOUND');
-
         // Scheduling = resource allocation = commercial: manager/admin only (one rule for diary + card).
+        const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { site_id: true } });
+        if (!card) throw new Error('CARD_NOT_FOUND');
         if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
-
-        // The target resource must also be on a site the caller may access.
-        const resource = await tx.resource.findFirst({
-          where: { id: resourceId, site_id: { in: vis.siteIds } },
-          select: { id: true, site_id: true },
-        });
-        if (!resource) throw new Error('RESOURCE_NOT_FOUND');
-        if (resource.site_id !== card.site_id) throw new Error('CROSS_SITE');
-
-        // Interval-overlap guard (half-open): existing.start < new.end AND existing.end > new.start.
-        const clash = await tx.jobCard.findFirst({
-          where: {
-            id: { not: jobCardId },
-            resource_id: resourceId,
-            start_at: { lt: end },
-            end_at: { gt: start },
-          },
-          select: { id: true, vehicle: { select: { registration: true } } },
-        });
-        if (clash) throw new Error(`CLASH:${clash.vehicle?.registration ?? 'another job'}`);
-
-        await tx.jobCard.update({
-          where: { id: jobCardId },
-          data: {
-            resource_id: resourceId, start_at: start, end_at: end,
-            ...(heldOnLift !== undefined ? { held_on_lift: !!heldOnLift } : {}),
-          },
-        });
+        // Shared guard (scope + interval-overlap + update) — the one place placement happens.
+        await placeJobCard(tx, { jobCardId, resourceId, start, end, siteIds: vis.siteIds, heldOnLift });
       });
       return res.status(200).json({ message: 'Job card placed.' });
     } catch (err: any) {

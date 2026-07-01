@@ -17,6 +17,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
+import { canManageSite } from '@/lib/admin-guard';
+import { placeJobCard } from '@/lib/diary-booking';
 
 type CreateJobCardBody = {
   registration: string;
@@ -30,6 +32,12 @@ type CreateJobCardBody = {
   flag_customer_car?: boolean;
   flag_mot?: boolean;
   flag_diag?: boolean;
+  // Optional: create the card already SCHEDULED (from the diary). Requires canManageSite; the
+  // booking runs through the shared guard (double-booking refused).
+  siteId?: string;
+  resourceId?: string;
+  startAt?: string;
+  endAt?: string;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -69,9 +77,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!registration) return res.status(400).json({ message: 'Registration is required.' });
     if (!customerName) return res.status(400).json({ message: 'Customer name is required.' });
 
-    // A user may only create a job card on a site they can access.
-    if (!vis.siteIds.includes(siteId)) {
+    // Target site: an explicit siteId (e.g. from the diary) the caller can access, else the session site.
+    const targetSiteId = body.siteId && vis.siteIds.includes(body.siteId) ? body.siteId : siteId;
+    if (!vis.siteIds.includes(targetSiteId)) {
       return res.status(403).json({ message: 'You are not assigned to this location.' });
+    }
+
+    // Optional scheduling (create + place). Resource allocation → manager/admin only.
+    const scheduling = !!(body.resourceId && body.startAt && body.endAt);
+    let start: Date | null = null, end: Date | null = null;
+    if (scheduling) {
+      if (!canManageSite(vis, targetSiteId)) return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
+      start = new Date(body.startAt as string); end = new Date(body.endAt as string);
+      if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
+        return res.status(400).json({ message: 'Invalid start/end time.' });
+      }
     }
 
     let mileage: number | null = null;
@@ -85,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const card = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Ownership: confirm the site belongs to this group.
         const site = await tx.site.findUnique({
-          where: { id: siteId },
+          where: { id: targetSiteId },
           select: { group_id: true },
         });
         if (!site || site.group_id !== groupId) {
@@ -108,7 +128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const customer = await tx.customer.create({
             data: {
               group_id: groupId,
-              site_id: siteId,
+              site_id: targetSiteId,
               name: customerName,
               phone: body.phone?.trim() || null,
               email: body.email?.trim() || null,
@@ -130,10 +150,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           vehicleId = createdVehicle.id;
         }
 
-        return tx.jobCard.create({
+        const created = await tx.jobCard.create({
           data: {
             group_id: groupId,
-            site_id: siteId,
+            site_id: targetSiteId,
             customer_id: customerId,
             vehicle_id: vehicleId,
             odometer_in: mileage,
@@ -145,13 +165,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
           select: { id: true },
         });
+        // Create + schedule atomically through the shared booking guard (double-booking refused).
+        if (scheduling) {
+          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, end: end as Date, siteIds: vis.siteIds });
+        }
+        return created;
       });
 
-      return res.status(201).json({ id: card.id, message: 'Job card created.' });
+      return res.status(201).json({ id: card.id, message: scheduling ? 'Job card created and scheduled.' : 'Job card created.' });
     } catch (error: any) {
-      if (error?.message === 'FORBIDDEN_SITE') {
-        return res.status(403).json({ message: 'You do not have permission to use this site.' });
-      }
+      const m = error?.message || '';
+      if (m === 'FORBIDDEN_SITE') return res.status(403).json({ message: 'You do not have permission to use this site.' });
+      if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
+      if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
+      if (m.startsWith('CLASH:')) return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
       console.error('Job Card Create Error:', error);
       return res.status(500).json({ message: 'Failed to create job card. Check logs for details.' });
     }

@@ -114,6 +114,7 @@ model Group {
   audit_logs AuditLog[]
   bookings   Booking[]
   job_cards  JobCard[]
+  diary_notes DiaryNote[]
 }
 
 model GroupBilling {
@@ -179,6 +180,7 @@ model Site {
   bookings       Booking[]
   job_cards      JobCard[]
   services       ServiceCatalogue[]
+  diary_notes    DiaryNote[]
 
   @@index([group_id])
 }
@@ -222,6 +224,7 @@ model Resource {
 
   site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
   job_cards JobCard[]
+  diary_notes DiaryNote[]
 
   @@index([site_id])
 }
@@ -532,6 +535,28 @@ model JobCardItem {
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
 
   @@index([job_card_id])
+}
+
+// Lightweight labelled diary entry — NOT a job card (no customer/vehicle/quote). A note may be
+// lift-specific (resource_id set — occupies a lift visually) or day-level (resource_id null —
+// a floating annotation like "Hugh at Drs"). Holidays/leave are a separate HR concern, not notes.
+model DiaryNote {
+  id          String    @id @default(uuid())
+  group_id    String
+  site_id     String
+  resource_id String?
+  title       String
+  start_at    DateTime
+  end_at      DateTime
+  colour      String?
+  created_by  String?
+  created_at  DateTime  @default(now())
+
+  group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site     Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  resource Resource? @relation(fields: [resource_id], references: [id], onDelete: SetNull)
+
+  @@index([site_id, start_at])
 }
 
 model AuditLog {
