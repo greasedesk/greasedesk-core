@@ -18,6 +18,7 @@ import AdminLayout from '@/components/layout/AdminLayout';
 import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
+import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
@@ -523,7 +524,8 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const openHour: number = site.open_hour ?? 8;
   const closeHour: number = site.close_hour ?? 18;
   const weekStart: number = site.week_start ?? 1;
-  const canManage = canManageSite(vis, site.id);
+  const perms = await getTenantPermissions(user.group_id as string);
+  const canManage = canCreateDiaryEntry(vis, site.id, perms); // create gesture + note edit (manager OR STANDARD+toggle)
 
   const view: 'week' | 'day' = ctx.query.view === 'day' ? 'day' : 'week';
   const dateParam = (ctx.query.date as string) || '';

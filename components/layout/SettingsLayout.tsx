@@ -14,6 +14,7 @@ const SUBNAV: Array<{ name: string; href: string; adminOnly?: boolean; managerOk
   { name: 'Locations & Resources', href: '/admin/settings/locations', managerOk: true },
   { name: 'Users', href: '/admin/settings/users', managerOk: true },
   { name: 'Financial', href: '/admin/settings/financial', adminOnly: true },
+  { name: 'Permissions', href: '/admin/settings/permissions', adminOnly: true },
   { name: 'Licences & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
   { name: 'Profile', href: '/admin/settings/profile' },
 ];

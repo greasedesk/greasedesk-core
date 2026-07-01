@@ -101,6 +101,11 @@ model Group {
   status        TenantStatus @default(trial)  // tenant lifecycle (console-managed later)
   trial_ends_at DateTime?                     // set on signup to now + TRIAL_DAYS
 
+  // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
+  // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
+  perm_standard_edit_pricing  Boolean @default(false)
+  perm_standard_diary_entries Boolean @default(false)
+
   billing    GroupBilling?
   features   GroupFeature[]
   sites      Site[]

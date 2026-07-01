@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import AdminLayout from '@/components/layout/AdminLayout';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
+import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { withI18n } from '@/lib/gssp-i18n';
 import EstimateBuilder, { EstimateLine } from '@/components/jobcard/EstimateBuilder';
 import JobCardStatus from '@/components/jobcard/JobCardStatus';
@@ -41,7 +42,8 @@ type CardProps = {
 type PageProps = {
   card: CardProps;
   jobCardId: string;
-  canEdit: boolean;
+  canEdit: boolean;         // commercial: status + booking (canManageSite)
+  canEditPricing: boolean;  // estimate editing (canManageSite OR STANDARD + pricing toggle)
   canOperate: boolean;
   currency: string;
   locale: string;
@@ -63,7 +65,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate, currency, locale, vatRate, lines, stages, hasEstimate, resources, booking, garageNotes }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, lines, stages, hasEstimate, resources, booking, garageNotes }: PageProps) {
   const router = useRouter();
   const { t } = useTranslation('jobcard');
   // Context-aware back link: return to wherever the card was opened from (diary preserves week/day+date).
@@ -138,7 +140,7 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canOperate
       {/* Estimate / quote builder (i18n-native; money via formatMoney) */}
       <EstimateBuilder
         jobCardId={jobCardId}
-        canEdit={canEdit}
+        canEdit={canEditPricing}
         currency={currency}
         locale={locale}
         initialVatRate={vatRate}
@@ -173,8 +175,10 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
 
   // Money formats against the card's site; editing pricing requires site authority (else view-only).
   const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null;
-  const canEdit = canManageSite(vis, row.site_id);     // commercial (pricing/lifecycle/scheduling)
+  const canEdit = canManageSite(vis, row.site_id);     // commercial (status/lifecycle/booking)
   const canOperate = canAccessSite(vis, row.site_id);  // operational (stage toggles, start work, notes)
+  const perms = await getTenantPermissions(user.group_id as string);
+  const canEditPricing = canEditEstimate(vis, row.site_id, perms); // estimate: manager OR STANDARD+toggle
 
   // Lifts/resources on the card's site (for booking) + the current booking from the SAME storage the diary uses.
   const resources = ((await prisma.resource.findMany({
@@ -220,6 +224,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       card,
       jobCardId: row.id,
       canEdit,
+      canEditPricing,
       canOperate,
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',

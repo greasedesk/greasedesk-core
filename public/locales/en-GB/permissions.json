@@ -1,0 +1,18 @@
+{
+  "title": "Permissions",
+  "intro": "The role defaults (Admin / Site manager / Standard) apply as normal. These toggles adjust what standard users (mechanics) may do across the whole business.",
+  "editPricing": {
+    "label": "Mechanics can edit estimates & pricing",
+    "desc": "When on, standard users can edit the estimate/quote on job cards at their location. Off: only managers and admins."
+  },
+  "diaryEntries": {
+    "label": "Mechanics can add diary notes & create entries",
+    "desc": "When on, standard users can add/edit diary notes and create new entries from the diary at their location. Off: only managers and admins."
+  },
+  "on": "On",
+  "off": "Off",
+  "save": "Save permissions",
+  "saving": "Saving…",
+  "saved": "Permissions saved.",
+  "error": "Could not save permissions."
+}

@@ -17,7 +17,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
-import { canManageSite } from '@/lib/admin-guard';
+import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
 
 type CreateJobCardBody = {
@@ -87,7 +87,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const scheduling = !!(body.resourceId && body.startAt && body.endAt);
     let start: Date | null = null, end: Date | null = null;
     if (scheduling) {
-      if (!canManageSite(vis, targetSiteId)) return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
+      const perms = await getTenantPermissions(groupId);
+      if (!canCreateDiaryEntry(vis, targetSiteId, perms)) return res.status(403).json({ message: 'You do not have permission to create a scheduled job.' });
       start = new Date(body.startAt as string); end = new Date(body.endAt as string);
       if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
         return res.status(400).json({ message: 'Invalid start/end time.' });

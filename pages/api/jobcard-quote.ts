@@ -14,7 +14,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, ItemType } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
-import { canManageSite } from '@/lib/admin-guard';
+import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
 const TYPES: ItemType[] = ['labour', 'part', 'misc'];
@@ -41,7 +41,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, group_id: user.group_id }, select: { id: true, site_id: true } });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
-  if (!canManageSite(vis, card.site_id)) {
+  const perms = await getTenantPermissions(user.group_id as string);
+  if (!canEditEstimate(vis, card.site_id, perms)) {
     return res.status(403).json({ message: 'You do not have permission to edit this job card’s estimate.' });
   }
 

@@ -12,7 +12,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
-import { canManageSite } from '@/lib/admin-guard';
+import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { isValidPaletteColour } from '@/lib/diary-colours';
 
 function parseDate(s: unknown): Date | null {
@@ -26,6 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
   const vis = await getVisibility(user.id as string);
+  const perms = await getTenantPermissions(user.group_id as string);
 
   async function resolveNoteSite(noteId: string): Promise<string | null> {
     const n = await prisma.diaryNote.findFirst({ where: { id: noteId, group_id: user.group_id }, select: { site_id: true } });
@@ -43,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!siteId || !title || !`${title}`.trim()) return res.status(400).json({ message: 'A title and location are required.' });
     const site = await prisma.site.findFirst({ where: { id: siteId, group_id: user.group_id }, select: { id: true } });
     if (!site) return res.status(404).json({ message: 'Location not found.' });
-    if (!canManageSite(vis, siteId)) return res.status(403).json({ message: 'Only a manager or admin can add a diary note.' });
+    if (!canCreateDiaryEntry(vis, siteId, perms)) return res.status(403).json({ message: 'You do not have permission to add a diary note.' });
     const start = parseDate(startAt), end = parseDate(endAt);
     if (!start || !end || start >= end) return res.status(400).json({ message: 'Invalid start/end time.' });
     if (colour && !isValidPaletteColour(colour)) return res.status(400).json({ message: 'Invalid colour.' });
@@ -61,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     const siteId = await resolveNoteSite(id);
     if (!siteId) return res.status(404).json({ message: 'Note not found.' });
-    if (!canManageSite(vis, siteId)) return res.status(403).json({ message: 'Only a manager or admin can edit a diary note.' });
+    if (!canCreateDiaryEntry(vis, siteId, perms)) return res.status(403).json({ message: 'You do not have permission to edit a diary note.' });
 
     const data: any = {};
     if (title !== undefined) { if (!`${title}`.trim()) return res.status(400).json({ message: 'Title cannot be empty.' }); data.title = `${title}`.trim(); }
@@ -85,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     const siteId = await resolveNoteSite(id);
     if (!siteId) return res.status(404).json({ message: 'Note not found.' });
-    if (!canManageSite(vis, siteId)) return res.status(403).json({ message: 'Only a manager or admin can remove a diary note.' });
+    if (!canCreateDiaryEntry(vis, siteId, perms)) return res.status(403).json({ message: 'You do not have permission to remove a diary note.' });
     await prisma.diaryNote.delete({ where: { id } });
     return res.status(200).json({ message: 'Note removed.' });
   }
