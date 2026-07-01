@@ -33,8 +33,62 @@ type LocationView = {
   isActive: boolean;
   isCurrent: boolean;
   resources: ResourceView[];
+  openDays: number[];
+  openHour: number;
+  closeHour: number;
+  weekStart: number;
 };
 type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean };
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Per-site diary display settings (open days / hours / week start). Manager/admin via /api/site-settings.
+function DiarySettings({ loc, onChanged }: { loc: LocationView; onChanged: () => void }) {
+  const [days, setDays] = useState<number[]>(loc.openDays);
+  const [open, setOpen] = useState(String(loc.openHour));
+  const [close, setClose] = useState(String(loc.closeHour));
+  const [wk, setWk] = useState(String(loc.weekStart));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const toggleDay = (d: number) => setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : [...p, d].sort((a, b) => a - b)));
+
+  async function save() {
+    setBusy(true); setMsg(null);
+    const error = await mutate('/api/site-settings', 'POST', { siteId: loc.id, openDays: days, openHour: Number(open), closeHour: Number(close), weekStart: Number(wk) });
+    setBusy(false);
+    if (error) return setMsg({ text: error, ok: false });
+    setMsg({ text: 'Diary settings saved.', ok: true }); onChanged();
+  }
+
+  return (
+    <div className="mt-4 pt-3 border-t border-line">
+      <div className="text-xs uppercase text-muted mb-2">Opening &amp; diary</div>
+      {msg && <div className={`p-2 rounded mb-2 text-xs ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {DOW.map((label, d) => (
+          <button key={d} onClick={() => toggleDay(d)} type="button"
+            className={`text-xs px-2 py-1 rounded border ${days.includes(d) ? 'bg-accent text-white border-accent' : 'bg-surface-muted text-muted border-line'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div><label className="block text-xs text-muted mb-1">Open</label><input type="number" min="0" max="23" value={open} onChange={(e) => setOpen(e.target.value)} className={`${inputClass} w-20`} /></div>
+        <div><label className="block text-xs text-muted mb-1">Close</label><input type="number" min="1" max="24" value={close} onChange={(e) => setClose(e.target.value)} className={`${inputClass} w-20`} /></div>
+        <div>
+          <label className="block text-xs text-muted mb-1">Week starts</label>
+          <select value={wk} onChange={(e) => setWk(e.target.value)} className={inputClass}>
+            <option value="1">Monday</option>
+            <option value="0">Sunday</option>
+          </select>
+        </div>
+        <button onClick={save} disabled={busy} className="text-xs bg-accent hover:bg-accent-hover text-white font-semibold rounded px-3 py-2 disabled:opacity-50">
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const inputClass = 'p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 
@@ -259,6 +313,9 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
         {loc.resources.map((r) => <ResourceRow key={r.id} resource={r} onChanged={onChanged} />)}
         <AddResource siteId={loc.id} onChanged={onChanged} />
       </div>
+
+      {/* Per-site diary display settings (open days / hours / week start) */}
+      <DiarySettings loc={loc} onChanged={onChanged} />
     </div>
   );
 }
@@ -295,7 +352,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const user = session?.user as any;
 
   type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
-  type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; resources: ResDbRow[] };
+  type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; open_days: number[]; open_hour: number; close_hour: number; week_start: number; resources: ResDbRow[] };
 
   const sites = (await prisma.site.findMany({
     where: { id: { in: vis.siteIds } }, // visible sites only
@@ -310,6 +367,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
+    openDays: s.open_days ?? [1, 2, 3, 4, 5, 6],
+    openHour: s.open_hour ?? 8,
+    closeHour: s.close_hour ?? 18,
+    weekStart: s.week_start ?? 1,
   }));
 
   return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER' } };

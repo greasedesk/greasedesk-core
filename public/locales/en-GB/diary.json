@@ -1,0 +1,48 @@
+{
+  "title": "Diary",
+  "week": "Week",
+  "day": "Day",
+  "weekOf": "Week of {{date}}",
+  "noSite": "You’re not currently assigned to a location — contact your admin.",
+  "noResources": "This location has no resources. Add some in Settings → Locations & Resources.",
+  "closedDay": "Closed",
+  "place": {
+    "title": "Place a job",
+    "jobCard": "Job card",
+    "unscheduled": "Unscheduled… ({{count}})",
+    "resource": "Lift / resource",
+    "date": "Date",
+    "start": "Start",
+    "hours": "Hours",
+    "submit": "Place",
+    "pickBoth": "Pick a job card and a resource.",
+    "placed": "Job placed.",
+    "failed": "Failed to place the job."
+  },
+  "peek": {
+    "customer": "Customer",
+    "lift": "Lift",
+    "time": "Time",
+    "status": "Status",
+    "value": "Value (incl. VAT)",
+    "open": "Open job card"
+  },
+  "status": {
+    "draft": "Draft", "quoted": "Quoted", "accepted": "Accepted", "declined": "Declined",
+    "in_progress": "In progress", "invoiced": "Invoiced", "paid": "Paid", "done": "Done", "cancelled": "Cancelled"
+  },
+  "settings": {
+    "title": "Opening & diary",
+    "openDays": "Open days",
+    "hours": "Opening hours",
+    "to": "to",
+    "weekStart": "Week starts",
+    "monday": "Monday",
+    "sunday": "Sunday",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Diary settings saved.",
+    "error": "Could not save diary settings."
+  },
+  "dow": { "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed", "4": "Thu", "5": "Fri", "6": "Sat" }
+}

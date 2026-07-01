@@ -56,3 +56,12 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", Roboto,
     "Helvetica Neue", Arial, sans-serif;
 }
+
+/* Diary blocks: the reg label reads horizontally, but flips to VERTICAL (bottom-to-top) when the
+   block is genuinely narrow — driven by the block's ACTUAL rendered width (many lifts at once OR a
+   narrow viewport), not a heuristic. See pages/admin/diary.tsx. */
+.diary-block { container-type: inline-size; }
+.diary-reg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 46px) {
+  .diary-reg { writing-mode: vertical-rl; transform: rotate(180deg); text-overflow: clip; line-height: 1; }
+}
