@@ -54,6 +54,7 @@ export default function DiaryPage(props: PageProps) {
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<{ colKey: string; date: string; resourceId?: string; aY: number; bY: number } | null>(null);
   const [create, setCreate] = useState<{ date: string; startAt: string; endAt: string; resourceId?: string } | null>(null);
+  const [editNote, setEditNote] = useState<DiaryNoteView | null>(null);
   const clickTimer = useRef<number | null>(null);
 
   if (noSites) {
@@ -139,7 +140,9 @@ export default function DiaryPage(props: PageProps) {
     return (
       <div
         onPointerDown={(e) => e.stopPropagation()}
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, borderColor: colour }}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => { e.stopPropagation(); if (canManage) setEditNote(n); }}
+        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, borderColor: colour, cursor: canManage ? 'pointer' : 'default' }}
         className="diary-block absolute rounded-md overflow-hidden bg-surface-muted border-2 border-dashed select-none"
         title={`${t('note.tag')}: ${n.title} · ${hhmm(n.startAt)}–${hhmm(n.endAt)}`}
       >
@@ -176,7 +179,9 @@ export default function DiaryPage(props: PageProps) {
               <div className="mb-3 flex flex-wrap gap-2">
                 <span className="text-xs uppercase text-muted self-center">{t('note.dayNotes')}:</span>
                 {dayLevelNotes.map((n) => (
-                  <span key={n.id} className="text-xs px-2 py-1 rounded-md bg-surface-muted border-2 border-dashed" style={{ borderColor: n.colour || '#94a3b8' }}>
+                  <span key={n.id} onDoubleClick={() => { if (canManage) setEditNote(n); }}
+                    style={{ borderColor: n.colour || '#94a3b8', cursor: canManage ? 'pointer' : 'default' }}
+                    className="text-xs px-2 py-1 rounded-md bg-surface-muted border-2 border-dashed">
                     <span className="italic text-ink">{n.title}</span> <span className="text-muted">{hhmm(n.startAt)}–{hhmm(n.endAt)}</span>
                   </span>
                 ))}
@@ -258,6 +263,13 @@ export default function DiaryPage(props: PageProps) {
         <CreateDialog
           info={create} siteId={siteId} resources={resources} defaultResourceId={create.resourceId ?? null}
           onClose={() => setCreate(null)} onDone={() => { setCreate(null); refresh(); }}
+        />
+      )}
+
+      {editNote && (
+        <EditNoteDialog
+          note={editNote} resources={resources}
+          onClose={() => setEditNote(null)} onDone={() => { setEditNote(null); refresh(); }}
         />
       )}
     </AdminLayout>
@@ -380,6 +392,102 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---- edit / delete a note (module scope so inputs don't remount) ----
+function EditNoteDialog({ note, resources, onClose, onDone }: {
+  note: DiaryNoteView; resources: ResourceCol[]; onClose: () => void; onDone: () => void;
+}) {
+  const { t } = useTranslation('diary');
+  const dPart = (iso: string) => iso.slice(0, 10);
+  const tPart = (iso: string) => iso.slice(11, 16);
+  const [title, setTitle] = useState(note.title);
+  const [startDate, setStartDate] = useState(dPart(note.startAt));
+  const [startTime, setStartTime] = useState(tPart(note.startAt));
+  const [endDate, setEndDate] = useState(dPart(note.endAt));
+  const [endTime, setEndTime] = useState(tPart(note.endAt));
+  const [noteLift, setNoteLift] = useState(note.resourceId ?? '');
+  const [colour, setColour] = useState(note.colour ?? '');
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const labelCls = 'block text-xs text-muted mb-1';
+
+  async function save() {
+    if (!title.trim()) { setErr(t('editNote.saveError')); return; }
+    setBusy(true); setErr(null);
+    const res = await fetch('/api/diary-notes', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: note.id, title, startAt: `${startDate}T${startTime}:00.000Z`, endAt: `${endDate}T${endTime}:00.000Z`, resourceId: noteLift || null, colour: colour || null }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setErr(data?.message || t('editNote.saveError')); return; }
+    onDone();
+  }
+  async function del() {
+    setBusy(true); setErr(null);
+    const res = await fetch(`/api/diary-notes?id=${note.id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setErr(data?.message || t('editNote.deleteError')); return; }
+    onDone();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-ink mb-4">{t('editNote.title')}</h2>
+        {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
+        <div className="space-y-3">
+          <div><label className={labelCls}>{t('create.noteTitle')}</label><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><label className={labelCls}>{t('create.start')}</label>
+              <div className="flex gap-2"><input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} /><input type="time" className={inputCls} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div>
+            </div>
+            <div><label className={labelCls}>{t('create.end')}</label>
+              <div className="flex gap-2"><input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} /><input type="time" className={inputCls} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div>
+            </div>
+          </div>
+          <div><label className={labelCls}>{t('create.lift')}</label>
+            <select className={inputCls} value={noteLift} onChange={(e) => setNoteLift(e.target.value)}>
+              <option value="">{t('create.dayLevel')}</option>
+              {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>{t('create.colour')}</label>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setColour('')} aria-label={t('create.noColour')} title={t('create.noColour')} aria-pressed={colour === ''}
+                className={`w-8 h-8 rounded-full bg-surface flex items-center justify-center ${colour === '' ? 'ring-2 ring-accent ring-offset-1 border border-line' : 'border border-line'}`}>
+                <span className="text-muted text-xs leading-none">✕</span>
+              </button>
+              {RESOURCE_PALETTE.map((c) => (
+                <button key={c} type="button" onClick={() => setColour(c)} aria-label={c} title={c} aria-pressed={colour === c} style={{ backgroundColor: c }}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center ${colour === c ? 'ring-2 ring-accent ring-offset-1' : 'border border-line'}`}>
+                  {colour === c && <span className="text-white text-sm leading-none">✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="flex gap-2">
+              <button onClick={save} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('editNote.saving') : t('editNote.save')}</button>
+              <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
+            </div>
+            {confirmDel ? (
+              <button onClick={del} disabled={busy} className="bg-danger text-white font-semibold rounded-lg px-3 py-2.5 text-sm disabled:opacity-50">{t('editNote.confirmYes')}</button>
+            ) : (
+              <button onClick={() => setConfirmDel(true)} className="text-danger hover:underline text-sm">{t('editNote.delete')}</button>
+            )}
+          </div>
+          {confirmDel && <p className="text-xs text-danger text-right">{t('editNote.confirmDelete')}</p>}
+        </div>
       </div>
     </div>
   );

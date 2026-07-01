@@ -68,5 +68,15 @@
     "jobFailed": "Could not create the job card.",
     "noteFailed": "Could not add the note."
   },
-  "note": { "tag": "Note", "dayNotes": "Notes" }
+  "note": { "tag": "Note", "dayNotes": "Notes" },
+  "editNote": {
+    "title": "Edit note",
+    "save": "Save",
+    "saving": "Saving…",
+    "delete": "Delete",
+    "confirmDelete": "Delete this note?",
+    "confirmYes": "Yes, delete",
+    "saveError": "Could not save the note.",
+    "deleteError": "Could not delete the note."
+  }
 }
