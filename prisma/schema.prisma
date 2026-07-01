@@ -52,6 +52,18 @@ enum TenantStatus {
   cancelled
 }
 
+// Cost-capture (per-site P&L foundation). Raw cost grains only — no aggregation in-schema.
+enum CostType {
+  salary // amount_pennies = annual salary
+  hourly // amount_pennies = hourly rate
+}
+
+enum OverheadPeriod {
+  weekly
+  monthly
+  annual
+}
+
 enum BillingStatus {
   ok
   grace
@@ -120,6 +132,11 @@ model Group {
   bookings   Booking[]
   job_cards  JobCard[]
   diary_notes DiaryNote[]
+
+  // Cost-capture
+  cost_people      CostPerson[]
+  overheads        Overhead[]
+  cost_allocations CostAllocation[]
 }
 
 model GroupBilling {
@@ -186,6 +203,7 @@ model Site {
   job_cards      JobCard[]
   services       ServiceCatalogue[]
   diary_notes    DiaryNote[]
+  cost_allocations CostAllocation[]
 
   @@index([group_id])
 }
@@ -313,6 +331,7 @@ model User {
   job_cards       JobCard[]      @relation("JobCardMechanic")
   audit_logs      AuditLog[]
   job_card_photos JobCardPhoto[] @relation("JobCardPhotoUploader")
+  cost_person     CostPerson?    // optional future link — costs ≠ logins
 
   // --- NEXTAUTH ---
   accounts Account[]
@@ -623,4 +642,71 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Cost-capture (per-site P&L foundation) — raw grains only, no aggregation here.
+// Every cost (person or overhead) is allocated across one+ sites by percent (Σ=100%).
+// The 100%-sum + tenant-site invariant is enforced in lib/cost-allocation.ts (the one place).
+// ───────────────────────────────────────────────────────────────────────────────
+
+// Headcount = people-as-costs, independent of User (a temp/bottle-washer costs money without a
+// login). Optional user_id links a cost to a real login later; costs ≠ logins.
+model CostPerson {
+  id             String   @id @default(uuid())
+  group_id       String
+  name           String
+  role           String?  // free-text ("Master Tech", "Bottle washer")
+  cost_type      CostType
+  amount_pennies Int      // salary (annual) OR hourly rate, in pennies
+  user_id        String?  @unique
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now())
+
+  group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  user        User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  allocations CostAllocation[]
+
+  @@index([group_id])
+}
+
+// Open-ended, admin-extendable business costs (rent, rates, insurance, IT, phones…).
+model Overhead {
+  id             String         @id @default(uuid())
+  group_id       String
+  name           String
+  amount_pennies Int
+  period         OverheadPeriod
+  is_active      Boolean        @default(true)
+  created_at     DateTime       @default(now())
+
+  group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  allocations CostAllocation[]
+
+  @@index([group_id])
+}
+
+// Shared allocation mechanism: one cost → many site allocations. Exactly one owner
+// (cost_person_id XOR overhead_id) is enforced by a DB CHECK in the migration. Per-cost
+// percents sum to 100.00 (basis-point validation in lib/cost-allocation.ts).
+model CostAllocation {
+  id             String   @id @default(uuid())
+  group_id       String   // denormalised tenant guard (indexed by-site pivot)
+  site_id        String
+  percent        Decimal  @db.Decimal(5, 2) // 0.01–100.00
+  cost_person_id String?
+  overhead_id    String?
+  created_at     DateTime @default(now())
+
+  group       Group       @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site        Site        @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  cost_person CostPerson? @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
+  overhead    Overhead?   @relation(fields: [overhead_id], references: [id], onDelete: Cascade)
+
+  @@unique([cost_person_id, site_id])
+  @@unique([overhead_id, site_id])
+  @@index([group_id])
+  @@index([site_id])
+  @@index([cost_person_id])
+  @@index([overhead_id])
 }
