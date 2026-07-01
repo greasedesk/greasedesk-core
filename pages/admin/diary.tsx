@@ -345,18 +345,33 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         {mode === 'note' && (
           <div className="space-y-3">
             <div><label className={labelCls}>{t('create.noteTitle')}</label><input className={inputCls} placeholder={t('create.notePlaceholder')} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>{t('create.lift')}</label>
-                <select className={inputCls} value={noteLift} onChange={(e) => setNoteLift(e.target.value)}>
-                  <option value="">{t('create.dayLevel')}</option>
-                  {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-              </div>
-              <div><label className={labelCls}>{t('create.colour')}</label>
-                <select className={inputCls} value={colour} onChange={(e) => setColour(e.target.value)}>
-                  <option value="">{t('create.noColour')}</option>
-                  {RESOURCE_PALETTE.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
+            <div><label className={labelCls}>{t('create.lift')}</label>
+              <select className={inputCls} value={noteLift} onChange={(e) => setNoteLift(e.target.value)}>
+                <option value="">{t('create.dayLevel')}</option>
+                {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>{t('create.colour')}</label>
+              <div className="flex flex-wrap gap-2">
+                {/* "None" — no colour */}
+                <button
+                  type="button" onClick={() => setColour('')}
+                  aria-label={t('create.noColour')} title={t('create.noColour')} aria-pressed={colour === ''}
+                  className={`w-8 h-8 rounded-full bg-surface flex items-center justify-center ${colour === '' ? 'ring-2 ring-accent ring-offset-1 border border-line' : 'border border-line'}`}
+                >
+                  <span className="text-muted text-xs leading-none">✕</span>
+                </button>
+                {RESOURCE_PALETTE.map((c) => (
+                  <button
+                    key={c} type="button" onClick={() => setColour(c)}
+                    aria-label={c} title={c} aria-pressed={colour === c}
+                    style={{ backgroundColor: c }}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center ${colour === c ? 'ring-2 ring-accent ring-offset-1' : 'border border-line'}`}
+                  >
+                    {colour === c && <span className="text-white text-sm leading-none">✓</span>}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="flex gap-2 pt-1">
