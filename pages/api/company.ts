@@ -3,7 +3,9 @@
  * Edit the caller's own Group (company) details. ADMIN/owner only — gated server-side via the
  * same getVisibility().isAdmin check used for user-management / location-create. Group-scoped.
  *
- *   PATCH { group_name?, company_number?, vat_number? }
+ *   PATCH { group_name?, company_number?, vat_number?, vat_registered? }
+ *
+ * vat_registered is the master switch gating VAT across quotes/invoices/overheads (lib/tenant-vat.ts).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -26,8 +28,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const groupId = sUser.group_id as string;
 
-  const { group_name, company_number, vat_number } = (req.body || {}) as {
-    group_name?: string; company_number?: string; vat_number?: string;
+  const { group_name, company_number, vat_number, vat_registered } = (req.body || {}) as {
+    group_name?: string; company_number?: string; vat_number?: string; vat_registered?: boolean;
   };
 
   const data: any = {};
@@ -38,6 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
+  if (vat_registered !== undefined) data.vat_registered = !!vat_registered;
 
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ message: 'Nothing to update.' });

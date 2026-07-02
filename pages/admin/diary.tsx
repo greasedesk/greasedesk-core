@@ -19,6 +19,7 @@ import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours'
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
+import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
@@ -526,6 +527,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const weekStart: number = site.week_start ?? 1;
   const perms = await getTenantPermissions(user.group_id as string);
   const canManage = canCreateDiaryEntry(vis, site.id, perms); // create gesture + note edit (manager OR STANDARD+toggle)
+  const vat = await getTenantVat(user.group_id as string); // master switch — peek value must respect it
 
   const view: 'week' | 'day' = ctx.query.view === 'day' ? 'day' : 'week';
   const dateParam = (ctx.query.date as string) || '';
@@ -576,6 +578,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     const totals = computeQuoteTotals(
       (c.items as any[]).map((it) => ({ item_type: it.item_type, qty: num(it.qty), unit_price_pennies: poundsToPennies(num(it.unit_price)), unit_cost_pennies: poundsToPennies(num(it.unit_cost)), vatable: num(it.vat_rate) > 0 })),
       num(c.vat_rate),
+      { vatRegistered: vat.registered },
     );
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,

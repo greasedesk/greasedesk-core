@@ -37,6 +37,7 @@ type Props = {
   locale: string;
   initialVatRate: number;
   initialLines: EstimateLine[];
+  vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
 };
 
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
@@ -50,13 +51,14 @@ type RowProps = {
   idx: number;
   kind: 'labour' | 'part';
   canEdit: boolean;
+  showVat: boolean;
   lineTotal: string;
   t: (k: string) => string;
   onChange: (idx: number, patch: Partial<EstimateLine>) => void;
   onRemove: (idx: number) => void;
 };
 
-function LineRow({ row, idx, kind, canEdit, lineTotal, t, onChange, onRemove }: RowProps) {
+function LineRow({ row, idx, kind, canEdit, showVat, lineTotal, t, onChange, onRemove }: RowProps) {
   return (
     <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
       <div className="sm:flex-1">
@@ -79,11 +81,13 @@ function LineRow({ row, idx, kind, canEdit, lineTotal, t, onChange, onRemove }: 
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.unit_cost}
           disabled={!canEdit} onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
       </div>
-      <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
-        <input type="checkbox" className="w-5 h-5" checked={row.vatable} disabled={!canEdit}
-          onChange={(e) => onChange(idx, { vatable: e.target.checked })} />
-        {t('estimate.vat')}
-      </label>
+      {showVat && (
+        <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
+          <input type="checkbox" className="w-5 h-5" checked={row.vatable} disabled={!canEdit}
+            onChange={(e) => onChange(idx, { vatable: e.target.checked })} />
+          {t('estimate.vat')}
+        </label>
+      )}
       <div className="sm:w-24 text-right">
         <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
         <div className="text-ink font-medium tabular-nums py-2">{lineTotal}</div>
@@ -96,7 +100,7 @@ function LineRow({ row, idx, kind, canEdit, lineTotal, t, onChange, onRemove }: 
   );
 }
 
-export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines }: Props) {
+export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true }: Props) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
@@ -117,8 +121,9 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
         vatable: l.vatable,
       })),
       Number(vatRate || 0),
+      { vatRegistered },
     ),
-    [lines, vatRate],
+    [lines, vatRate, vatRegistered],
   );
 
   const update = (idx: number, patch: Partial<EstimateLine>) =>
@@ -159,7 +164,7 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
       {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
       {labour.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit}
+        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
       ))}
       {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
@@ -168,7 +173,7 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
       {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
       {parts.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit}
+        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
       ))}
       {canEdit && (
@@ -178,17 +183,23 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
         </div>
       )}
 
-      {/* VAT rate + summary */}
+      {/* VAT rate + summary. VAT rate + line hidden entirely when the tenant isn't VAT registered. */}
       <div className="border-t border-line mt-4 pt-4 flex flex-col sm:flex-row sm:justify-between gap-4">
-        <div className="sm:w-40">
-          <label className={labelCls}>{t('estimate.vatRate')}</label>
-          <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" max="100" value={vatRate}
-            disabled={!canEdit} onChange={(e) => setVatRate(e.target.value)} />
-        </div>
+        {vatRegistered ? (
+          <div className="sm:w-40">
+            <label className={labelCls}>{t('estimate.vatRate')}</label>
+            <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" max="100" value={vatRate}
+              disabled={!canEdit} onChange={(e) => setVatRate(e.target.value)} />
+          </div>
+        ) : (
+          <div className="hidden sm:block" />
+        )}
         <div className="text-sm space-y-1 sm:w-64">
           <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryLabour')}</span><span className="text-ink tabular-nums">{fmt(totals.labour_pennies)}</span></div>
           <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryParts')}</span><span className="text-ink tabular-nums">{fmt(totals.parts_pennies)}</span></div>
-          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryVat')}</span><span className="text-ink tabular-nums">{fmt(totals.vat_pennies)}</span></div>
+          {vatRegistered && (
+            <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryVat')}</span><span className="text-ink tabular-nums">{fmt(totals.vat_pennies)}</span></div>
+          )}
           <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('estimate.summaryTotal')}</span><span className="text-ink tabular-nums">{fmt(totals.total_pennies)}</span></div>
         </div>
       </div>

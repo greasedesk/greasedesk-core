@@ -14,7 +14,7 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { getVisibility } from '@/lib/site-visibility';
 
-type Company = { group_name: string; company_number: string | null; vat_number: string | null };
+type Company = { group_name: string; company_number: string | null; vat_number: string | null; vat_registered: boolean };
 type Account = { ref: string; status: string; trialEndsAt: string | null };
 type Profile = {
   id: string; name: string; email: string; job_title: string; start_date: string;
@@ -90,11 +90,15 @@ function CompanyDetails({ company, isAdmin }: { company: Company; isAdmin: boole
   const [name, setName] = useState(company.group_name);
   const [num, setNum] = useState(company.company_number ?? '');
   const [vat, setVat] = useState(company.vat_number ?? '');
+  const [vatReg, setVatReg] = useState(company.vat_registered);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   async function save(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setMsg(null);
-    const err = await post('/api/company', 'PATCH', { group_name: name, company_number: num, vat_number: vat });
+    const err = await post('/api/company', 'PATCH', {
+      group_name: name, company_number: num, vat_registered: vatReg,
+      vat_number: vatReg ? vat : '', // clear stored number when de-registering
+    });
     setBusy(false);
     if (err) return setMsg({ text: err, type: 'error' });
     setMsg({ text: 'Company details saved.', type: 'success' }); router.replace(router.asPath);
@@ -106,7 +110,8 @@ function CompanyDetails({ company, isAdmin }: { company: Company; isAdmin: boole
         <div className="space-y-2 text-sm">
           <div><span className="text-muted">Name: </span><span className="text-ink">{company.group_name}</span></div>
           <div><span className="text-muted">Company number: </span><span className="text-ink">{company.company_number || '—'}</span></div>
-          <div><span className="text-muted">VAT number: </span><span className="text-ink">{company.vat_number || '—'}</span></div>
+          <div><span className="text-muted">VAT registered: </span><span className="text-ink">{company.vat_registered ? 'Yes' : 'No'}</span></div>
+          {company.vat_registered && <div><span className="text-muted">VAT number: </span><span className="text-ink">{company.vat_number || '—'}</span></div>}
         </div>
         <p className="text-xs text-muted mt-3">Only an admin can edit company details.</p>
       </div>
@@ -119,7 +124,16 @@ function CompanyDetails({ company, isAdmin }: { company: Company; isAdmin: boole
       <form onSubmit={save} className="space-y-3">
         <div><label className={labelClass}>Company name *</label><input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} /></div>
         <div><label className={labelClass}>Company number</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} /></div>
-        <div><label className={labelClass}>VAT number</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
+        <label className="flex items-start gap-3 py-1 cursor-pointer">
+          <input type="checkbox" checked={vatReg} onChange={(e) => setVatReg(e.target.checked)} className="w-5 h-5 mt-0.5" />
+          <span>
+            <span className="text-sm font-medium text-ink block">VAT registered</span>
+            <span className="text-xs text-muted">Off = no VAT on quotes, invoices or overheads (prices are just prices).</span>
+          </span>
+        </label>
+        {vatReg && (
+          <div><label className={labelClass}>VAT number</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
+        )}
         <button type="submit" disabled={busy} className="bg-ok hover:bg-ok text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Save company details'}</button>
       </form>
     </div>
@@ -272,9 +286,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   if (isSelf) {
     const g = (await prisma.group.findUnique({
       where: { id: sUser.group_id },
-      select: { group_name: true, company_number: true, vat_number: true, ref: true, status: true, trial_ends_at: true },
+      select: { group_name: true, company_number: true, vat_number: true, vat_registered: true, ref: true, status: true, trial_ends_at: true },
     })) as any;
-    company = g ? { group_name: g.group_name, company_number: g.company_number, vat_number: g.vat_number } : null;
+    company = g ? { group_name: g.group_name, company_number: g.company_number, vat_number: g.vat_number, vat_registered: !!g.vat_registered } : null;
     account = g ? { ref: g.ref, status: g.status, trialEndsAt: g.trial_ends_at ? g.trial_ends_at.toISOString() : null } : null;
   }
 

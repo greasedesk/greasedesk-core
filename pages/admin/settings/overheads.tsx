@@ -17,11 +17,11 @@ import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/
 type SiteOpt = { id: string; name: string; isActive: boolean };
 type Alloc = { siteId: string; percent: number };
 type Period = 'weekly' | 'monthly' | 'annual';
-type Overhead = { id: string; name: string; amountPennies: number; period: Period; isActive: boolean; allocations: Alloc[] };
+type Overhead = { id: string; name: string; amountPennies: number; vatAmountPennies: number; period: Period; isActive: boolean; allocations: Alloc[] };
 
-type FormState = { id: string | null; name: string; amount: string; period: Period; rows: AllocRow[] };
+type FormState = { id: string | null; name: string; amount: string; vatAmount: string; period: Period; rows: AllocRow[] };
 
-const emptyForm = (): FormState => ({ id: null, name: '', amount: '', period: 'monthly', rows: [] });
+const emptyForm = (): FormState => ({ id: null, name: '', amount: '', vatAmount: '', period: 'monthly', rows: [] });
 const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100);
 const penniesToInput = (p: number): string => (p / 100).toFixed(2);
 
@@ -29,6 +29,7 @@ export default function OverheadsSettings() {
   const { t } = useTranslation('overheads');
   const [sites, setSites] = useState<SiteOpt[]>([]);
   const [overheads, setOverheads] = useState<Overhead[]>([]);
+  const [vatRegistered, setVatRegistered] = useState(true);
   const [form, setForm] = useState<FormState | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -39,6 +40,7 @@ export default function OverheadsSettings() {
     const data = await res.json();
     setSites(data.sites || []);
     setOverheads(data.overheads || []);
+    setVatRegistered(!!data.vatRegistered);
   }
   useEffect(() => { load(); }, []);
 
@@ -46,7 +48,8 @@ export default function OverheadsSettings() {
   function openEdit(o: Overhead) {
     setMsg(null);
     setForm({
-      id: o.id, name: o.name, amount: penniesToInput(o.amountPennies), period: o.period,
+      id: o.id, name: o.name, amount: penniesToInput(o.amountPennies),
+      vatAmount: o.vatAmountPennies ? penniesToInput(o.vatAmountPennies) : '', period: o.period,
       rows: o.allocations.map((a, i) => ({ key: `${a.siteId}-${i}`, siteId: a.siteId, percent: String(a.percent) })),
     });
   }
@@ -60,6 +63,7 @@ export default function OverheadsSettings() {
     const body = {
       id: form.id || undefined,
       name: form.name.trim(), period: form.period, amountPennies: poundsToPennies(form.amount),
+      vatAmountPennies: vatRegistered ? poundsToPennies(form.vatAmount) : 0,
       allocations: form.rows.map((r) => ({ siteId: r.siteId, percent: Number(r.percent) })),
     };
     try {
@@ -82,7 +86,14 @@ export default function OverheadsSettings() {
     } finally { setBusy(false); }
   }
 
-  const amountLabel = (o: Overhead) => `${formatMoney(o.amountPennies)} · ${t(o.period)}`;
+  const amountLabel = (o: Overhead) => {
+    const base = `${formatMoney(o.amountPennies)} · ${t(o.period)}`;
+    // When registered with a VAT component, show the true (ex-VAT reclaimable) cost.
+    if (vatRegistered && o.vatAmountPennies > 0) {
+      return `${base} · ${formatMoney(o.amountPennies - o.vatAmountPennies)} ${t('exVat')}`;
+    }
+    return base;
+  };
 
   return (
     <SettingsLayout isAdmin>
@@ -112,11 +123,24 @@ export default function OverheadsSettings() {
                   className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
               </label>
               <label className="block">
-                <span className="text-sm font-medium text-ink">{t('amount')}</span>
+                <span className="text-sm font-medium text-ink">{vatRegistered ? t('amountGross') : t('amount')}</span>
                 <input type="number" inputMode="decimal" min={0} step="0.01" value={form.amount}
                   onChange={(e) => setForm({ ...form, amount: e.target.value })}
                   className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
               </label>
+              {vatRegistered && (
+                <label className="block">
+                  <span className="flex items-center justify-between text-sm font-medium text-ink">
+                    {t('vatAmount')}
+                    <button type="button" onClick={() => setForm({ ...form, vatAmount: (Number(form.amount || 0) / 6).toFixed(2) })}
+                      className="text-xs text-accent hover:underline font-normal">{t('vatDerive')}</button>
+                  </span>
+                  <input type="number" inputMode="decimal" min={0} step="0.01" value={form.vatAmount}
+                    onChange={(e) => setForm({ ...form, vatAmount: e.target.value })}
+                    className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
+                  <span className="text-xs text-muted mt-0.5 block">{t('vatHint')}</span>
+                </label>
+              )}
               <label className="block">
                 <span className="text-sm font-medium text-ink">{t('period')}</span>
                 <select value={form.period} onChange={(e) => setForm({ ...form, period: e.target.value as Period })}

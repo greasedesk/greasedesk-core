@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { validateAllocations } from '@/lib/cost-allocation';
+import { getTenantVat } from '@/lib/tenant-vat';
 
 const PERIODS = new Set(['weekly', 'monthly', 'annual']);
 
@@ -31,24 +32,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     orderBy: { site_name: 'asc' },
   });
   const tenantSiteIds = sites.map((s) => s.id);
+  const vat = await getTenantVat(groupId); // master switch — VAT split only meaningful when registered
 
   // ---- GET: list overheads + allocations, plus sites for the editor/by-site pivot ----
   if (req.method === 'GET') {
     const overheads: Array<{
-      id: string; name: string; amount_pennies: number; period: 'weekly' | 'monthly' | 'annual';
+      id: string; name: string; amount_pennies: number; vat_amount_pennies: number; period: 'weekly' | 'monthly' | 'annual';
       is_active: boolean; allocations: Array<{ site_id: string; percent: unknown }>;
     }> = await prisma.overhead.findMany({
       where: { group_id: groupId },
       orderBy: { created_at: 'asc' },
       select: {
-        id: true, name: true, amount_pennies: true, period: true, is_active: true,
+        id: true, name: true, amount_pennies: true, vat_amount_pennies: true, period: true, is_active: true,
         allocations: { select: { site_id: true, percent: true } },
       },
     });
     return res.status(200).json({
+      vatRegistered: vat.registered,
       sites: sites.map((s) => ({ id: s.id, name: s.site_name, isActive: s.is_active })),
       overheads: overheads.map((o) => ({
-        id: o.id, name: o.name, amountPennies: o.amount_pennies, period: o.period, isActive: o.is_active,
+        id: o.id, name: o.name, amountPennies: o.amount_pennies, vatAmountPennies: o.vat_amount_pennies,
+        period: o.period, isActive: o.is_active,
         allocations: o.allocations.map((a) => ({ siteId: a.site_id, percent: Number(a.percent) })),
       })),
     });
@@ -69,6 +73,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!PERIODS.has(period)) return res.status(400).json({ message: 'Period must be weekly, monthly or annual.' });
     if (amountPennies === null) return res.status(400).json({ message: 'Amount must be a non-negative number of pennies.' });
 
+    // VAT component only when registered; never exceeds the gross. Non-registered → forced 0.
+    const rawVat = toPennies(body.vatAmountPennies) ?? 0;
+    const vatAmountPennies = vat.registered ? Math.min(rawVat, amountPennies) : 0;
+
     const check = validateAllocations(body.allocations, tenantSiteIds);
     if (!check.ok) return res.status(400).json({ message: check.error });
 
@@ -81,11 +89,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const overhead = isPatch
         ? await tx.overhead.update({
             where: { id },
-            data: { name, period: period as any, amount_pennies: amountPennies },
+            data: { name, period: period as any, amount_pennies: amountPennies, vat_amount_pennies: vatAmountPennies },
             select: { id: true },
           })
         : await tx.overhead.create({
-            data: { group_id: groupId, name, period: period as any, amount_pennies: amountPennies },
+            data: { group_id: groupId, name, period: period as any, amount_pennies: amountPennies, vat_amount_pennies: vatAmountPennies },
             select: { id: true },
           });
       await tx.costAllocation.deleteMany({ where: { overhead_id: overhead.id } });

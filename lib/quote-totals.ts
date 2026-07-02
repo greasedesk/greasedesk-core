@@ -62,8 +62,16 @@ function lineCostPennies(item: QuoteLineInput): number {
   return Math.round(cost * qty);
 }
 
-export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number): QuoteTotals {
-  const vat_rate = clampVatRate(rawVatRate);
+export type QuoteTotalsOpts = {
+  // Master switch (Group.vat_registered). When false, VAT is forced to 0 EVERYWHERE regardless of
+  // per-line vatable flags — a non-registered garage charges/shows no VAT. Default true = VAT-as-now.
+  // Gates at compute time only; stored line flags are untouched, so re-registering restores VAT.
+  vatRegistered?: boolean;
+};
+
+export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, opts: QuoteTotalsOpts = {}): QuoteTotals {
+  const vatApplies = opts.vatRegistered !== false; // default true (backward-compatible)
+  const vat_rate = vatApplies ? clampVatRate(rawVatRate) : 0;
   let labour = 0, parts = 0, labourCost = 0, partsCost = 0, vatableBase = 0;
   const lines: QuoteLineResult[] = [];
 
@@ -72,12 +80,12 @@ export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number):
     const cost = lineCostPennies(item);
     if (item.item_type === 'labour') { labour += total; labourCost += cost; }
     else { parts += total; partsCost += cost; } // part + misc both bucket into parts
-    if (item.vatable) vatableBase += total;
+    if (vatApplies && item.vatable) vatableBase += total;
     // Per-line VAT is informational (record only); the card VAT below is the authoritative figure.
-    lines.push({ line_total_pennies: total, vat_pennies: item.vatable ? Math.round((total * vat_rate) / 100) : 0 });
+    lines.push({ line_total_pennies: total, vat_pennies: vatApplies && item.vatable ? Math.round((total * vat_rate) / 100) : 0 });
   }
 
-  // Authoritative VAT: sum-then-multiply, rounded once.
+  // Authoritative VAT: sum-then-multiply, rounded once. Zero when not registered.
   const vat = Math.round((vatableBase * vat_rate) / 100);
 
   return {

@@ -15,6 +15,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, ItemType } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
+import { getTenantVat } from '@/lib/tenant-vat';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
 const TYPES: ItemType[] = ['labour', 'part', 'misc'];
@@ -65,7 +66,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  const totals = computeQuoteTotals(inputs, rate);
+  // Master switch: a non-registered tenant gets no VAT anywhere, regardless of per-line flags.
+  const vat = await getTenantVat(user.group_id as string);
+  const totals = computeQuoteTotals(inputs, rate, { vatRegistered: vat.registered });
 
   // Effective per-line values to store (mirror the compute flooring).
   const rows = inputs.map((it, i) => ({
