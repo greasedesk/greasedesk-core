@@ -19,6 +19,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
+import { ensureIdentityAndCurrentOwner, normalizeVin } from '@/lib/vehicle-identity';
 
 type CreateJobCardBody = {
   registration: string;
@@ -144,12 +145,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               customer_id: customerId,
               registration,
               vin: body.vin?.trim() || null,
+              vin_normalized: normalizeVin(body.vin),
               mileage_at_create: mileage,
             },
             select: { id: true },
           });
           vehicleId = createdVehicle.id;
         }
+
+        // Stage A dual-write: mirror the weld into the identity + ownership-edge layer (idempotent).
+        // customer_id above stays the read source until Stage B; this only keeps the new layer in step.
+        await ensureIdentityAndCurrentOwner(tx, {
+          vehicleId, groupId, customerId, registration, vin: body.vin,
+        });
 
         const created = await tx.jobCard.create({
           data: {

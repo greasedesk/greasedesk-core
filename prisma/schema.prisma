@@ -144,6 +144,7 @@ model Group {
   users      User[]
   customers  Customer[]
   vehicles   Vehicle[]
+  vehicle_identities VehicleIdentity[]
   services   ServiceCatalogue[] // Services at Group level (master list)
   parts      PartCatalogue[]
   tax_rates  TaxRate[]
@@ -386,11 +387,12 @@ model Customer {
   user   User?
 
   // --- RELATIONS ---
-  group     Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
-  vehicles  Vehicle[]
-  bookings  Booking[]
-  job_cards JobCard[]
+  group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site       Site               @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  vehicles   Vehicle[]
+  ownerships VehicleOwnership[]
+  bookings   Booking[]
+  job_cards  JobCard[]
 
   @@index([group_id, site_id])
 }
@@ -398,7 +400,13 @@ model Customer {
 model Vehicle {
   id                String   @id @default(uuid())
   group_id          String
-  customer_id       String
+  customer_id       String   // WELD — retired (nullable + unwritten) in Stage C, never read after Stage B
+  // Car-first re-root (Stage A, additive). identity_id links to the stable VIN-soft-anchored
+  // VehicleIdentity (1:1 now, mergeable cross-tenant later). vin_normalized is the canonical
+  // dedup key (upper/strip). Ownership moves to the VehicleOwnership edge — customer_id above
+  // stays required through Stage A/B and is retired last.
+  identity_id       String?
+  vin_normalized    String?
   registration      String
   vin               String?
   make              String?
@@ -411,13 +419,56 @@ model Vehicle {
   mileage_at_create Int?
   created_at        DateTime @default(now())
 
-  group     Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  customer  Customer  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  bookings  Booking[]
-  job_cards JobCard[]
+  group      Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  customer   Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  identity   VehicleIdentity?  @relation(fields: [identity_id], references: [id], onDelete: SetNull)
+  ownerships VehicleOwnership[]
+  bookings   Booking[]
+  job_cards  JobCard[]
 
   @@index([group_id, customer_id])
   @@index([registration])
+  @@index([identity_id])
+  @@index([group_id, vin_normalized])
+}
+
+// Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
+// NOW (group_id) but shaped to go cross-tenant later WITHOUT a re-root — a future migration merges
+// identities sharing a VIN across tenants by re-pointing Vehicle.identity_id. VIN is the PREFERRED
+// anchor when present (unique per tenant), reg is the fallback, the uuid id is the anchor underneath.
+model VehicleIdentity {
+  id             String   @id @default(uuid())
+  group_id       String
+  vin_normalized String? // canonical VIN (upper/strip); NULL when no VIN captured yet
+  registration   String? // reg fallback (regs recycle → not unique)
+  created_at     DateTime @default(now())
+
+  group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicles Vehicle[]
+
+  @@unique([group_id, vin_normalized]) // VIN unique PER TENANT when present (NULLs distinct)
+  @@index([group_id, registration])
+}
+
+// Ownership as a time-bounded EDGE (not a column). Current owner = the row with is_current = true
+// (one per vehicle, enforced by a partial-unique index added in raw SQL). Owner history = all rows.
+// This is the seam a future garage-mediated transfer will use (close current edge, open a new one);
+// no transfer mechanism is built here. PII stays on Customer — this edge only references it.
+model VehicleOwnership {
+  id          String    @id @default(uuid())
+  vehicle_id  String
+  customer_id String
+  is_current  Boolean   @default(true)
+  valid_from  DateTime  @default(now())
+  valid_to    DateTime? // NULL = current; set on a future transfer
+  created_at  DateTime  @default(now())
+
+  vehicle  Vehicle  @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@index([vehicle_id])
+  @@index([customer_id])
+  @@index([vehicle_id, is_current])
 }
 
 model ServiceCatalogue {
