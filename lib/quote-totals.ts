@@ -15,7 +15,7 @@
  *  - Per-line VATable flag: only VATable lines contribute to VAT.
  *  - VAT = round( (sum of VATable line totals) × vatRate / 100 )  — sum-then-multiply, one rounding.
  */
-export type QuoteItemType = 'labour' | 'part' | 'misc';
+export type QuoteItemType = 'labour' | 'part' | 'misc' | 'fixed';
 
 export type QuoteLineInput = {
   item_type: QuoteItemType;

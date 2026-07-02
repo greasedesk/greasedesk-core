@@ -198,7 +198,8 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
   // Each row carries its original index so per-line totals map back to totals.lines[idx].
   const withIdx = lines.map((l, idx) => ({ l, idx }));
   const labour = withIdx.filter((x) => x.l.item_type === 'labour');
-  const parts = withIdx.filter((x) => x.l.item_type !== 'labour');
+  const parts = withIdx.filter((x) => x.l.item_type !== 'labour' && x.l.item_type !== 'fixed');
+  const fixed = withIdx.filter((x) => x.l.item_type === 'fixed'); // published bundles — own section
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 mt-6">
@@ -232,6 +233,20 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
           <button onClick={() => add('part')} className="text-xs text-accent hover:underline">+ {t('estimate.addParts')}</button>
           <p className="text-xs text-muted mt-1">{t('estimate.discountHint')}</p>
         </div>
+      )}
+
+      {/* Fixed-price services — published bundles (price-led; cost optional). Shown only if in use
+          or the estimate is editable, so it doesn't clutter a card that has none. */}
+      {(fixed.length > 0 || canEdit) && (
+        <>
+          <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.fixed')}</h3>
+          {fixed.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyFixed')}</p>}
+          {fixed.map(({ l, idx }) => (
+            <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+          ))}
+          {canEdit && <button onClick={() => add('fixed')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addFixed')}</button>}
+        </>
       )}
 
       {/* VAT rate + summary. VAT rate + line hidden entirely when the tenant isn't VAT registered. */}

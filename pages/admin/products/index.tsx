@@ -12,7 +12,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 
-type ItemType = 'labour' | 'part' | 'misc';
+type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Item = { id: string; code: string; name: string; itemType: ItemType; unitCost: number; unitPrice: number; vatRate: number; active: boolean };
 type FormState = { id: string | null; code: string; name: string; itemType: ItemType; cost: string; price: string; vatRate: string; active: boolean };
 
@@ -42,7 +42,9 @@ export default function ProductsPage() {
   const openEdit = (i: Item) => { setMsg(null); setForm({ id: i.id, code: i.code, name: i.name, itemType: i.itemType, cost: String(i.unitCost), price: String(i.unitPrice), vatRate: String(i.vatRate), active: i.active }); };
   const close = () => setForm(null);
 
-  const canSave = !!form && form.code.trim() !== '' && form.name.trim() !== '' && form.cost !== '' && form.price !== '' && Number(form.cost) >= 0;
+  // Cost is optional for fixed-price bundles (price-led; true cost accrues on the real job lines).
+  const canSave = !!form && form.code.trim() !== '' && form.name.trim() !== '' && form.price !== ''
+    && (form.itemType === 'fixed' || (form.cost !== '' && Number(form.cost) >= 0));
 
   async function save() {
     if (!form || !canSave) return;
@@ -95,7 +97,7 @@ export default function ProductsPage() {
                 <input value={form.code} placeholder={t('codePlaceholder')} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} /></label>
               <label className="block"><span className={labelCls}>{t('type')}</span>
                 <select value={form.itemType} onChange={(e) => setForm({ ...form, itemType: e.target.value as ItemType })} className={inputCls}>
-                  <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="misc">{t('misc')}</option>
+                  <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="fixed">{t('fixed')}</option><option value="misc">{t('misc')}</option>
                 </select></label>
               <label className="block sm:col-span-2"><span className={labelCls}>{t('name')}</span>
                 <input value={form.name} placeholder={t('namePlaceholder')} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} /></label>

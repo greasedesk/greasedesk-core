@@ -12,6 +12,7 @@
   "labour": "Labour",
   "part": "Part",
   "misc": "Misc",
+  "fixed": "Fixed Price",
   "cost": "Cost",
   "price": "Price",
   "vatRate": "VAT rate (%)",

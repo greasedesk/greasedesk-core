@@ -18,7 +18,7 @@ import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
-const TYPES: ItemType[] = ['labour', 'part', 'misc'];
+const TYPES: ItemType[] = ['labour', 'part', 'misc', 'fixed'];
 
 type IncomingLine = {
   item_type?: string; description?: string; qty?: number | string;

@@ -80,6 +80,7 @@ enum ItemType {
   labour
   part
   misc
+  fixed // published fixed-price service bundle (price-led, cost-optional); its own estimate section
 }
 
 // Shared, system-defined category for a Profit Centre (typed business unit).

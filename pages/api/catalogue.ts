@@ -15,7 +15,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getTenantVat } from '@/lib/tenant-vat';
 
-const TYPES = new Set(['labour', 'part', 'misc']);
+const TYPES = new Set(['labour', 'part', 'misc', 'fixed']);
 const dec = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -67,10 +67,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!TYPES.has(t)) return res.status(400).json({ message: 'Type must be labour, part or misc.' });
       data.item_type = t;
     }
-    if (body.unitCost !== undefined || !isPatch) {
+    // Cost: required for part/labour/misc; OPTIONAL for fixed (price-led — true cost accrues on the
+    // real job lines, defaults 0). Provided value is always validated.
+    const isFixed = data.item_type === 'fixed';
+    if (body.unitCost !== undefined && body.unitCost !== null && body.unitCost !== '') {
       const c = dec(body.unitCost);
       if (c === null || c < 0) return res.status(400).json({ message: 'Cost must be a non-negative number.' });
       data.unit_cost = new Prisma.Decimal(c.toFixed(2));
+    } else if (!isPatch) {
+      if (isFixed) data.unit_cost = new Prisma.Decimal('0.00');
+      else return res.status(400).json({ message: 'Cost is required.' });
     }
     if (body.unitPrice !== undefined || !isPatch) {
       const pr = dec(body.unitPrice);

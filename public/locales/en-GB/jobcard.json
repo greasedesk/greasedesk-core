@@ -5,6 +5,9 @@
     "parts": "Parts & materials",
     "addLabour": "Add labour",
     "addParts": "Add part",
+    "fixed": "Fixed-price services",
+    "emptyFixed": "No fixed-price services.",
+    "addFixed": "Add fixed-price service",
     "code": "Code",
     "codePlaceholder": "Catalogue",
     "description": "Description",
@@ -33,7 +36,7 @@
     "discountHint": "Tip: enter a negative unit price for a discount line."
   },
   "back": { "diary": "← Back to diary", "list": "← Back to list" },
-  "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc" },
+  "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc", "fixed": "Fixed price" },
   "status": {
     "label": "Status",
     "draft": "Draft",
