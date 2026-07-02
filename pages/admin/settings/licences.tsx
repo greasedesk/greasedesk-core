@@ -31,8 +31,8 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 export default function LicencesSettings({ groupName, plan, status, includedSites, siteCount, isAdmin }: PageProps) {
   return (
     <SettingsLayout isAdmin={isAdmin}>
-      <Head><title>Licences & Subscriptions - GreaseDesk</title></Head>
-      <p className="text-muted mb-6">Your plan and billable units. Billing is driven by the number of locations. Management is a later module.</p>
+      <Head><title>Licence & Subscriptions - GreaseDesk</title></Head>
+      <p className="text-muted mb-6">Your GreaseDesk subscription: plan, status, and billable units (billing is driven by the number of locations).</p>
 
       <div className="bg-surface border border-line rounded-xl p-6 max-w-xl">
         <Row label="Account" value={groupName} />
@@ -40,6 +40,13 @@ export default function LicencesSettings({ groupName, plan, status, includedSite
         <Row label="Status" value={status} />
         <Row label="Included locations" value={includedSites} />
         <Row label="Current locations" value={siteCount} />
+      </div>
+
+      <div className="bg-surface-muted border border-line rounded-xl p-4 max-w-xl mt-4">
+        <p className="text-sm text-muted">
+          <span className="font-medium text-ink">Modules &amp; add-ons</span> — as modules are released you'll be able to
+          add or reduce them here and adjust your location count. Self-service management is coming in a later release.
+        </p>
       </div>
     </SettingsLayout>
   );

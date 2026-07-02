@@ -40,8 +40,8 @@ export default function SetPasswordPage({ state, email, token }: PageProps) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(data?.message || 'Could not set your password.'); setBusy(false); return; }
       // END-TO-END handoff: sign in with the email (from the validated token) + the new password,
-      // then land on the profile-completion page as the authenticated user.
-      await signIn('credentials', { email: data.email || email, password: pw, callbackUrl: '/admin/settings/profile' });
+      // then land on Settings, which role-routes the user to their own account detail.
+      await signIn('credentials', { email: data.email || email, password: pw, callbackUrl: '/admin/settings' });
       // signIn redirects on success; if it returns, surface a fallback.
       setBusy(false);
     } catch {

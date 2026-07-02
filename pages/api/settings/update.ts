@@ -21,6 +21,7 @@ import { Prisma } from '@prisma/client';
 import { requireAdminApi } from '@/lib/admin-guard';
 
 type SaveSettingsBody = {
+  siteId?: string; // target location (all-locations Financial); defaults to caller's site
   defaultVatRate: number | string;
   defaultLabourRate: number | string;
   timezone?: string;
@@ -48,9 +49,9 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   }
 
   const groupId = user.group_id;
-  const siteId = user.site_id;
 
   const {
+    siteId: bodySiteId,
     defaultVatRate,
     defaultLabourRate,
     timezone,
@@ -59,6 +60,10 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     supportedCountries,
     supportedCurrencies,
   } = req.body as SaveSettingsBody;
+
+  // All-locations Financial: target any site the caller's group owns (validated below). Defaults
+  // to the caller's own site when no target is supplied.
+  const siteId = (typeof bodySiteId === 'string' && bodySiteId) || user.site_id;
 
   const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);

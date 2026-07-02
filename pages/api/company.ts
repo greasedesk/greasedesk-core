@@ -3,7 +3,7 @@
  * Edit the caller's own Group (company) details. ADMIN/owner only — gated server-side via the
  * same getVisibility().isAdmin check used for user-management / location-create. Group-scoped.
  *
- *   PATCH { group_name?, company_number?, vat_number?, vat_registered? }
+ *   PATCH { group_name?, company_number?, address?, vat_number?, vat_registered? }
  *
  * vat_registered is the master switch gating VAT across quotes/invoices/overheads (lib/tenant-vat.ts).
  */
@@ -28,8 +28,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const groupId = sUser.group_id as string;
 
-  const { group_name, company_number, vat_number, vat_registered } = (req.body || {}) as {
-    group_name?: string; company_number?: string; vat_number?: string; vat_registered?: boolean;
+  const { group_name, company_number, address, vat_number, vat_registered } = (req.body || {}) as {
+    group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean;
   };
 
   const data: any = {};
@@ -39,6 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data.group_name = clean;
   }
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
+  if (address !== undefined) data.address = address.trim() || null;
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
   if (vat_registered !== undefined) data.vat_registered = !!vat_registered;
 

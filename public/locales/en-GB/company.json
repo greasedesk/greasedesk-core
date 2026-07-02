@@ -1,0 +1,24 @@
+{
+  "account": {
+    "title": "Account details",
+    "intro": "Your GreaseDesk account reference and status.",
+    "reference": "Reference",
+    "permanent": "permanent",
+    "status": "Status",
+    "trialEnds": "Trial ends"
+  },
+  "details": {
+    "title": "Company details",
+    "intro": "Your business's registered details. These appear on quotes and invoices.",
+    "name": "Company name",
+    "number": "Company number",
+    "address": "Address",
+    "vatRegistered": "VAT registered",
+    "vatRegisteredHint": "Off = no VAT on quotes, invoices or overheads (prices are just prices).",
+    "vatNumber": "VAT number",
+    "save": "Save company details",
+    "saving": "Saving…",
+    "saved": "Company details saved.",
+    "error": "Could not save."
+  }
+}

@@ -5,8 +5,8 @@
  * CRUD for Profit Centres, scoped to the caller's group_id/site_id.
  * Auth/ownership pattern mirrors pages/api/settings/update.ts.
  *
- *   POST   { name, category }                    → create on the caller's site
- *   PATCH  { id, name?, category?, is_active? }   → update (own site only)
+ *   POST   { name, category, siteId? }            → create on siteId (any group site the caller may access; defaults to caller's site)
+ *   PATCH  { id, name?, category?, is_active? }   → update (any group site the caller may access)
  *   DELETE { id }                                 → delete if unreferenced; else 409
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -26,29 +26,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ message: 'Authentication Error: Group/Site context not found.' });
   }
 
-  const siteId = user.site_id as string;
-
-  // Visibility: the caller's active site must be one they may access (defends a stale session).
+  // Visibility: the set of sites the caller may act on (all group sites for an admin). All-locations
+  // Financial can target any of these; a profit centre is "owned" if it sits on one of them.
   const vis = await getVisibility(user.id as string);
-  if (!vis.siteIds.includes(siteId)) {
+  if (!vis.siteIds.includes(user.site_id as string)) {
     return res.status(403).json({ message: 'You do not have permission for this site.' });
   }
 
-  // Helper: confirm a profit centre belongs to the caller's site.
+  // Helper: confirm a profit centre belongs to a site the caller may access.
   async function ownPc(id: string) {
     if (!id) return null;
-    return prisma.profitCentre.findFirst({ where: { id, site_id: siteId }, select: { id: true } });
+    return prisma.profitCentre.findFirst({ where: { id, site_id: { in: vis.siteIds } }, select: { id: true } });
   }
 
   if (req.method === 'POST') {
-    const { name, category } = (req.body || {}) as { name?: string; category?: string };
+    const { name, category, siteId } = (req.body || {}) as { name?: string; category?: string; siteId?: string };
     const cleanName = (name || '').trim();
     if (!cleanName) return res.status(400).json({ message: 'Name is required.' });
     if (!category || !VALID_CATEGORIES.includes(category)) {
       return res.status(400).json({ message: `Category must be one of: ${VALID_CATEGORIES.join(', ')}.` });
     }
+    // Target site: a group site the caller may access; defaults to their active site.
+    const targetSite = typeof siteId === 'string' && vis.siteIds.includes(siteId) ? siteId : (user.site_id as string);
     const created = await prisma.profitCentre.create({
-      data: { site_id: siteId, name: cleanName, category: category as ProfitCentreCategory },
+      data: { site_id: targetSite, name: cleanName, category: category as ProfitCentreCategory },
       select: { id: true },
     });
     return res.status(201).json({ id: created.id, message: 'Profit centre created.' });

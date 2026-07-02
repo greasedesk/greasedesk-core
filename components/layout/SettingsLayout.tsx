@@ -1,54 +1,92 @@
 /**
  * File: components/layout/SettingsLayout.tsx
- * Wraps AdminLayout and renders the Settings sub-navigation. Admin-only tabs are hidden from
- * STANDARD users (pass isAdmin). Page-level access is still enforced by requireAdminPage on each
- * admin-only page's getServerSideProps — this just keeps the nav honest.
+ * Wraps AdminLayout and renders the two-tier Settings navigation:
+ *   Top tabs:  Locations & Resources · Users · Company Profile · Licence & Subscriptions
+ *   Sub-tabs:  contextual (Users → roster/permissions; Company Profile → account/company/…).
+ * Nav flags only HIDE tabs; page-level getServerSideProps still enforces gating (requireAdminPage /
+ * requireSiteManagerPage). The Users top-tab href varies by role: managers/admins land on the
+ * roster, a STANDARD user lands on their own detail (pass selfUserId).
  */
 import React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import AdminLayout from '@/components/layout/AdminLayout';
 
-// adminOnly → ADMIN/owner only; managerOk → ADMIN or SITE_MANAGER; neither → everyone.
-const SUBNAV: Array<{ name: string; href: string; adminOnly?: boolean; managerOk?: boolean }> = [
-  { name: 'Locations & Resources', href: '/admin/settings/locations', managerOk: true },
-  { name: 'Users', href: '/admin/settings/users', managerOk: true },
-  { name: 'Financial', href: '/admin/settings/financial', adminOnly: true },
-  { name: 'Headcount', href: '/admin/settings/headcount', adminOnly: true },
-  { name: 'Overheads', href: '/admin/settings/overheads', adminOnly: true },
-  { name: 'Permissions', href: '/admin/settings/permissions', adminOnly: true },
-  { name: 'Licences & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
-  { name: 'Profile', href: '/admin/settings/profile' },
+// Gating: adminOnly → ADMIN/owner; managerOk → ADMIN or SITE_MANAGER; neither → everyone.
+type Gate = { adminOnly?: boolean; managerOk?: boolean };
+type SubTab = Gate & { name: string; href: string };
+type TopTab = Gate & { name: string; key: string; href: string; match: string[]; subtabs?: SubTab[] };
+
+const TABS: TopTab[] = [
+  {
+    name: 'Locations & Resources', key: 'locations', href: '/admin/settings/locations', managerOk: true,
+    match: ['/admin/settings/locations'],
+  },
+  {
+    // Visible to everyone; href is resolved per-role in buildTabs (roster vs own detail).
+    name: 'Users', key: 'users', href: '/admin/settings/users',
+    match: ['/admin/settings/users'],
+    subtabs: [
+      { name: 'Users', href: '/admin/settings/users', managerOk: true },
+      { name: 'Permissions', href: '/admin/settings/permissions', adminOnly: true },
+    ],
+  },
+  {
+    name: 'Company Profile', key: 'company', href: '/admin/settings/company/account', adminOnly: true,
+    match: ['/admin/settings/company', '/admin/settings/financial', '/admin/settings/headcount', '/admin/settings/overheads'],
+    subtabs: [
+      { name: 'Account Details', href: '/admin/settings/company/account', adminOnly: true },
+      { name: 'Company Details', href: '/admin/settings/company/details', adminOnly: true },
+      { name: 'Financial', href: '/admin/settings/financial', adminOnly: true },
+      { name: 'Headcount', href: '/admin/settings/headcount', adminOnly: true },
+      { name: 'Overheads', href: '/admin/settings/overheads', adminOnly: true },
+    ],
+  },
+  {
+    name: 'Licence & Subscriptions', key: 'licence', href: '/admin/settings/licences', adminOnly: true,
+    match: ['/admin/settings/licences'],
+  },
 ];
 
-export default function SettingsLayout({ isAdmin = false, isManager = false, children }: { isAdmin?: boolean; isManager?: boolean; children: React.ReactNode }) {
+type Props = { isAdmin?: boolean; isManager?: boolean; selfUserId?: string; children: React.ReactNode };
+
+export default function SettingsLayout({ isAdmin = false, isManager = false, selfUserId, children }: Props) {
   const router = useRouter();
-  const tabs = SUBNAV.filter((s) => {
-    if (s.adminOnly) return isAdmin;
-    if (s.managerOk) return isAdmin || isManager;
-    return true;
-  });
+  const path = router.pathname; // e.g. /admin/settings/users/[id]
+  const canSee = (g: Gate) => (g.adminOnly ? isAdmin : g.managerOk ? isAdmin || isManager : true);
+
+  const top = TABS.filter(canSee);
+  const active = TABS.find((t) => t.match.some((m) => path === m || path.startsWith(m + '/')));
+  // Users top-tab: managers/admins → roster; a STANDARD user → their own detail.
+  const hrefFor = (t: TopTab) =>
+    t.key === 'users' && !(isAdmin || isManager) && selfUserId ? `/admin/settings/users/${selfUserId}` : t.href;
+  const subtabs = (active?.subtabs ?? []).filter(canSee);
+
+  const tabCls = (on: boolean) =>
+    `px-4 py-2 text-sm rounded-t-lg transition-colors ${
+      on ? 'bg-surface text-ink border-b-2 border-accent font-semibold' : 'text-muted hover:text-ink hover:bg-surface-muted'
+    }`;
+  const subCls = (on: boolean) =>
+    `px-3 py-1.5 text-sm rounded-lg transition-colors ${
+      on ? 'bg-accent-soft text-accent font-semibold' : 'text-muted hover:text-ink hover:bg-surface-muted'
+    }`;
+
   return (
     <AdminLayout>
       <h1 className="text-3xl font-bold text-ink mb-4">Settings</h1>
-      <div className="flex flex-wrap gap-1 border-b border-line mb-6">
-        {tabs.map((s) => {
-          const active = router.pathname === s.href;
-          return (
-            <Link
-              key={s.href}
-              href={s.href}
-              className={`px-4 py-2 text-sm rounded-t-lg transition-colors ${
-                active
-                  ? 'bg-surface text-ink border-b-2 border-accent font-semibold'
-                  : 'text-muted hover:text-ink hover:bg-surface-muted'
-              }`}
-            >
-              {s.name}
-            </Link>
-          );
-        })}
+      <div className="flex flex-wrap gap-1 border-b border-line mb-4">
+        {top.map((t) => (
+          <Link key={t.key} href={hrefFor(t)} className={tabCls(active?.key === t.key)}>{t.name}</Link>
+        ))}
       </div>
+      {subtabs.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-6">
+          {subtabs.map((s) => {
+            const on = path === s.href || path.startsWith(s.href + '/');
+            return <Link key={s.href} href={s.href} className={subCls(on)}>{s.name}</Link>;
+          })}
+        </div>
+      )}
       {children}
     </AdminLayout>
   );

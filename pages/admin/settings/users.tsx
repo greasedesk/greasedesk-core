@@ -154,7 +154,7 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
         </div>
         {canManage && !editing && (
           <div className="flex items-center gap-3 shrink-0">
-            <Link href={`/admin/settings/profile?user=${user.id}`} className="text-xs text-accent hover:underline">Profile</Link>
+            <Link href={`/admin/settings/users/${user.id}`} className="text-xs text-accent hover:underline">Profile</Link>
             <button onClick={() => setEditing(true)} className="text-xs text-accent hover:underline">Edit</button>
             <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-muted cursor-not-allowed' : 'text-danger hover:underline'}`}>Remove</button>
           </div>
@@ -206,11 +206,18 @@ export default function UsersSettings({ users, sites, selfId, isAdmin, isManager
   return (
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
       <Head><title>Users - GreaseDesk</title></Head>
-      <p className="text-muted mb-6">
-        {isAdmin
-          ? 'Manage your users, their role (Admin / Site manager / Standard), and which location(s) each is assigned to.'
-          : 'Manage the standard users at your location(s) and which location(s) each is assigned to. Only an admin can grant the site-manager or admin role.'}
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <p className="text-muted">
+          {isAdmin
+            ? 'Manage your users, their role (Admin / Site manager / Standard), and which location(s) each is assigned to.'
+            : 'Manage the standard users at your location(s) and which location(s) each is assigned to. Only an admin can grant the site-manager or admin role.'}
+        </p>
+        {selfId && (
+          <Link href={`/admin/settings/users/${selfId}`} className="shrink-0 text-sm text-accent hover:underline whitespace-nowrap">
+            My account →
+          </Link>
+        )}
+      </div>
 
       {(isAdmin || isManager) && <AddUser sites={sites} onChanged={refresh} />}
 

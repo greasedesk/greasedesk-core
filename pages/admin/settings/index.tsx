@@ -1,7 +1,8 @@
 /**
  * File: pages/admin/settings/index.tsx
  * /admin/settings → role-aware landing (routed through getVisibility, so it can't drift from the
- * per-tab gating): STANDARD has only Profile; ADMIN/SITE_MANAGER land on Locations & Resources.
+ * per-tab gating): STANDARD lands on their own user detail (profile + password);
+ * ADMIN/SITE_MANAGER land on Locations & Resources.
  */
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
@@ -18,7 +19,9 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   if (!u?.id) return { redirect: { destination: '/admin/login', permanent: false } };
 
   const vis = await getVisibility(u.id as string);
-  // STANDARD users only have the Profile tab; everyone else lands on the first tab (Locations).
-  const destination = vis.role === 'STANDARD' ? '/admin/settings/profile' : '/admin/settings/locations';
+  // STANDARD → their own detail (self-service profile + password); everyone else → Locations.
+  const destination = vis.role === 'STANDARD'
+    ? `/admin/settings/users/${u.id}`
+    : '/admin/settings/locations';
   return { redirect: { destination, permanent: false } };
 };

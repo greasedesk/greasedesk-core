@@ -24,7 +24,8 @@ type SiteSettings = {
   supportedCurrencies: string[];
 };
 type PcTag = { id: string; name: string; category: string | null };
-type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; isAdmin: boolean };
+type SiteOpt = { id: string; name: string };
+type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; sites: SiteOpt[]; selectedSiteId: string; isAdmin: boolean };
 
 const ALL_COUNTRIES = ['United Kingdom', 'Ireland', 'Germany', 'France', 'Spain', 'Australia', 'United States'];
 const ALL_CURRENCIES = ['GBP', 'EUR', 'USD', 'AUD'];
@@ -53,8 +54,8 @@ async function mutate(url: string, method: string, body: any): Promise<string | 
   }
 }
 
-// --- Profit Centre tag manager (compact) ---
-function ProfitCentreTags({ tags }: { tags: PcTag[] }) {
+// --- Profit Centre tag manager (compact) --- (tags are per-site; scoped to the selected location)
+function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   const [name, setName] = useState('');
@@ -66,7 +67,7 @@ function ProfitCentreTags({ tags }: { tags: PcTag[] }) {
     e.preventDefault();
     setBusy(true);
     setErr(null);
-    const error = await mutate('/api/profit-centres', 'POST', { name, category });
+    const error = await mutate('/api/profit-centres', 'POST', { name, category, siteId });
     setBusy(false);
     if (error) return setErr(error);
     setName('');
@@ -129,10 +130,16 @@ function ProfitCentreTags({ tags }: { tags: PcTag[] }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, isAdmin }: PageProps) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin }: PageProps) {
+  const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
+
+  // Switching location reloads SSR with that site's settings (?site=<id>).
+  function switchSite(id: string) {
+    router.push({ pathname: router.pathname, query: { site: id } });
+  }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value } = e.target;
@@ -159,6 +166,7 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          siteId: selectedSiteId,
           defaultVatRate: settings.defaultVatRate,
           defaultLabourRate: settings.defaultLabourRate,
           timezone: settings.timezone,
@@ -183,7 +191,15 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
       <Head><title>Financial Settings - GreaseDesk</title></Head>
 
       <div className="max-w-4xl mx-auto bg-surface p-6 sm:p-8 rounded-xl border border-line">
-        <p className="text-muted mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>.</p>
+        {sites.length > 1 && (
+          <div className="mb-6">
+            <label htmlFor="siteSelect" className={labelClass}>Location</label>
+            <select id="siteSelect" value={selectedSiteId} onChange={(e) => switchSite(e.target.value)} className={inputClass}>
+              {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        )}
+        <p className="text-muted mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>. The VAT rate is business-wide (applies to every location).</p>
 
         {message.text && (
           <div className={`p-3 rounded-lg mb-4 text-sm ${message.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>
@@ -249,7 +265,7 @@ export default function FinancialSettings({ initial, profitCentres, isAdmin }: P
         </form>
       </div>
 
-      <ProfitCentreTags tags={profitCentres} />
+      <ProfitCentreTags tags={profitCentres} siteId={selectedSiteId} />
     </SettingsLayout>
   );
 }
@@ -265,15 +281,24 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   type PcDbRow = { id: string; name: string; category: string | null };
+  type SiteDbRow = { id: string; site_name: string };
+
+  // All-locations: pick the target site from ?site=<id>, validated to belong to the group;
+  // fall back to the caller's own site. The per-site settings below load for that site.
+  const allSites = (await prisma.site.findMany({
+    where: { group_id: user.group_id }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true },
+  })) as SiteDbRow[];
+  const requested = typeof ctx.query.site === 'string' ? ctx.query.site : '';
+  const selectedSiteId = allSites.some((s) => s.id === requested) ? requested : (user.site_id as string);
 
   const [site, vatRow, labourSvc, pcs] = await Promise.all([
     prisma.site.findUnique({
-      where: { id: user.site_id },
+      where: { id: selectedSiteId },
       select: { site_name: true, timezone: true, currency_code: true, pricing_display_mode: true, supported_countries: true, supported_currencies: true },
     }),
     prisma.taxRate.findFirst({ where: { group_id: user.group_id, name: 'UK VAT' }, select: { percentage: true } }),
-    prisma.serviceCatalogue.findFirst({ where: { group_id: user.group_id, site_id: user.site_id, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
-    prisma.profitCentre.findMany({ where: { site_id: user.site_id }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
+    prisma.serviceCatalogue.findFirst({ where: { group_id: user.group_id, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
+    prisma.profitCentre.findMany({ where: { site_id: selectedSiteId }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
   ]);
 
   const initial: SiteSettings = {
@@ -288,6 +313,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   };
 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
+  const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  return { props: { initial, profitCentres, isAdmin: true } };
+  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true } };
 };
