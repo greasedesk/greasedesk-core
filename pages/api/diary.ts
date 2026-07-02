@@ -19,6 +19,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
+import { writeAudit } from '@/lib/audit';
 
 function parseDateTime(s: unknown): Date | null {
   if (typeof s !== 'string' || !s) return null;
@@ -54,6 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
         // Shared guard (scope + interval-overlap + update) — the one place placement happens.
         await placeJobCard(tx, { jobCardId, resourceId, start, end, siteIds: vis.siteIds, heldOnLift });
+        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { resourceId, startAt, endAt } });
       });
       return res.status(200).json({ message: 'Job card placed.' });
     } catch (err: any) {
@@ -77,9 +79,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!card) return res.status(404).json({ message: 'Job card not found.' });
     // Unscheduling is also resource allocation → manager/admin only.
     if (!canManageSite(vis, card.site_id)) return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
-    await prisma.jobCard.update({
-      where: { id: jobCardId },
-      data: { resource_id: null, start_at: null, end_at: null, held_on_lift: false, scheduled_date: null, start_slot: null, end_slot: null },
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.jobCard.update({
+        where: { id: jobCardId },
+        data: { resource_id: null, start_at: null, end_at: null, held_on_lift: false, scheduled_date: null, start_slot: null, end_slot: null },
+      });
+      await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.removed' });
     });
     return res.status(200).json({ message: 'Job card unplaced.' });
   }

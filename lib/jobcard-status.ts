@@ -19,6 +19,11 @@ export const JOB_STATUSES: JobStatus[] = [
   'draft', 'quoted', 'accepted', 'declined', 'in_progress', 'invoiced', 'paid', 'done', 'cancelled',
 ];
 
+// Milestone membership sets (NOT a numeric rank — the lifecycle branches: declined/cancelled are not
+// "further along" than accepted). The tab chokepoint reads these to decide Quote/Invoice completeness.
+export const QUOTE_DONE_STATUSES: JobStatus[] = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'];
+export const INVOICE_DONE_STATUSES: JobStatus[] = ['invoiced', 'paid', 'done'];
+
 const TRANSITIONS: Record<JobStatus, Transition[]> = {
   draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }],
   quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],

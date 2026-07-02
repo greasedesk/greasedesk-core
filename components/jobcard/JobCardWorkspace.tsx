@@ -1,0 +1,357 @@
+/**
+ * File: components/jobcard/JobCardWorkspace.tsx
+ * The tabbed process-path workspace for a job card. Renders the mobile-first step strip, exactly ONE
+ * pane at a time (no long phone scroll), and the audit foot pane. Active tab lives in the URL (?tab=)
+ * so refresh/back/deep-link work. Every mutating control re-enforces server-side; the UI greying is
+ * the same gating chokepoint (computeTabs) the APIs use, so it can never permit an out-of-order action.
+ *
+ * Tabs: Customer Details (edge-resolved owner) → Quote (renamed estimate + accept-&-book) → Intake →
+ * In-Job → Completion photos (gated stages; upload is a placeholder until the R2 slice) → Invoice.
+ */
+import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/router';
+import { useTranslation } from 'next-i18next';
+import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
+import JobCardNotes from '@/components/jobcard/JobCardNotes';
+import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
+import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
+import { JobStatus, StageKey } from '@/lib/jobcard-status';
+import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
+
+type Resource = { id: string; name: string };
+export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean } | null;
+
+type Props = {
+  jobCardId: string;
+  status: JobStatus;
+  tabsState: Record<TabKey, TabState>;
+  canManage: boolean;     // commercial (status/accept/booking/invoice)
+  canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
+  canEditPricing: boolean;
+  owner: { name: string; phone: string | null; email: string | null };
+  vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
+  flags: string[];
+  garageNotes: string;
+  currency: string; locale: string; vatRate: number; vatRegistered: boolean;
+  lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
+  resources: Resource[]; booking: CardBooking;
+  stages: Record<StageKey, boolean>;
+  invoice: { id: string; number: string } | null;
+  events: AuditEvent[];
+};
+
+const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+const datePart = (iso: string) => iso.slice(0, 10);
+const timePart = (iso: string) => iso.slice(11, 16);
+const buildISO = (d: string, t: string) => `${d}T${t}:00.000Z`;
+
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs uppercase text-muted mb-1">{label}</div>
+      <div className="text-ink">{value || '—'}</div>
+    </div>
+  );
+}
+
+export default function JobCardWorkspace(p: Props) {
+  const { t } = useTranslation('jobcard');
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const cancelled = p.status === 'cancelled';
+
+  // ----- active tab from URL, defaulting to the first reachable-incomplete step -----
+  const firstOpen = useMemo(() => {
+    const open = TAB_KEYS.find((k) => p.tabsState[k].reachable && !p.tabsState[k].complete);
+    if (open) return open;
+    const lastReachable = [...TAB_KEYS].reverse().find((k) => p.tabsState[k].reachable);
+    return lastReachable ?? 'details';
+  }, [p.tabsState]);
+  const urlTab = (router.query.tab as string) as TabKey | undefined;
+  const active: TabKey = urlTab && TAB_KEYS.includes(urlTab) && p.tabsState[urlTab].reachable ? urlTab : firstOpen;
+
+  function selectTab(k: TabKey) {
+    router.replace({ pathname: router.pathname, query: { ...router.query, tab: k } }, undefined, { shallow: true });
+  }
+
+  async function run(key: string, fn: () => Promise<Response>) {
+    setBusy(key); setErr(null);
+    try {
+      const res = await fn();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('action.error')); return false; }
+      router.replace(router.asPath); // refresh SSR-derived tab state + audit
+      return true;
+    } catch { setErr(t('action.error')); return false; }
+    finally { setBusy(null); }
+  }
+  const postJSON = (url: string, body: unknown) => () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  const setStage = (stage: StageKey, done: boolean) => run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }));
+  const setStatus = (to: JobStatus) => run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }));
+
+  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: p.tabsState[k].reachable, complete: p.tabsState[k].complete }));
+
+  // ---------- panes ----------
+  function StageComplete({ stage, label }: { stage: StageKey; label: string }) {
+    const done = p.stages[stage];
+    const detailsBlocked = stage === 'details' && !(p.owner.name && p.owner.name !== '—' && p.vehicle.registration && p.vehicle.registration !== '—');
+    return (
+      <button
+        type="button"
+        disabled={!p.canOperate || cancelled || busy !== null || (!done && detailsBlocked)}
+        title={!done && detailsBlocked ? t('tab.detailsMinData') : undefined}
+        onClick={() => setStage(stage, !done)}
+        className={`w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50 ${done ? 'bg-ok-soft text-ok border border-line' : 'bg-accent hover:bg-accent-hover text-white'}`}
+      >
+        {done ? t('stageComplete.doneToggle', { label }) : t('stageComplete.mark', { label })}
+      </button>
+    );
+  }
+
+  function PhotoPlaceholder() {
+    return (
+      <div className="border-2 border-dashed border-line rounded-xl p-8 text-center bg-surface-muted">
+        <p className="text-sm text-muted">{t('photos.placeholder')}</p>
+        <p className="text-xs text-muted mt-1">{t('photos.placeholderHint')}</p>
+      </div>
+    );
+  }
+
+  function DetailsPane() {
+    return (
+      <div className="space-y-5">
+        <div className="bg-surface border border-line rounded-xl p-5">
+          <h2 className="text-lg font-semibold text-ink mb-4">{t('tab.details')}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Field label={t('field.registration')} value={p.vehicle.registration} />
+            <Field label={t('field.vin')} value={p.vehicle.vin} />
+            <Field label={t('field.mileage')} value={p.vehicle.mileageIn != null ? p.vehicle.mileageIn.toLocaleString(p.locale) : null} />
+            <Field label={t('field.customer')} value={p.owner.name} />
+            <Field label={t('field.phone')} value={p.owner.phone} />
+            <Field label={t('field.email')} value={p.owner.email} />
+          </div>
+          <p className="text-xs text-muted mt-4">{t('field.ownerFromEdge')}</p>
+          <p className="text-xs text-muted mt-1">{t('field.editComingSoon')}</p>
+        </div>
+
+        <div className="bg-surface border border-line rounded-xl p-5">
+          <h3 className="text-sm font-semibold text-ink mb-3">{t('field.flags')}</h3>
+          {p.flags.length ? (
+            <div className="flex flex-wrap gap-2">
+              {p.flags.map((f) => <span key={f} className="text-sm px-3 py-1 rounded-lg bg-accent text-white border border-accent">{t(`flag.${f}`)}</span>)}
+            </div>
+          ) : <p className="text-muted text-sm">{t('field.noFlags')}</p>}
+        </div>
+
+        <JobCardNotes jobCardId={p.jobCardId} canEdit={p.canOperate && !cancelled} initialNotes={p.garageNotes} />
+
+        <div className="flex justify-end"><StageComplete stage="details" label={t('tab.details')} /></div>
+      </div>
+    );
+  }
+
+  function InvoicePane() {
+    return (
+      <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
+        <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
+        {p.invoice ? (
+          <>
+            <Link href={`/admin/invoices/${p.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
+              <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{p.invoice.number}</span></span>
+              <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
+            </Link>
+            {p.status === 'invoiced' && p.canManage && !cancelled && (
+              <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+            )}
+          </>
+        ) : p.status === 'in_progress' && p.canManage && !cancelled ? (
+          <>
+            <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
+            <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.invoiced')}</button>
+          </>
+        ) : (
+          <p className="text-sm text-muted">{t('invoiceTab.notYet')}</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
+      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
+      {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
+
+      {active === 'details' && <DetailsPane />}
+
+      {active === 'quote' && (
+        <div className="space-y-5">
+          <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
+          <QuoteActions
+            status={p.status} canManage={p.canManage && !cancelled} hasEstimate={p.hasEstimate} cancelled={cancelled}
+            resources={p.resources} booking={p.booking} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
+            onDone={() => router.replace(router.asPath)} t={t} setStatus={setStatus}
+          />
+        </div>
+      )}
+
+      {active === 'intake' && (
+        <div className="space-y-5">
+          <PhotoPlaceholder />
+          <div className="flex flex-wrap gap-3 justify-end">
+            {p.status === 'accepted' && p.canOperate && !cancelled && (
+              <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
+            )}
+            <StageComplete stage="intake" label={t('tab.intake')} />
+          </div>
+        </div>
+      )}
+
+      {active === 'injob' && (
+        <div className="space-y-5">
+          <PhotoPlaceholder />
+          <div className="flex justify-end"><StageComplete stage="injob" label={t('tab.injob')} /></div>
+        </div>
+      )}
+
+      {active === 'completion' && (
+        <div className="space-y-5">
+          <PhotoPlaceholder />
+          <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !cancelled} busy={busy} setBusy={setBusy} setErr={setErr} onDone={() => router.replace(router.asPath)} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
+          <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
+        </div>
+      )}
+
+      {active === 'invoice' && <InvoicePane />}
+
+      <JobCardAudit events={p.events} />
+    </>
+  );
+}
+
+// ---------- Quote actions: mark-quoted / accept-&-book / reschedule / decline / cancel ----------
+function QuoteActions(props: {
+  status: JobStatus; canManage: boolean; hasEstimate: boolean; cancelled: boolean;
+  resources: Resource[]; booking: CardBooking; jobCardId: string;
+  busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void;
+  t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void;
+}) {
+  const { status, canManage, hasEstimate, resources, booking, jobCardId, busy, setBusy, setErr, onDone, t } = props;
+  const [liftId, setLiftId] = useState(booking?.resourceId ?? '');
+  const [startDate, setStartDate] = useState(booking ? datePart(booking.startAt) : '');
+  const [startTime, setStartTime] = useState(booking ? timePart(booking.startAt) : '09:00');
+  const [endDate, setEndDate] = useState(booking ? datePart(booking.endAt) : '');
+  const [endTime, setEndTime] = useState(booking ? timePart(booking.endAt) : '11:00');
+  const [held, setHeld] = useState(!!booking?.heldOnLift);
+
+  const isBookingStage = status === 'quoted' || status === 'declined';
+  const isAcceptedOnwards = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'].includes(status);
+
+  async function call(key: string, url: string, method: string, body?: unknown) {
+    setBusy(key); setErr(null);
+    try {
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('action.error')); return; }
+      onDone();
+    } catch { setErr(t('action.error')); }
+    finally { setBusy(null); }
+  }
+
+  function acceptAndBook() {
+    if (!liftId || !startDate || !startTime || !endDate || !endTime) { setErr(t('booking.needLiftAndTimes')); return; }
+    const startAt = buildISO(startDate, startTime); const endAt = buildISO(endDate, endTime);
+    if (Date.parse(endAt) <= Date.parse(startAt)) { setErr(t('booking.endAfterStart')); return; }
+    call('accept', '/api/jobcard-accept', 'POST', { jobCardId, resourceId: liftId, startAt, endAt, heldOnLift: held });
+  }
+  function reschedule() {
+    if (!liftId || !startDate || !startTime || !endDate || !endTime) { setErr(t('booking.needLiftAndTimes')); return; }
+    const startAt = buildISO(startDate, startTime); const endAt = buildISO(endDate, endTime);
+    if (Date.parse(endAt) <= Date.parse(startAt)) { setErr(t('booking.endAfterStart')); return; }
+    call('reschedule', '/api/diary', 'PATCH', { jobCardId, resourceId: liftId, startAt, endAt, heldOnLift: held });
+  }
+
+  if (!canManage) return null;
+  const canCancel = !['done', 'cancelled'].includes(status);
+
+  return (
+    <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-ink">{t('quoteActions.title')}</h3>
+
+      {status === 'draft' && (
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button disabled={!hasEstimate || busy !== null} title={!hasEstimate ? t('quoteActions.needLine') : undefined}
+            onClick={() => props.setStatus('quoted')}
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.quoted')}</button>
+        </div>
+      )}
+
+      {(isBookingStage || isAcceptedOnwards) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
+            <label className="block text-xs text-muted mb-1">{t('booking.lift')}</label>
+            <select className={inputCls} value={liftId} onChange={(e) => setLiftId(e.target.value)}>
+              <option value="">{t('booking.selectLift')}</option>
+              {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div><label className="block text-xs text-muted mb-1">{t('booking.start')}</label>
+            <div className="flex gap-2"><input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} /><input type="time" className={inputCls} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div></div>
+          <div><label className="block text-xs text-muted mb-1">{t('booking.end')}</label>
+            <div className="flex gap-2"><input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} /><input type="time" className={inputCls} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div></div>
+          <label className="sm:col-span-2 flex items-center gap-2 text-sm text-ink"><input type="checkbox" className="w-4 h-4" checked={held} onChange={(e) => setHeld(e.target.checked)} />{t('booking.heldOnLift')}</label>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+        {isBookingStage && (
+          <>
+            <button disabled={busy !== null} onClick={acceptAndBook} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.acceptBook')}</button>
+            {status === 'quoted' && <button disabled={busy !== null} onClick={() => props.setStatus('declined')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('action.declined')}</button>}
+          </>
+        )}
+        {isAcceptedOnwards && (
+          <>
+            <button disabled={busy !== null} onClick={reschedule} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.reschedule')}</button>
+            <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('booking.unbook')}</button>
+          </>
+        )}
+        {canCancel && <button disabled={busy !== null} onClick={() => props.setStatus('cancelled')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-danger-soft text-danger disabled:opacity-50 sm:ml-auto">{t('action.cancelled')}</button>}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Completion mileage-out (advisories grain seed) ----------
+function MileageOut(props: { jobCardId: string; initial: number | null; canEdit: boolean; busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; t: (k: string, o?: any) => string; mileageIn: number | null; locale: string }) {
+  const { t } = props;
+  const [val, setVal] = useState(props.initial != null ? String(props.initial) : '');
+  const delta = props.mileageIn != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) - props.mileageIn : null;
+  async function save() {
+    props.setBusy('mileage'); props.setErr(null);
+    try {
+      const res = await fetch('/api/jobcard-odometer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: props.jobCardId, odometerOut: val }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { props.setErr(data?.message || t('action.error')); return; }
+      props.onDone();
+    } catch { props.setErr(t('action.error')); }
+    finally { props.setBusy(null); }
+  }
+  return (
+    <div className="bg-surface border border-line rounded-xl p-5">
+      <h3 className="text-sm font-semibold text-ink mb-1">{t('completion.mileageOut')}</h3>
+      <p className="text-xs text-muted mb-3">{t('completion.mileageHint')}</p>
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+        <div className="flex-1">
+          <input type="number" min="0" className={inputCls} value={val} disabled={!props.canEdit || props.busy !== null} onChange={(e) => setVal(e.target.value)} placeholder={t('completion.mileageOut')} />
+          {delta != null && delta >= 0 && <p className="text-xs text-muted mt-1">{t('completion.delta', { miles: delta.toLocaleString(props.locale) })}</p>}
+        </div>
+        <button disabled={!props.canEdit || props.busy !== null} onClick={save} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('completion.saveMileage')}</button>
+      </div>
+    </div>
+  );
+}

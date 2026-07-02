@@ -15,6 +15,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard } from '@/lib/invoice-issue';
+import { writeAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -67,11 +68,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
+      await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
       if (to === 'invoiced') {
         const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
-        if (!existing) await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
+        if (!existing) {
+          await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
+          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
+        }
       } else if (to === 'paid') {
         await tx.invoice.updateMany({ where: { job_card_id: jobCardId, status: 'issued' }, data: { status: 'paid', paid_at: new Date() } });
+        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid' });
       }
     });
   } catch (e) {

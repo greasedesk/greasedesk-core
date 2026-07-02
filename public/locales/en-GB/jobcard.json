@@ -103,5 +103,87 @@
     "saving": "Saving…",
     "saved": "Notes saved.",
     "error": "Could not save the notes."
+  },
+  "createdAt": "Created {{when}}",
+  "cancelledBanner": "This job is cancelled — everything is read-only.",
+  "tab": {
+    "details": "Customer Details",
+    "quote": "Quote",
+    "intake": "Intake Photos",
+    "injob": "In-Job Photos",
+    "completion": "Completion Photos",
+    "invoice": "Invoice",
+    "locked": "Complete the previous step to unlock this one.",
+    "detailsMinData": "Add the customer and registration first."
+  },
+  "flag": {
+    "urgent": "Urgent / Priority",
+    "sales": "Sales Car",
+    "customer": "Customer Car",
+    "mot": "MOT",
+    "diag": "DIAG"
+  },
+  "field": {
+    "registration": "Registration",
+    "vin": "VIN",
+    "mileage": "Mileage in",
+    "customer": "Customer",
+    "phone": "Phone",
+    "email": "Email",
+    "flags": "Flags",
+    "noFlags": "No flags set.",
+    "ownerFromEdge": "Owner shown is the vehicle's current owner.",
+    "editComingSoon": "Editing customer & vehicle details from the card arrives next."
+  },
+  "stageComplete": {
+    "mark": "Mark {{label}} complete",
+    "doneToggle": "{{label}} complete — tap to reopen"
+  },
+  "photos": {
+    "placeholder": "Photo upload arrives with cloud storage next.",
+    "placeholderHint": "This step still gates the workflow — mark it complete when the photos are taken."
+  },
+  "quoteActions": {
+    "title": "Quote actions",
+    "acceptBook": "Accept & book",
+    "reschedule": "Reschedule",
+    "needLine": "Add at least one line before quoting."
+  },
+  "completion": {
+    "mileageOut": "Mileage out",
+    "mileageHint": "Odometer reading at completion — seeds future service advisories. Optional.",
+    "saveMileage": "Save mileage",
+    "delta": "{{miles}} miles this visit"
+  },
+  "invoiceTab": {
+    "number": "Invoice",
+    "view": "View invoice",
+    "readyToMint": "All stages complete — raise the invoice.",
+    "notYet": "The invoice becomes available once the job is worked and completed."
+  },
+  "audit": {
+    "title": "Audit trail",
+    "preface": "Records actions from now on. Cards worked before this feature shipped start with an empty trail.",
+    "empty": "No activity recorded yet.",
+    "status": {
+      "draft": "Reopened to draft",
+      "quoted": "Marked as quoted",
+      "accepted": "Quote accepted",
+      "declined": "Quote declined",
+      "in_progress": "Work started",
+      "invoiced": "Marked invoiced",
+      "paid": "Marked paid",
+      "done": "Marked done",
+      "cancelled": "Job cancelled"
+    },
+    "stage": {
+      "details": { "done": "Customer Details completed", "undone": "Customer Details reopened" },
+      "intake": { "done": "Intake photos completed", "undone": "Intake photos reopened" },
+      "injob": { "done": "In-Job photos completed", "undone": "In-Job photos reopened" },
+      "complete": { "done": "Completion photos completed", "undone": "Completion photos reopened" }
+    },
+    "accept": { "booked": "Accepted & booked onto the diary" },
+    "booking": { "moved": "Booking scheduled / moved", "removed": "Removed from the diary" },
+    "invoice": { "minted": "Invoice raised", "paid": "Invoice marked paid" }
   }
 }
