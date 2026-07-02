@@ -19,7 +19,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
-import { ensureIdentityAndCurrentOwner, normalizeVin } from '@/lib/vehicle-identity';
+import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin } from '@/lib/vehicle-identity';
 
 type CreateJobCardBody = {
   registration: string;
@@ -114,20 +114,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error('FORBIDDEN_SITE');
         }
 
-        // Find-or-create Vehicle by registration within the tenant; reuse its customer.
-        let vehicle = await tx.vehicle.findFirst({
+        // Find-or-create Vehicle by registration within the tenant. Owner is resolved from the
+        // ownership EDGE (Stage B) — customer_id is never read here.
+        const vehicle = await tx.vehicle.findFirst({
           where: { group_id: groupId, registration },
-          select: { id: true, customer_id: true },
+          select: { id: true },
         });
 
-        let customerId: string;
-        let vehicleId: string;
-
-        if (vehicle) {
-          customerId = vehicle.customer_id;
-          vehicleId = vehicle.id;
-        } else {
-          const customer = await tx.customer.create({
+        const newCustomer = () =>
+          tx.customer.create({
             data: {
               group_id: groupId,
               site_id: targetSiteId,
@@ -137,12 +132,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
             select: { id: true },
           });
-          customerId = customer.id;
 
+        let customerId: string;
+        let vehicleId: string;
+
+        if (vehicle) {
+          vehicleId = vehicle.id;
+          // Stage B: resolve the current owner from the edge, NOT vehicle.customer_id.
+          const ownerId = await getCurrentOwnerId(tx, vehicleId);
+          // Defensive: a found vehicle with no current edge (pre-backfill anomaly) is healed by
+          // creating an owner here; ensureIdentityAndCurrentOwner below opens the edge for it.
+          customerId = ownerId ?? (await newCustomer()).id;
+        } else {
+          customerId = (await newCustomer()).id;
           const createdVehicle = await tx.vehicle.create({
             data: {
               group_id: groupId,
-              customer_id: customerId,
+              customer_id: customerId, // weld still written on new vehicles (retired in Stage C)
               registration,
               vin: body.vin?.trim() || null,
               vin_normalized: normalizeVin(body.vin),
@@ -153,8 +159,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           vehicleId = createdVehicle.id;
         }
 
-        // Stage A dual-write: mirror the weld into the identity + ownership-edge layer (idempotent).
-        // customer_id above stays the read source until Stage B; this only keeps the new layer in step.
+        // Dual-write (unchanged): ensure the identity + current ownership edge exist (idempotent).
+        // JobCard.customer_id below is satisfied by the edge-resolved customerId, not the weld.
         await ensureIdentityAndCurrentOwner(tx, {
           vehicleId, groupId, customerId, registration, vin: body.vin,
         });

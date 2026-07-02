@@ -17,6 +17,23 @@ export function normalizeVin(vin?: string | null): string | null {
 }
 
 /**
+ * Stage B owner resolution: the CURRENT owner of a vehicle, read from the ownership edge — never
+ * from Vehicle.customer_id. Returns the customer_id of the single is_current edge, or null if the
+ * vehicle has no current owner (a genuinely new vehicle, or a pre-backfill anomaly the caller heals).
+ * This is the read path that replaces the old vehicle.customer_id dereference.
+ */
+export async function getCurrentOwnerId(
+  tx: Prisma.TransactionClient,
+  vehicleId: string,
+): Promise<string | null> {
+  const edge = await tx.vehicleOwnership.findFirst({
+    where: { vehicle_id: vehicleId, is_current: true },
+    select: { customer_id: true },
+  });
+  return edge?.customer_id ?? null;
+}
+
+/**
  * Ensure a vehicle has a VehicleIdentity (VIN-anchored per tenant when present) and exactly one
  * current ownership edge for the given owner. Idempotent: if the identity/edge already exist they
  * are left as-is. Never writes Vehicle.customer_id. Call inside the same transaction as the vehicle
