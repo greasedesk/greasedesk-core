@@ -512,8 +512,10 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, currency: 'GBP', locale: 'en-GB', canManage: false, noSites: true } };
   }
 
-  const wanted = (ctx.query.site as string) || user.site_id;
-  const resolvedId = wanted && vis.siteIds.includes(wanted) ? wanted : vis.siteIds[0];
+  // Default to the user's PRIMARY location; a valid ?site switches. Forced out-of-scope ?site
+  // (not one of vis.siteIds) falls back to primary — never shows another location's diary.
+  const wanted = (ctx.query.site as string) || vis.primarySiteId || '';
+  const resolvedId = wanted && vis.siteIds.includes(wanted) ? wanted : (vis.primarySiteId ?? vis.siteIds[0]);
   const site = (await prisma.site.findFirst({
     where: { id: resolvedId },
     select: { id: true, site_name: true, open_days: true, open_hour: true, close_hour: true, week_start: true, currency_code: true, locale: true },

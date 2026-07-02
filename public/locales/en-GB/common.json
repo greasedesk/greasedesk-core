@@ -8,8 +8,7 @@
     "settings": "Settings",
     "signOut": "Sign Out",
     "toggleMenu": "Toggle Menu",
-    "locationsLabel": "Locations:",
-    "openDiary": "Open {{name}}'s diary"
+    "allLocations": "All locations"
   },
   "dashboard": {
     "welcome": "Welcome Back!",

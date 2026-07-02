@@ -39,7 +39,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       orderBy: { site_name: 'asc' },
       select: { id: true, site_name: true },
     });
-    return res.status(200).json({ currentSiteId, locations: sites });
+    // primarySiteId drives the nav's default-location highlight when no ?site is set.
+    return res.status(200).json({ currentSiteId, primarySiteId: vis.primarySiteId, locations: sites });
   }
 
   if (req.method === 'POST') {

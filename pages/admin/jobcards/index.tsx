@@ -30,7 +30,7 @@ type JobCardRow = {
   stages: Stages;
 };
 
-type PageProps = { cards: JobCardRow[]; noSites: boolean };
+type PageProps = { cards: JobCardRow[]; noSites: boolean; scopeLabel: string };
 
 const STAGE_LABELS: Array<[keyof Stages, string]> = [
   ['details', 'Job Card'],
@@ -59,7 +59,7 @@ function StageBadges({ stages }: { stages: Stages }) {
   );
 }
 
-export default function JobCardsListPage({ cards, noSites }: PageProps) {
+export default function JobCardsListPage({ cards, noSites, scopeLabel }: PageProps) {
   return (
     <>
       <Head>
@@ -67,7 +67,10 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
       </Head>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold text-ink">Job Cards</h1>
+        <div>
+          <h1 className="text-3xl font-bold text-ink">Job Cards</h1>
+          {scopeLabel && <p className="text-sm text-muted mt-0.5">{scopeLabel}</p>}
+        </div>
         <Link
           href="/admin/jobcards/new"
           className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm"
@@ -146,15 +149,31 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   };
 
   const vis = await getVisibility(user.id as string); // role/assignment site visibility
+  if (vis.siteIds.length === 0) {
+    return { props: { cards: [], noSites: true, scopeLabel: '' } };
+  }
+
+  // Location scope from ?site: "all" (multi-site only) shows every accessible site; a valid site id
+  // filters to it; otherwise default to the PRIMARY location. Forced out-of-scope ?site falls back
+  // to primary — a mechanic can never pull another location's cards by hand-typing the URL.
+  const raw = typeof ctx.query.site === 'string' ? ctx.query.site : '';
+  const isAll = raw === 'all' && vis.siteIds.length > 1;
+  const sid = isAll ? null : (raw && raw !== 'all' && vis.siteIds.includes(raw) ? raw : (vis.primarySiteId ?? vis.siteIds[0]));
 
   const rows = (await prisma.jobCard.findMany({
-    where: { site_id: { in: vis.siteIds } }, // visible sites only
+    where: { site_id: isAll ? { in: vis.siteIds } : (sid as string) },
     orderBy: { created_at: 'desc' },
     include: {
       customer: { select: { name: true } },
       vehicle: { select: { registration: true } },
     },
   })) as JobCardListDbRow[];
+
+  let scopeLabel = 'All locations';
+  if (!isAll && sid) {
+    const s = (await prisma.site.findUnique({ where: { id: sid }, select: { site_name: true } })) as { site_name: string } | null;
+    scopeLabel = s?.site_name ?? '';
+  }
 
   const cards: JobCardRow[] = rows.map((r: JobCardListDbRow) => ({
     id: r.id,
@@ -170,5 +189,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     },
   }));
 
-  return { props: { cards, noSites: vis.siteIds.length === 0 } };
+  return { props: { cards, noSites: false, scopeLabel } };
 };
