@@ -30,8 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const groupId = sUser.group_id as string;
 
-  const { group_name, company_number, address, vat_number, vat_registered, default_vat_rate } = (req.body || {}) as {
+  const { group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
+    invoice_prefix?: string; invoice_pad_width?: number | string;
   };
 
   const data: any = {};
@@ -48,6 +49,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const r = Number(default_vat_rate);
     if (!Number.isFinite(r) || r < 0 || r > 100) return res.status(400).json({ message: 'Default VAT rate must be between 0 and 100.' });
     data.default_vat_rate = new Prisma.Decimal(r.toFixed(2));
+  }
+  if (invoice_prefix !== undefined) data.invoice_prefix = String(invoice_prefix).trim();
+  if (invoice_pad_width !== undefined) {
+    const w = Math.trunc(Number(invoice_pad_width));
+    if (!Number.isFinite(w) || w < 0 || w > 10) return res.status(400).json({ message: 'Invoice padding must be between 0 and 10.' });
+    data.invoice_pad_width = w;
   }
 
   if (Object.keys(data).length === 0) {

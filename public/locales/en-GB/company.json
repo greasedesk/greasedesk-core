@@ -22,5 +22,12 @@
     "saving": "Saving…",
     "saved": "Company details saved.",
     "error": "Could not save."
+  },
+  "invoice": {
+    "heading": "Invoice numbering",
+    "prefix": "Prefix",
+    "prefixPlaceholder": "e.g. INV- or FY26-",
+    "padWidth": "Zero-padding width",
+    "preview": "Next number preview"
   }
 }

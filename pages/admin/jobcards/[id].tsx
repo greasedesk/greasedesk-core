@@ -55,6 +55,7 @@ type PageProps = {
   resources: Array<{ id: string; name: string }>;
   booking: CardBooking;
   garageNotes: string;
+  invoice: { id: string; number: string } | null;
 };
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -66,7 +67,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, stages, hasEstimate, resources, booking, garageNotes }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, stages, hasEstimate, resources, booking, garageNotes, invoice }: PageProps) {
   const router = useRouter();
   const { t } = useTranslation('jobcard');
   // Context-aware back link: return to wherever the card was opened from (diary preserves week/day+date).
@@ -89,6 +90,14 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPri
           {back.label}
         </Link>
       </div>
+
+      {invoice && (
+        <Link href={`/admin/invoices/${invoice.id}`}
+          className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 mb-6 hover:bg-accent-soft/70">
+          <span className="text-sm text-ink font-medium">Invoice <span className="font-mono">{invoice.number}</span></span>
+          <span className="text-sm text-accent">View invoice →</span>
+        </Link>
+      )}
 
       {/* Lifecycle status + the four operational stage toggles */}
       <JobCardStatus
@@ -193,6 +202,9 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     ? { resourceId: row.resource_id, startAt: (row.start_at as Date).toISOString(), endAt: (row.end_at as Date).toISOString(), heldOnLift: !!row.held_on_lift }
     : null;
 
+  const invoiceRow = (await prisma.invoice.findUnique({ where: { job_card_id: row.id }, select: { id: true, invoice_number: true } })) as { id: string; invoice_number: string | null } | null;
+  const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
+
   const num = (d: any) => (d == null ? 0 : Number(d));
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
@@ -245,6 +257,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       resources,
       booking,
       garageNotes: row.garage_notes ?? '',
+      invoice,
     },
   };
 });

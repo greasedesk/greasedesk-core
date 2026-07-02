@@ -52,6 +52,12 @@ enum TenantStatus {
   cancelled
 }
 
+// Invoice lifecycle. issued = number assigned, editable; paid = frozen (canEditInvoice → false).
+enum InvoiceStatus {
+  issued
+  paid
+}
+
 // Cost-capture (per-site P&L foundation). Raw cost grains only — no aggregation in-schema.
 enum CostType {
   salary // amount_pennies = annual salary
@@ -110,6 +116,11 @@ model Group {
   // cascades as an editable pre-fill to quotes + overheads. Read via lib/tenant-vat.ts.
   default_vat_rate Decimal  @default(20) @db.Decimal(5, 2)
   address          String?
+
+  // Invoice number DISPLAY format (per-tenant). Rendered via lib/invoice-number.ts::formatInvoiceNumber.
+  // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").
+  invoice_prefix    String @default("")
+  invoice_pad_width Int    @default(4)
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
   created_at       DateTime @default(now())
@@ -144,6 +155,10 @@ model Group {
   cost_people      CostPerson[]
   overheads        Overhead[]
   cost_allocations CostAllocation[]
+
+  // Invoicing
+  invoices         Invoice[]
+  invoice_sequence InvoiceSequence?
 }
 
 model GroupBilling {
@@ -211,6 +226,7 @@ model Site {
   services       ServiceCatalogue[]
   diary_notes    DiaryNote[]
   cost_allocations CostAllocation[]
+  invoices       Invoice[]
 
   @@index([group_id])
 }
@@ -356,6 +372,7 @@ model Customer {
   name       String
   phone      String?
   email      String?
+  address    String?  // billing address — source for Invoice.customer_address_snapshot
   notes      String?
   created_at DateTime @default(now())
 
@@ -531,6 +548,7 @@ model JobCard {
   resource          Resource?      @relation(fields: [resource_id], references: [id], onDelete: SetNull)
   photos            JobCardPhoto[]
   items             JobCardItem[]
+  invoice           Invoice?
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
@@ -649,6 +667,71 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Invoicing — GreaseDesk IS the primary VAT invoice (replaces Xero at issue). Numbers are minted
+// once (assignInvoiceNumber) and rendered once (formatInvoiceNumber); freeze-on-paid = canEditInvoice.
+// The header is SNAPSHOT at issue so later profile edits never rewrite history.
+// ───────────────────────────────────────────────────────────────────────────────
+
+model Invoice {
+  id             String        @id @default(uuid())
+  group_id       String // tenantId
+  job_card_id    String        @unique // one invoice per card; sticky number on re-issue
+  site_id        String
+  status         InvoiceStatus @default(issued)
+  sequence_value Int // monotonic counter value underneath the rendered number
+  invoice_number String? // rendered string; set at issue, sticky thereafter
+  issued_at      DateTime      @default(now())
+  paid_at        DateTime?
+
+  // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
+  company_name_snapshot       String
+  company_vat_number_snapshot String?
+  company_address_snapshot    String?
+  customer_name_snapshot      String
+  customer_address_snapshot   String?
+  vehicle_reg_snapshot        String?
+  vehicle_desc_snapshot       String?
+  vat_registered_at_issue     Boolean
+  created_at                  DateTime @default(now())
+
+  group    Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site     Site          @relation(fields: [site_id], references: [id], onDelete: NoAction)
+  job_card JobCard       @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
+  lines    InvoiceLine[]
+
+  @@unique([group_id, sequence_value]) // no duplicate sequence per tenant
+  @@index([group_id])
+  @@index([site_id])
+}
+
+model InvoiceLine {
+  id                String   @id @default(uuid())
+  invoice_id        String
+  description       String
+  qty               Decimal  @default(1) @db.Decimal(12, 2)
+  unit_price        Decimal  @default(0) @db.Decimal(12, 2)
+  vat_rate          Decimal  @default(0) @db.Decimal(5, 2)
+  line_vat          Decimal  @default(0) @db.Decimal(12, 2)
+  line_total        Decimal  @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
+  unit_cost         Decimal  @default(0) @db.Decimal(12, 2) // INTERNAL — margin only; NEVER rendered to the customer
+  catalogue_item_id String? // forward hook; NO FK yet (no catalogue table) — added when catalogue lands
+  position          Int      @default(0)
+  created_at        DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+
+  @@index([invoice_id])
+}
+
+model InvoiceSequence {
+  group_id   String   @id // one row per tenant
+  last_value Int      @default(0) // monotonic — never resets, never reused. NOT seeded (business decision pending).
+  updated_at DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -10,9 +10,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
+import { issueInvoiceForCard } from '@/lib/invoice-issue';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -58,6 +60,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!allDone) return res.status(409).json({ message: 'Complete all four stages before invoicing.' });
   }
 
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
+  // Apply the transition + its side effects atomically.
+  //  - invoiced: mint the invoice (once — sticky via Invoice.job_card_id @unique). The mint runs in
+  //    THIS tx, so if anything fails the sequence increment rolls back too (no gap, no burned number).
+  //  - paid: freeze the invoice (status=paid, paid_at) → canEditInvoice flips to false.
+  try {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
+      if (to === 'invoiced') {
+        const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
+        if (!existing) await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
+      } else if (to === 'paid') {
+        await tx.invoice.updateMany({ where: { job_card_id: jobCardId, status: 'issued' }, data: { status: 'paid', paid_at: new Date() } });
+      }
+    });
+  } catch (e) {
+    console.error('Status transition error:', e);
+    return res.status(500).json({ message: 'Failed to update status.' });
+  }
   return res.status(200).json({ message: 'Status updated.', status: to });
 }
