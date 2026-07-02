@@ -32,6 +32,9 @@ type FormState = {
 
 const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100));
 const inc = (exPounds: number, rate: number) => exPounds * (1 + (rate || 0) / 100);
+// Margin ON PRICE (not markup on cost). Divide-by-zero (price 0) → null → shown as "—", never NaN/∞.
+const marginPct = (price: number, cost: number): number | null => (price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : null);
+const pctLabel = (price: number, cost: number): string => { const m = marginPct(price, cost); return m === null ? '—' : `${m}%`; };
 const inputCls = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink';
 const labelCls = 'text-sm font-medium text-ink';
 
@@ -178,7 +181,7 @@ export default function ProductsPage() {
                   <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="fixed">{t('fixed')}</option><option value="misc">{t('misc')}</option>
                 </select></label>
               <label className="block sm:col-span-2"><span className={labelCls}>{t('name')}</span>
-                <input value={form.name} placeholder={t('namePlaceholder')} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} /></label>
+                <textarea value={form.name} placeholder={t('namePlaceholder')} rows={2} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${inputCls} resize-y`} /></label>
 
               {!isFixed && (<>
                 <label className="block"><span className={labelCls}>{t('cost')} {t('exVat')}</span>
@@ -203,7 +206,7 @@ export default function ProductsPage() {
                   <div className="mt-2 space-y-2">
                     {form.components.map((c, i) => (
                       <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                        <input value={c.description} onChange={(e) => setComp(i, { description: e.target.value })} placeholder={t('componentDesc')} className="col-span-12 sm:col-span-6 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink" />
+                        <textarea value={c.description} rows={2} onChange={(e) => setComp(i, { description: e.target.value })} placeholder={t('componentDesc')} className="col-span-12 sm:col-span-6 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink resize-y" />
                         <input type="number" inputMode="decimal" step="0.01" min={0} value={c.qty} onChange={(e) => setComp(i, { qty: e.target.value })} aria-label={t('componentQty')} className="col-span-3 sm:col-span-2 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" />
                         <input type="number" inputMode="decimal" step="0.01" min={0} value={c.cost} onChange={(e) => setComp(i, { cost: e.target.value })} aria-label={t('componentCost')} className="col-span-6 sm:col-span-3 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" placeholder={t('componentCost')} />
                         <button onClick={() => rmComp(i)} className="col-span-3 sm:col-span-1 text-xs text-danger hover:underline">{t('remove')}</button>
@@ -218,7 +221,7 @@ export default function ProductsPage() {
                   <label className="block sm:w-64"><span className={labelCls}>{t('basePrice')} {t('exVat')}</span>
                     <input type="number" inputMode="decimal" step="0.01" min={0} value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: e.target.value })} className={inputCls} />
                     <ExInc ex={Number(form.basePrice || 0)} rate={rate} /></label>
-                  <p className="text-xs text-muted mt-1">{t('margin')}: <span className="text-ink font-medium">{money(Number(form.basePrice || 0) - compCost)}</span> {t('exVat')}</p>
+                  <p className="text-xs text-muted mt-1">{t('margin')}: <span className="text-ink font-medium">{money(Number(form.basePrice || 0) - compCost)}</span> {t('exVat')} · <span className="text-ink font-medium">{pctLabel(Number(form.basePrice || 0), compCost)}</span></p>
                 </div>
 
                 {/* Tier grid */}
@@ -239,7 +242,7 @@ export default function ProductsPage() {
                               className="w-28 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right disabled:opacity-50" />
                             <label className="flex items-center gap-1 text-xs text-muted"><input type="checkbox" checked={cell.manual} onChange={(e) => setCell(tt.id, { manual: e.target.checked })} />{t('tierGrid.manual')}</label>
                             <span className="text-xs text-muted">
-                              {cell.manual ? t('tierGrid.perJob') : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)}</>}
+                              {cell.manual ? t('tierGrid.perJob') : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)} · {pctLabel(eff ?? 0, compCost)}</>}
                             </span>
                           </div>
                         );
@@ -277,7 +280,7 @@ export default function ProductsPage() {
                       {!i.active && <span className="ml-2 text-[10px] uppercase tracking-wide text-muted">{t('archived')}</span>}
                     </div>
                     <div className="text-xs text-muted mt-0.5">
-                      {typeLabel(i.itemType)} · {isFx ? t('basePrice') : t('price')} {money(price)} {t('exVat')} · {t('cost')} {money(cost)} · {t('margin')} {money(price - cost)}
+                      {typeLabel(i.itemType)} · {isFx ? t('basePrice') : t('price')} {money(price)} {t('exVat')} · {t('cost')} {money(cost)} · {t('margin')} {money(price - cost)} · {pctLabel(price, cost)}
                       {isFx && ` · ${i.components.length} ${t('componentsShort')}${i.tierPrices.length ? ` · ${i.tierPrices.length} ${t('tierPricesShort')}` : ''}`}
                     </div>
                   </div>

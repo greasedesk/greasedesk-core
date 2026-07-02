@@ -93,7 +93,7 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
       )}
       <div className="sm:flex-1">
         <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
-        <input className={inputCls} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
+        <textarea className={`${inputCls} resize-y`} rows={2} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
           disabled={!canEdit} onChange={(e) => onChange(idx, { description: e.target.value })} />
       </div>
       <div className="sm:w-24">

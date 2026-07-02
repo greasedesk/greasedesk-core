@@ -132,8 +132,8 @@ export default function InvoicePage(props: PageProps) {
               <p className="text-xs text-muted">{t('rollupHint')}</p>
               {rows.map((r, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                  <input value={r.description} onChange={(e) => setRow(i, { description: e.target.value })} placeholder={t('cols.description')}
-                    className="col-span-12 sm:col-span-5 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink" />
+                  <textarea value={r.description} rows={2} onChange={(e) => setRow(i, { description: e.target.value })} placeholder={t('cols.description')}
+                    className="col-span-12 sm:col-span-5 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink resize-y" />
                   <input type="number" inputMode="decimal" step="0.01" value={r.qtyStr} onChange={(e) => setRow(i, { qtyStr: e.target.value })} aria-label={t('cols.qty')}
                     className="col-span-3 sm:col-span-2 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" />
                   <input type="number" inputMode="decimal" step="0.01" value={r.unitPriceStr} onChange={(e) => setRow(i, { unitPriceStr: e.target.value })} aria-label={t('cols.unitPrice')}
