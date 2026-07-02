@@ -16,13 +16,18 @@ import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-
 import { formatMoney } from '@/lib/format-money';
 
 export type EstimateLine = {
-  item_type: QuoteItemType; // 'labour' | 'part' (misc supported by the API; not surfaced this slice)
+  item_type: QuoteItemType; // 'labour' | 'part' | 'misc'
   description: string;
   qty: string;        // hours (labour) / quantity (parts)
   unit_price: string; // rate (labour) / unit price (parts; negative allowed)
   unit_cost: string;  // optional cost each
   vatable: boolean;
+  code?: string;                    // catalogue code typed on the line (match key; not persisted)
+  catalogue_item_id?: string | null; // origin hook, persisted; remembers the catalogue item it came from
 };
+
+// Catalogue item (active, tenant-scoped) loaded once for client-side code matching.
+export type CatalogueLite = { id: string; code: string; name: string; item_type: QuoteItemType; unit_cost: number; unit_price: number; vat_rate: number };
 
 // Internal row = a line plus a stable client id used as the React key.
 type Row = EstimateLine & { _uid: string };
@@ -38,12 +43,15 @@ type Props = {
   initialVatRate: number;
   initialLines: EstimateLine[];
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
+  catalogue?: CatalogueLite[]; // active catalogue for code autocomplete (client-side match)
 };
+
+const CODES_DATALIST = 'gd-catalogue-codes';
 
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs text-muted mb-1';
 
-const blank = (item_type: QuoteItemType): Row => ({ _uid: uid(), item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true });
+const blank = (item_type: QuoteItemType): Row => ({ _uid: uid(), item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true, code: '', catalogue_item_id: null });
 
 // ---- module-scope row component (stable identity → inputs keep focus) ----
 type RowProps = {
@@ -52,15 +60,25 @@ type RowProps = {
   kind: 'labour' | 'part';
   canEdit: boolean;
   showVat: boolean;
+  hasCatalogue: boolean;
   lineTotal: string;
   t: (k: string) => string;
   onChange: (idx: number, patch: Partial<EstimateLine>) => void;
+  onCode: (idx: number, code: string) => void;
   onRemove: (idx: number) => void;
 };
 
-function LineRow({ row, idx, kind, canEdit, showVat, lineTotal, t, onChange, onRemove }: RowProps) {
+function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
   return (
     <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
+      {hasCatalogue && (
+        <div className="sm:w-28">
+          <label className={labelCls}>{t('estimate.code')}</label>
+          <input className={inputCls} placeholder={t('estimate.codePlaceholder')} value={row.code ?? ''} list={CODES_DATALIST}
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+            disabled={!canEdit} onChange={(e) => onCode(idx, e.target.value)} />
+        </div>
+      )}
       <div className="sm:flex-1">
         <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
         <input className={inputCls} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
@@ -100,10 +118,37 @@ function LineRow({ row, idx, kind, canEdit, showVat, lineTotal, t, onChange, onR
   );
 }
 
-export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true }: Props) {
+export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [] }: Props) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
+
+  // Client-side, load-once code match (active catalogue only, tenant-scoped by SSR). Case-insensitive.
+  const codeIndex = useMemo(() => {
+    const m = new Map<string, CatalogueLite>();
+    for (const c of catalogue) m.set(c.code.trim().toUpperCase(), c);
+    return m;
+  }, [catalogue]);
+  const hasCatalogue = catalogue.length > 0;
+
+  // Typing a code PRE-FILLS the line (editable defaults; never locks). A code that resolves to a
+  // different type re-buckets the line to the correct section. No match → just clears the origin id.
+  const onCode = (idx: number, code: string) => {
+    const hit = codeIndex.get(code.trim().toUpperCase());
+    setLines((p) => p.map((l, i) => {
+      if (i !== idx) return l;
+      if (!hit) return { ...l, code, catalogue_item_id: null };
+      return {
+        ...l, code,
+        item_type: hit.item_type,
+        description: hit.name,
+        unit_price: String(hit.unit_price),
+        unit_cost: String(hit.unit_cost),
+        vatable: Number(hit.vat_rate) > 0, // per-line rate maps to the vatable flag; charged at the card rate
+        catalogue_item_id: hit.id,
+      };
+    }));
+  };
   const [vatRate, setVatRate] = useState<string>(String(initialVatRate));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -134,7 +179,8 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
   async function save() {
     setBusy(true); setMsg(null);
     try {
-      const items = lines.map(({ _uid, ...rest }) => rest); // strip the client-only id
+      // strip the client-only id + the transient code (not a JobCardItem field); keep catalogue_item_id.
+      const items = lines.map(({ _uid, code, ...rest }) => rest);
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
@@ -156,6 +202,11 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 mt-6">
+      {hasCatalogue && (
+        <datalist id={CODES_DATALIST}>
+          {catalogue.map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
+        </datalist>
+      )}
       <h2 className="text-lg font-semibold text-ink mb-1">{t('estimate.title')}</h2>
       {!canEdit && <p className="text-warn text-sm mb-3">{t('estimate.readOnly')}</p>}
       {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
@@ -164,8 +215,8 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
       {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
       {labour.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered}
-          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
+        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
 
@@ -173,8 +224,8 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
       {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
       {parts.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered}
-          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onRemove={remove} />
+        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && (
         <div className="mb-4">

@@ -5,6 +5,8 @@
     "parts": "Parts & materials",
     "addLabour": "Add labour",
     "addParts": "Add part",
+    "code": "Code",
+    "codePlaceholder": "Catalogue",
     "description": "Description",
     "descriptionPlaceholder": "Description",
     "rate": "Rate / hr",

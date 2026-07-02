@@ -159,6 +159,9 @@ model Group {
   // Invoicing
   invoices         Invoice[]
   invoice_sequence InvoiceSequence?
+
+  // Product catalogue (tenant-level; one shared catalogue across all sites)
+  catalogue_items  CatalogueItem[]
 }
 
 model GroupBilling {
@@ -582,9 +585,15 @@ model JobCardItem {
   vat_amount  Decimal  @default(0) @db.Decimal(12, 2)
   created_at  DateTime @default(now())
 
-  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  // Origin hook: which catalogue item pre-filled this line (for the future per-item margin lens).
+  // SetNull so archiving/deleting the catalogue item never breaks a historic line.
+  catalogue_item_id String?
+
+  job_card  JobCard        @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  catalogue CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
 
   @@index([job_card_id])
+  @@index([catalogue_item_id])
 }
 
 // Lightweight labelled diary entry — NOT a job card (no customer/vehicle/quote). A note may be
@@ -732,6 +741,32 @@ model InvoiceSequence {
   updated_at DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Product catalogue — a grain-standardiser + data-entry accelerator (NOT stock control). Defined
+// once per tenant (code → cost/price/VAT/type); typing the code on a job-card line pre-fills it as
+// editable defaults. Carries BOTH cost and price so margin is banked at entry.
+// ───────────────────────────────────────────────────────────────────────────────
+
+model CatalogueItem {
+  id         String   @id @default(uuid())
+  group_id   String // TENANT-level — one shared catalogue, one price, across all sites
+  code       String // required; unique per tenant; the match key
+  name       String // fills the line's description on autocomplete
+  item_type  ItemType // labour | part | misc — inherited by the autocompleted line
+  unit_cost  Decimal  @db.Decimal(12, 2) // required — cost is expected (banks the margin)
+  unit_price Decimal  @db.Decimal(12, 2)
+  vat_rate   Decimal  @default(20) @db.Decimal(5, 2) // defaulted from getTenantVat().defaultRate on create
+  active     Boolean  @default(true) // archive (false) preferred over hard delete — preserves history
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  group     Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_lines JobCardItem[]
+
+  @@unique([group_id, code])
+  @@index([group_id])
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

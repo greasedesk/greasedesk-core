@@ -23,6 +23,7 @@ const TYPES: ItemType[] = ['labour', 'part', 'misc'];
 type IncomingLine = {
   item_type?: string; description?: string; qty?: number | string;
   unit_price?: number | string; unit_cost?: number | string; vatable?: boolean;
+  catalogue_item_id?: string | null; // origin hook (tenant-validated below)
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -71,6 +72,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Master switch: a non-registered tenant gets no VAT anywhere, regardless of per-line flags.
   const totals = computeQuoteTotals(inputs, rate, { vatRegistered: vat.registered });
 
+  // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to null
+  // (SetNull-safe; a line never claims an origin it can't own).
+  const sentIds = Array.from(new Set(items.map((it) => (typeof it.catalogue_item_id === 'string' ? it.catalogue_item_id : '')).filter(Boolean)));
+  const validIds = new Set<string>();
+  if (sentIds.length) {
+    const found = (await prisma.catalogueItem.findMany({ where: { id: { in: sentIds }, group_id: user.group_id }, select: { id: true } })) as Array<{ id: string }>;
+    found.forEach((f) => validIds.add(f.id));
+  }
+
   // Effective per-line values to store (mirror the compute flooring).
   const rows = inputs.map((it, i) => ({
     job_card_id: jobCardId,
@@ -81,6 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     unit_cost: new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies ?? 0))),
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),
     vat_amount: new Prisma.Decimal(penniesToPounds(totals.lines[i].vat_pennies)),
+    catalogue_item_id: (typeof items[i].catalogue_item_id === 'string' && validIds.has(items[i].catalogue_item_id as string)) ? (items[i].catalogue_item_id as string) : null,
   }));
 
   try {

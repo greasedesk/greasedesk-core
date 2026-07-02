@@ -18,7 +18,7 @@ import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
-import EstimateBuilder, { EstimateLine } from '@/components/jobcard/EstimateBuilder';
+import EstimateBuilder, { EstimateLine, CatalogueLite } from '@/components/jobcard/EstimateBuilder';
 import JobCardStatus from '@/components/jobcard/JobCardStatus';
 import JobCardBooking, { CardBooking } from '@/components/jobcard/JobCardBooking';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
@@ -50,6 +50,7 @@ type PageProps = {
   vatRate: number;
   vatRegistered: boolean;
   lines: EstimateLine[];
+  catalogue: CatalogueLite[];
   stages: Record<StageKey, boolean>;
   hasEstimate: boolean;
   resources: Array<{ id: string; name: string }>;
@@ -67,7 +68,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, stages, hasEstimate, resources, booking, garageNotes, invoice }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, catalogue, stages, hasEstimate, resources, booking, garageNotes, invoice }: PageProps) {
   const router = useRouter();
   const { t } = useTranslation('jobcard');
   // Context-aware back link: return to wherever the card was opened from (diary preserves week/day+date).
@@ -156,6 +157,7 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPri
         initialVatRate={vatRate}
         initialLines={lines}
         vatRegistered={vatRegistered}
+        catalogue={catalogue}
       />
     </>
   );
@@ -206,6 +208,18 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
+  // Active catalogue for the line-code autocomplete (tenant-scoped; loaded once, matched in-browser).
+  const catalogueRows = (await prisma.catalogueItem.findMany({
+    where: { group_id: user.group_id, active: true },
+    orderBy: { code: 'asc' },
+    select: { id: true, code: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true },
+  })) as any[];
+  const catalogue: CatalogueLite[] = catalogueRows.map((c) => ({
+    id: c.id, code: c.code, name: c.name, item_type: c.item_type,
+    unit_cost: Number(c.unit_cost), unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
+  }));
+  const codeById = new Map(catalogue.map((c) => [c.id, c.code]));
+
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
     description: it.description ?? '',
@@ -213,6 +227,8 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     unit_price: String(num(it.unit_price)),
     unit_cost: num(it.unit_cost) ? String(num(it.unit_cost)) : '',
     vatable: num(it.vat_rate) > 0,
+    code: it.catalogue_item_id ? (codeById.get(it.catalogue_item_id) ?? '') : '',
+    catalogue_item_id: it.catalogue_item_id ?? null,
   }));
 
   const card: CardProps = {
@@ -247,6 +263,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       vatRate: lines.length > 0 ? num(row.vat_rate) : vat.defaultRate,
       vatRegistered: vat.registered,
       lines,
+      catalogue,
       stages: {
         details: !!row.stage_details_done,
         intake: !!row.stage_intake_done,
