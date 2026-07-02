@@ -9,7 +9,6 @@ import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import AdminLayout from '@/components/layout/AdminLayout';
 import { daysLeft } from '@/lib/trial';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
@@ -43,7 +42,7 @@ function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: str
 export default function AdminDashboard({ groupName, accountRef, status, trialEndsAt, currency, locale }: PageProps) {
   const { t } = useTranslation('common');
   return (
-    <AdminLayout>
+    <>
       <Head>
         <title>Dashboard - GreaseDesk</title>
       </Head>
@@ -69,7 +68,7 @@ export default function AdminDashboard({ groupName, accountRef, status, trialEnd
           <p className="text-3xl text-accent">{formatMoney(45000, { currency, locale })}</p>
         </div>
       </div>
-    </AdminLayout>
+    </>
   );
 }
 

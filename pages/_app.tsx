@@ -9,6 +9,7 @@ import App, { AppContext, AppProps } from 'next/app';
 import '@/styles/globals.css';
 import { SessionProvider } from 'next-auth/react';
 import { appWithTranslation } from 'next-i18next';
+import AdminLayout from '@/components/layout/AdminLayout';
 // NOTE: serverSideTranslations (server-only, uses `fs`) is dynamically imported inside the
 // server branch of getInitialProps below — importing it at top level would pull `fs` into the
 // client bundle (_app ships to the client).
@@ -36,10 +37,17 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
   };
 }
 
-function GreaseDeskApp({ Component, pageProps }: AppProps) {
+// PERSISTENT admin shell: AdminLayout (dark rail + locations bar) is mounted ONCE here for every
+// /admin route (except the login page) instead of inside each page. Across admin navigations React
+// keeps the same AdminLayout instance mounted — it never remounts, so the locations bar doesn't
+// refetch/flicker and tab switches don't do a full-shell teardown (fast INP, no layout shift).
+// Login renders bare; the settings redirect shims return null and redirect server-side (harmless).
+function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
+  const useAdminShell = router.pathname.startsWith('/admin') && router.pathname !== '/admin/login';
+  const page = <Component {...pageProps} />;
   return (
     <SessionProvider session={pageProps.session}>
-      <Component {...pageProps} />
+      {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
     </SessionProvider>
   );
 }

@@ -12,7 +12,6 @@ import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import AdminLayout from '@/components/layout/AdminLayout';
 import { getVisibility } from '@/lib/site-visibility';
 
 type Stages = {
@@ -62,7 +61,7 @@ function StageBadges({ stages }: { stages: Stages }) {
 
 export default function JobCardsListPage({ cards, noSites }: PageProps) {
   return (
-    <AdminLayout>
+    <>
       <Head>
         <title>Job Cards - GreaseDesk</title>
       </Head>
@@ -122,7 +121,7 @@ export default function JobCardsListPage({ cards, noSites }: PageProps) {
           </tbody>
         </table>
       </div>
-    </AdminLayout>
+    </>
   );
 }
 

@@ -14,7 +14,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
-import AdminLayout from '@/components/layout/AdminLayout';
 
 // Data Types
 type SiteRates = {
@@ -75,7 +74,7 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
   };
 
   return (
-    <AdminLayout>
+    <>
       <Head>
         <title>Rates & Localisation Settings - GreaseDesk</title>
       </Head>
@@ -157,7 +156,7 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
           </button>
         </form>
       </div>
-    </AdminLayout>
+    </>
   );
 }
 

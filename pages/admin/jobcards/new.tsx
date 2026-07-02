@@ -13,7 +13,6 @@ import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import AdminLayout from '@/components/layout/AdminLayout';
 
 const inputClass =
   'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
@@ -85,7 +84,7 @@ export default function NewJobCardPage() {
   }
 
   return (
-    <AdminLayout>
+    <>
       <Head>
         <title>New Job Card - GreaseDesk</title>
       </Head>
@@ -168,7 +167,7 @@ export default function NewJobCardPage() {
           </div>
         </form>
       </div>
-    </AdminLayout>
+    </>
   );
 }
 

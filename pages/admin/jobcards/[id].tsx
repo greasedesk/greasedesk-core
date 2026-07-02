@@ -13,7 +13,6 @@ import { useTranslation } from 'next-i18next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import AdminLayout from '@/components/layout/AdminLayout';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
@@ -76,7 +75,7 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPri
     ? { href: `/admin/diary?site=${q.site ?? ''}&view=${q.view ?? 'week'}&date=${q.date ?? ''}`, label: t('back.diary') }
     : { href: '/admin/jobcards', label: t('back.list') };
   return (
-    <AdminLayout>
+    <>
       <Head>
         <title>Job Card {card.registration} - GreaseDesk</title>
       </Head>
@@ -149,7 +148,7 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPri
         initialLines={lines}
         vatRegistered={vatRegistered}
       />
-    </AdminLayout>
+    </>
   );
 }
 

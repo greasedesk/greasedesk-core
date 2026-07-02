@@ -14,7 +14,6 @@ import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import AdminLayout from '@/components/layout/AdminLayout';
 import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
@@ -61,10 +60,10 @@ export default function DiaryPage(props: PageProps) {
 
   if (noSites) {
     return (
-      <AdminLayout>
+      <>
         <Head><title>{t('title')} - GreaseDesk</title></Head>
         <div className="bg-surface text-ink rounded-xl border border-line p-8 text-center shadow">{t('noSite')}</div>
-      </AdminLayout>
+      </>
     );
   }
 
@@ -156,7 +155,7 @@ export default function DiaryPage(props: PageProps) {
   }
 
   return (
-    <AdminLayout>
+    <>
       <Head><title>{t('title')} - GreaseDesk</title></Head>
 
       <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
@@ -275,7 +274,7 @@ export default function DiaryPage(props: PageProps) {
           onClose={() => setEditNote(null)} onDone={() => { setEditNote(null); refresh(); }}
         />
       )}
-    </AdminLayout>
+    </>
   );
 }
 

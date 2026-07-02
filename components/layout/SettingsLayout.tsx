@@ -1,6 +1,7 @@
 /**
  * File: components/layout/SettingsLayout.tsx
- * Wraps AdminLayout and renders the two-tier Settings navigation:
+ * Renders the two-tier Settings navigation INSIDE the persistent admin shell (AdminLayout is
+ * mounted once in _app for /admin routes — this no longer wraps it):
  *   Top tabs:  Locations & Resources · Users · Company Profile · Licence & Subscriptions
  *   Sub-tabs:  contextual (Users → roster/permissions; Company Profile → account/company/…).
  * Nav flags only HIDE tabs; page-level getServerSideProps still enforces gating (requireAdminPage /
@@ -10,7 +11,6 @@
 import React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import AdminLayout from '@/components/layout/AdminLayout';
 
 // Gating: adminOnly → ADMIN/owner; managerOk → ADMIN or SITE_MANAGER; neither → everyone.
 type Gate = { adminOnly?: boolean; managerOk?: boolean };
@@ -23,9 +23,11 @@ const TABS: TopTab[] = [
     match: ['/admin/settings/locations'],
   },
   {
-    // Visible to everyone; href is resolved per-role in buildTabs (roster vs own detail).
+    // Visible to everyone; href is resolved per-role in hrefFor (roster vs own detail). Both the
+    // roster (/users) and Permissions (/permissions) live under this tab, so BOTH must match here —
+    // otherwise the Permissions page finds no active top tab and the sub-tab bar disappears.
     name: 'Users', key: 'users', href: '/admin/settings/users',
-    match: ['/admin/settings/users'],
+    match: ['/admin/settings/users', '/admin/settings/permissions'],
     subtabs: [
       { name: 'Users', href: '/admin/settings/users', managerOk: true },
       { name: 'Permissions', href: '/admin/settings/permissions', adminOnly: true },
@@ -71,8 +73,11 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
       on ? 'bg-accent-soft text-accent font-semibold' : 'text-muted hover:text-ink hover:bg-surface-muted'
     }`;
 
+  // NOTE: no AdminLayout wrapper here — the admin shell is mounted once in _app for all /admin
+  // routes (persistent), so this renders only the settings chrome (title + two-tier nav) inside
+  // that stable shell. Switching tabs swaps this content but never remounts the shell/locations bar.
   return (
-    <AdminLayout>
+    <>
       <h1 className="text-3xl font-bold text-ink mb-4">Settings</h1>
       <div className="flex flex-wrap gap-1 border-b border-line mb-4">
         {top.map((t) => (
@@ -88,6 +93,6 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
         </div>
       )}
       {children}
-    </AdminLayout>
+    </>
   );
 }

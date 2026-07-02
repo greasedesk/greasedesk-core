@@ -97,11 +97,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           <BrandLogo width={120} />
         </header>
 
-        {/* Location top bar */}
-        {locations.length > 0 && (
-          <div className="bg-surface border-b border-line px-4 sm:px-6 lg:px-8 py-2 flex items-center gap-2 overflow-x-auto">
-            <span className="text-xs uppercase text-muted mr-1">{t('nav.locationsLabel')}</span>
-            {locations.map((loc) => {
+        {/* Location top bar — PERSISTENT: this shell is mounted once (via getLayout) and reconciled
+            across navigations, so it never remounts/refetches. Always rendered with a reserved
+            height so it never appears/disappears (no layout shift, no flicker on tab switch). */}
+        <div className="bg-surface border-b border-line px-4 sm:px-6 lg:px-8 py-2 flex items-center gap-2 overflow-x-auto min-h-[41px]">
+          <span className="text-xs uppercase text-muted mr-1">{t('nav.locationsLabel')}</span>
+          {locations.map((loc) => {
               const selected =
                 router.pathname === '/admin/diary'
                   ? (router.query.site as string) ?? currentSiteId
@@ -122,8 +123,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </Link>
               );
             })}
-          </div>
-        )}
+        </div>
 
         {/* Page content */}
         <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
