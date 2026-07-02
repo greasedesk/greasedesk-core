@@ -47,8 +47,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ message: 'You do not have permission to edit this job card’s estimate.' });
   }
 
+  // Master switch + company default rate (the fallback when the client omits a rate).
+  const vat = await getTenantVat(user.group_id as string);
   // Validate + normalise lines.
-  const rate = clampVatRate(typeof vatRate === 'string' ? parseFloat(vatRate) : (vatRate ?? 20));
+  const rate = clampVatRate(typeof vatRate === 'string' ? parseFloat(vatRate) : (vatRate ?? vat.defaultRate));
   const inputs: QuoteLineInput[] = [];
   for (const raw of items) {
     const t = String(raw.item_type) as ItemType;
@@ -67,7 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Master switch: a non-registered tenant gets no VAT anywhere, regardless of per-line flags.
-  const vat = await getTenantVat(user.group_id as string);
   const totals = computeQuoteTotals(inputs, rate, { vatRegistered: vat.registered });
 
   // Effective per-line values to store (mirror the compute flooring).

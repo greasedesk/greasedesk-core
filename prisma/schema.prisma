@@ -106,6 +106,9 @@ model Group {
   // preserves existing tenants' VAT-as-now behaviour; sub-threshold garages turn it off. Resolved
   // via lib/tenant-vat.ts and gated in computeQuoteTotals — never scattered.
   vat_registered   Boolean  @default(true)
+  // Company-wide default VAT rate (only meaningful when registered). THE single source that
+  // cascades as an editable pre-fill to quotes + overheads. Read via lib/tenant-vat.ts.
+  default_vat_rate Decimal  @default(20) @db.Decimal(5, 2)
   address          String?
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
@@ -676,14 +679,14 @@ model CostPerson {
 
 // Open-ended, admin-extendable business costs (rent, rates, insurance, IT, phones…).
 model Overhead {
-  id                 String         @id @default(uuid())
-  group_id           String
-  name               String
-  amount_pennies     Int            // GROSS amount paid (what you're billed)
-  vat_amount_pennies Int            @default(0) // reclaimable VAT component (0 = exempt/none/not-registered)
-  period             OverheadPeriod
-  is_active          Boolean        @default(true)
-  created_at         DateTime       @default(now())
+  id                    String         @id @default(uuid())
+  group_id              String
+  name                  String
+  ex_vat_amount_pennies Int            // EX-VAT amount = the true cost, entered directly
+  vat_rate              Decimal        @default(0) @db.Decimal(5, 2) // per-expense rate (free entry: 5, 0, 20…); pre-filled from Group.default_vat_rate
+  period                OverheadPeriod
+  is_active             Boolean        @default(true)
+  created_at            DateTime       @default(now())
 
   group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
   allocations CostAllocation[]

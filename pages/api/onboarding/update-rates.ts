@@ -136,8 +136,11 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // B. Group VAT rate (deterministic id per group)
+      // B. Company default VAT rate on Group — THE source that cascades as the pre-fill everywhere.
       const vatDec = new Prisma.Decimal(vat.toFixed(2));
+      await tx.group.update({ where: { id: groupId! }, data: { default_vat_rate: vatDec } });
+
+      // B2. Legacy 'UK VAT' TaxRate (deterministic id per group) — kept for the legacy rates page.
       const ukVatId = `${groupId}-UK-VAT`;
       await tx.taxRate.upsert({
         where: { id: ukVatId },

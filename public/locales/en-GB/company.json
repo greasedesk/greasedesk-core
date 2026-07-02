@@ -16,6 +16,8 @@
     "vatRegistered": "VAT registered",
     "vatRegisteredHint": "Off = no VAT on quotes, invoices or overheads (prices are just prices).",
     "vatNumber": "VAT number",
+    "defaultVatRate": "Default VAT rate (%)",
+    "defaultVatRateHint": "The company-wide default. Pre-fills new quotes and overheads; still editable per entry.",
     "save": "Save company details",
     "saving": "Saving…",
     "saved": "Company details saved.",

@@ -10,7 +10,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { validateAllocations } from '@/lib/cost-allocation';
-import { getTenantVat } from '@/lib/tenant-vat';
+import { getTenantVat, overheadVatPennies, overheadGrossPennies } from '@/lib/tenant-vat';
 
 const PERIODS = new Set(['weekly', 'monthly', 'annual']);
 
@@ -19,6 +19,7 @@ const toPennies = (v: unknown): number | null => {
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.round(n);
 };
+const clampRate = (v: unknown): number => Math.min(100, Math.max(0, Number.isFinite(Number(v)) ? Number(v) : 0));
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const vis = await requireAdminApi(req, res); // 401/403 handled inside
@@ -32,29 +33,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     orderBy: { site_name: 'asc' },
   });
   const tenantSiteIds = sites.map((s) => s.id);
-  const vat = await getTenantVat(groupId); // master switch — VAT split only meaningful when registered
+  const vat = await getTenantVat(groupId); // registration + company default rate (pre-fill source)
 
   // ---- GET: list overheads + allocations, plus sites for the editor/by-site pivot ----
   if (req.method === 'GET') {
     const overheads: Array<{
-      id: string; name: string; amount_pennies: number; vat_amount_pennies: number; period: 'weekly' | 'monthly' | 'annual';
+      id: string; name: string; ex_vat_amount_pennies: number; vat_rate: unknown; period: 'weekly' | 'monthly' | 'annual';
       is_active: boolean; allocations: Array<{ site_id: string; percent: unknown }>;
     }> = await prisma.overhead.findMany({
       where: { group_id: groupId },
       orderBy: { created_at: 'asc' },
       select: {
-        id: true, name: true, amount_pennies: true, vat_amount_pennies: true, period: true, is_active: true,
+        id: true, name: true, ex_vat_amount_pennies: true, vat_rate: true, period: true, is_active: true,
         allocations: { select: { site_id: true, percent: true } },
       },
     });
     return res.status(200).json({
       vatRegistered: vat.registered,
+      defaultVatRate: vat.defaultRate, // cascades as the pre-fill for a new overhead's rate
       sites: sites.map((s) => ({ id: s.id, name: s.site_name, isActive: s.is_active })),
-      overheads: overheads.map((o) => ({
-        id: o.id, name: o.name, amountPennies: o.amount_pennies, vatAmountPennies: o.vat_amount_pennies,
-        period: o.period, isActive: o.is_active,
-        allocations: o.allocations.map((a) => ({ siteId: a.site_id, percent: Number(a.percent) })),
-      })),
+      overheads: overheads.map((o) => {
+        const exVatPennies = o.ex_vat_amount_pennies;
+        const vatRate = Number(o.vat_rate);
+        return {
+          id: o.id, name: o.name, exVatPennies, vatRate,
+          vatPennies: overheadVatPennies({ exVatPennies, vatRate }),
+          grossPennies: overheadGrossPennies({ exVatPennies, vatRate }),
+          period: o.period, isActive: o.is_active,
+          allocations: o.allocations.map((a) => ({ siteId: a.site_id, percent: Number(a.percent) })),
+        };
+      }),
     });
   }
 
@@ -67,15 +75,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const period = String(body.period || '');
-    const amountPennies = toPennies(body.amountPennies);
+    const exVatAmountPennies = toPennies(body.exVatAmountPennies);
 
     if (!name) return res.status(400).json({ message: 'Name is required.' });
     if (!PERIODS.has(period)) return res.status(400).json({ message: 'Period must be weekly, monthly or annual.' });
-    if (amountPennies === null) return res.status(400).json({ message: 'Amount must be a non-negative number of pennies.' });
+    if (exVatAmountPennies === null) return res.status(400).json({ message: 'Ex-VAT amount must be a non-negative number of pennies.' });
 
-    // VAT component only when registered; never exceeds the gross. Non-registered → forced 0.
-    const rawVat = toPennies(body.vatAmountPennies) ?? 0;
-    const vatAmountPennies = vat.registered ? Math.min(rawVat, amountPennies) : 0;
+    // Per-expense rate (free entry 0–100). When not registered VAT is irrelevant → rate forced to 0.
+    const vatRate = vat.registered ? clampRate(body.vatRate) : 0;
 
     const check = validateAllocations(body.allocations, tenantSiteIds);
     if (!check.ok) return res.status(400).json({ message: check.error });
@@ -89,11 +96,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const overhead = isPatch
         ? await tx.overhead.update({
             where: { id },
-            data: { name, period: period as any, amount_pennies: amountPennies, vat_amount_pennies: vatAmountPennies },
+            data: { name, period: period as any, ex_vat_amount_pennies: exVatAmountPennies, vat_rate: new Prisma.Decimal(vatRate.toFixed(2)) },
             select: { id: true },
           })
         : await tx.overhead.create({
-            data: { group_id: groupId, name, period: period as any, amount_pennies: amountPennies, vat_amount_pennies: vatAmountPennies },
+            data: { group_id: groupId, name, period: period as any, ex_vat_amount_pennies: exVatAmountPennies, vat_rate: new Prisma.Decimal(vatRate.toFixed(2)) },
             select: { id: true },
           });
       await tx.costAllocation.deleteMany({ where: { overhead_id: overhead.id } });

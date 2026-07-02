@@ -3,11 +3,13 @@
  * Edit the caller's own Group (company) details. ADMIN/owner only — gated server-side via the
  * same getVisibility().isAdmin check used for user-management / location-create. Group-scoped.
  *
- *   PATCH { group_name?, company_number?, address?, vat_number?, vat_registered? }
+ *   PATCH { group_name?, company_number?, address?, vat_number?, vat_registered?, default_vat_rate? }
  *
- * vat_registered is the master switch gating VAT across quotes/invoices/overheads (lib/tenant-vat.ts).
+ * vat_registered is the master switch; default_vat_rate is the ONE company default that cascades as
+ * an editable pre-fill to quotes + overheads. Both gate/feed via lib/tenant-vat.ts.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -28,8 +30,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const groupId = sUser.group_id as string;
 
-  const { group_name, company_number, address, vat_number, vat_registered } = (req.body || {}) as {
-    group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean;
+  const { group_name, company_number, address, vat_number, vat_registered, default_vat_rate } = (req.body || {}) as {
+    group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
   };
 
   const data: any = {};
@@ -42,6 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (address !== undefined) data.address = address.trim() || null;
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
   if (vat_registered !== undefined) data.vat_registered = !!vat_registered;
+  if (default_vat_rate !== undefined) {
+    const r = Number(default_vat_rate);
+    if (!Number.isFinite(r) || r < 0 || r > 100) return res.status(400).json({ message: 'Default VAT rate must be between 0 and 100.' });
+    data.default_vat_rate = new Prisma.Decimal(r.toFixed(2));
+  }
 
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ message: 'Nothing to update.' });

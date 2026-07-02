@@ -231,7 +231,8 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       canOperate,
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
-      vatRate: num(row.vat_rate) || 20,
+      // Existing quote keeps its stored rate; a fresh card pre-fills the company default (cascade).
+      vatRate: lines.length > 0 ? num(row.vat_rate) : vat.defaultRate,
       vatRegistered: vat.registered,
       lines,
       stages: {

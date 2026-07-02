@@ -14,19 +14,20 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 
 type PageProps = {
-  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string;
+  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
 
-export default function CompanyDetails({ groupName, companyNumber, address, vatRegistered, vatNumber }: PageProps) {
+export default function CompanyDetails({ groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate }: PageProps) {
   const { t } = useTranslation('company');
   const [name, setName] = useState(groupName);
   const [num, setNum] = useState(companyNumber);
   const [addr, setAddr] = useState(address);
   const [vatReg, setVatReg] = useState(vatRegistered);
   const [vat, setVat] = useState(vatNumber);
+  const [rate, setRate] = useState(defaultVatRate);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -38,6 +39,7 @@ export default function CompanyDetails({ groupName, companyNumber, address, vatR
         body: JSON.stringify({
           group_name: name, company_number: num, address: addr,
           vat_registered: vatReg, vat_number: vatReg ? vat : '', // clear number when de-registering
+          ...(vatReg ? { default_vat_rate: Number(rate || 0) } : {}), // rate only meaningful when registered
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -66,7 +68,14 @@ export default function CompanyDetails({ groupName, companyNumber, address, vatR
             </span>
           </label>
           {vatReg && (
-            <div><label className={labelClass}>{t('details.vatNumber')}</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
+            <>
+              <div><label className={labelClass}>{t('details.vatNumber')}</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
+              <div>
+                <label className={labelClass}>{t('details.defaultVatRate')}</label>
+                <input type="number" inputMode="decimal" min={0} max={100} step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} className={inputClass} />
+                <span className="text-xs text-muted mt-0.5 block">{t('details.defaultVatRateHint')}</span>
+              </div>
+            </>
           )}
           <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
             {busy ? t('details.saving') : t('details.save')}
@@ -82,8 +91,8 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
-    select: { group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true },
-  })) as { group_name: string; company_number: string | null; address: string | null; vat_registered: boolean; vat_number: string | null } | null;
+    select: { group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true },
+  })) as { group_name: string; company_number: string | null; address: string | null; vat_registered: boolean; vat_number: string | null; default_vat_rate: unknown } | null;
   return {
     props: {
       groupName: g?.group_name ?? '',
@@ -91,6 +100,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       address: g?.address ?? '',
       vatRegistered: !!g?.vat_registered,
       vatNumber: g?.vat_number ?? '',
+      defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : '20.00',
     },
   };
 });

@@ -17,19 +17,20 @@ import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/
 type SiteOpt = { id: string; name: string; isActive: boolean };
 type Alloc = { siteId: string; percent: number };
 type Period = 'weekly' | 'monthly' | 'annual';
-type Overhead = { id: string; name: string; amountPennies: number; vatAmountPennies: number; period: Period; isActive: boolean; allocations: Alloc[] };
+type Overhead = { id: string; name: string; exVatPennies: number; vatRate: number; vatPennies: number; grossPennies: number; period: Period; isActive: boolean; allocations: Alloc[] };
 
-type FormState = { id: string | null; name: string; amount: string; vatAmount: string; period: Period; rows: AllocRow[] };
+type FormState = { id: string | null; name: string; exVat: string; vatRate: string; period: Period; rows: AllocRow[] };
 
-const emptyForm = (): FormState => ({ id: null, name: '', amount: '', vatAmount: '', period: 'monthly', rows: [] });
 const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100);
 const penniesToInput = (p: number): string => (p / 100).toFixed(2);
+const clampRate = (r: number) => Math.min(100, Math.max(0, Number.isFinite(r) ? r : 0));
 
 export default function OverheadsSettings() {
   const { t } = useTranslation('overheads');
   const [sites, setSites] = useState<SiteOpt[]>([]);
   const [overheads, setOverheads] = useState<Overhead[]>([]);
   const [vatRegistered, setVatRegistered] = useState(true);
+  const [defaultVatRate, setDefaultVatRate] = useState('20');
   const [form, setForm] = useState<FormState | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -41,29 +42,30 @@ export default function OverheadsSettings() {
     setSites(data.sites || []);
     setOverheads(data.overheads || []);
     setVatRegistered(!!data.vatRegistered);
+    if (data.defaultVatRate != null) setDefaultVatRate(String(data.defaultVatRate));
   }
   useEffect(() => { load(); }, []);
 
-  function openAdd() { setMsg(null); setForm(emptyForm()); }
+  // New overhead pre-fills the VAT rate from the company default (editable per-expense).
+  function openAdd() { setMsg(null); setForm({ id: null, name: '', exVat: '', vatRate: vatRegistered ? defaultVatRate : '0', period: 'monthly', rows: [] }); }
   function openEdit(o: Overhead) {
     setMsg(null);
     setForm({
-      id: o.id, name: o.name, amount: penniesToInput(o.amountPennies),
-      vatAmount: o.vatAmountPennies ? penniesToInput(o.vatAmountPennies) : '', period: o.period,
+      id: o.id, name: o.name, exVat: penniesToInput(o.exVatPennies), vatRate: String(o.vatRate), period: o.period,
       rows: o.allocations.map((a, i) => ({ key: `${a.siteId}-${i}`, siteId: a.siteId, percent: String(a.percent) })),
     });
   }
   function close() { setForm(null); }
 
-  const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows);
+  const canSave = !!form && form.name.trim() !== '' && Number(form.exVat) >= 0 && form.exVat !== '' && allocIsValid(form.rows);
 
   async function save() {
     if (!form || !canSave) return;
     setBusy(true); setMsg(null);
     const body = {
       id: form.id || undefined,
-      name: form.name.trim(), period: form.period, amountPennies: poundsToPennies(form.amount),
-      vatAmountPennies: vatRegistered ? poundsToPennies(form.vatAmount) : 0,
+      name: form.name.trim(), period: form.period, exVatAmountPennies: poundsToPennies(form.exVat),
+      vatRate: vatRegistered ? clampRate(Number(form.vatRate)) : 0,
       allocations: form.rows.map((r) => ({ siteId: r.siteId, percent: Number(r.percent) })),
     };
     try {
@@ -87,12 +89,11 @@ export default function OverheadsSettings() {
   }
 
   const amountLabel = (o: Overhead) => {
-    const base = `${formatMoney(o.amountPennies)} · ${t(o.period)}`;
-    // When registered with a VAT component, show the true (ex-VAT reclaimable) cost.
-    if (vatRegistered && o.vatAmountPennies > 0) {
-      return `${base} · ${formatMoney(o.amountPennies - o.vatAmountPennies)} ${t('exVat')}`;
+    // Ex-VAT is the true cost. When registered with a rate, also show VAT + gross.
+    if (vatRegistered && o.vatPennies > 0) {
+      return `${formatMoney(o.exVatPennies)} ${t('exVat')} + ${formatMoney(o.vatPennies)} ${t('vatAt', { rate: o.vatRate })} = ${formatMoney(o.grossPennies)} · ${t(o.period)}`;
     }
-    return base;
+    return `${formatMoney(o.exVatPennies)} · ${t(o.period)}`;
   };
 
   return (
@@ -123,22 +124,18 @@ export default function OverheadsSettings() {
                   className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
               </label>
               <label className="block">
-                <span className="text-sm font-medium text-ink">{vatRegistered ? t('amountGross') : t('amount')}</span>
-                <input type="number" inputMode="decimal" min={0} step="0.01" value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                <span className="text-sm font-medium text-ink">{vatRegistered ? t('exVatAmount') : t('amount')}</span>
+                <input type="number" inputMode="decimal" min={0} step="0.01" value={form.exVat}
+                  onChange={(e) => setForm({ ...form, exVat: e.target.value })}
                   className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
               </label>
               {vatRegistered && (
                 <label className="block">
-                  <span className="flex items-center justify-between text-sm font-medium text-ink">
-                    {t('vatAmount')}
-                    <button type="button" onClick={() => setForm({ ...form, vatAmount: (Number(form.amount || 0) / 6).toFixed(2) })}
-                      className="text-xs text-accent hover:underline font-normal">{t('vatDerive')}</button>
-                  </span>
-                  <input type="number" inputMode="decimal" min={0} step="0.01" value={form.vatAmount}
-                    onChange={(e) => setForm({ ...form, vatAmount: e.target.value })}
+                  <span className="text-sm font-medium text-ink">{t('vatRate')}</span>
+                  <input type="number" inputMode="decimal" min={0} max={100} step="0.01" value={form.vatRate}
+                    onChange={(e) => setForm({ ...form, vatRate: e.target.value })}
                     className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
-                  <span className="text-xs text-muted mt-0.5 block">{t('vatHint')}</span>
+                  <span className="text-xs text-muted mt-0.5 block">{t('vatRateHint')}</span>
                 </label>
               )}
               <label className="block">
@@ -151,6 +148,16 @@ export default function OverheadsSettings() {
                 </select>
               </label>
             </div>
+
+            {vatRegistered && (() => {
+              const exP = poundsToPennies(form.exVat);
+              const vatP = Math.round((exP * clampRate(Number(form.vatRate))) / 100);
+              return (
+                <p className="text-xs text-muted mt-2">
+                  {t('vatCalc', { vat: formatMoney(vatP), gross: formatMoney(exP + vatP) })}
+                </p>
+              );
+            })()}
 
             <AllocationEditor sites={sites} rows={form.rows} onChange={(rows) => setForm({ ...form, rows })} t={t} />
 

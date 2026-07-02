@@ -15,7 +15,6 @@ import { requireAdminPage } from '@/lib/admin-guard';
 
 type SiteSettings = {
   siteName: string;
-  defaultVatRate: number;
   defaultLabourRate: number;
   timezone: string;
   currencyCode: string;
@@ -148,7 +147,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       setSettings((prev) => ({ ...prev, [name]: values }));
       return;
     }
-    if (name === 'defaultVatRate' || name === 'defaultLabourRate') {
+    if (name === 'defaultLabourRate') {
       setSettings((prev) => ({ ...prev, [name]: parseFloat(value) }));
     } else if (name === 'currencyCode') {
       setSettings((prev) => ({ ...prev, [name]: value.toUpperCase() }));
@@ -167,7 +166,6 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           siteId: selectedSiteId,
-          defaultVatRate: settings.defaultVatRate,
           defaultLabourRate: settings.defaultLabourRate,
           timezone: settings.timezone,
           currencyCode: settings.currencyCode,
@@ -247,10 +245,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                   <option value="ex_vat">Excluding VAT (Net Price)</option>
                   <option value="inc_vat">Including VAT (Gross Price)</option>
                 </select>
-              </div>
-              <div>
-                <label htmlFor="defaultVatRate" className={labelClass}>Default VAT Rate (%)</label>
-                <input type="number" step="0.01" id="defaultVatRate" name="defaultVatRate" value={settings.defaultVatRate} onChange={handleChange} className={inputClass} required />
+                <p className="text-xs text-muted mt-1">The default VAT rate lives in Company Profile → Company Details.</p>
               </div>
               <div>
                 <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate (£/hr, Ex. VAT)</label>
@@ -291,12 +286,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const requested = typeof ctx.query.site === 'string' ? ctx.query.site : '';
   const selectedSiteId = allSites.some((s) => s.id === requested) ? requested : (user.site_id as string);
 
-  const [site, vatRow, labourSvc, pcs] = await Promise.all([
+  const [site, labourSvc, pcs] = await Promise.all([
     prisma.site.findUnique({
       where: { id: selectedSiteId },
       select: { site_name: true, timezone: true, currency_code: true, pricing_display_mode: true, supported_countries: true, supported_currencies: true },
     }),
-    prisma.taxRate.findFirst({ where: { group_id: user.group_id, name: 'UK VAT' }, select: { percentage: true } }),
     prisma.serviceCatalogue.findFirst({ where: { group_id: user.group_id, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
     prisma.profitCentre.findMany({ where: { site_id: selectedSiteId }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
   ]);
@@ -308,7 +302,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     pricingDisplayMode: (site?.pricing_display_mode as 'ex_vat' | 'inc_vat') ?? 'ex_vat',
     supportedCountries: (site?.supported_countries as string[]) ?? ['United Kingdom'],
     supportedCurrencies: (site?.supported_currencies as string[]) ?? ['GBP'],
-    defaultVatRate: vatRow ? Number(vatRow.percentage) : 20,
     defaultLabourRate: labourSvc ? Number(labourSvc.default_labour_rate) : 75,
   };
 

@@ -22,7 +22,6 @@ import { requireAdminApi } from '@/lib/admin-guard';
 
 type SaveSettingsBody = {
   siteId?: string; // target location (all-locations Financial); defaults to caller's site
-  defaultVatRate: number | string;
   defaultLabourRate: number | string;
   timezone?: string;
   currencyCode?: string;
@@ -52,7 +51,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   const {
     siteId: bodySiteId,
-    defaultVatRate,
     defaultLabourRate,
     timezone,
     currencyCode,
@@ -65,15 +63,15 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   // to the caller's own site when no target is supplied.
   const siteId = (typeof bodySiteId === 'string' && bodySiteId) || user.site_id;
 
-  const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
-
-  if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
-    return res.status(400).json({ message: 'Invalid VAT rate' });
-  }
   if (!Number.isFinite(labour) || labour < 0) {
     return res.status(400).json({ message: 'Invalid labour rate' });
   }
+
+  // VAT rate is no longer set here — it's the ONE company default on Group (Company Details). The
+  // labour service carries a vat_rate for legacy shape only (unread), mirrored from that default.
+  const grp = (await prisma.group.findUnique({ where: { id: groupId }, select: { default_vat_rate: true } })) as { default_vat_rate: unknown } | null;
+  const companyVat = grp && grp.default_vat_rate != null ? Number(grp.default_vat_rate) : 20;
 
   try {
     // Ensure this site truly belongs to this group
@@ -103,38 +101,14 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // 2️⃣ Maintain Group VAT rate
-      const existingVat = await tx.taxRate.findFirst({
-        where: { group_id: groupId, name: 'UK VAT' },
-        select: { id: true },
-      });
-
-      if (existingVat) {
-        await tx.taxRate.update({
-          where: { id: existingVat.id },
-          data: {
-            percentage: new Prisma.Decimal(vat.toFixed(2)),
-          },
-        });
-      } else {
-        await tx.taxRate.create({
-          data: {
-            group_id: groupId,
-            name: 'UK VAT',
-            percentage: new Prisma.Decimal(vat.toFixed(2)),
-            valid_from: new Date(),
-          },
-        });
-      }
-
-      // 3️⃣ Maintain default labour service for this site
+      // 2️⃣ Maintain default labour service for this site (VAT rate mirrors the company default).
       const existingLabour = await tx.serviceCatalogue.findFirst({
         where: { group_id: groupId, site_id: siteId, service_code: 'LABOUR_HR' },
         select: { id: true },
       });
 
       const rateDec = new Prisma.Decimal(labour.toFixed(2));
-      const vatDec = new Prisma.Decimal(vat.toFixed(2));
+      const vatDec = new Prisma.Decimal(companyVat.toFixed(2));
 
       if (existingLabour) {
         await tx.serviceCatalogue.update({
