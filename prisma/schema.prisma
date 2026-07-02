@@ -400,7 +400,7 @@ model Customer {
 model Vehicle {
   id                String   @id @default(uuid())
   group_id          String
-  customer_id       String   // WELD — retired (nullable + unwritten) in Stage C, never read after Stage B
+  customer_id       String?  // WELD retired (Stage C): nullable + SetNull + unwritten. Owner source is the ownership edge.
   // Car-first re-root (Stage A, additive). identity_id links to the stable VIN-soft-anchored
   // VehicleIdentity (1:1 now, mergeable cross-tenant later). vin_normalized is the canonical
   // dedup key (upper/strip). Ownership moves to the VehicleOwnership edge — customer_id above
@@ -420,7 +420,7 @@ model Vehicle {
   created_at        DateTime @default(now())
 
   group      Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  customer   Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  customer   Customer?         @relation(fields: [customer_id], references: [id], onDelete: SetNull)
   identity   VehicleIdentity?  @relation(fields: [identity_id], references: [id], onDelete: SetNull)
   ownerships VehicleOwnership[]
   bookings   Booking[]
@@ -527,7 +527,7 @@ model Booking {
   group_id         String
   site_id          String
   profit_centre_id String?   // reporting tag (optional); operational link is site_id (+ resource, later)
-  customer_id      String
+  customer_id      String?
   vehicle_id       String
   booking_date     DateTime
   start_time       DateTime?
@@ -541,7 +541,7 @@ model Booking {
   group         Group             @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site          Site              @relation(fields: [site_id], references: [id], onDelete: NoAction)
   profit_centre ProfitCentre?     @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
-  customer      Customer          @relation(fields: [customer_id], references: [id], onDelete: NoAction)
+  customer      Customer?         @relation(fields: [customer_id], references: [id], onDelete: SetNull)
   vehicle       Vehicle           @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   service       ServiceCatalogue? @relation(fields: [service_id], references: [id], onDelete: SetNull)
 
@@ -553,7 +553,7 @@ model JobCard {
   group_id               String
   site_id                String
   profit_centre_id       String?   // reporting tag (optional); operational link is site_id (+ resource, later)
-  customer_id            String
+  customer_id            String?
   vehicle_id             String
   status                 JobCardStatus @default(draft)
   mechanic_assigned_id   String?
@@ -598,7 +598,7 @@ model JobCard {
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
   profit_centre     ProfitCentre?  @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
-  customer          Customer       @relation(fields: [customer_id], references: [id], onDelete: NoAction)
+  customer          Customer?      @relation(fields: [customer_id], references: [id], onDelete: SetNull)
   vehicle           Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   mechanic_assigned User?          @relation("JobCardMechanic", fields: [mechanic_assigned_id], references: [id], onDelete: SetNull)
   resource          Resource?      @relation(fields: [resource_id], references: [id], onDelete: SetNull)

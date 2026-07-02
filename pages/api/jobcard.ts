@@ -148,7 +148,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const createdVehicle = await tx.vehicle.create({
             data: {
               group_id: groupId,
-              customer_id: customerId, // weld still written on new vehicles (retired in Stage C)
+              // Stage C: Vehicle.customer_id is retired — no longer written. The owner lives on the
+              // VehicleOwnership edge (created just below). The column stays nullable + vestigial.
               registration,
               vin: body.vin?.trim() || null,
               vin_normalized: normalizeVin(body.vin),
