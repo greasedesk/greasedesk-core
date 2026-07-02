@@ -1,6 +1,6 @@
 {
   "title": "Products",
-  "intro": "Define your regular parts, labour and service bundles once — code, cost, price and VAT. Typing the code on a job-card line pre-fills it (editable). Standardises the grain across mechanics; banks the margin at entry.",
+  "intro": "Define your regular parts, labour and fixed-price services once. Typing the code on a job-card line pre-fills a simple item; fixed-price services are added on the card via a tier picker. All prices are ex VAT.",
   "add": "Add product",
   "edit": "Edit product",
   "empty": "No products yet. Add your first to speed up job-card entry.",
@@ -29,5 +29,36 @@
   "cancel": "Cancel",
   "saved": "Saved.",
   "error": "Could not save.",
-  "codeInUse": "That code is already in use."
+  "codeInUse": "That code is already in use.",
+  "exVat": "ex VAT",
+  "incVat": "inc VAT",
+  "components": "Components",
+  "componentsHint": "Cost + spec only. Descriptions concatenate into the invoice line; components never print as priced rows.",
+  "componentsTotal": "True cost",
+  "componentsShort": "components",
+  "componentDesc": "Description",
+  "componentQty": "Qty",
+  "componentCost": "Cost each (ex VAT)",
+  "addComponent": "Add component",
+  "basePrice": "Base price",
+  "tierGrid": {
+    "heading": "Tier prices (ex VAT)",
+    "hint": "Blank = inherit the base price. Enter a price to override, or tick “price on the day” to offer the tier with the price set per job.",
+    "inherit": "= base",
+    "manual": "price on the day",
+    "perJob": "price set per job"
+  },
+  "tierPricesShort": "tier prices",
+  "tiers": {
+    "heading": "Service tiers",
+    "intro": "Optional vehicle/price tiers for fixed-price services (e.g. Sub-2L, Performance, Electric). Leave empty for a single-price catalogue.",
+    "add": "Add",
+    "name": "Tier name",
+    "empty": "No tiers — fixed-price services use a single base price.",
+    "archive": "Archive",
+    "restore": "Restore",
+    "archived": "Archived",
+    "delete": "Delete",
+    "confirmDelete": "Delete this tier? Its per-service prices are removed; services fall back to their base price."
+  }
 }

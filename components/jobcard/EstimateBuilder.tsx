@@ -13,6 +13,7 @@ import React, { useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
+import { resolveTierPrice } from '@/lib/catalogue';
 import { formatMoney } from '@/lib/format-money';
 
 export type EstimateLine = {
@@ -26,8 +27,17 @@ export type EstimateLine = {
   catalogue_item_id?: string | null; // origin hook, persisted; remembers the catalogue item it came from
 };
 
-// Catalogue item (active, tenant-scoped) loaded once for client-side code matching.
+// Catalogue item (active, tenant-scoped) loaded once for client-side code matching. SIMPLE items only.
 export type CatalogueLite = { id: string; code: string; name: string; item_type: QuoteItemType; unit_cost: number; unit_price: number; vat_rate: number };
+
+// Fixed-price services are added via a tier picker (not typed codes). Carries components (spec + cost)
+// and per-tier price rows so the explosion resolves the price + spec entirely client-side.
+export type FixedServiceLite = {
+  id: string; code: string; name: string; basePriceExVat: number; vatRate: number;
+  components: Array<{ description: string; qty: number; unitCost: number }>;
+  tierPrices: Array<{ tierId: string; priceExVat: number | null }>;
+};
+export type TierLite = { id: string; name: string };
 
 // Internal row = a line plus a stable client id used as the React key.
 type Row = EstimateLine & { _uid: string };
@@ -43,7 +53,9 @@ type Props = {
   initialVatRate: number;
   initialLines: EstimateLine[];
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
-  catalogue?: CatalogueLite[]; // active catalogue for code autocomplete (client-side match)
+  catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
+  fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
+  tiers?: TierLite[]; // active tenant tiers
 };
 
 const CODES_DATALIST = 'gd-catalogue-codes';
@@ -118,10 +130,33 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
   );
 }
 
-export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [] }: Props) {
+export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [] }: Props) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
+  const [pickService, setPickService] = useState('');
+  const [pickTier, setPickTier] = useState('');
+
+  // Add a fixed-price service: resolve the tier price + spec entirely client-side and explode into
+  // ONE line — description = concatenated component spec, unit_price = resolved price (blank when the
+  // tier is price-on-the-day), unit_cost = Σ component cost (SILENT — never shown to the customer).
+  function addFixedService() {
+    const svc = fixedServices.find((s) => s.id === pickService);
+    if (!svc) return;
+    const res = resolveTierPrice(svc.basePriceExVat, svc.tierPrices, pickTier || null);
+    const desc = svc.components.map((c) => c.description).join('\n');
+    const costPounds = svc.components.reduce((s, c) => s + Math.max(0, c.qty) * c.unitCost, 0);
+    setLines((p) => [...p, {
+      _uid: uid(), item_type: 'fixed',
+      description: desc || svc.name,
+      qty: '1',
+      unit_price: res.manual || res.pricePounds == null ? '' : String(res.pricePounds),
+      unit_cost: costPounds.toFixed(2),
+      vatable: svc.vatRate > 0,
+      code: '', catalogue_item_id: svc.id,
+    }]);
+    setPickService(''); setPickTier('');
+  }
 
   // Client-side, load-once code match (active catalogue only, tenant-scoped by SSR). Case-insensitive.
   const codeIndex = useMemo(() => {
@@ -242,10 +277,28 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
           <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.fixed')}</h3>
           {fixed.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyFixed')}</p>}
           {fixed.map(({ l, idx }) => (
-            <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+            <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false}
               lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
           ))}
-          {canEdit && <button onClick={() => add('fixed')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addFixed')}</button>}
+          {canEdit && (
+            fixedServices.length > 0 ? (
+              <div className="flex flex-wrap items-end gap-2 mb-4">
+                <select value={pickService} onChange={(e) => setPickService(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+                  <option value="">{t('estimate.pickService')}</option>
+                  {fixedServices.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                {tiers.length > 0 && (
+                  <select value={pickTier} onChange={(e) => setPickTier(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+                    <option value="">{t('estimate.pickTierBase')}</option>
+                    {tiers.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}
+                  </select>
+                )}
+                <button onClick={addFixedService} disabled={!pickService} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">+ {t('estimate.addFixed')}</button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted mb-4">{t('estimate.noFixedServices')}</p>
+            )
+          )}
         </>
       )}
 

@@ -163,6 +163,7 @@ model Group {
 
   // Product catalogue (tenant-level; one shared catalogue across all sites)
   catalogue_items  CatalogueItem[]
+  service_tiers    ServiceTier[]
 }
 
 model GroupBilling {
@@ -755,19 +756,71 @@ model CatalogueItem {
   group_id   String // TENANT-level — one shared catalogue, one price, across all sites
   code       String // required; unique per tenant; the match key
   name       String // fills the line's description on autocomplete
-  item_type  ItemType // labour | part | misc — inherited by the autocompleted line
-  unit_cost  Decimal  @db.Decimal(12, 2) // required — cost is expected (banks the margin)
+  item_type  ItemType // labour | part | misc | fixed
+  // Simple items (part/labour/misc): flat cost + price. Fixed items: these are MIRRORED derived-on-
+  // save from base_price_ex_vat + the component sum (see lib/catalogue.ts) — never set by callers.
+  unit_cost  Decimal  @db.Decimal(12, 2)
   unit_price Decimal  @db.Decimal(12, 2)
   vat_rate   Decimal  @default(20) @db.Decimal(5, 2) // defaulted from getTenantVat().defaultRate on create
   active     Boolean  @default(true) // archive (false) preferred over hard delete — preserves history
+  // Fixed-price services only: the anchor/lowest-tier EX-VAT price (null for simple items).
+  base_price_ex_vat Decimal? @db.Decimal(12, 2)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  group     Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  job_lines JobCardItem[]
+  group       Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_lines   JobCardItem[]
+  components  CatalogueComponent[]
+  tier_prices CatalogueItemTierPrice[]
 
   @@unique([group_id, code])
   @@index([group_id])
+}
+
+// Tenant-DEFINED, OPTIONAL vehicle/price tiers (0 tiers = single-price world; no tier UI shown).
+model ServiceTier {
+  id         String   @id @default(uuid())
+  group_id   String
+  name       String
+  position   Int      @default(0)
+  active     Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  group       Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  tier_prices CatalogueItemTierPrice[]
+
+  @@index([group_id])
+}
+
+// A fixed service's cost/spec components. NEVER a priced customer row — only descriptions
+// concatenate into the invoice line's spec; qty×unit_cost feeds the item's true cost.
+model CatalogueComponent {
+  id                String  @id @default(uuid())
+  catalogue_item_id String
+  description       String
+  qty               Decimal @default(1) @db.Decimal(12, 2)
+  unit_cost_ex_vat  Decimal @default(0) @db.Decimal(12, 2)
+  position          Int     @default(0)
+
+  item CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+
+  @@index([catalogue_item_id])
+}
+
+// Per-tier published price override. Three states: no row → inherit base_price; value → that price;
+// null price_ex_vat → OFFERED at this tier but price set per-job (manual on the card picker).
+model CatalogueItemTierPrice {
+  id                String   @id @default(uuid())
+  catalogue_item_id String
+  tier_id           String
+  price_ex_vat      Decimal? @db.Decimal(12, 2)
+
+  item CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+  tier ServiceTier   @relation(fields: [tier_id], references: [id], onDelete: Cascade)
+
+  @@unique([catalogue_item_id, tier_id])
+  @@index([catalogue_item_id])
+  @@index([tier_id])
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

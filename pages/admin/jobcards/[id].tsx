@@ -18,7 +18,7 @@ import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
-import EstimateBuilder, { EstimateLine, CatalogueLite } from '@/components/jobcard/EstimateBuilder';
+import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
 import JobCardStatus from '@/components/jobcard/JobCardStatus';
 import JobCardBooking, { CardBooking } from '@/components/jobcard/JobCardBooking';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
@@ -51,6 +51,8 @@ type PageProps = {
   vatRegistered: boolean;
   lines: EstimateLine[];
   catalogue: CatalogueLite[];
+  fixedServices: FixedServiceLite[];
+  tiers: TierLite[];
   stages: Record<StageKey, boolean>;
   hasEstimate: boolean;
   resources: Array<{ id: string; name: string }>;
@@ -68,7 +70,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, catalogue, stages, hasEstimate, resources, booking, garageNotes, invoice }: PageProps) {
+export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPricing, canOperate, currency, locale, vatRate, vatRegistered, lines, catalogue, fixedServices, tiers, stages, hasEstimate, resources, booking, garageNotes, invoice }: PageProps) {
   const router = useRouter();
   const { t } = useTranslation('jobcard');
   // Context-aware back link: return to wherever the card was opened from (diary preserves week/day+date).
@@ -158,6 +160,8 @@ export default function JobCardDetailPage({ card, jobCardId, canEdit, canEditPri
         initialLines={lines}
         vatRegistered={vatRegistered}
         catalogue={catalogue}
+        fixedServices={fixedServices}
+        tiers={tiers}
       />
     </>
   );
@@ -208,17 +212,32 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
-  // Active catalogue for the line-code autocomplete (tenant-scoped; loaded once, matched in-browser).
-  const catalogueRows = (await prisma.catalogueItem.findMany({
-    where: { group_id: user.group_id, active: true },
-    orderBy: { code: 'asc' },
-    select: { id: true, code: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true },
-  })) as any[];
-  const catalogue: CatalogueLite[] = catalogueRows.map((c) => ({
+  // Active catalogue (loaded once, matched in-browser): SIMPLE items feed the code autocomplete;
+  // FIXED services feed the tier picker (with components + tier prices for client-side resolution).
+  const [catalogueRows, tierRows] = await Promise.all([
+    prisma.catalogueItem.findMany({
+      where: { group_id: user.group_id, active: true },
+      orderBy: { code: 'asc' },
+      select: {
+        id: true, code: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
+        components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
+        tier_prices: { select: { tier_id: true, price_ex_vat: true } },
+      },
+    }) as Promise<any[]>,
+    prisma.serviceTier.findMany({ where: { group_id: user.group_id, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
+  ]);
+  const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
     unit_cost: Number(c.unit_cost), unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
   }));
   const codeById = new Map(catalogue.map((c) => [c.id, c.code]));
+  const fixedServices: FixedServiceLite[] = catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({
+    id: c.id, code: c.code, name: c.name,
+    basePriceExVat: Number(c.base_price_ex_vat ?? c.unit_price), vatRate: Number(c.vat_rate),
+    components: c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })),
+    tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
+  }));
+  const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
@@ -264,6 +283,8 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       vatRegistered: vat.registered,
       lines,
       catalogue,
+      fixedServices,
+      tiers,
       stages: {
         details: !!row.stage_details_done,
         intake: !!row.stage_intake_done,

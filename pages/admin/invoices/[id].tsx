@@ -166,7 +166,7 @@ export default function InvoicePage(props: PageProps) {
                 <tbody>
                   {props.lines.map((l, i) => (
                     <tr key={i} className="border-b border-line/60">
-                      <td className="py-2 text-ink">{l.description}</td>
+                      <td className="py-2 text-ink whitespace-pre-line">{l.description}</td>
                       <td className="py-2 px-2 text-right text-ink tabular-nums">{l.qtyStr}</td>
                       <td className="py-2 px-2 text-right text-ink tabular-nums">{fmt(poundsToPenniesClient(l.unitPriceStr))}</td>
                       {reg && <td className="py-2 px-2 text-right text-muted tabular-nums">{l.vatRateStr}%</td>}
