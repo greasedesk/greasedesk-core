@@ -218,6 +218,9 @@ model Site {
   open_hour  Int   @default(8)                  // diary window start hour
   close_hour Int   @default(18)                 // diary window end hour
   week_start Int   @default(1)                  // first day of week (0=Sun, 1=Mon)
+  // Booking-form duration granularity (minutes) for the Quote-tab slot picker. Sub-day durations step
+  // by this; working-day length comes from open_hour/close_hour. Default 30. Diary reads start_at/end_at.
+  booking_slot_minutes Int @default(30)
   // --------------------------------
 
   group          Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)

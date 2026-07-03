@@ -19,6 +19,7 @@ import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
+import { startTimeSlots, durationOptions, computeEndISO, seedDurationValue, DurationOption } from '@/lib/booking-slots';
 
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean } | null;
@@ -37,6 +38,7 @@ type Props = {
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
   resources: Resource[]; booking: CardBooking;
+  siteHours: { openHour: number; closeHour: number; slotMinutes: number };
   stages: Record<StageKey, boolean>;
   invoice: { id: string; number: string } | null;
   events: AuditEvent[];
@@ -180,7 +182,7 @@ export default function JobCardWorkspace(p: Props) {
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={p.status} canManage={p.canManage && !cancelled} hasEstimate={p.hasEstimate} cancelled={cancelled}
-            resources={p.resources} booking={p.booking} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
+            resources={p.resources} booking={p.booking} siteHours={p.siteHours} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={() => router.replace(router.asPath)} t={t} setStatus={setStatus}
           />
           <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
@@ -224,20 +226,36 @@ export default function JobCardWorkspace(p: Props) {
 // ---------- Quote actions: mark-quoted / accept-&-book / reschedule / decline / cancel ----------
 function QuoteActions(props: {
   status: JobStatus; canManage: boolean; hasEstimate: boolean; cancelled: boolean;
-  resources: Resource[]; booking: CardBooking; jobCardId: string;
+  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number }; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void;
 }) {
-  const { status, canManage, hasEstimate, resources, booking, jobCardId, busy, setBusy, setErr, onDone, t } = props;
+  const { status, canManage, hasEstimate, resources, booking, siteHours, locale, jobCardId, busy, setBusy, setErr, onDone, t } = props;
+  const { openHour, closeHour, slotMinutes } = siteHours;
+
+  const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
+  const durOptions = useMemo(() => durationOptions(openHour, closeHour, slotMinutes), [openHour, closeHour, slotMinutes]);
+  const defaultDuration = durOptions.find((o) => o.value === 'm:60')?.value ?? durOptions[0]?.value ?? 'm:30';
+
   const [liftId, setLiftId] = useState(booking?.resourceId ?? '');
   const [startDate, setStartDate] = useState(booking ? datePart(booking.startAt) : '');
-  const [startTime, setStartTime] = useState(booking ? timePart(booking.startAt) : '09:00');
-  const [endDate, setEndDate] = useState(booking ? datePart(booking.endAt) : '');
-  const [endTime, setEndTime] = useState(booking ? timePart(booking.endAt) : '11:00');
-  const [held, setHeld] = useState(!!booking?.heldOnLift);
+  const [startTime, setStartTime] = useState(booking ? timePart(booking.startAt) : (slots.includes('09:00') ? '09:00' : slots[0] ?? '08:00'));
+  const [duration, setDuration] = useState(booking ? seedDurationValue(booking.startAt, booking.endAt, openHour, closeHour, slotMinutes) : defaultDuration);
 
   const isBookingStage = status === 'quoted' || status === 'declined';
   const isAcceptedOnwards = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'].includes(status);
+  const endISO = startDate && startTime ? computeEndISO(buildISO(startDate, startTime), duration) : null;
+
+  const durLabel = (o: DurationOption) =>
+    o.kind === 'day' ? (o.amount === 1 ? t('booking.durDay1') : t('booking.durDayN', { count: o.amount }))
+      : o.amount < 60 ? t('booking.durMinutes', { m: o.amount })
+        : t('booking.durHours', { h: o.amount / 60 });
+  const endLabel = (iso: string) => {
+    const d = new Date(iso);
+    const wd = d.toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' });
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    return `${wd} ${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+  };
 
   async function call(key: string, url: string, method: string, body?: unknown) {
     setBusy(key); setErr(null);
@@ -249,18 +267,10 @@ function QuoteActions(props: {
     } catch { setErr(t('action.error')); }
     finally { setBusy(null); }
   }
-
-  function acceptAndBook() {
-    if (!liftId || !startDate || !startTime || !endDate || !endTime) { setErr(t('booking.needLiftAndTimes')); return; }
-    const startAt = buildISO(startDate, startTime); const endAt = buildISO(endDate, endTime);
-    if (Date.parse(endAt) <= Date.parse(startAt)) { setErr(t('booking.endAfterStart')); return; }
-    call('accept', '/api/jobcard-accept', 'POST', { jobCardId, resourceId: liftId, startAt, endAt, heldOnLift: held });
-  }
-  function reschedule() {
-    if (!liftId || !startDate || !startTime || !endDate || !endTime) { setErr(t('booking.needLiftAndTimes')); return; }
-    const startAt = buildISO(startDate, startTime); const endAt = buildISO(endDate, endTime);
-    if (Date.parse(endAt) <= Date.parse(startAt)) { setErr(t('booking.endAfterStart')); return; }
-    call('reschedule', '/api/diary', 'PATCH', { jobCardId, resourceId: liftId, startAt, endAt, heldOnLift: held });
+  // End is derived from start + duration (end > start by construction), so no separate end entry.
+  function book(key: string, url: string, method: string) {
+    if (!liftId || !startDate || !startTime || !endISO) { setErr(t('booking.needLiftAndTimes')); return; }
+    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), endAt: endISO });
   }
 
   if (!canManage) return null;
@@ -287,24 +297,36 @@ function QuoteActions(props: {
               {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </div>
-          <div><label className="block text-xs text-muted mb-1">{t('booking.start')}</label>
-            <div className="flex gap-2"><input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} /><input type="time" className={inputCls} value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div></div>
-          <div><label className="block text-xs text-muted mb-1">{t('booking.end')}</label>
-            <div className="flex gap-2"><input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} /><input type="time" className={inputCls} value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div></div>
-          <label className="sm:col-span-2 flex items-center gap-2 text-sm text-ink"><input type="checkbox" className="w-4 h-4" checked={held} onChange={(e) => setHeld(e.target.checked)} />{t('booking.heldOnLift')}</label>
+          <div>
+            <label className="block text-xs text-muted mb-1">{t('booking.startDate')}</label>
+            <input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs text-muted mb-1">{t('booking.startTime')}</label>
+            <select className={inputCls} value={startTime} onChange={(e) => setStartTime(e.target.value)}>
+              {slots.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-xs text-muted mb-1">{t('booking.duration')}</label>
+            <select className={inputCls} value={duration} onChange={(e) => setDuration(e.target.value)}>
+              {durOptions.map((o) => <option key={o.value} value={o.value}>{durLabel(o)}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2 text-sm text-muted">{endISO ? t('booking.endsAt', { when: endLabel(endISO) }) : t('booking.pickStart')}</div>
         </div>
       )}
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">
         {isBookingStage && (
           <>
-            <button disabled={busy !== null} onClick={acceptAndBook} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.acceptBook')}</button>
+            <button disabled={busy !== null} onClick={() => book('accept', '/api/jobcard-accept', 'POST')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.acceptBook')}</button>
             {status === 'quoted' && <button disabled={busy !== null} onClick={() => props.setStatus('declined')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('action.declined')}</button>}
           </>
         )}
         {isAcceptedOnwards && (
           <>
-            <button disabled={busy !== null} onClick={reschedule} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.reschedule')}</button>
+            <button disabled={busy !== null} onClick={() => book('reschedule', '/api/diary', 'PATCH')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.reschedule')}</button>
             <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('booking.unbook')}</button>
           </>
         )}
