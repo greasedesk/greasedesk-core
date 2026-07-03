@@ -51,3 +51,16 @@ export function resolveTierPrice(
   }
   return { pricePounds: Number(basePriceExVat || 0), manual: false };
 }
+
+/**
+ * The customer-facing line text for a fixed-price service: Title (heading) + Description (spec),
+ * deduped when they're identical. Components are INTERNAL cost-only and NEVER appear here — this is
+ * the one place that decides the printed spec, so the card-add path and any data re-derive can't
+ * drift. Falls back to code only if both title and description are blank.
+ */
+export function fixedLineText(title: string | null | undefined, description: string | null | undefined, code?: string | null): string {
+  const spec = (description || '').trim();
+  const head = (title || '').trim();
+  if (head && head !== spec) return spec ? `${head}\n${spec}` : head;
+  return spec || head || (code || '').trim();
+}

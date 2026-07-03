@@ -12,7 +12,7 @@
 import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
-import { resolveTierPrice } from '@/lib/catalogue';
+import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
 import { formatMoney } from '@/lib/format-money';
 
 export type EstimateLine = {
@@ -140,17 +140,18 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   const [pickTier, setPickTier] = useState('');
 
   // Add a fixed-price service: resolve the tier price + spec entirely client-side and explode into
-  // ONE line — description = concatenated component spec, unit_price = resolved price (blank when the
-  // tier is price-on-the-day), unit_cost = Σ component cost (SILENT — never shown to the customer).
+  // ONE line. The customer-facing line text is the product's Title (heading) + Description (spec) —
+  // components are INTERNAL cost-only, they feed unit_cost/margin and are NEVER printed. unit_price =
+  // resolved tier price (blank when price-on-the-day); unit_cost = Σ component cost (SILENT).
   function addFixedService() {
     const svc = fixedServices.find((s) => s.id === pickService);
     if (!svc) return;
     const res = resolveTierPrice(svc.basePriceExVat, svc.tierPrices, pickTier || null);
-    const desc = svc.components.map((c) => c.description).join('\n');
+    const desc = fixedLineText(svc.title, svc.name, svc.code);
     const costPounds = svc.components.reduce((s, c) => s + Math.max(0, c.qty) * c.unitCost, 0);
     setLines((p) => [...p, {
       _uid: uid(), item_type: 'fixed',
-      description: desc || svc.name,
+      description: desc,
       qty: '1',
       unit_price: res.manual || res.pricePounds == null ? '' : String(res.pricePounds),
       unit_cost: costPounds.toFixed(2),
