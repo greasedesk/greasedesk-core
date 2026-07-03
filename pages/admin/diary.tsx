@@ -123,10 +123,10 @@ export default function DiaryPage(props: PageProps) {
 
   // ---- context menu (right-click desktop / long-press mobile) — replaces drag-to-create ----
   const cancelPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
+  const atMinFromY = (y: number) => snap15(Math.max(openHour * 60, Math.min(openHour * 60 + Math.round(y), closeHour * 60 - 15)));
   function openEmptyMenu(col: { date: string; resourceId?: string }, clientX: number, clientY: number, y: number) {
     if (!canManage) return;
-    const atMin = snap15(Math.max(openHour * 60, Math.min(openHour * 60 + Math.round(y), closeHour * 60 - 15)));
-    setPeek(null); setMenu({ x: clientX, y: clientY, date: col.date, resourceId: col.resourceId, atMin });
+    setPeek(null); setMenu({ x: clientX, y: clientY, date: col.date, resourceId: col.resourceId, atMin: atMinFromY(y) });
   }
   function onColContext(col: { date: string; resourceId?: string }, e: React.MouseEvent) {
     if (!canManage) return;
@@ -139,8 +139,19 @@ export default function DiaryPage(props: PageProps) {
     const cx = tch.clientX, cy = tch.clientY;
     pressTimer.current = window.setTimeout(() => { pressTimer.current = null; openEmptyMenu(col, cx, cy, y); }, 500);
   }
-  function onBlockMenu(card: DiaryCard, e: React.MouseEvent) { e.preventDefault(); e.stopPropagation(); setPeek(null); setMenu({ x: e.clientX, y: e.clientY, card }); }
-  function onBlockLongPress(card: DiaryCard, e: React.TouchEvent) { const tch = e.touches[0]; const cx = tch.clientX, cy = tch.clientY; pressTimer.current = window.setTimeout(() => { pressTimer.current = null; setPeek(null); setMenu({ x: cx, y: cy, card }); }, 500); }
+  // Y within the column body (a block's offsetParent), so "Book a job here" seeds the clicked time even
+  // when the click landed on a booking that fills the column.
+  const bodyY = (el: HTMLElement, clientY: number) => { const body = el.offsetParent as HTMLElement | null; return body ? clientY - body.getBoundingClientRect().top : 0; };
+  function onBlockMenu(card: DiaryCard, col: { date: string; resourceId?: string }, e: React.MouseEvent) {
+    if (!canManage) { e.preventDefault(); e.stopPropagation(); return; }
+    e.preventDefault(); e.stopPropagation();
+    setPeek(null); setMenu({ x: e.clientX, y: e.clientY, card, date: col.date, resourceId: col.resourceId, atMin: atMinFromY(bodyY(e.currentTarget as HTMLElement, e.clientY)) });
+  }
+  function onBlockLongPress(card: DiaryCard, col: { date: string; resourceId?: string }, e: React.TouchEvent) {
+    if (!canManage) return;
+    const tch = e.touches[0]; const cx = tch.clientX, cy = tch.clientY; const y = bodyY(e.currentTarget as HTMLElement, cy);
+    pressTimer.current = window.setTimeout(() => { pressTimer.current = null; setPeek(null); setMenu({ x: cx, y: cy, card, date: col.date, resourceId: col.resourceId, atMin: atMinFromY(y) }); }, 500);
+  }
   async function unbook(card: DiaryCard) { setMenu(null); await fetch(`/api/diary?jobCardId=${card.id}`, { method: 'DELETE' }); refresh(); }
 
   const columns = view === 'week'
@@ -152,15 +163,15 @@ export default function DiaryPage(props: PageProps) {
 
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
-  function JobBlock({ c, top, height, leftPct, widthPct }: { c: DiaryCard; top: number; height: number; leftPct: number; widthPct: number }) {
+  function JobBlock({ c, col, top, height, leftPct, widthPct }: { c: DiaryCard; col: { date: string; resourceId?: string }; top: number; height: number; leftPct: number; widthPct: number }) {
     const colour = resolveColour(c.resourceColour);
     return (
       <div
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => onBlockClick(c, e)}
         onDoubleClick={(e) => onBlockDbl(c, e)}
-        onContextMenu={(e) => onBlockMenu(c, e)}
-        onTouchStart={(e) => onBlockLongPress(c, e)}
+        onContextMenu={(e) => onBlockMenu(c, col, e)}
+        onTouchStart={(e) => onBlockLongPress(c, col, e)}
         onTouchEnd={cancelPress}
         onTouchMove={cancelPress}
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
@@ -277,7 +288,7 @@ export default function DiaryPage(props: PageProps) {
                             <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                           ))}
                           {placed.map((x) => x.kind === 'job'
-                            ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
+                            ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
                             : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
                         </div>
                       </div>
@@ -319,6 +330,8 @@ export default function DiaryPage(props: PageProps) {
             {menu.card ? (
               <>
                 <div className="px-3 py-1.5 text-xs text-muted border-b border-line">{menu.card.reg} · {menu.card.resourceName}</div>
+                <button className={menuBtn} onClick={() => { const m = menu!; setCreate({ date: m.date!, startAt: minToISO(m.date!, m.atMin!), resourceId: m.resourceId, mode: 'job' }); setMenu(null); }}>{t('menu.book')}</button>
+                <div className="border-t border-line" />
                 <button className={menuBtn} onClick={() => { const c = menu.card!; setMenu(null); openCard(c.id); }}>{t('menu.open')}</button>
                 <button className={menuBtn} onClick={() => { setMove({ card: menu.card! }); setMenu(null); }}>{t('menu.reschedule')}</button>
                 <button className={menuBtn} onClick={() => unbook(menu.card!)}>{t('menu.unbook')}</button>
