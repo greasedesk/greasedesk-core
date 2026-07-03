@@ -164,6 +164,8 @@
     "title": "Quote actions",
     "acceptBook": "Accept & book",
     "reschedule": "Reschedule",
+    "save": "Save",
+    "saveReturn": "Save and return to Diary",
     "needLine": "Add at least one line before quoting."
   },
   "completion": {

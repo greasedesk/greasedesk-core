@@ -50,6 +50,7 @@ type PageProps = {
   resources: Array<{ id: string; name: string }>;
   booking: CardBooking;
   siteHours: { openHour: number; closeHour: number; slotMinutes: number };
+  siteId: string;
   stages: Record<StageKey, boolean>;
   tabsState: Record<TabKey, TabState>;
   invoice: { id: string; number: string } | null;
@@ -97,6 +98,7 @@ export default function JobCardDetailPage(props: PageProps) {
         resources={props.resources}
         booking={props.booking}
         siteHours={props.siteHours}
+        siteId={props.siteId}
         stages={props.stages}
         invoice={props.invoice}
         events={props.events}
@@ -239,6 +241,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       hasEstimate: (row.items as any[]).length > 0,
       resources, booking, stages, tabsState, invoice, events,
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30 },
+      siteId: row.site_id,
     },
   };
 });

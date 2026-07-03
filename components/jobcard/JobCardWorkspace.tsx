@@ -39,6 +39,7 @@ type Props = {
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
   resources: Resource[]; booking: CardBooking;
   siteHours: { openHour: number; closeHour: number; slotMinutes: number };
+  siteId: string;
   stages: Record<StageKey, boolean>;
   invoice: { id: string; number: string } | null;
   events: AuditEvent[];
@@ -182,8 +183,8 @@ export default function JobCardWorkspace(p: Props) {
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={p.status} canManage={p.canManage && !cancelled} hasEstimate={p.hasEstimate} cancelled={cancelled}
-            resources={p.resources} booking={p.booking} siteHours={p.siteHours} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
-            onDone={() => router.replace(router.asPath)} t={t} setStatus={setStatus}
+            resources={p.resources} booking={p.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
+            onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus}
           />
           <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
         </div>
@@ -226,11 +227,11 @@ export default function JobCardWorkspace(p: Props) {
 // ---------- Quote actions: mark-quoted / accept-&-book / reschedule / decline / cancel ----------
 function QuoteActions(props: {
   status: JobStatus; canManage: boolean; hasEstimate: boolean; cancelled: boolean;
-  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number }; locale: string; jobCardId: string;
-  busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void;
+  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number }; siteId: string; locale: string; jobCardId: string;
+  busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void;
 }) {
-  const { status, canManage, hasEstimate, resources, booking, siteHours, locale, jobCardId, busy, setBusy, setErr, onDone, t } = props;
+  const { status, canManage, hasEstimate, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t } = props;
   const { openHour, closeHour, slotMinutes } = siteHours;
 
   const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
@@ -257,21 +258,24 @@ function QuoteActions(props: {
     return `${wd} ${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
   };
 
-  async function call(key: string, url: string, method: string, body?: unknown) {
+  // onOk overrides the default post-success behaviour (refresh). Used by Save-and-return to navigate
+  // ONLY on success — a clash/error never navigates (stays on the card, surfaces the message).
+  async function call(key: string, url: string, method: string, body?: unknown, onOk?: () => void) {
     setBusy(key); setErr(null);
     try {
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(data?.message || t('action.error')); return; }
-      onDone();
+      if (onOk) onOk(); else onDone();
     } catch { setErr(t('action.error')); }
     finally { setBusy(null); }
   }
   // End is derived from start + duration (end > start by construction), so no separate end entry.
-  function book(key: string, url: string, method: string) {
+  function book(key: string, url: string, method: string, onOk?: () => void) {
     if (!liftId || !startDate || !startTime || !endISO) { setErr(t('booking.needLiftAndTimes')); return; }
-    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), endAt: endISO });
+    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), endAt: endISO }, onOk);
   }
+  const diaryUrl = `/admin/diary?site=${encodeURIComponent(siteId)}&view=week${startDate ? `&date=${startDate}` : ''}`;
 
   if (!canManage) return null;
   const canCancel = !['done', 'cancelled'].includes(status);
@@ -326,7 +330,8 @@ function QuoteActions(props: {
         )}
         {isAcceptedOnwards && (
           <>
-            <button disabled={busy !== null} onClick={() => book('reschedule', '/api/diary', 'PATCH')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.reschedule')}</button>
+            <button disabled={busy !== null} onClick={() => book('saveReturn', '/api/diary', 'PATCH', () => navigate(diaryUrl))} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.saveReturn')}</button>
+            <button disabled={busy !== null} onClick={() => book('save', '/api/diary', 'PATCH')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.save')}</button>
             <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('booking.unbook')}</button>
           </>
         )}
