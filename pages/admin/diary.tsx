@@ -72,19 +72,21 @@ export default function DiaryPage(props: PageProps) {
     if (e <= s) return null;
     return { top: ((s - winStart) / 60000) * PX_PER_MIN, height: Math.max(18, ((e - s) / 60000) * PX_PER_MIN), s, e };
   }
-  // Cards draw their real occupancy-footprint segment on this day (spill lands on the next open day);
-  // notes (no segments) keep the simple raw-clamp. One footprint segment sits within one open day.
-  function segment(c: { startAt: string; endAt: string; segments?: Segment[] }, d: string) {
+  // ALL footprint segments a card occupies on this day → one block each. A lunch-split day yields two
+  // (morning + afternoon), so nothing is concealed. Notes (no segments) keep the single raw-clamp.
+  function segmentsForDay(c: { startAt: string; endAt: string; segments?: Segment[] }, d: string) {
     const winStart = dayStartMs(d) + openHour * 3600000;
     const winEnd = dayStartMs(d) + closeHour * 3600000;
+    const out: NonNullable<ReturnType<typeof box>>[] = [];
     if (c.segments) {
       for (const sg of c.segments) {
         const ss = Date.parse(sg.startISO), se = Date.parse(sg.endISO);
-        if (se > winStart && ss < winEnd) return box(Math.max(ss, winStart), Math.min(se, winEnd), winStart);
+        if (se > winStart && ss < winEnd) { const b = box(Math.max(ss, winStart), Math.min(se, winEnd), winStart); if (b) out.push(b); }
       }
-      return null;
+      return out;
     }
-    return box(Math.max(Date.parse(c.startAt), winStart), Math.min(Date.parse(c.endAt), winEnd), winStart);
+    const b = box(Math.max(Date.parse(c.startAt), winStart), Math.min(Date.parse(c.endAt), winEnd), winStart);
+    return b ? [b] : [];
   }
   const minToISO = (date: string, min: number) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}:00.000Z`;
 
@@ -140,7 +142,7 @@ export default function DiaryPage(props: PageProps) {
     : resources.map((r) => ({ key: r.id, label: r.name, date: anchor, resourceId: r.id }));
 
   // Day-level notes (no lift) shown as a banner strip in day view.
-  const dayLevelNotes = view === 'day' ? notes.filter((n) => !n.resourceId && segment(n, anchor)) : [];
+  const dayLevelNotes = view === 'day' ? notes.filter((n) => !n.resourceId && segmentsForDay(n, anchor).length > 0) : [];
 
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
@@ -229,13 +231,11 @@ export default function DiaryPage(props: PageProps) {
                     const items: Item[] = [];
                     for (const c of cards) {
                       if (view === 'day' && c.resourceId !== col.resourceId) continue;
-                      const sg = segment(c, col.date); if (!sg) continue;
-                      items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'job', card: c });
+                      for (const sg of segmentsForDay(c, col.date)) items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'job', card: c });
                     }
                     for (const n of notes) {
                       if (view === 'day') { if (n.resourceId !== col.resourceId) continue; } // day-level handled by banner
-                      const sg = segment(n, col.date); if (!sg) continue;
-                      items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'note', note: n });
+                      for (const sg of segmentsForDay(n, col.date)) items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'note', note: n });
                     }
                     const placed = layoutOverlap(items);
                     return (
@@ -253,7 +253,14 @@ export default function DiaryPage(props: PageProps) {
                             const top = (b.start - openHour * 60) * PX_PER_MIN;
                             const height = (Math.min(b.end, closeHour * 60) - Math.max(b.start, openHour * 60)) * PX_PER_MIN;
                             if (height <= 0) return null;
-                            return <div key={`br${bi}`} style={{ top, height, backgroundImage: 'repeating-linear-gradient(45deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 6px)' }} className="absolute left-0 right-0 bg-surface-muted/70 pointer-events-none" title={t('breakBand')} />;
+                            // Inline slate fill + hatch (the /70 opacity modifier doesn't apply to bare-var()
+                            // tokens; a token fill was near-white). Slate rgba reads clearly on light AND dark.
+                            return <div key={`br${bi}`} title={t('breakBand')} className="absolute left-0 right-0 pointer-events-none" style={{
+                              top, height,
+                              backgroundColor: 'rgba(100, 116, 139, 0.22)',
+                              backgroundImage: 'repeating-linear-gradient(45deg, rgba(71,85,105,0.28) 0, rgba(71,85,105,0.28) 1px, transparent 1px, transparent 7px)',
+                              borderTop: '1px solid rgba(100,116,139,0.4)', borderBottom: '1px solid rgba(100,116,139,0.4)',
+                            }} />;
                           })}
                           {HOURS.slice(1).map((h, i) => (
                             <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
@@ -262,8 +269,8 @@ export default function DiaryPage(props: PageProps) {
                             <div className="absolute left-0 right-0 bg-accent-soft border border-accent rounded pointer-events-none" style={{ top: Math.min(drag.aY, drag.bY), height: Math.max(8, Math.abs(drag.bY - drag.aY)) }} />
                           )}
                           {placed.map((x) => x.kind === 'job'
-                            ? <JobBlock key={x.card.id} c={x.card} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
-                            : <NoteBlock key={x.note.id} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
+                            ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
+                            : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
                         </div>
                       </div>
                     );
