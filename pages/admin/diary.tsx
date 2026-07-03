@@ -44,6 +44,8 @@ function dayStartMs(date: string) { return Date.parse(`${date}T00:00:00.000Z`); 
 function hhmm(iso: string) { return new Date(iso).toISOString().slice(11, 16); }
 const pad = (n: number) => String(n).padStart(2, '0');
 const snap15 = (min: number) => Math.round(min / 15) * 15;
+const menuBtn = 'w-full text-left px-3 py-2.5 hover:bg-surface-muted text-ink';
+const HOUR_OPTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 0.5); // 0.5 … 8.0 hrs
 
 export default function DiaryPage(props: PageProps) {
   const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, noSites } = props;
@@ -54,10 +56,13 @@ export default function DiaryPage(props: PageProps) {
   const HOURS = Array.from({ length: closeHour - openHour + 1 }, (_, i) => openHour + i);
 
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
-  const [drag, setDrag] = useState<{ colKey: string; date: string; resourceId?: string; aY: number; bY: number } | null>(null);
-  const [create, setCreate] = useState<{ date: string; startAt: string; endAt: string; resourceId?: string } | null>(null);
+  // Right-click / long-press context menu. Empty-space form: {date, resourceId?, atMin}. Booking form: {card}.
+  const [menu, setMenu] = useState<{ x: number; y: number; date?: string; resourceId?: string; atMin?: number; card?: DiaryCard } | null>(null);
+  const [create, setCreate] = useState<{ date: string; startAt: string; resourceId?: string; mode: 'job' | 'note' } | null>(null);
+  const [move, setMove] = useState<{ card: DiaryCard } | null>(null);
   const [editNote, setEditNote] = useState<DiaryNoteView | null>(null);
   const clickTimer = useRef<number | null>(null);
+  const pressTimer = useRef<number | null>(null);
 
   if (noSites) {
     return (
@@ -116,26 +121,27 @@ export default function DiaryPage(props: PageProps) {
     setPeek(null); openCard(card.id);
   }
 
-  // ---- empty-space create gesture (manager only) ----
-  function colYFromEvent(e: React.PointerEvent) { return e.clientY - e.currentTarget.getBoundingClientRect().top; }
-  function onColDown(col: { key: string; date: string; resourceId?: string }, e: React.PointerEvent) {
+  // ---- context menu (right-click desktop / long-press mobile) — replaces drag-to-create ----
+  const cancelPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
+  function openEmptyMenu(col: { date: string; resourceId?: string }, clientX: number, clientY: number, y: number) {
     if (!canManage) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    const y = colYFromEvent(e);
-    setDrag({ colKey: col.key, date: col.date, resourceId: col.resourceId, aY: y, bY: y });
+    const atMin = snap15(Math.max(openHour * 60, Math.min(openHour * 60 + Math.round(y), closeHour * 60 - 15)));
+    setPeek(null); setMenu({ x: clientX, y: clientY, date: col.date, resourceId: col.resourceId, atMin });
   }
-  function onColMove(e: React.PointerEvent) { if (drag) setDrag({ ...drag, bY: colYFromEvent(e) }); }
-  function onColUp(e: React.PointerEvent) {
-    if (!drag) return;
-    const a = Math.min(drag.aY, drag.bY), b = Math.max(drag.aY, drag.bY);
-    const single = b - a < 6;
-    let sMin = snap15(openHour * 60 + Math.round(single ? drag.aY : a));
-    let eMin = snap15(single ? sMin + 60 : openHour * 60 + Math.round(b));
-    sMin = Math.max(openHour * 60, Math.min(sMin, closeHour * 60 - 15));
-    eMin = Math.min(closeHour * 60, Math.max(eMin, sMin + 15));
-    setCreate({ date: drag.date, resourceId: drag.resourceId, startAt: minToISO(drag.date, sMin), endAt: minToISO(drag.date, eMin) });
-    setDrag(null);
+  function onColContext(col: { date: string; resourceId?: string }, e: React.MouseEvent) {
+    if (!canManage) return;
+    e.preventDefault(); e.stopPropagation();
+    openEmptyMenu(col, e.clientX, e.clientY, e.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top);
   }
+  function onColTouchStart(col: { date: string; resourceId?: string }, e: React.TouchEvent) {
+    if (!canManage) return;
+    const tch = e.touches[0]; const y = tch.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top;
+    const cx = tch.clientX, cy = tch.clientY;
+    pressTimer.current = window.setTimeout(() => { pressTimer.current = null; openEmptyMenu(col, cx, cy, y); }, 500);
+  }
+  function onBlockMenu(card: DiaryCard, e: React.MouseEvent) { e.preventDefault(); e.stopPropagation(); setPeek(null); setMenu({ x: e.clientX, y: e.clientY, card }); }
+  function onBlockLongPress(card: DiaryCard, e: React.TouchEvent) { const tch = e.touches[0]; const cx = tch.clientX, cy = tch.clientY; pressTimer.current = window.setTimeout(() => { pressTimer.current = null; setPeek(null); setMenu({ x: cx, y: cy, card }); }, 500); }
+  async function unbook(card: DiaryCard) { setMenu(null); await fetch(`/api/diary?jobCardId=${card.id}`, { method: 'DELETE' }); refresh(); }
 
   const columns = view === 'week'
     ? days.map((d) => ({ key: d.date, label: d.label, date: d.date, resourceId: undefined as string | undefined }))
@@ -153,6 +159,10 @@ export default function DiaryPage(props: PageProps) {
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => onBlockClick(c, e)}
         onDoubleClick={(e) => onBlockDbl(c, e)}
+        onContextMenu={(e) => onBlockMenu(c, e)}
+        onTouchStart={(e) => onBlockLongPress(c, e)}
+        onTouchEnd={cancelPress}
+        onTouchMove={cancelPress}
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
         className="diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none"
         title={`${c.reg} · ${c.customer} · ${c.resourceName} · ${timeLabel(c)}`}
@@ -242,11 +252,12 @@ export default function DiaryPage(props: PageProps) {
                       <div key={col.key} className="flex-1 min-w-[46px] border-l border-line">
                         <div className="h-7 text-sm text-ink text-center font-medium truncate px-1">{col.label}</div>
                         <div
-                          className="relative bg-surface"
-                          style={{ height: WIN_MIN * PX_PER_MIN, touchAction: canManage ? 'none' : undefined, cursor: canManage ? 'crosshair' : undefined }}
-                          onPointerDown={(e) => onColDown(col, e)}
-                          onPointerMove={onColMove}
-                          onPointerUp={onColUp}
+                          className="relative bg-surface border-b border-line"
+                          style={{ height: WIN_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
+                          onContextMenu={(e) => onColContext(col, e)}
+                          onTouchStart={(e) => onColTouchStart(col, e)}
+                          onTouchEnd={cancelPress}
+                          onTouchMove={cancelPress}
                         >
                           {/* Non-working break bands (lunch etc.) — drawn like closed time, behind blocks. */}
                           {breaks.map((b, bi) => {
@@ -265,9 +276,6 @@ export default function DiaryPage(props: PageProps) {
                           {HOURS.slice(1).map((h, i) => (
                             <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                           ))}
-                          {drag && drag.colKey === col.key && (
-                            <div className="absolute left-0 right-0 bg-accent-soft border border-accent rounded pointer-events-none" style={{ top: Math.min(drag.aY, drag.bY), height: Math.max(8, Math.abs(drag.bY - drag.aY)) }} />
-                          )}
                           {placed.map((x) => x.kind === 'job'
                             ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
                             : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
@@ -278,7 +286,7 @@ export default function DiaryPage(props: PageProps) {
                 </div>
               </div>
             </div>
-            {canManage && <p className="text-xs text-muted mt-2">{t('create.title')}: click or drag an empty slot.</p>}
+            {canManage && <p className="text-xs text-muted mt-2">{t('menu.hint')}</p>}
           </>
         )}
       </div>
@@ -302,10 +310,42 @@ export default function DiaryPage(props: PageProps) {
         </>
       )}
 
+      {/* Right-click / long-press context menu */}
+      {menu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+          <div className="fixed z-50 bg-surface border border-line rounded-xl shadow-lg py-1 w-56 text-sm overflow-hidden"
+            style={{ left: Math.min(menu.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 232), top: Math.min(menu.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 200) }}>
+            {menu.card ? (
+              <>
+                <div className="px-3 py-1.5 text-xs text-muted border-b border-line">{menu.card.reg} · {menu.card.resourceName}</div>
+                <button className={menuBtn} onClick={() => { const c = menu.card!; setMenu(null); openCard(c.id); }}>{t('menu.open')}</button>
+                <button className={menuBtn} onClick={() => { setMove({ card: menu.card! }); setMenu(null); }}>{t('menu.reschedule')}</button>
+                <button className={menuBtn} onClick={() => unbook(menu.card!)}>{t('menu.unbook')}</button>
+                <button className={menuBtn} onClick={() => { const c = menu.card!; setCreate({ date: c.startAt.slice(0, 10), startAt: c.startAt, resourceId: c.resourceId, mode: 'note' }); setMenu(null); }}>{t('menu.addNote')}</button>
+              </>
+            ) : (
+              <>
+                <div className="px-3 py-1.5 text-xs text-muted border-b border-line">{hhmm(minToISO(menu.date!, menu.atMin!))}</div>
+                <button className={menuBtn} onClick={() => { setCreate({ date: menu.date!, startAt: minToISO(menu.date!, menu.atMin!), resourceId: menu.resourceId, mode: 'job' }); setMenu(null); }}>{t('menu.book')}</button>
+                <button className={menuBtn} onClick={() => { setCreate({ date: menu.date!, startAt: minToISO(menu.date!, menu.atMin!), resourceId: menu.resourceId, mode: 'note' }); setMenu(null); }}>{t('menu.addNote')}</button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
       {create && (
         <CreateDialog
           info={create} siteId={siteId} resources={resources} defaultResourceId={create.resourceId ?? null}
           onClose={() => setCreate(null)} onDone={() => { setCreate(null); refresh(); }}
+        />
+      )}
+
+      {move && (
+        <MoveDialog
+          card={move.card} resources={resources}
+          onClose={() => setMove(null)} onDone={() => { setMove(null); refresh(); }}
         />
       )}
 
@@ -321,27 +361,31 @@ export default function DiaryPage(props: PageProps) {
 
 // ---- create dialogue (module scope so inputs don't remount on keystroke) ----
 function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onDone }: {
-  info: { date: string; startAt: string; endAt: string; resourceId?: string };
+  info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string };
   siteId: string; resources: ResourceCol[]; defaultResourceId: string | null;
   onClose: () => void; onDone: () => void;
 }) {
   const { t } = useTranslation('diary');
-  const [mode, setMode] = useState<'choose' | 'job' | 'note'>('choose');
+  const [mode, setMode] = useState<'choose' | 'job' | 'note'>(info.mode);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [hours, setHours] = useState('1');
   // job fields
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
   const [liftId, setLiftId] = useState(defaultResourceId ?? resources[0]?.id ?? '');
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
-  const when = `${info.date} · ${info.startAt.slice(11, 16)}–${info.endAt.slice(11, 16)}`;
+  // End is naive start + hours (the /api/jobcard bridge → workingMinutes = end-start = hours*60; the
+  // footprint re-expands correctly around close/breaks). Duration is the source of truth.
+  const endAt = new Date(Date.parse(info.startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString();
+  const when = `${info.date} · ${info.startAt.slice(11, 16)} · ${hours} hr`;
 
   async function createJob() {
-    if (!reg.trim() || !cust.trim() || !liftId) { setErr(t('create.jobFailed')); return; }
+    if (!reg.trim() || !cust.trim() || !liftId || !(Number(hours) > 0)) { setErr(t('create.jobFailed')); return; }
     setBusy(true); setErr(null);
     const res = await fetch('/api/jobcard', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ registration: reg, customerName: cust, mileage: mileage || undefined, siteId, resourceId: liftId, startAt: info.startAt, endAt: info.endAt }),
+      body: JSON.stringify({ registration: reg, customerName: cust, mileage: mileage || undefined, siteId, resourceId: liftId, startAt: info.startAt, endAt }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
@@ -353,7 +397,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     setBusy(true); setErr(null);
     const res = await fetch('/api/diary-notes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteId, title, startAt: info.startAt, endAt: info.endAt, resourceId: noteLift || null, colour: colour || null }),
+      body: JSON.stringify({ siteId, title, startAt: info.startAt, endAt, resourceId: noteLift || null, colour: colour || null }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
@@ -363,6 +407,13 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
 
   const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
   const labelCls = 'block text-xs text-muted mb-1';
+  const durationField = (
+    <div><label className={labelCls}>{t('create.duration')}</label>
+      <select className={inputCls} value={hours} onChange={(e) => setHours(e.target.value)}>
+        {HOUR_OPTS.map((h) => <option key={h} value={String(h)}>{t('create.hoursOpt', { h })}</option>)}
+      </select>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
@@ -390,6 +441,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
                 </select>
               </div>
             </div>
+            {durationField}
             <div className="flex gap-2 pt-1">
               <button onClick={createJob} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
               <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
@@ -406,6 +458,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
                 {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
             </div>
+            {durationField}
             <div>
               <label className={labelCls}>{t('create.colour')}</label>
               <div className="flex flex-wrap gap-2">
@@ -435,6 +488,68 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---- reschedule a booking (lift + start + duration) → PATCH /api/diary (same guard) ----
+function MoveDialog({ card, resources, onClose, onDone }: {
+  card: DiaryCard; resources: ResourceCol[]; onClose: () => void; onDone: () => void;
+}) {
+  const { t } = useTranslation('diary');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [liftId, setLiftId] = useState(card.resourceId);
+  const [date, setDate] = useState(card.startAt.slice(0, 10));
+  const [time, setTime] = useState(card.startAt.slice(11, 16));
+  // Default duration = the booking's current working minutes (sum of footprint segments), snapped to 0.5 hr.
+  const curMin = card.segments.reduce((a, s) => a + (Date.parse(s.endISO) - Date.parse(s.startISO)), 0) / 60000;
+  const [hours, setHours] = useState(String(Math.max(0.5, Math.round(curMin / 30) * 0.5)));
+  const startAt = `${date}T${time}:00.000Z`;
+
+  async function save() {
+    if (!liftId || !date || !time || !(Number(hours) > 0)) { setErr(t('move.failed')); return; }
+    setBusy(true); setErr(null);
+    const res = await fetch('/api/diary', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobCardId: card.id, resourceId: liftId, startAt, workingMinutes: Math.round(Number(hours) * 60) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setErr(data?.message || t('move.failed')); return; }
+    onDone();
+  }
+
+  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const labelCls = 'block text-xs text-muted mb-1';
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-ink">{t('move.title')}</h2>
+        <p className="text-sm text-muted mb-4">{card.reg} · {card.customer}</p>
+        {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
+        <div className="space-y-3">
+          <div><label className={labelCls}>{t('create.lift')}</label>
+            <select className={inputCls} value={liftId} onChange={(e) => setLiftId(e.target.value)}>
+              {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={labelCls}>{t('move.date')}</label><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></div>
+            <div><label className={labelCls}>{t('move.time')}</label><input type="time" className={inputCls} value={time} onChange={(e) => setTime(e.target.value)} /></div>
+          </div>
+          <div><label className={labelCls}>{t('create.duration')}</label>
+            <select className={inputCls} value={hours} onChange={(e) => setHours(e.target.value)}>
+              {(HOUR_OPTS.includes(Number(hours)) ? HOUR_OPTS : [Number(hours), ...HOUR_OPTS]).map((h) => <option key={h} value={String(h)}>{t('create.hoursOpt', { h })}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={save} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('move.save')}</button>
+            <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
+          </div>
+        </div>
       </div>
     </div>
   );

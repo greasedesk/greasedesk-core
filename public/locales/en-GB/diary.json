@@ -63,12 +63,29 @@
     "noColour": "None",
     "start": "Start",
     "end": "End",
+    "duration": "Duration",
+    "hoursOpt": "{{h}} hr",
     "createJob": "Create job card",
     "addNote": "Add note",
     "cancel": "Cancel",
     "working": "Saving…",
     "jobFailed": "Could not create the job card.",
     "noteFailed": "Could not add the note."
+  },
+  "menu": {
+    "hint": "Right-click (or long-press) the diary to book a job or add a note.",
+    "open": "Open job card",
+    "reschedule": "Reschedule",
+    "unbook": "Unbook",
+    "addNote": "Add note here",
+    "book": "Book a job here"
+  },
+  "move": {
+    "title": "Reschedule booking",
+    "date": "Date",
+    "time": "Start time",
+    "save": "Save",
+    "failed": "Could not reschedule — the lift may not be free."
   },
   "note": { "tag": "Note", "dayNotes": "Notes" },
   "editNote": {
