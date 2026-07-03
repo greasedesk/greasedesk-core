@@ -25,6 +25,7 @@ import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorks
 import { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
+import { parseBreaks, Break } from '@/lib/occupancy';
 
 type PageProps = {
   registration: string;
@@ -49,7 +50,7 @@ type PageProps = {
   hasEstimate: boolean;
   resources: Array<{ id: string; name: string }>;
   booking: CardBooking;
-  siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] };
+  siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
   stages: Record<StageKey, boolean>;
   tabsState: Record<TabKey, TabState>;
@@ -126,7 +127,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   })) as any;
   if (!row) return { notFound: true };
 
-  const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true } })) as { currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[] } | null;
+  const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } })) as { currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null;
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
   const perms = await getTenantPermissions(user.group_id as string);
@@ -247,7 +248,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       lines, catalogue, fixedServices, tiers,
       hasEstimate: (row.items as any[]).length > 0,
       resources, booking, stages, tabsState, invoice, events,
-      siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6] },
+      siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6], breaks: parseBreaks(site?.breaks) },
       siteId: row.site_id,
     },
   };

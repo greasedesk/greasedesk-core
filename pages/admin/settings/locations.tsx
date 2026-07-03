@@ -14,6 +14,7 @@ import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
+import { parseBreaks } from '@/lib/occupancy';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
 import { requireSiteManagerPage } from '@/lib/admin-guard';
@@ -37,6 +38,7 @@ type LocationView = {
   openHour: number;
   closeHour: number;
   weekStart: number;
+  breaks: { start: number; end: number }[];
 };
 type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean };
 
@@ -48,13 +50,21 @@ function DiarySettings({ loc, onChanged }: { loc: LocationView; onChanged: () =>
   const [open, setOpen] = useState(String(loc.openHour));
   const [close, setClose] = useState(String(loc.closeHour));
   const [wk, setWk] = useState(String(loc.weekStart));
+  const [breaks, setBreaks] = useState<{ start: number; end: number }[]>(loc.breaks ?? []);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const toggleDay = (d: number) => setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : [...p, d].sort((a, b) => a - b)));
 
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const minToHHMM = (m: number) => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+  const hhmmToMin = (s: string) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const setBreak = (i: number, patch: Partial<{ start: number; end: number }>) => setBreaks((p) => p.map((b, j) => (j === i ? { ...b, ...patch } : b)));
+  const addBreak = () => setBreaks((p) => [...p, { start: 13 * 60, end: 14 * 60 }]);
+  const removeBreak = (i: number) => setBreaks((p) => p.filter((_, j) => j !== i));
+
   async function save() {
     setBusy(true); setMsg(null);
-    const error = await mutate('/api/site-settings', 'POST', { siteId: loc.id, openDays: days, openHour: Number(open), closeHour: Number(close), weekStart: Number(wk) });
+    const error = await mutate('/api/site-settings', 'POST', { siteId: loc.id, openDays: days, openHour: Number(open), closeHour: Number(close), weekStart: Number(wk), breaks });
     setBusy(false);
     if (error) return setMsg({ text: error, ok: false });
     setMsg({ text: 'Diary settings saved.', ok: true }); onChanged();
@@ -82,6 +92,21 @@ function DiarySettings({ loc, onChanged }: { loc: LocationView; onChanged: () =>
             <option value="0">Sunday</option>
           </select>
         </div>
+      </div>
+      <div className="mt-3">
+        <div className="text-xs text-muted mb-1">Breaks (non-working — lunch, tea)</div>
+        {breaks.length === 0 && <div className="text-xs text-muted mb-1">No breaks.</div>}
+        {breaks.map((b, i) => (
+          <div key={i} className="flex items-center gap-2 mb-1.5">
+            <input type="time" step="900" value={minToHHMM(b.start)} onChange={(e) => setBreak(i, { start: hhmmToMin(e.target.value) })} className={`${inputClass} w-28`} />
+            <span className="text-xs text-muted">to</span>
+            <input type="time" step="900" value={minToHHMM(b.end)} onChange={(e) => setBreak(i, { end: hhmmToMin(e.target.value) })} className={`${inputClass} w-28`} />
+            <button type="button" onClick={() => removeBreak(i)} aria-label="Remove break" className="text-danger text-sm px-2 py-1">✕</button>
+          </div>
+        ))}
+        <button type="button" onClick={addBreak} className="text-xs bg-surface-muted text-ink rounded px-2 py-1 border border-line">+ Add break</button>
+      </div>
+      <div className="mt-3">
         <button onClick={save} disabled={busy} className="text-xs bg-accent hover:bg-accent-hover text-white font-semibold rounded px-3 py-2 disabled:opacity-50">
           {busy ? 'Saving…' : 'Save'}
         </button>
@@ -352,7 +377,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const user = session?.user as any;
 
   type ResDbRow = { id: string; name: string; type: string; display_order: number; is_active: boolean; colour: string | null };
-  type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; open_days: number[]; open_hour: number; close_hour: number; week_start: number; resources: ResDbRow[] };
+  type SiteDbRow = { id: string; site_name: string; address: string | null; is_active: boolean; open_days: number[]; open_hour: number; close_hour: number; week_start: number; breaks: unknown; resources: ResDbRow[] };
 
   const sites = (await prisma.site.findMany({
     where: { id: { in: vis.siteIds } }, // visible sites only
@@ -371,6 +396,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     openHour: s.open_hour ?? 8,
     closeHour: s.close_hour ?? 18,
     weekStart: s.week_start ?? 1,
+    breaks: parseBreaks(s.breaks),
   }));
 
   return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER' } };

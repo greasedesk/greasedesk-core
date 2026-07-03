@@ -20,7 +20,7 @@ import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
 import { startTimeSlots } from '@/lib/booking-slots';
-import { computeFootprint } from '@/lib/occupancy';
+import { computeFootprint, Break } from '@/lib/occupancy';
 
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
@@ -39,7 +39,7 @@ type Props = {
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
   resources: Resource[]; booking: CardBooking;
-  siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] };
+  siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
   stages: Record<StageKey, boolean>;
   invoice: { id: string; number: string } | null;
@@ -237,12 +237,12 @@ function seedHours(wm: number): { sel: string; free: string } {
 
 function QuoteActions(props: {
   status: JobStatus; canManage: boolean; cancelled: boolean;
-  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] }; siteId: string; locale: string; jobCardId: string;
+  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
 }) {
   const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
-  const { openHour, closeHour, openDays } = siteHours;
+  const { openHour, closeHour, openDays, breaks } = siteHours;
 
   const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
   const seed = booking ? seedHours(booking.workingMinutes) : { sel: '1', free: '' };
@@ -257,7 +257,7 @@ function QuoteActions(props: {
   const isAcceptedOnwards = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'].includes(status);
   // The trade quotes in JOB-HOURS; duration → working-minutes feeds the unchanged footprint engine.
   const workingMinutes = durSel === 'other' ? Math.round((Number(freeHours) || 0) * 60) : Math.round(Number(durSel) * 60);
-  const endISO = startDate && startTime && workingMinutes > 0 ? computeFootprint(buildISO(startDate, startTime), workingMinutes, openHour, closeHour, openDays).endISO : null;
+  const endISO = startDate && startTime && workingMinutes > 0 ? computeFootprint(buildISO(startDate, startTime), workingMinutes, openHour, closeHour, openDays, breaks).endISO : null;
 
   const endLabel = (iso: string) => {
     const d = new Date(iso);

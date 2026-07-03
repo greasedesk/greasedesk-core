@@ -1,38 +1,61 @@
 /**
  * File: lib/occupancy.ts
- * THE shared occupancy-footprint chokepoint. Given a booking's WORKING duration (minutes) and the
- * site's opening hours + open-days, it returns the real per-day, working-hours-bounded segments the
- * job occupies — same-day through multi-week — plus the true wrapped end. Duration is working time:
- * a job fills only within [open, close); on reaching close it resumes at the NEXT OPEN day's opening,
- * skipping whatever days are actually closed (reads the stored open_days — never hardcodes a weekend).
+ * THE shared occupancy-footprint chokepoint. Given a booking's WORKING duration (minutes), the site's
+ * opening hours, open-days, and BREAKS (non-working bands like lunch), it returns the real per-day,
+ * working-hours-bounded segments the job occupies — plus the true wrapped end. Working time each day
+ * is [open, close) minus the break bands; work fills those sub-bands in order, pausing at each break
+ * and at close, resuming at the next working moment (break end, or next open day's opening). A job
+ * spanning a break produces two segments that day (morning + afternoon).
  *
- * All three consumers (booking-form end preview, diary render, clash guard) read THIS so they can't
- * drift. Times are naive-UTC wall times (same convention as the diary), so day arithmetic in UTC has
- * no DST drift. Pure — no I/O.
+ * BREAKS are the same shape as the close-of-day wrap — a boundary to pause at and resume after — so
+ * nothing new conceptually. breaks defaults to [] → identical to the pre-breaks behaviour, so callers
+ * that don't pass breaks (or sites with none) are unchanged. Times are naive-UTC wall times (no DST).
+ * All three consumers (form end-preview, diary render, clash guard) read THIS so they can't drift.
  */
 export type Segment = { startISO: string; endISO: string };
+export type Break = { start: number; end: number }; // minutes-from-midnight, [start, end)
 export type Footprint = { segments: Segment[]; endISO: string };
 
 const MIN = 60000;
 const todMin = (ms: number) => { const d = new Date(ms); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
 const dow = (ms: number) => new Date(ms).getUTCDay(); // 0=Sun..6=Sat
-const atOpen = (ms: number, openMin: number) => {
-  const d = new Date(ms);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0) + openMin * MIN;
-};
+const midnight = (ms: number) => { const d = new Date(ms); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0); };
+const atMin = (ms: number, min: number) => midnight(ms) + min * MIN;
 
-/** Advance to the earliest working moment >= ms: within [open, close) on a day in openDays. */
-function advanceToOpen(ms: number, openMin: number, closeMin: number, openDays: number[]): number {
+/** Coerce a Site.breaks JSON value into a validated Break[] (drops anything malformed). */
+export function parseBreaks(v: unknown): Break[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((b): b is Break => !!b && typeof (b as any).start === 'number' && typeof (b as any).end === 'number' && (b as any).end > (b as any).start)
+    .map((b) => ({ start: b.start, end: b.end }));
+}
+
+/** The working sub-bands of a day: [open, close) minus the (clamped, merged) break bands. */
+export function dayBands(openMin: number, closeMin: number, breaks: Break[]): Array<[number, number]> {
+  const bs = (breaks || []).filter((b) => b.end > b.start).sort((a, b) => a.start - b.start);
+  const out: Array<[number, number]> = [];
+  let cur = openMin;
+  for (const b of bs) {
+    const bStart = Math.max(openMin, Math.min(b.start, closeMin));
+    const bEnd = Math.max(openMin, Math.min(b.end, closeMin));
+    if (bStart > cur) out.push([cur, bStart]);
+    cur = Math.max(cur, bEnd);
+  }
+  if (cur < closeMin) out.push([cur, closeMin]);
+  return out.filter(([s, e]) => e > s);
+}
+
+/** Advance to the earliest WORKING moment >= ms: inside a working sub-band on a day in openDays. */
+function advanceToWorking(ms: number, bands: Array<[number, number]>, openMin: number, openDays: number[]): number {
   let cur = ms;
-  for (let guard = 0; guard < 3700; guard++) { // ~10yr of days; bounded so a bad openDays can't loop forever
+  for (let guard = 0; guard < 3700; guard++) {
     if (openDays.includes(dow(cur))) {
       const t = todMin(cur);
-      if (t < openMin) return atOpen(cur, openMin);
-      if (t < closeMin) return cur;
+      for (const [bStart, bEnd] of bands) if (t < bEnd) return atMin(cur, Math.max(t, bStart));
     }
-    cur = atOpen(cur + 24 * 3600000, openMin); // next calendar day at opening, re-check
+    cur = atMin(cur + 24 * 3600000, openMin); // next calendar day at opening, re-check
   }
-  throw new Error('OCCUPANCY_NO_OPEN_DAY');
+  throw new Error('OCCUPANCY_NO_WORKING_TIME');
 }
 
 export function computeFootprint(
@@ -41,25 +64,29 @@ export function computeFootprint(
   openHour: number,
   closeHour: number,
   openDays: number[],
+  breaks: Break[] = [],
 ): Footprint {
   const openMin = openHour * 60;
   const closeMin = closeHour * 60;
-  if (!openDays || openDays.length === 0 || !(workingMinutes > 0)) {
-    return { segments: [], endISO: startISO };
-  }
+  if (!openDays || openDays.length === 0 || !(workingMinutes > 0)) return { segments: [], endISO: startISO };
+  const bands = dayBands(openMin, closeMin, breaks);
+  if (bands.length === 0) return { segments: [], endISO: startISO };
+
   const segments: Segment[] = [];
   let remaining = Math.round(workingMinutes);
-  let cur = advanceToOpen(Date.parse(startISO), openMin, closeMin, openDays);
+  let cur = advanceToWorking(Date.parse(startISO), bands, openMin, openDays);
   let lastEnd = cur;
   while (remaining > 0) {
-    cur = advanceToOpen(cur, openMin, closeMin, openDays);
-    const avail = closeMin - todMin(cur);
-    const take = Math.min(remaining, avail);
-    const segEnd = cur + take * MIN;
+    cur = advanceToWorking(cur, bands, openMin, openDays);
+    const t = todMin(cur);
+    const band = bands.find(([bStart, bEnd]) => t >= bStart && t < bEnd);
+    const bandEnd = band ? band[1] : closeMin; // pause at the next boundary: break-start OR close
+    const take = Math.min(remaining, bandEnd - t);
+    const segEnd = atMin(cur, t + take);
     segments.push({ startISO: new Date(cur).toISOString(), endISO: new Date(segEnd).toISOString() });
     remaining -= take;
     lastEnd = segEnd;
-    cur = segEnd; // if this hit close, the next advanceToOpen rolls to the next open day
+    cur = segEnd; // hitting a break-start or close → next advanceToWorking rolls to the next band/day
   }
   return { segments, endISO: new Date(lastEnd).toISOString() };
 }

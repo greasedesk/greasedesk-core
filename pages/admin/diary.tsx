@@ -23,7 +23,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
-import { computeFootprint, Segment } from '@/lib/occupancy';
+import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 
 const PX_PER_MIN = 1;
 
@@ -35,7 +35,7 @@ type PageProps = {
   siteId: string; siteName: string; view: 'week' | 'day'; anchor: string;
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
-  openHour: number; closeHour: number; currency: string; locale: string; canManage: boolean;
+  openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
   noSites?: boolean;
 };
 
@@ -46,7 +46,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const snap15 = (min: number) => Math.round(min / 15) * 15;
 
 export default function DiaryPage(props: PageProps) {
-  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, currency, locale, canManage, noSites } = props;
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, noSites } = props;
   const { t } = useTranslation('diary');
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
@@ -248,6 +248,13 @@ export default function DiaryPage(props: PageProps) {
                           onPointerMove={onColMove}
                           onPointerUp={onColUp}
                         >
+                          {/* Non-working break bands (lunch etc.) — drawn like closed time, behind blocks. */}
+                          {breaks.map((b, bi) => {
+                            const top = (b.start - openHour * 60) * PX_PER_MIN;
+                            const height = (Math.min(b.end, closeHour * 60) - Math.max(b.start, openHour * 60)) * PX_PER_MIN;
+                            if (height <= 0) return null;
+                            return <div key={`br${bi}`} style={{ top, height, backgroundImage: 'repeating-linear-gradient(45deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 6px)' }} className="absolute left-0 right-0 bg-surface-muted/70 pointer-events-none" title={t('breakBand')} />;
+                          })}
                           {HOURS.slice(1).map((h, i) => (
                             <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                           ))}
@@ -536,7 +543,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const vis = await getVisibility(user.id as string);
   if (vis.siteIds.length === 0) {
     const today = ymd(new Date());
-    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, currency: 'GBP', locale: 'en-GB', canManage: false, noSites: true } };
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, noSites: true } };
   }
 
   // Default to the user's PRIMARY location; a valid ?site switches. Forced out-of-scope ?site
@@ -545,13 +552,14 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const resolvedId = wanted && vis.siteIds.includes(wanted) ? wanted : (vis.primarySiteId ?? vis.siteIds[0]);
   const site = (await prisma.site.findFirst({
     where: { id: resolvedId },
-    select: { id: true, site_name: true, open_days: true, open_hour: true, close_hour: true, week_start: true, currency_code: true, locale: true },
+    select: { id: true, site_name: true, open_days: true, open_hour: true, close_hour: true, breaks: true, week_start: true, currency_code: true, locale: true },
   })) as any;
   if (!site) return { redirect: { destination: '/admin/diary', permanent: false } };
 
   const openDays: number[] = (site.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6]).slice().sort((a: number, b: number) => a - b);
   const openHour: number = site.open_hour ?? 8;
   const closeHour: number = site.close_hour ?? 18;
+  const breaks: Break[] = parseBreaks(site.breaks);
   const weekStart: number = site.week_start ?? 1;
   const perms = await getTenantPermissions(user.group_id as string);
   const canManage = canCreateDiaryEntry(vis, site.id, perms); // create gesture + note edit (manager OR STANDARD+toggle)
@@ -611,7 +619,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     const startAt = (c.start_at as Date).toISOString();
     // Occupancy footprint from the WORKING duration (source of truth; fallback (end - start) pre-backfill).
     const mins = c.booking_duration_minutes ?? Math.round(((c.end_at as Date).getTime() - (c.start_at as Date).getTime()) / 60000);
-    const fp = computeFootprint(startAt, mins, openHour, closeHour, openDays);
+    const fp = computeFootprint(startAt, mins, openHour, closeHour, openDays, breaks);
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—',
@@ -622,5 +630,5 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   });
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage } };
 });

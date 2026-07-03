@@ -12,7 +12,7 @@
  * Throws: CARD_NOT_FOUND | RESOURCE_NOT_FOUND | CROSS_SITE | EMPTY_FOOTPRINT | CLASH:<reg>
  */
 import { Prisma } from '@prisma/client';
-import { computeFootprint, footprintsClash } from '@/lib/occupancy';
+import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
 export type PlaceParams = {
   jobCardId: string;
@@ -37,12 +37,13 @@ export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams)
   if (resource.site_id !== card.site_id) throw new Error('CROSS_SITE');
 
   // Site hours + open-days drive the footprint (skips whatever is actually closed — never hardcoded).
-  const site = await tx.site.findUnique({ where: { id: card.site_id }, select: { open_hour: true, close_hour: true, open_days: true } });
+  const site = await tx.site.findUnique({ where: { id: card.site_id }, select: { open_hour: true, close_hour: true, open_days: true, breaks: true } });
   const openHour = site?.open_hour ?? 8;
   const closeHour = site?.close_hour ?? 18;
   const openDays = site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6];
+  const breaks = parseBreaks(site?.breaks);
 
-  const newFp = computeFootprint(p.start.toISOString(), p.workingMinutes, openHour, closeHour, openDays);
+  const newFp = computeFootprint(p.start.toISOString(), p.workingMinutes, openHour, closeHour, openDays, breaks);
   if (newFp.segments.length === 0) throw new Error('EMPTY_FOOTPRINT');
   const newEnd = new Date(Date.parse(newFp.endISO));
 
@@ -60,7 +61,7 @@ export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams)
     // which equals the working-minutes the old naive form implied.
     const mins = c.booking_duration_minutes ?? Math.round(((c.end_at?.getTime() ?? c.start_at.getTime()) - c.start_at.getTime()) / 60000);
     if (!(mins > 0)) continue;
-    const fp = computeFootprint(c.start_at.toISOString(), mins, openHour, closeHour, openDays);
+    const fp = computeFootprint(c.start_at.toISOString(), mins, openHour, closeHour, openDays, breaks);
     if (footprintsClash(newFp, fp)) throw new Error(`CLASH:${c.vehicle?.registration ?? 'another job'}`);
   }
 
