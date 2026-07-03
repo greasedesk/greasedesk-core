@@ -177,12 +177,13 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'quote' && (
         <div className="space-y-5">
-          <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
+          {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={p.status} canManage={p.canManage && !cancelled} hasEstimate={p.hasEstimate} cancelled={cancelled}
             resources={p.resources} booking={p.booking} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={() => router.replace(router.asPath)} t={t} setStatus={setStatus}
           />
+          <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
         </div>
       )}
 
