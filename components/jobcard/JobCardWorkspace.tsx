@@ -8,18 +8,18 @@
  * Tabs: Customer Details (edge-resolved owner) → Quote (renamed estimate + accept-&-book) → Intake →
  * In-Job → Completion photos (gated stages; upload is a placeholder until the R2 slice) → Invoice.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
-import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
+import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle } from '@/components/jobcard/EstimateBuilder';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
-import { startTimeSlots, durationOptions, durationToWorkingMinutes, seedDurationFromMinutes, DurationOption } from '@/lib/booking-slots';
+import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint } from '@/lib/occupancy';
 
 type Resource = { id: string; name: string };
@@ -56,6 +56,8 @@ export default function JobCardWorkspace(p: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const estimateRef = useRef<EstimateHandle>(null);
+  const commitEstimate = () => estimateRef.current ? estimateRef.current.commit() : Promise.resolve({ ok: true as const });
 
   const cancelled = p.status === 'cancelled';
 
@@ -183,11 +185,11 @@ export default function JobCardWorkspace(p: Props) {
         <div className="space-y-5">
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
-            status={p.status} canManage={p.canManage && !cancelled} hasEstimate={p.hasEstimate} cancelled={cancelled}
+            status={p.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
             resources={p.resources} booking={p.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
-            onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus}
+            onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
-          <EstimateBuilder jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
         </div>
       )}
 
@@ -226,79 +228,96 @@ export default function JobCardWorkspace(p: Props) {
 }
 
 // ---------- Quote actions: mark-quoted / accept-&-book / reschedule / decline / cancel ----------
+const HOURS_OPTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 0.5); // 0.5 … 8.0
+// Seed the hours picker from stored working-minutes: a clean half-hour ≤ 8h → a dropdown value; else Other.
+function seedHours(wm: number): { sel: string; free: string } {
+  if (wm > 0 && wm % 30 === 0 && wm <= 480) return { sel: String(wm / 60), free: '' };
+  return { sel: 'other', free: wm > 0 ? String(Math.round((wm / 60) * 100) / 100) : '' };
+}
+
 function QuoteActions(props: {
-  status: JobStatus; canManage: boolean; hasEstimate: boolean; cancelled: boolean;
+  status: JobStatus; canManage: boolean; cancelled: boolean;
   resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
-  t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void;
+  t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
 }) {
-  const { status, canManage, hasEstimate, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t } = props;
-  const { openHour, closeHour, slotMinutes, openDays } = siteHours;
-  const workingDayMinutes = Math.max(slotMinutes, (closeHour - openHour) * 60);
+  const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
+  const { openHour, closeHour, openDays } = siteHours;
 
   const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
-  const durOptions = useMemo(() => durationOptions(openHour, closeHour, slotMinutes), [openHour, closeHour, slotMinutes]);
-  const defaultDuration = durOptions.find((o) => o.value === 'm:60')?.value ?? durOptions[0]?.value ?? 'm:30';
+  const seed = booking ? seedHours(booking.workingMinutes) : { sel: '1', free: '' };
 
   const [liftId, setLiftId] = useState(booking?.resourceId ?? '');
   const [startDate, setStartDate] = useState(booking ? datePart(booking.startAt) : '');
   const [startTime, setStartTime] = useState(booking ? timePart(booking.startAt) : (slots.includes('09:00') ? '09:00' : slots[0] ?? '08:00'));
-  const [duration, setDuration] = useState(booking ? seedDurationFromMinutes(booking.workingMinutes, workingDayMinutes, slotMinutes) : defaultDuration);
+  const [durSel, setDurSel] = useState(seed.sel);
+  const [freeHours, setFreeHours] = useState(seed.free);
 
   const isBookingStage = status === 'quoted' || status === 'declined';
   const isAcceptedOnwards = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'].includes(status);
-  // WORKING duration is the source of truth; the end is the footprint's TRUE wrapped end.
-  const workingMinutes = durationToWorkingMinutes(duration, workingDayMinutes);
-  const endISO = startDate && startTime ? computeFootprint(buildISO(startDate, startTime), workingMinutes, openHour, closeHour, openDays).endISO : null;
+  // The trade quotes in JOB-HOURS; duration → working-minutes feeds the unchanged footprint engine.
+  const workingMinutes = durSel === 'other' ? Math.round((Number(freeHours) || 0) * 60) : Math.round(Number(durSel) * 60);
+  const endISO = startDate && startTime && workingMinutes > 0 ? computeFootprint(buildISO(startDate, startTime), workingMinutes, openHour, closeHour, openDays).endISO : null;
 
-  const durLabel = (o: DurationOption) =>
-    o.kind === 'day' ? (o.amount === 1 ? t('booking.durDay1') : t('booking.durDayN', { count: o.amount }))
-      : o.amount < 60 ? t('booking.durMinutes', { m: o.amount })
-        : t('booking.durHours', { h: o.amount / 60 });
   const endLabel = (iso: string) => {
     const d = new Date(iso);
     const wd = d.toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' });
     const p2 = (n: number) => String(n).padStart(2, '0');
     return `${wd} ${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
   };
+  const liftName = () => resources.find((r) => r.id === liftId)?.name ?? t('booking.lift');
+  const diaryUrl = `/admin/diary?site=${encodeURIComponent(siteId)}&view=week${startDate ? `&date=${startDate}` : ''}`;
 
-  // onOk overrides the default post-success behaviour (refresh). Used by Save-and-return to navigate
-  // ONLY on success — a clash/error never navigates (stays on the card, surfaces the message).
-  async function call(key: string, url: string, method: string, body?: unknown, onOk?: () => void) {
+  // Plain status/booking action (decline / cancel / unbook) — no estimate commit.
+  async function call(key: string, url: string, method: string, body?: unknown) {
     setBusy(key); setErr(null);
     try {
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (data?.code === 'CLASH') { setErr(t('booking.clash', { lift: resources.find((r) => r.id === liftId)?.name ?? t('booking.lift') })); return; }
-        setErr(data?.message || t('action.error')); return;
-      }
-      if (onOk) onOk(); else onDone();
+      if (!res.ok) { setErr(data?.code === 'CLASH' ? t('booking.couldntBook', { lift: liftName() }) : (data?.message || t('action.error'))); return; }
+      onDone();
     } catch { setErr(t('action.error')); }
     finally { setBusy(null); }
   }
-  // End is derived from start + working duration via the footprint, so we send the DURATION (source
-  // of truth), not an end. The guard derives the footprint + end from it.
-  function book(key: string, url: string, method: string, onOk?: () => void) {
-    if (!liftId || !startDate || !startTime || !endISO) { setErr(t('booking.needLiftAndTimes')); return; }
-    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), workingMinutes }, onOk);
+
+  // THE unified Save: commit the estimate FIRST (so it's never lost), then attempt the booking/status.
+  // Partial success — if the estimate saves but the booking clashes, the estimate is already safe and
+  // we report the booking failure; never a silent revert.
+  async function saveAll(kind: 'estimate' | 'reschedule' | 'accept' | 'quoted', navigateAfter = false) {
+    const needsBooking = kind === 'reschedule' || kind === 'accept';
+    if (needsBooking && (!liftId || !startDate || !startTime || !(workingMinutes > 0))) { setErr(t('booking.needLiftAndTimes')); return; }
+    setBusy('save'); setErr(null);
+    const est = await commitEstimate();
+    let secondOk = true, secondMsg = '';
+    if (needsBooking) {
+      const url = kind === 'accept' ? '/api/jobcard-accept' : '/api/diary';
+      const method = kind === 'accept' ? 'POST' : 'PATCH';
+      try {
+        const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), workingMinutes }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { secondOk = false; secondMsg = d?.code === 'CLASH' ? t('booking.couldntBook', { lift: liftName() }) : (d?.message || t('action.error')); }
+      } catch { secondOk = false; secondMsg = t('action.error'); }
+    } else if (kind === 'quoted') {
+      try {
+        const r = await fetch('/api/jobcard-status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId, to: 'quoted' }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { secondOk = false; secondMsg = d?.message || t('action.error'); }
+      } catch { secondOk = false; secondMsg = t('action.error'); }
+    }
+    setBusy(null);
+    if (est.ok && secondOk) { navigateAfter ? navigate(diaryUrl) : onDone(); return; }
+    if (est.ok && !secondOk) { setErr(t('booking.partialSaved', { msg: secondMsg })); onDone(); return; } // estimate safe; report the rest
+    if (!est.ok && secondOk) { setErr(est.message || t('estimate.saveError')); return; }              // estimate failed — keep edits, no refresh
+    setErr([est.message, secondMsg].filter(Boolean).join(' — '));
   }
-  const diaryUrl = `/admin/diary?site=${encodeURIComponent(siteId)}&view=week${startDate ? `&date=${startDate}` : ''}`;
 
   if (!canManage) return null;
   const canCancel = !['done', 'cancelled'].includes(status);
+  const btn = 'text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50';
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
       <h3 className="text-sm font-semibold text-ink">{t('quoteActions.title')}</h3>
-
-      {status === 'draft' && (
-        <div className="flex flex-col sm:flex-row gap-2">
-          <button disabled={!hasEstimate || busy !== null} title={!hasEstimate ? t('quoteActions.needLine') : undefined}
-            onClick={() => props.setStatus('quoted')}
-            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.quoted')}</button>
-        </div>
-      )}
 
       {(isBookingStage || isAcceptedOnwards) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -321,29 +340,42 @@ function QuoteActions(props: {
           </div>
           <div className="sm:col-span-2">
             <label className="block text-xs text-muted mb-1">{t('booking.duration')}</label>
-            <select className={inputCls} value={duration} onChange={(e) => setDuration(e.target.value)}>
-              {durOptions.map((o) => <option key={o.value} value={o.value}>{durLabel(o)}</option>)}
-            </select>
+            <div className="flex gap-2">
+              <select className={inputCls} value={durSel} onChange={(e) => setDurSel(e.target.value)}>
+                {HOURS_OPTS.map((h) => <option key={h} value={String(h)}>{t('booking.durHours', { h })}</option>)}
+                <option value="other">{t('booking.durOther')}</option>
+              </select>
+              {durSel === 'other' && (
+                <input type="number" step="0.5" min="0" inputMode="decimal" className={inputCls} value={freeHours} onChange={(e) => setFreeHours(e.target.value)} placeholder={t('booking.durHoursPh')} />
+              )}
+            </div>
           </div>
           <div className="sm:col-span-2 text-sm text-muted">{endISO ? t('booking.endsAt', { when: endLabel(endISO) }) : t('booking.pickStart')}</div>
         </div>
       )}
 
       <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+        {status === 'draft' && (
+          <>
+            <button disabled={busy !== null} onClick={() => saveAll('estimate')} className={`${btn} bg-accent-soft text-accent`}>{t('quoteActions.save')}</button>
+            <button disabled={busy !== null} onClick={() => saveAll('quoted')} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t('action.quoted')}</button>
+          </>
+        )}
         {isBookingStage && (
           <>
-            <button disabled={busy !== null} onClick={() => book('accept', '/api/jobcard-accept', 'POST')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.acceptBook')}</button>
-            {status === 'quoted' && <button disabled={busy !== null} onClick={() => props.setStatus('declined')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('action.declined')}</button>}
+            <button disabled={busy !== null} onClick={() => saveAll('accept')} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t('quoteActions.acceptBook')}</button>
+            <button disabled={busy !== null} onClick={() => saveAll('estimate')} className={`${btn} bg-accent-soft text-accent`}>{t('quoteActions.save')}</button>
+            {status === 'quoted' && <button disabled={busy !== null} onClick={() => props.setStatus('declined')} className={`${btn} bg-surface-muted text-ink`}>{t('action.declined')}</button>}
           </>
         )}
         {isAcceptedOnwards && (
           <>
-            <button disabled={busy !== null} onClick={() => book('saveReturn', '/api/diary', 'PATCH', () => navigate(diaryUrl))} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('quoteActions.saveReturn')}</button>
-            <button disabled={busy !== null} onClick={() => book('save', '/api/diary', 'PATCH')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent-soft text-accent disabled:opacity-50">{t('quoteActions.save')}</button>
-            <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted text-ink disabled:opacity-50">{t('booking.unbook')}</button>
+            <button disabled={busy !== null} onClick={() => saveAll('reschedule', true)} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t('quoteActions.saveReturn')}</button>
+            <button disabled={busy !== null} onClick={() => saveAll('reschedule')} className={`${btn} bg-accent-soft text-accent`}>{t('quoteActions.save')}</button>
+            <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className={`${btn} bg-surface-muted text-ink`}>{t('booking.unbook')}</button>
           </>
         )}
-        {canCancel && <button disabled={busy !== null} onClick={() => props.setStatus('cancelled')} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-danger-soft text-danger disabled:opacity-50 sm:ml-auto">{t('action.cancelled')}</button>}
+        {canCancel && <button disabled={busy !== null} onClick={() => props.setStatus('cancelled')} className={`${btn} bg-danger-soft text-danger sm:ml-auto`}>{t('action.cancelled')}</button>}
       </div>
     </div>
   );

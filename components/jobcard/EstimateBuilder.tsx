@@ -9,8 +9,7 @@
  * Note: LineRow is defined at MODULE SCOPE (not inside the component) and rows are keyed by a
  * stable per-line _uid — otherwise React remounts each input every keystroke and focus is lost.
  */
-import React, { useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
+import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
 import { resolveTierPrice } from '@/lib/catalogue';
@@ -130,9 +129,12 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
   );
 }
 
-export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [] }: Props) {
+// Imperative handle so the ONE unified Quote-tab Save can commit the estimate lines (the standalone
+// "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
+export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
+
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [] }: Props, ref) {
   const { t } = useTranslation('jobcard');
-  const router = useRouter();
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
@@ -185,8 +187,6 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
     }));
   };
   const [vatRate, setVatRate] = useState<string>(String(initialVatRate));
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   const fmt = (pennies: number) => formatMoney(pennies, { currency, locale });
 
@@ -211,8 +211,9 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
   const remove = (idx: number) => setLines((p) => p.filter((_, i) => i !== idx));
   const add = (item_type: QuoteItemType) => setLines((p) => [...p, blank(item_type)]);
 
-  async function save() {
-    setBusy(true); setMsg(null);
+  // Persist the estimate lines. Returns a result; the parent's unified Save orchestrates messaging +
+  // refresh (and pairs this with the booking commit). No router.replace here — the parent handles it.
+  async function commit(): Promise<{ ok: boolean; message?: string }> {
     try {
       // strip the client-only id + the transient code (not a JobCardItem field); keep catalogue_item_id.
       const items = lines.map(({ _uid, code, ...rest }) => rest);
@@ -221,14 +222,13 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
         body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ text: data?.message || t('estimate.saveError'), ok: false }); setBusy(false); return; }
-      setMsg({ text: t('estimate.saved'), ok: true });
-      router.replace(router.asPath); // re-SSR so the persisted card value reflects the save
+      if (!res.ok) return { ok: false, message: data?.message || t('estimate.saveError') };
+      return { ok: true };
     } catch {
-      setMsg({ text: t('estimate.saveError'), ok: false });
+      return { ok: false, message: t('estimate.saveError') };
     }
-    setBusy(false);
   }
+  useImperativeHandle(ref, () => ({ commit }), [lines, vatRate, jobCardId]);
 
   // Each row carries its original index so per-line totals map back to totals.lines[idx].
   const withIdx = lines.map((l, idx) => ({ l, idx }));
@@ -245,7 +245,6 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
       )}
       <h2 className="text-lg font-semibold text-ink mb-1">{t('estimate.title')}</h2>
       {!canEdit && <p className="text-warn text-sm mb-3">{t('estimate.readOnly')}</p>}
-      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
       {/* Labour */}
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
@@ -323,13 +322,8 @@ export default function EstimateBuilder({ jobCardId, canEdit, currency, locale, 
         </div>
       </div>
 
-      {canEdit && (
-        <div className="mt-4">
-          <button onClick={save} disabled={busy} className="bg-ok hover:bg-ok text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 w-full sm:w-auto">
-            {busy ? t('estimate.saving') : t('estimate.save')}
-          </button>
-        </div>
-      )}
     </div>
   );
-}
+});
+
+export default EstimateBuilder;
