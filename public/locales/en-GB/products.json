@@ -6,6 +6,8 @@
   "empty": "No products yet. Add your first to speed up job-card entry.",
   "code": "Code",
   "codePlaceholder": "e.g. FDP-FOCUS",
+  "titleLabel": "Title",
+  "titlePlaceholder": "e.g. Gold Service, Platinum Service (Petrol)",
   "name": "Description",
   "namePlaceholder": "e.g. Front discs & pads (fitted)",
   "type": "Type",

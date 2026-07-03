@@ -813,6 +813,9 @@ model CatalogueItem {
   id         String   @id @default(uuid())
   group_id   String // TENANT-level — one shared catalogue, one price, across all sites
   code       String // required; unique per tenant; the match key
+  // Human label shown in "choose a service" pickers (distinct from code=reference and the printed
+  // spec). Backfilled = code for existing rows; consumers show `title || code` so it's never blank.
+  title      String?
   name       String // fills the line's description on autocomplete
   item_type  ItemType // labour | part | misc | fixed
   // Simple items (part/labour/misc): flat cost + price. Fixed items: these are MIRRORED derived-on-

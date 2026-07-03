@@ -32,7 +32,7 @@ export type CatalogueLite = { id: string; code: string; name: string; item_type:
 // Fixed-price services are added via a tier picker (not typed codes). Carries components (spec + cost)
 // and per-tier price rows so the explosion resolves the price + spec entirely client-side.
 export type FixedServiceLite = {
-  id: string; code: string; name: string; basePriceExVat: number; vatRate: number;
+  id: string; code: string; title?: string | null; name: string; basePriceExVat: number; vatRate: number;
   components: Array<{ description: string; qty: number; unitCost: number }>;
   tierPrices: Array<{ tierId: string; priceExVat: number | null }>;
 };
@@ -284,7 +284,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
               <div className="flex flex-wrap items-end gap-2 mb-4">
                 <select value={pickService} onChange={(e) => setPickService(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
                   <option value="">{t('estimate.pickService')}</option>
-                  {fixedServices.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {fixedServices.map((s) => <option key={s.id} value={s.id}>{s.title || s.code}</option>)}
                 </select>
                 {tiers.length > 0 && (
                   <select value={pickTier} onChange={(e) => setPickTier(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">

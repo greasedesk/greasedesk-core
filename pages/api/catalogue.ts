@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         where: { group_id: groupId },
         orderBy: [{ active: 'desc' }, { code: 'asc' }],
         select: {
-          id: true, code: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, active: true,
+          id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, active: true,
           base_price_ex_vat: true,
           components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
           tier_prices: { select: { tier_id: true, price_ex_vat: true } },
@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       vatRegistered: vat.registered,
       tiers: tiers.map((t) => ({ id: t.id, name: t.name, position: t.position, active: t.active })),
       items: items.map((i) => ({
-        id: i.id, code: i.code, name: i.name, itemType: i.item_type,
+        id: i.id, code: i.code, title: i.title, name: i.name, itemType: i.item_type,
         unitCost: Number(i.unit_cost), unitPrice: Number(i.unit_price), vatRate: Number(i.vat_rate), active: i.active,
         basePriceExVat: i.base_price_ex_vat == null ? null : Number(i.base_price_ex_vat),
         components: i.components.map((c: any) => ({ description: c.description, qty: Number(c.qty), unitCostExVat: Number(c.unit_cost_ex_vat) })),
@@ -85,6 +85,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!name) return res.status(400).json({ message: 'Name is required.' });
       data.name = name;
     }
+    // Human label (optional). Empty → null so consumers fall back to code.
+    if (body.title !== undefined) data.title = String(body.title ?? '').trim() || null;
     if (body.itemType !== undefined || !isPatch) data.item_type = itemType as any;
     if (body.vatRate !== undefined) data.vat_rate = new Prisma.Decimal(clampRate(body.vatRate).toFixed(2));
     else if (!isPatch) { const vat = await getTenantVat(groupId); data.vat_rate = new Prisma.Decimal(clampRate(vat.defaultRate).toFixed(2)); }

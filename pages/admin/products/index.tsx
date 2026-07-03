@@ -17,7 +17,7 @@ type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Comp = { description: string; qty: number; unitCostExVat: number };
 type TierPrice = { tierId: string; priceExVat: number | null };
 type Item = {
-  id: string; code: string; name: string; itemType: ItemType; unitCost: number; unitPrice: number; vatRate: number; active: boolean;
+  id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number; unitPrice: number; vatRate: number; active: boolean;
   basePriceExVat: number | null; components: Comp[]; tierPrices: TierPrice[];
 };
 type Tier = { id: string; name: string; position: number; active: boolean };
@@ -25,7 +25,7 @@ type Tier = { id: string; name: string; position: number; active: boolean };
 type FormComp = { description: string; qty: string; cost: string };
 type TierCell = { price: string; manual: boolean };
 type FormState = {
-  id: string | null; code: string; name: string; itemType: ItemType; active: boolean; vatRate: string;
+  id: string | null; code: string; title: string; name: string; itemType: ItemType; active: boolean; vatRate: string;
   cost: string; price: string;              // simple
   basePrice: string; components: FormComp[]; tierCells: Record<string, TierCell>; // fixed
 };
@@ -70,7 +70,7 @@ export default function ProductsPage() {
 
   // ---- item form ----
   const blankTierCells = (): Record<string, TierCell> => Object.fromEntries(activeTiers.map((tt) => [tt.id, { price: '', manual: false }]));
-  function openAdd() { setMsg(null); setForm({ id: null, code: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', components: [], tierCells: blankTierCells() }); }
+  function openAdd() { setMsg(null); setForm({ id: null, code: '', title: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', components: [], tierCells: blankTierCells() }); }
   function openEdit(i: Item) {
     setMsg(null);
     const cells: Record<string, TierCell> = {};
@@ -79,7 +79,7 @@ export default function ProductsPage() {
       cells[tt.id] = row ? (row.priceExVat === null ? { price: '', manual: true } : { price: String(row.priceExVat), manual: false }) : { price: '', manual: false };
     }
     setForm({
-      id: i.id, code: i.code, name: i.name, itemType: i.itemType, active: i.active, vatRate: String(i.vatRate),
+      id: i.id, code: i.code, title: i.title ?? '', name: i.name, itemType: i.itemType, active: i.active, vatRate: String(i.vatRate),
       cost: String(i.unitCost), price: String(i.unitPrice),
       basePrice: i.basePriceExVat == null ? '' : String(i.basePriceExVat),
       components: i.components.map((c) => ({ description: c.description, qty: String(c.qty), cost: String(c.unitCostExVat) })),
@@ -101,7 +101,7 @@ export default function ProductsPage() {
   async function save() {
     if (!form || !canSave) return;
     setBusy(true); setMsg(null);
-    const common = { id: form.id || undefined, code: form.code.trim(), name: form.name.trim(), itemType: form.itemType, vatRate: Number(form.vatRate || 0), active: form.active };
+    const common = { id: form.id || undefined, code: form.code.trim(), title: form.title.trim(), name: form.name.trim(), itemType: form.itemType, vatRate: Number(form.vatRate || 0), active: form.active };
     let body: any;
     if (isFixed) {
       const tierPrices = activeTiers.flatMap((tt): Array<{ tierId: string; priceExVat: number | null }> => {
@@ -180,6 +180,8 @@ export default function ProductsPage() {
                 <select value={form.itemType} onChange={(e) => setForm({ ...form, itemType: e.target.value as ItemType })} className={inputCls}>
                   <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="fixed">{t('fixed')}</option><option value="misc">{t('misc')}</option>
                 </select></label>
+              <label className="block sm:col-span-2"><span className={labelCls}>{t('titleLabel')}</span>
+                <input value={form.title} placeholder={t('titlePlaceholder')} onChange={(e) => setForm({ ...form, title: e.target.value })} className={inputCls} /></label>
               <label className="block sm:col-span-2"><span className={labelCls}>{t('name')}</span>
                 <textarea value={form.name} placeholder={t('namePlaceholder')} rows={2} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${inputCls} resize-y`} /></label>
 

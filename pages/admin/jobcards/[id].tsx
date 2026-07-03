@@ -166,7 +166,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       where: { group_id: user.group_id, active: true },
       orderBy: { code: 'asc' },
       select: {
-        id: true, code: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
+        id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
         components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
         tier_prices: { select: { tier_id: true, price_ex_vat: true } },
       },
@@ -179,7 +179,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   }));
   const codeById = new Map(catalogue.map((c) => [c.id, c.code]));
   const fixedServices: FixedServiceLite[] = catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({
-    id: c.id, code: c.code, name: c.name,
+    id: c.id, code: c.code, title: c.title, name: c.name,
     basePriceExVat: Number(c.base_price_ex_vat ?? c.unit_price), vatRate: Number(c.vat_rate),
     components: c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })),
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
