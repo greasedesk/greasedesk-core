@@ -23,6 +23,7 @@
     "customer": "Customer",
     "lift": "Lift",
     "time": "Time",
+    "wrapped": "{{h}} hrs · {{start}} → {{end}}",
     "status": "Status",
     "value": "Value (incl. VAT)",
     "open": "Open job card"

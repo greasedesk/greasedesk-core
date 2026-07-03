@@ -88,6 +88,18 @@ export default function DiaryPage(props: PageProps) {
   }
   const minToISO = (date: string, min: number) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}:00.000Z`;
 
+  // Truthful time label from the footprint. Same-day (1 segment) → plain range. Wrapped/multi-day
+  // (>1 segment) → duration in working-hours + start→end WITH weekday, so it never reads as a short
+  // same-day job or as continuous clock-time. Derived from the footprint the card already carries.
+  const dowTime = (iso: string) => `${new Date(iso).toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' })} ${hhmm(iso)}`;
+  function timeLabel(c: { startAt: string; endAt: string; segments?: Segment[] }) {
+    const segs = c.segments ?? [];
+    if (segs.length <= 1) return `${hhmm(c.startAt)}–${hhmm(c.endAt)}`;
+    const mins = segs.reduce((s, sg) => s + (Date.parse(sg.endISO) - Date.parse(sg.startISO)) / 60000, 0);
+    const hrs = Math.round(mins / 30) / 2; // working-hours, nearest half-hour
+    return t('peek.wrapped', { h: hrs, start: dowTime(c.startAt), end: dowTime(c.endAt) });
+  }
+
   const cardHref = (id: string) => `/admin/jobcards/${id}?from=diary&site=${siteId}&view=${view}&date=${anchor}`;
   function openCard(id: string) { router.push(cardHref(id)); }
   function onBlockClick(card: DiaryCard, e: React.MouseEvent) {
@@ -141,7 +153,7 @@ export default function DiaryPage(props: PageProps) {
         onDoubleClick={(e) => onBlockDbl(c, e)}
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
         className="diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none"
-        title={`${c.reg} · ${c.customer} · ${c.resourceName} · ${hhmm(c.startAt)}–${hhmm(c.endAt)}`}
+        title={`${c.reg} · ${c.customer} · ${c.resourceName} · ${timeLabel(c)}`}
       >
         <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5">{c.reg}</span>
         {view === 'day' && height > 40 && <span className="block text-[10px] text-muted px-1 truncate">{c.customer}</span>}
@@ -203,9 +215,13 @@ export default function DiaryPage(props: PageProps) {
             <div className="overflow-x-auto">
               <div className="flex min-w-full">
                 <div className="w-14 shrink-0 pt-7">
-                  {HOURS.map((h) => (
-                    <div key={h} style={{ height: 60 * PX_PER_MIN }} className="text-xs text-muted text-right pr-2 -mt-2">{pad(h)}:00</div>
-                  ))}
+                  {/* Axis height = the day-column body (WIN_MIN), so the grid ends at close (18:00). Labels
+                      are absolutely placed on their gridlines — no empty strip below the last hour. */}
+                  <div className="relative" style={{ height: WIN_MIN * PX_PER_MIN }}>
+                    {HOURS.map((h, i) => (
+                      <div key={h} style={{ top: i * 60 * PX_PER_MIN }} className="absolute right-0 pr-2 -mt-2 text-xs text-muted">{pad(h)}:00</div>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex-1 flex min-w-0">
                   {columns.map((col) => {
@@ -263,7 +279,7 @@ export default function DiaryPage(props: PageProps) {
             <div className="space-y-0.5">
               <div><span className="text-muted">{t('peek.customer')}: </span><span className="text-ink">{peek.card.customer}</span></div>
               <div><span className="text-muted">{t('peek.lift')}: </span><span className="text-ink">{peek.card.resourceName}</span></div>
-              <div><span className="text-muted">{t('peek.time')}: </span><span className="text-ink">{hhmm(peek.card.startAt)}–{hhmm(peek.card.endAt)}</span></div>
+              <div><span className="text-muted">{t('peek.time')}: </span><span className="text-ink">{timeLabel(peek.card)}</span></div>
               <div><span className="text-muted">{t('peek.status')}: </span><span className="text-ink">{t(`status.${peek.card.status}`)}</span></div>
               <div><span className="text-muted">{t('peek.value')}: </span><span className="text-ink font-medium">{formatMoney(peek.card.valuePennies, { currency, locale })}</span></div>
             </div>
