@@ -14,6 +14,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
+import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
@@ -29,7 +30,7 @@ type Props = {
   canManage: boolean;     // commercial (status/accept/booking/invoice)
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
-  owner: { name: string; phone: string | null; email: string | null };
+  owner: { name: string; phone: string | null; email: string | null; address: string | null };
   vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
   flags: string[];
   garageNotes: string;
@@ -45,15 +46,6 @@ const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink t
 const datePart = (iso: string) => iso.slice(0, 10);
 const timePart = (iso: string) => iso.slice(11, 16);
 const buildISO = (d: string, t: string) => `${d}T${t}:00.000Z`;
-
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-xs uppercase text-muted mb-1">{label}</div>
-      <div className="text-ink">{value || '—'}</div>
-    </div>
-  );
-}
 
 export default function JobCardWorkspace(p: Props) {
   const { t } = useTranslation('jobcard');
@@ -124,19 +116,14 @@ export default function JobCardWorkspace(p: Props) {
   function DetailsPane() {
     return (
       <div className="space-y-5">
-        <div className="bg-surface border border-line rounded-xl p-5">
-          <h2 className="text-lg font-semibold text-ink mb-4">{t('tab.details')}</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Field label={t('field.registration')} value={p.vehicle.registration} />
-            <Field label={t('field.vin')} value={p.vehicle.vin} />
-            <Field label={t('field.mileage')} value={p.vehicle.mileageIn != null ? p.vehicle.mileageIn.toLocaleString(p.locale) : null} />
-            <Field label={t('field.customer')} value={p.owner.name} />
-            <Field label={t('field.phone')} value={p.owner.phone} />
-            <Field label={t('field.email')} value={p.owner.email} />
-          </div>
-          <p className="text-xs text-muted mt-4">{t('field.ownerFromEdge')}</p>
-          <p className="text-xs text-muted mt-1">{t('field.editComingSoon')}</p>
-        </div>
+        <CustomerDetailsForm
+          jobCardId={p.jobCardId}
+          owner={p.owner}
+          vehicle={p.vehicle}
+          canEdit={p.canOperate && !cancelled}
+          locale={p.locale}
+          onSaved={() => router.replace(router.asPath)}
+        />
 
         <div className="bg-surface border border-line rounded-xl p-5">
           <h3 className="text-sm font-semibold text-ink mb-3">{t('field.flags')}</h3>

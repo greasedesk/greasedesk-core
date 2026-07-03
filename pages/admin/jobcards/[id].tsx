@@ -38,7 +38,7 @@ type PageProps = {
   locale: string;
   vatRate: number;
   vatRegistered: boolean;
-  owner: { name: string; phone: string | null; email: string | null };
+  owner: { name: string; phone: string | null; email: string | null; address: string | null };
   vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
   flags: string[];
   garageNotes: string;
@@ -133,9 +133,9 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   // link only if a card somehow predates its vehicle's edge — the backfill covered all live vehicles).
   const edgeOwnerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
   const ownerRow = edgeOwnerId
-    ? (await prisma.customer.findUnique({ where: { id: edgeOwnerId }, select: { name: true, phone: true, email: true } }))
+    ? (await prisma.customer.findUnique({ where: { id: edgeOwnerId }, select: { name: true, phone: true, email: true, address: true } }))
     : (row.customer ?? null);
-  const owner = { name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, email: ownerRow?.email ?? null };
+  const owner = { name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null };
 
   const resources = ((await prisma.resource.findMany({
     where: { site_id: row.site_id, is_active: true },

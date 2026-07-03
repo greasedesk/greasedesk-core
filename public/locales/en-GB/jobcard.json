@@ -130,10 +130,18 @@
     "customer": "Customer",
     "phone": "Phone",
     "email": "Email",
+    "address": "Address",
     "flags": "Flags",
     "noFlags": "No flags set.",
-    "ownerFromEdge": "Owner shown is the vehicle's current owner.",
-    "editComingSoon": "Editing customer & vehicle details from the card arrives next."
+    "ownerFromEdge": "Owner shown is the vehicle's current owner — edits apply to them."
+  },
+  "detailsEdit": {
+    "save": "Save details",
+    "saving": "Saving…",
+    "saved": "Details saved.",
+    "error": "Could not save the details.",
+    "regCollision": "A vehicle with this registration already exists here. Continue anyway?",
+    "regCancelled": "Not saved — change the registration or confirm to continue."
   },
   "stageComplete": {
     "mark": "Mark {{label}} complete",
@@ -184,6 +192,8 @@
     },
     "accept": { "booked": "Accepted & booked onto the diary" },
     "booking": { "moved": "Booking scheduled / moved", "removed": "Removed from the diary" },
+    "owner": { "edited": "Customer details edited" },
+    "vehicle": { "edited": "Vehicle details edited" },
     "invoice": { "minted": "Invoice raised", "paid": "Invoice marked paid" }
   }
 }

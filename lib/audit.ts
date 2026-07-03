@@ -17,6 +17,8 @@ export type AuditAction =
   | 'accept.booked'
   | 'booking.moved'
   | 'booking.removed'
+  | 'owner.edited'
+  | 'vehicle.edited'
   | 'invoice.minted'
   | 'invoice.paid';
 
