@@ -120,6 +120,15 @@
   },
   "createdAt": "Created {{when}}",
   "cancelledBanner": "This job is cancelled — everything is read-only.",
+  "delete": {
+    "button": "Delete card",
+    "confirmQ": "Permanently delete this card and its data? This cannot be undone.",
+    "confirmYes": "Delete",
+    "cancel": "Cancel",
+    "working": "Deleting…",
+    "failed": "Could not delete the card.",
+    "invoiceBlocked": "This card has an issued invoice and can’t be deleted."
+  },
   "tab": {
     "details": "Customer Details",
     "quote": "Quote",

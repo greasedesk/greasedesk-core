@@ -202,6 +202,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  res.setHeader('Allow', 'GET, POST');
+  // Hard-delete (admin only) — distinct from cancel (which keeps a read-only record). Removes the card
+  // and everything that hangs off it: estimate lines + photos (FK cascade) and the polymorphic audit
+  // trail (no FK — deleted explicitly). The booking lives on the card row itself, so deleting the card
+  // frees the diary slot. The VEHICLE + ownership edge are NOT touched (car-first: the car outlives any
+  // one job). REFUSED when an issued/paid Invoice is attached — issued VAT invoices are legal records.
+  if (req.method === 'DELETE') {
+    if (!vis.isAdmin) return res.status(403).json({ message: 'Admin access required to delete a job card.' });
+    const id = (req.query.id as string) || (req.body && (req.body.id as string)) || '';
+    if (!id) return res.status(400).json({ message: 'Missing job card id.' });
+
+    // Group-scoped (admin sees every group site). Invoice presence = issued/paid (no draft invoices exist).
+    const card = await prisma.jobCard.findFirst({
+      where: { id, site_id: { in: vis.siteIds } },
+      select: { id: true, invoice: { select: { id: true } } },
+    });
+    if (!card) return res.status(404).json({ message: 'Job card not found.' });
+    if (card.invoice) return res.status(409).json({ message: 'This card has an issued invoice and can’t be deleted.' });
+
+    try {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await tx.auditLog.deleteMany({ where: { group_id: groupId, entity: 'job_card', entity_id: id } });
+        await tx.jobCard.delete({ where: { id } }); // JobCardItem + JobCardPhoto cascade via FK
+      });
+    } catch (error) {
+      console.error('Job Card Delete Error:', error);
+      return res.status(500).json({ message: 'Failed to delete job card.' });
+    }
+    return res.status(200).json({ message: 'Job card deleted.' });
+  }
+
+  res.setHeader('Allow', 'GET, POST, DELETE');
   return res.status(405).json({ message: 'Method Not Allowed' });
 }

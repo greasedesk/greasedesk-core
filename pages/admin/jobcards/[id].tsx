@@ -6,7 +6,7 @@
  * each tab's {reachable, complete} via the gating chokepoint, and loads the audit trail. All
  * interaction lives in JobCardWorkspace; the same chokepoint guards the APIs, so greying can't lie.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -32,6 +32,7 @@ type PageProps = {
   createdAt: string;
   status: JobStatus;
   jobCardId: string;
+  isAdmin: boolean;
   canEdit: boolean;
   canEditPricing: boolean;
   canOperate: boolean;
@@ -73,7 +74,10 @@ export default function JobCardDetailPage(props: PageProps) {
           <h1 className="text-3xl font-bold text-ink">{props.registration}</h1>
           <p className="text-muted text-sm mt-1">{t('createdAt', { when: new Date(props.createdAt).toLocaleString(props.locale) })}</p>
         </div>
-        <Link href={back.href} className="text-sm text-muted hover:text-ink">{back.label}</Link>
+        <div className="flex flex-col items-end gap-2">
+          <Link href={back.href} className="text-sm text-muted hover:text-ink">{back.label}</Link>
+          {props.isAdmin && <DeleteCardButton jobCardId={props.jobCardId} hasInvoice={!!props.invoice} />}
+        </div>
       </div>
 
       <JobCardWorkspace
@@ -105,6 +109,43 @@ export default function JobCardDetailPage(props: PageProps) {
         events={props.events}
       />
     </>
+  );
+}
+
+// Admin-only hard-delete (distinct from cancel). Two-step inline confirm; the server re-enforces
+// admin + the issued-invoice guard, so this UI can't authorise anything on its own.
+function DeleteCardButton({ jobCardId, hasInvoice }: { jobCardId: string; hasInvoice: boolean }) {
+  const { t } = useTranslation('jobcard');
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (hasInvoice) {
+    return <span className="text-xs text-muted" title={t('delete.invoiceBlocked')}>{t('delete.invoiceBlocked')}</span>;
+  }
+
+  async function del() {
+    setBusy(true); setErr(null);
+    const res = await fetch(`/api/jobcard?id=${jobCardId}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setBusy(false); setConfirming(false); setErr(data?.message || t('delete.failed')); return; }
+    router.replace('/admin/jobcards');
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      {!confirming ? (
+        <button onClick={() => { setErr(null); setConfirming(true); }} className="text-sm text-danger hover:underline">{t('delete.button')}</button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-ink">{t('delete.confirmQ')}</span>
+          <button disabled={busy} onClick={del} className="text-sm bg-danger text-white rounded-lg px-3 py-1.5 disabled:opacity-50">{busy ? t('delete.working') : t('delete.confirmYes')}</button>
+          <button disabled={busy} onClick={() => setConfirming(false)} className="text-sm text-muted hover:text-ink">{t('delete.cancel')}</button>
+        </div>
+      )}
+      {err && <span className="text-xs text-danger">{err}</span>}
+    </div>
   );
 }
 
@@ -232,6 +273,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       status: row.status,
       jobCardId: row.id,
       canEdit, canEditPricing, canOperate,
+      isAdmin: vis.isAdmin,
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
       vatRate: lines.length > 0 ? num(row.vat_rate) : vat.defaultRate,
