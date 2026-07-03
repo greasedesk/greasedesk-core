@@ -182,8 +182,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           select: { id: true },
         });
         // Create + schedule atomically through the shared booking guard (double-booking refused).
+        // Diary drag-create is within-day, so working-minutes = (end - start).
         if (scheduling) {
-          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, end: end as Date, siteIds: vis.siteIds });
+          const workingMinutes = Math.round(((end as Date).getTime() - (start as Date).getTime()) / 60000);
+          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.siteIds });
         }
         return created;
       });

@@ -23,11 +23,12 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
+import { computeFootprint, Segment } from '@/lib/occupancy';
 
 const PX_PER_MIN = 1;
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; startAt: string; endAt: string; status: string; valuePennies: number };
+type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type PageProps = {
@@ -67,13 +68,23 @@ export default function DiaryPage(props: PageProps) {
     );
   }
 
-  function segment(c: { startAt: string; endAt: string }, d: string) {
-    const winStart = dayStartMs(d) + openHour * 3600000;
-    const winEnd = dayStartMs(d) + closeHour * 3600000;
-    const s = Math.max(Date.parse(c.startAt), winStart);
-    const e = Math.min(Date.parse(c.endAt), winEnd);
+  function box(s: number, e: number, winStart: number) {
     if (e <= s) return null;
     return { top: ((s - winStart) / 60000) * PX_PER_MIN, height: Math.max(18, ((e - s) / 60000) * PX_PER_MIN), s, e };
+  }
+  // Cards draw their real occupancy-footprint segment on this day (spill lands on the next open day);
+  // notes (no segments) keep the simple raw-clamp. One footprint segment sits within one open day.
+  function segment(c: { startAt: string; endAt: string; segments?: Segment[] }, d: string) {
+    const winStart = dayStartMs(d) + openHour * 3600000;
+    const winEnd = dayStartMs(d) + closeHour * 3600000;
+    if (c.segments) {
+      for (const sg of c.segments) {
+        const ss = Date.parse(sg.startISO), se = Date.parse(sg.endISO);
+        if (se > winStart && ss < winEnd) return box(Math.max(ss, winStart), Math.min(se, winEnd), winStart);
+      }
+      return null;
+    }
+    return box(Math.max(Date.parse(c.startAt), winStart), Math.min(Date.parse(c.endAt), winEnd), winStart);
   }
   const minToISO = (date: string, min: number) => `${date}T${pad(Math.floor(min / 60))}:${pad(min % 60)}:00.000Z`;
 
@@ -562,7 +573,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     prisma.jobCard.findMany({
       where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
       select: {
-        id: true, resource_id: true, start_at: true, end_at: true, status: true, vat_rate: true,
+        id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true,
         resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
         items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true } },
       },
@@ -581,11 +592,16 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
       num(c.vat_rate),
       { vatRegistered: vat.registered },
     );
+    const startAt = (c.start_at as Date).toISOString();
+    // Occupancy footprint from the WORKING duration (source of truth; fallback (end - start) pre-backfill).
+    const mins = c.booking_duration_minutes ?? Math.round(((c.end_at as Date).getTime() - (c.start_at as Date).getTime()) / 60000);
+    const fp = computeFootprint(startAt, mins, openHour, closeHour, openDays);
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—',
-      startAt: (c.start_at as Date).toISOString(), endAt: (c.end_at as Date).toISOString(),
+      startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string, valuePennies: totals.total_pennies,
+      segments: fp.segments,
     };
   });
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));

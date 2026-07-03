@@ -36,6 +36,24 @@ export function computeEndISO(startISO: string, value: string): string {
   return new Date(end).toISOString();
 }
 
+/** A duration option value → WORKING minutes. Day options are N WORKING days (footprint-aware). */
+export function durationToWorkingMinutes(value: string, workingDayMinutes: number): number {
+  const [kind, nStr] = value.split(':');
+  const n = Number(nStr);
+  return kind === 'd' ? n * workingDayMinutes : n;
+}
+
+/** Reschedule seed from stored working-minutes → the matching dropdown value. */
+export function seedDurationFromMinutes(workingMinutes: number, workingDayMinutes: number, stepMin = 30, maxDays = 5): string {
+  const step = Math.max(5, stepMin);
+  if (workingMinutes > 0 && workingDayMinutes > 0 && workingMinutes % workingDayMinutes === 0) {
+    const d = workingMinutes / workingDayMinutes;
+    if (d >= 1 && d <= maxDays) return `d:${d}`;
+  }
+  const snapped = Math.min(workingDayMinutes, Math.max(step, Math.round(workingMinutes / step) * step));
+  return `m:${snapped}`;
+}
+
 /** Best-matching duration option for an existing booking (reschedule seed): exact whole-days else snapped minutes. */
 export function seedDurationValue(startISO: string, endISO: string, openHour: number, closeHour: number, stepMin = 30, maxDays = 5): string {
   const step = Math.max(5, stepMin);

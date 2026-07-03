@@ -36,16 +36,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(user.id as string); // visible sites
 
   if (req.method === 'PATCH') {
-    const { jobCardId, resourceId, startAt, endAt, heldOnLift } = (req.body || {}) as {
-      jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; heldOnLift?: boolean;
+    const { jobCardId, resourceId, startAt, endAt, workingMinutes: wmIn } = (req.body || {}) as {
+      jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; workingMinutes?: number;
     };
     if (!jobCardId || !resourceId) {
       return res.status(400).json({ message: 'jobCardId and resourceId are required.' });
     }
     const start = parseDateTime(startAt);
-    const end = parseDateTime(endAt);
-    if (!start || !end) return res.status(400).json({ message: 'startAt and endAt must be valid datetimes.' });
-    if (start >= end) return res.status(400).json({ message: 'startAt must be before endAt.' });
+    if (!start) return res.status(400).json({ message: 'startAt must be a valid datetime.' });
+    // Duration = source of truth. Bridge: a caller sending endAt (diary drag, old form) yields the
+    // same working-minutes via (end - start).
+    const workingMinutes = wmIn ?? (endAt ? Math.round((Date.parse(endAt) - start.getTime()) / 60000) : NaN);
+    if (!(workingMinutes > 0)) return res.status(400).json({ message: 'A valid duration is required.' });
 
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -53,9 +55,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { site_id: true } });
         if (!card) throw new Error('CARD_NOT_FOUND');
         if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
-        // Shared guard (scope + interval-overlap + update) — the one place placement happens.
-        await placeJobCard(tx, { jobCardId, resourceId, start, end, siteIds: vis.siteIds, heldOnLift });
-        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { resourceId, startAt, endAt } });
+        // Shared guard (scope + footprint-overlap + update) — the one place placement happens.
+        await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.siteIds });
+        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { resourceId, startAt, workingMinutes } });
       });
       return res.status(200).json({ message: 'Job card placed.' });
     } catch (err: any) {
@@ -64,8 +66,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'FORBIDDEN') return res.status(403).json({ message: 'Only a manager or admin can schedule a job.' });
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
+      if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
       if (m.startsWith('CLASH:')) {
-        return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
+        return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. Double-booking refused.', clash: true });
       }
       console.error('Diary place error:', err);
       return res.status(500).json({ message: 'Failed to place job card.' });

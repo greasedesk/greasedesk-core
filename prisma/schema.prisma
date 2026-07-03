@@ -592,7 +592,11 @@ model JobCard {
   garage_notes   String?                    // internal staff notes on the job
   resource_id    String?
   start_at       DateTime? // scheduling start (source of truth)
-  end_at         DateTime? // scheduling end (source of truth)
+  // Booking WORKING duration (minutes) — the occupancy-footprint SOURCE OF TRUTH. The footprint,
+  // its per-day segments, and end_at are derived from (start_at + this + site hours) via lib/occupancy.
+  booking_duration_minutes Int?
+  end_at         DateTime? // DERIVED convenience = footprint true wrapped end. Diary week-fetch bound +
+                           // display only; never source of truth (duration wins). Guard ignores it.
   // Legacy slot model — retained until retired in a later slice; no longer read.
   scheduled_date DateTime? @db.Date
   start_slot     Int?

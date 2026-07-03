@@ -28,16 +28,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, resourceId, startAt, endAt, heldOnLift } = (req.body || {}) as {
-    jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; heldOnLift?: boolean;
+  const { jobCardId, resourceId, startAt, endAt, workingMinutes: wmIn } = (req.body || {}) as {
+    jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; workingMinutes?: number;
   };
-  if (!jobCardId || !resourceId || !startAt || !endAt) {
-    return res.status(400).json({ message: 'Pick a lift, a start and an end to accept & book.' });
+  if (!jobCardId || !resourceId || !startAt) {
+    return res.status(400).json({ message: 'Pick a lift, a start and a duration to accept & book.' });
   }
   const start = new Date(startAt);
-  const end = new Date(endAt);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-    return res.status(400).json({ message: 'End must be after start.' });
+  // Duration is the source of truth. Bridge: a caller still sending endAt (or the old naive form)
+  // yields the same working-minutes via (end - start), since naive end = start + duration.
+  const workingMinutes = wmIn ?? (endAt ? Math.round((Date.parse(endAt) - start.getTime()) / 60000) : NaN);
+  if (Number.isNaN(start.getTime()) || !(workingMinutes > 0)) {
+    return res.status(400).json({ message: 'Pick a valid start and duration.' });
   }
 
   const card = await prisma.jobCard.findFirst({
@@ -58,20 +60,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 1) book first — throws CLASH:<reg> / CROSS_SITE / RESOURCE_NOT_FOUND → rolls the whole thing back
-      await placeJobCard(tx, { jobCardId, resourceId, start, end, siteIds: vis.siteIds, heldOnLift });
+      await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.siteIds });
       // 2) only then advance the lifecycle
       await tx.jobCard.update({ where: { id: jobCardId }, data: { status: 'accepted' } });
       // 3) record the combined event in the same tx
       await writeAudit(tx, {
         groupId: user.group_id as string, userId: user.id as string, jobCardId,
-        action: 'accept.booked', diff: { resourceId, startAt, endAt, from: card.status, to: 'accepted' },
+        action: 'accept.booked', diff: { resourceId, startAt, workingMinutes, from: card.status, to: 'accepted' },
       });
     });
   } catch (e: any) {
     const msg = String(e?.message ?? '');
     if (msg.startsWith('CLASH:')) {
-      return res.status(409).json({ message: `That lift is already booked (${msg.slice(6)}). The quote stays quoted — pick another slot.` });
+      return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. The quote stays quoted.' });
     }
+    if (msg === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'Pick a valid duration.' });
     if (msg === 'CROSS_SITE' || msg === 'RESOURCE_NOT_FOUND') return res.status(400).json({ message: 'That lift is not available for this job’s location.' });
     if (msg === 'CARD_NOT_FOUND') return res.status(404).json({ message: 'Job card not found.' });
     console.error('Accept-and-book error:', e);

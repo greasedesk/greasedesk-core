@@ -19,10 +19,11 @@ import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
-import { startTimeSlots, durationOptions, computeEndISO, seedDurationValue, DurationOption } from '@/lib/booking-slots';
+import { startTimeSlots, durationOptions, durationToWorkingMinutes, seedDurationFromMinutes, DurationOption } from '@/lib/booking-slots';
+import { computeFootprint } from '@/lib/occupancy';
 
 type Resource = { id: string; name: string };
-export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean } | null;
+export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
 
 type Props = {
   jobCardId: string;
@@ -38,7 +39,7 @@ type Props = {
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
   resources: Resource[]; booking: CardBooking;
-  siteHours: { openHour: number; closeHour: number; slotMinutes: number };
+  siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] };
   siteId: string;
   stages: Record<StageKey, boolean>;
   invoice: { id: string; number: string } | null;
@@ -227,12 +228,13 @@ export default function JobCardWorkspace(p: Props) {
 // ---------- Quote actions: mark-quoted / accept-&-book / reschedule / decline / cancel ----------
 function QuoteActions(props: {
   status: JobStatus; canManage: boolean; hasEstimate: boolean; cancelled: boolean;
-  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number }; siteId: string; locale: string; jobCardId: string;
+  resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void;
 }) {
   const { status, canManage, hasEstimate, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t } = props;
-  const { openHour, closeHour, slotMinutes } = siteHours;
+  const { openHour, closeHour, slotMinutes, openDays } = siteHours;
+  const workingDayMinutes = Math.max(slotMinutes, (closeHour - openHour) * 60);
 
   const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
   const durOptions = useMemo(() => durationOptions(openHour, closeHour, slotMinutes), [openHour, closeHour, slotMinutes]);
@@ -241,11 +243,13 @@ function QuoteActions(props: {
   const [liftId, setLiftId] = useState(booking?.resourceId ?? '');
   const [startDate, setStartDate] = useState(booking ? datePart(booking.startAt) : '');
   const [startTime, setStartTime] = useState(booking ? timePart(booking.startAt) : (slots.includes('09:00') ? '09:00' : slots[0] ?? '08:00'));
-  const [duration, setDuration] = useState(booking ? seedDurationValue(booking.startAt, booking.endAt, openHour, closeHour, slotMinutes) : defaultDuration);
+  const [duration, setDuration] = useState(booking ? seedDurationFromMinutes(booking.workingMinutes, workingDayMinutes, slotMinutes) : defaultDuration);
 
   const isBookingStage = status === 'quoted' || status === 'declined';
   const isAcceptedOnwards = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'].includes(status);
-  const endISO = startDate && startTime ? computeEndISO(buildISO(startDate, startTime), duration) : null;
+  // WORKING duration is the source of truth; the end is the footprint's TRUE wrapped end.
+  const workingMinutes = durationToWorkingMinutes(duration, workingDayMinutes);
+  const endISO = startDate && startTime ? computeFootprint(buildISO(startDate, startTime), workingMinutes, openHour, closeHour, openDays).endISO : null;
 
   const durLabel = (o: DurationOption) =>
     o.kind === 'day' ? (o.amount === 1 ? t('booking.durDay1') : t('booking.durDayN', { count: o.amount }))
@@ -265,15 +269,19 @@ function QuoteActions(props: {
     try {
       const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(data?.message || t('action.error')); return; }
+      if (!res.ok) {
+        if (data?.code === 'CLASH') { setErr(t('booking.clash', { lift: resources.find((r) => r.id === liftId)?.name ?? t('booking.lift') })); return; }
+        setErr(data?.message || t('action.error')); return;
+      }
       if (onOk) onOk(); else onDone();
     } catch { setErr(t('action.error')); }
     finally { setBusy(null); }
   }
-  // End is derived from start + duration (end > start by construction), so no separate end entry.
+  // End is derived from start + working duration via the footprint, so we send the DURATION (source
+  // of truth), not an end. The guard derives the footprint + end from it.
   function book(key: string, url: string, method: string, onOk?: () => void) {
     if (!liftId || !startDate || !startTime || !endISO) { setErr(t('booking.needLiftAndTimes')); return; }
-    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), endAt: endISO }, onOk);
+    call(key, url, method, { jobCardId, resourceId: liftId, startAt: buildISO(startDate, startTime), workingMinutes }, onOk);
   }
   const diaryUrl = `/admin/diary?site=${encodeURIComponent(siteId)}&view=week${startDate ? `&date=${startDate}` : ''}`;
 
