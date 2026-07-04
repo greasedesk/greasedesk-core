@@ -154,8 +154,15 @@ export default function JobCardWorkspace(p: Props) {
     return (
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
-        {p.isComeback && <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>}
-        {p.invoice ? (
+        {p.isComeback ? (
+          // Comeback: no invoice ever (no sequential number burned). Completes straight to done.
+          <>
+            <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>
+            {p.status === 'in_progress' && p.canOperate && !cancelled && (
+              <button disabled={busy !== null} onClick={() => setStatus('done')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.complete')}</button>
+            )}
+          </>
+        ) : p.invoice ? (
           <>
             <Link href={`/admin/invoices/${p.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
               <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{p.invoice.number}</span></span>
@@ -195,9 +202,10 @@ export default function JobCardWorkspace(p: Props) {
             onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
           <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
-          {/* Warranty/comeback — commercial decision (manager/admin). Makes the job zero-revenue for
-              reporting; the estimate lines stay as the true COST. */}
-          {p.canManage && !cancelled && (
+          {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
+              Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
+              intact as the true cost. It also suppresses invoicing (see the Invoice tab). */}
+          {p.canOperate && !cancelled && (
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
               <input type="checkbox" className="w-5 h-5 mt-0.5" checked={p.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>

@@ -126,9 +126,10 @@
   "cancelledBanner": "This job is cancelled — everything is read-only.",
   "comeback": {
     "label": "Warranty / comeback (no charge)",
-    "hint": "Work redone free — the parts & labour below stay as the real cost, but the job counts as £0 revenue on reports.",
-    "banner": "Warranty / comeback — this job counts as £0 revenue (cost still counted) on reports.",
-    "invoiceNote": "This is a comeback — no charge to the customer; it counts as £0 revenue on reports."
+    "hint": "Work redone free — the estimate lines below stay intact as the real cost. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job). It won’t be invoiced.",
+    "banner": "Warranty / comeback — £0 revenue; margin drag = parts cost only. This job won’t be invoiced.",
+    "invoiceNote": "This is a comeback — it isn’t invoiced (no charge, no invoice number). Complete it below; the parts cost is still captured for reporting.",
+    "complete": "Complete job (no invoice)"
   },
   "delete": {
     "button": "Delete card",
