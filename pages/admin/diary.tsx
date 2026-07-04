@@ -267,7 +267,7 @@ export default function DiaryPage(props: PageProps) {
           <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
         ))}
         {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
-        {showMoney && finance.canSeeValues && height > 28 && <span className="block text-[10px] font-semibold text-ink px-1 tabular-nums">{formatMoney(c.valuePennies, { currency, locale })}</span>}
+        {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
       </div>
     );
   }
@@ -919,7 +919,10 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string,
-      valuePennies: fin.seeValues ? totals.total_pennies : 0, // SERVER-GATED — no value sent if not permitted
+      // Block value: normal job = inc-VAT retail; comeback = the DRAIN it represents = −(parts cost,
+      // ex-VAT) — matches what the margin total already subtracts. Booked/margin totals compute from
+      // `totals` directly (above), so this display choice never affects them. SERVER-GATED.
+      valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : totals.total_pennies) : 0,
       segments: fp.segments,
     };
   });
