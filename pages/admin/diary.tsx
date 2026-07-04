@@ -6,7 +6,7 @@
  * click (1h) or drag (range, 15-min snap) opens a dialogue to add a job card (scheduled) or a note.
  * DiaryNotes render visually distinct from jobs. Create/place is manager/admin (canManageSite).
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -36,6 +36,7 @@ type PageProps = {
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
+  weekStart: number; today: string;
   noSites?: boolean;
 };
 
@@ -47,13 +48,77 @@ const snap15 = (min: number) => Math.round(min / 15) * 15;
 const menuBtn = 'w-full text-left px-3 py-2.5 hover:bg-surface-muted text-ink';
 const HOUR_OPTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 0.5); // 0.5 … 8.0 hrs
 
+// ---- Dynamic mini-month day-picker (module scope so state survives parent re-renders) ----
+// Clicking a day jumps the diary to it (day view → that day; week view → that day's week — SSR derives
+// the week from the date param). ‹ › page the DISPLAYED month; Today jumps to the real today.
+function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose }: {
+  siteId: string; view: 'week' | 'day'; anchor: string; today: string; weekStart: number; locale: string;
+  t: (k: string, o?: any) => string; onClose: () => void;
+}) {
+  const router = useRouter();
+  const a = new Date(`${anchor}T00:00:00.000Z`);
+  const [ym, setYm] = useState<{ y: number; m: number }>({ y: a.getUTCFullYear(), m: a.getUTCMonth() });
+  const go = (dateStr: string) => { router.push(`/admin/diary?site=${siteId}&view=${view}&date=${dateStr}`); onClose(); };
+
+  const first = new Date(Date.UTC(ym.y, ym.m, 1));
+  const lead = (first.getUTCDay() - weekStart + 7) % 7;
+  const gridStart = new Date(first.getTime() - lead * 86400000);
+  const cells = Array.from({ length: 42 }, (_, i) => new Date(gridStart.getTime() + i * 86400000));
+  const dow = Array.from({ length: 7 }, (_, i) => (weekStart + i) % 7);
+  const dowLabel = (d: number) => new Date(Date.UTC(2023, 0, 1 + d)).toLocaleDateString(locale, { weekday: 'narrow', timeZone: 'UTC' });
+  const monthLabel = first.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const shift = (delta: number) => setYm(({ y, m }) => { const d = new Date(Date.UTC(y, m + delta, 1)); return { y: d.getUTCFullYear(), m: d.getUTCMonth() }; });
+
+  return (
+    <>
+      <div className="fixed inset-0 z-30" onClick={onClose} />
+      <div className="absolute right-0 mt-1 z-40 w-72 bg-surface border border-line rounded-xl shadow-lg p-3">
+        <div className="flex items-center justify-between mb-2">
+          <button aria-label={t('prev')} onClick={() => shift(-1)} className="px-2 py-1 rounded-md hover:bg-surface-muted text-ink">‹</button>
+          <div className="text-sm font-semibold text-ink">{monthLabel}</div>
+          <button aria-label={t('next')} onClick={() => shift(1)} className="px-2 py-1 rounded-md hover:bg-surface-muted text-ink">›</button>
+        </div>
+        <div className="grid grid-cols-7 gap-0.5 mb-1">
+          {dow.map((d) => <div key={d} className="text-center text-[11px] text-muted font-medium py-1">{dowLabel(d)}</div>)}
+        </div>
+        <div className="grid grid-cols-7 gap-0.5">
+          {cells.map((c) => {
+            const ds = ymd(c);
+            const inMonth = c.getUTCMonth() === ym.m;
+            const isToday = ds === today;
+            const isSel = ds === anchor;
+            const base = 'h-9 rounded-full text-sm flex items-center justify-center';
+            const tone = isSel ? 'bg-accent text-white font-semibold'
+              : isToday ? 'ring-2 ring-accent text-ink font-semibold'
+              : inMonth ? 'text-ink hover:bg-surface-muted' : 'text-muted/50 hover:bg-surface-muted';
+            return <button key={ds} onClick={() => go(ds)} className={`${base} ${tone}`}>{c.getUTCDate()}</button>;
+          })}
+        </div>
+        <div className="mt-2 pt-2 border-t border-line flex justify-center">
+          <button onClick={() => go(today)} className="text-sm text-accent hover:underline font-medium">{t('todayBtn')}</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function DiaryPage(props: PageProps) {
-  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, noSites } = props;
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, noSites } = props;
   const { t } = useTranslation('diary');
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
-  const WIN_MIN = (closeHour - openHour) * 60;
-  const HOURS = Array.from({ length: closeHour - openHour + 1 }, (_, i) => openHour + i);
+  // STAGE 1 — the grid now spans the FULL 24h day (00:00–24:00); it scrolls and lands on the working
+  // day. Blocks/lunch/gridlines position by absolute minute-of-midnight. The booking ENGINE is unchanged
+  // — footprints still live inside working hours; out-of-hours is display space only.
+  const DAY_MIN = 24 * 60;                                    // 1440 — full day height in px (PX_PER_MIN=1)
+  const HOURS = Array.from({ length: 25 }, (_, i) => i);      // 0..24 (labels + gridlines)
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Land on the working day: 09:00 (open) near the top with ~1h of pre-open context (08:00) above it.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = Math.max(0, (openHour - 1) * 60 * PX_PER_MIN);
+  }, [openHour, view, anchor]);
 
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
   // Right-click / long-press context menu. Empty-space form: {date, resourceId?, atMin}. Booking form: {card}.
@@ -80,8 +145,10 @@ export default function DiaryPage(props: PageProps) {
   // ALL footprint segments a card occupies on this day → one block each. A lunch-split day yields two
   // (morning + afternoon), so nothing is concealed. Notes (no segments) keep the single raw-clamp.
   function segmentsForDay(c: { startAt: string; endAt: string; segments?: Segment[] }, d: string) {
-    const winStart = dayStartMs(d) + openHour * 3600000;
-    const winEnd = dayStartMs(d) + closeHour * 3600000;
+    // Full-day window (midnight→midnight). Blocks position by minute-of-midnight; the engine keeps
+    // footprints inside working hours, so nothing spills past the working band anyway.
+    const winStart = dayStartMs(d);
+    const winEnd = dayStartMs(d) + DAY_MIN * 60000;
     const out: NonNullable<ReturnType<typeof box>>[] = [];
     if (c.segments) {
       for (const sg of c.segments) {
@@ -123,7 +190,8 @@ export default function DiaryPage(props: PageProps) {
 
   // ---- context menu (right-click desktop / long-press mobile) — replaces drag-to-create ----
   const cancelPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
-  const atMinFromY = (y: number) => snap15(Math.max(openHour * 60, Math.min(openHour * 60 + Math.round(y), closeHour * 60 - 15)));
+  // y is px from the top of the 24h body = minute-of-midnight. Snap to 15; clamp within the day.
+  const atMinFromY = (y: number) => snap15(Math.max(0, Math.min(Math.round(y), DAY_MIN - 15)));
   function openEmptyMenu(col: { date: string; resourceId?: string }, clientX: number, clientY: number, y: number) {
     if (!canManage) return;
     setPeek(null); setMenu({ x: clientX, y: clientY, date: col.date, resourceId: col.resourceId, atMin: atMinFromY(y) });
@@ -200,22 +268,45 @@ export default function DiaryPage(props: PageProps) {
     );
   }
 
+  // Dynamic headers from the anchor (UTC so they match the SSR date math, not the browser's TZ).
+  const anchorUTC = new Date(`${anchor}T00:00:00.000Z`);
+  const monthLabel = anchorUTC.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const dateLong = anchorUTC.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const weekdayLong = anchorUTC.toLocaleDateString(locale, { weekday: 'long', timeZone: 'UTC' });
+  const pillLabel = view === 'week' ? t('weekOf', { date: days[0]?.date ?? anchor }) : dateLong;
+
   return (
     <>
       <Head><title>{t('title')} - GreaseDesk</title></Head>
 
       <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h1 className="text-2xl font-bold text-ink">{t('title')} — {siteName}</h1>
           <div className="flex items-center gap-2">
             <div className="flex rounded-lg overflow-hidden border border-line">
               <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('week')}</Link>
               <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('day')}</Link>
             </div>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
-            <span className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">{view === 'week' ? t('weekOf', { date: days[0]?.date ?? anchor }) : anchor}</span>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">→</Link>
+            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
+            <div className="relative">
+              <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
+              {pickerOpen && (
+                <DayPicker siteId={siteId} view={view} anchor={anchor} today={today} weekStart={weekStart} locale={locale} t={t} onClose={() => setPickerOpen(false)} />
+              )}
+            </div>
+            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} aria-label={t('next')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">→</Link>
           </div>
+        </div>
+
+        {/* Month header (both views) + date header (day view) — Outlook-style, dynamic from the anchor. */}
+        <div className="text-center mb-4">
+          <div className="text-xl font-semibold text-ink tracking-tight">{monthLabel}</div>
+          {view === 'day' && (
+            <div className="mt-1">
+              <div className="text-lg font-bold text-ink">{dateLong}</div>
+              <div className="text-sm text-muted">{weekdayLong}</div>
+            </div>
+          )}
         </div>
 
         {resources.length === 0 ? (
@@ -235,14 +326,15 @@ export default function DiaryPage(props: PageProps) {
                 ))}
               </div>
             )}
-            <div className="overflow-x-auto">
+            {/* ONE scroll pane: 24h tall (vertical scroll) + week columns (horizontal). Column headers are
+                sticky-top, the time axis sticky-left. On load it lands scrolled to the working day. */}
+            <div ref={scrollRef} className="overflow-auto border border-line rounded-lg" style={{ maxHeight: '72vh' }}>
               <div className="flex min-w-full">
-                <div className="w-14 shrink-0 pt-7">
-                  {/* Axis height = the day-column body (WIN_MIN), so the grid ends at close (18:00). Labels
-                      are absolutely placed on their gridlines — no empty strip below the last hour. */}
-                  <div className="relative" style={{ height: WIN_MIN * PX_PER_MIN }}>
-                    {HOURS.map((h, i) => (
-                      <div key={h} style={{ top: i * 60 * PX_PER_MIN }} className="absolute right-0 pr-2 -mt-2 text-xs text-muted">{pad(h)}:00</div>
+                <div className="w-14 shrink-0 sticky left-0 z-20 bg-surface">
+                  <div className="h-7 sticky top-0 z-30 bg-surface border-b border-r border-line" />
+                  <div className="relative border-r border-line" style={{ height: DAY_MIN * PX_PER_MIN }}>
+                    {HOURS.slice(0, 24).map((h) => (
+                      <div key={h} style={{ top: h * 60 * PX_PER_MIN }} className="absolute right-0 pr-2 -mt-2 text-xs text-muted">{pad(h)}:00</div>
                     ))}
                   </div>
                 </div>
@@ -261,31 +353,33 @@ export default function DiaryPage(props: PageProps) {
                     const placed = layoutOverlap(items);
                     return (
                       <div key={col.key} className="flex-1 min-w-[46px] border-l border-line">
-                        <div className="h-7 text-sm text-ink text-center font-medium truncate px-1">{col.label}</div>
+                        <div className="h-7 sticky top-0 z-10 bg-surface border-b border-line text-sm text-ink text-center font-medium truncate px-1 flex items-center justify-center">{col.label}</div>
                         <div
-                          className="relative bg-surface border-b border-line"
-                          style={{ height: WIN_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
+                          className="relative bg-surface"
+                          style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
                           onContextMenu={(e) => onColContext(col, e)}
                           onTouchStart={(e) => onColTouchStart(col, e)}
                           onTouchEnd={cancelPress}
                           onTouchMove={cancelPress}
                         >
-                          {/* Non-working break bands (lunch etc.) — drawn like closed time, behind blocks. */}
+                          {/* Out-of-hours (before open / after close) — a very light wash, lighter than the
+                              lunch hatch, so working-vs-not reads at a glance. Display only; the engine still
+                              binds bookings to working hours. */}
+                          {openHour > 0 && <div className="absolute left-0 right-0 pointer-events-none" style={{ top: 0, height: openHour * 60 * PX_PER_MIN, backgroundColor: 'rgba(100,116,139,0.07)' }} />}
+                          {closeHour < 24 && <div className="absolute left-0 right-0 pointer-events-none" style={{ top: closeHour * 60 * PX_PER_MIN, height: (DAY_MIN - closeHour * 60) * PX_PER_MIN, backgroundColor: 'rgba(100,116,139,0.07)' }} />}
+                          {/* Non-working break bands (lunch etc.) — hatched grey, positioned by minute-of-midnight. */}
                           {breaks.map((b, bi) => {
-                            const top = (b.start - openHour * 60) * PX_PER_MIN;
-                            const height = (Math.min(b.end, closeHour * 60) - Math.max(b.start, openHour * 60)) * PX_PER_MIN;
+                            const height = (b.end - b.start) * PX_PER_MIN;
                             if (height <= 0) return null;
-                            // Inline slate fill + hatch (the /70 opacity modifier doesn't apply to bare-var()
-                            // tokens; a token fill was near-white). Slate rgba reads clearly on light AND dark.
                             return <div key={`br${bi}`} title={t('breakBand')} className="absolute left-0 right-0 pointer-events-none" style={{
-                              top, height,
+                              top: b.start * PX_PER_MIN, height,
                               backgroundColor: 'rgba(100, 116, 139, 0.22)',
                               backgroundImage: 'repeating-linear-gradient(45deg, rgba(71,85,105,0.28) 0, rgba(71,85,105,0.28) 1px, transparent 1px, transparent 7px)',
                               borderTop: '1px solid rgba(100,116,139,0.4)', borderBottom: '1px solid rgba(100,116,139,0.4)',
                             }} />;
                           })}
-                          {HOURS.slice(1).map((h, i) => (
-                            <div key={h} style={{ top: (i + 1) * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
+                          {HOURS.slice(1, 24).map((h) => (
+                            <div key={h} style={{ top: h * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                           ))}
                           {placed.map((x) => x.kind === 'job'
                             ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
@@ -765,5 +859,5 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   });
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()) } };
 });
