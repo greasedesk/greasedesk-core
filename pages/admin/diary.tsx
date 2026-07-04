@@ -40,7 +40,7 @@ type PageProps = {
   finance: FinanceProps;
   noSites?: boolean;
 };
-type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; bookedPennies: number; marginPennies: number };
+type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; vatRegistered: boolean; bookedPennies: number; marginPennies: number; days: Record<string, { bookedPennies: number; marginPennies: number }> };
 
 function ymd(d: Date) { return d.toISOString().slice(0, 10); }
 function dayStartMs(date: string) { return Date.parse(`${date}T00:00:00.000Z`); }
@@ -114,6 +114,13 @@ export default function DiaryPage(props: PageProps) {
   useEffect(() => { try { setShowValues(localStorage.getItem('gd-diary-show-values') !== '0'); } catch {} }, []);
   const toggleValues = () => setShowValues((v) => { const n = !v; try { localStorage.setItem('gd-diary-show-values', n ? '1' : '0'); } catch {} return n; });
   const showMoney = hasFinance && showValues;
+  // "(Ex-VAT)" only for VAT-registered tenants — for a non-registered garage there's no VAT, so their
+  // prices ARE their revenue and the label would be meaningless. Money helper with the conditional label.
+  const exVatSuffix = finance.vatRegistered ? ` ${t('finance.exVat')}` : '';
+  const money = (pennies: number) => formatMoney(pennies, { currency, locale });
+  // Week view shows per-day totals under each day header → taller header (axis spacer must match).
+  const showDayTotals = view === 'week' && showMoney;
+  const headH = showDayTotals ? 'h-12' : 'h-7';
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   // STAGE 1 — the grid now spans the FULL 24h day (00:00–24:00); it scrolls and lands on the working
@@ -337,10 +344,10 @@ export default function DiaryPage(props: PageProps) {
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
               {showMoney && finance.canSeeValues && (
-                <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums">{formatMoney(finance.bookedPennies, { currency, locale })}</span></span>
+                <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums">{money(finance.bookedPennies)}{exVatSuffix}</span></span>
               )}
               {showMoney && finance.canSeeMargin && (
-                <span><span className="text-muted">{t('finance.margin')}: </span><span className="text-ink font-semibold tabular-nums">{formatMoney(finance.marginPennies, { currency, locale })}</span></span>
+                <span><span className="text-muted">{t('finance.margin')}: </span><span className={`font-semibold tabular-nums ${finance.marginPennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(finance.marginPennies)}{exVatSuffix}</span></span>
               )}
               {!showValues && <span className="text-muted italic">{t('finance.hidden')}</span>}
             </div>
@@ -375,7 +382,7 @@ export default function DiaryPage(props: PageProps) {
             <div ref={scrollRef} className="overflow-auto border border-line rounded-lg" style={{ height: (REST_MIN + 28) * PX_PER_MIN, maxHeight: '78vh' }}>
               <div className="flex min-w-full">
                 <div className="w-14 shrink-0 sticky left-0 z-20 bg-surface">
-                  <div className="h-7 sticky top-0 z-30 bg-surface border-b border-r border-line" />
+                  <div className={`${headH} sticky top-0 z-30 bg-surface border-b border-r border-line`} />
                   <div className="relative border-r border-line" style={{ height: DAY_MIN * PX_PER_MIN }}>
                     {HOURS.slice(0, 24).map((h) => (
                       <div key={h} style={{ top: h * 60 * PX_PER_MIN }} className="absolute right-0 pr-2 -mt-2 text-xs text-muted">{pad(h)}:00</div>
@@ -397,7 +404,15 @@ export default function DiaryPage(props: PageProps) {
                     const placed = layoutOverlap(items);
                     return (
                       <div key={col.key} className="flex-1 min-w-[46px] border-l border-line">
-                        <div className="h-7 sticky top-0 z-10 bg-surface border-b border-line text-sm text-ink text-center font-medium truncate px-1 flex items-center justify-center">{col.label}</div>
+                        <div className={`${headH} sticky top-0 z-10 bg-surface border-b border-line px-1 flex flex-col items-center justify-center`}>
+                          <span className="text-sm text-ink font-medium truncate w-full text-center leading-tight">{col.label}</span>
+                          {showDayTotals && (() => { const d = finance.days[col.date] ?? { bookedPennies: 0, marginPennies: 0 }; return (
+                            <span className="text-[9px] leading-tight text-center tabular-nums">
+                              {finance.canSeeValues && <span className="block text-muted">{t('finance.bookedShort')} {money(d.bookedPennies)}</span>}
+                              {finance.canSeeMargin && <span className={`block ${d.marginPennies < 0 ? 'text-danger' : 'text-muted'}`}>{t('finance.marginShort')} {money(d.marginPennies)}</span>}
+                            </span>
+                          ); })()}
+                        </div>
                         <div
                           className="relative bg-surface"
                           style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
@@ -816,7 +831,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const vis = await getVisibility(user.id as string);
   if (vis.siteIds.length === 0) {
     const today = ymd(new Date());
-    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, finance: { canSeeValues: false, canSeeMargin: false, bookedPennies: 0, marginPennies: 0 }, noSites: true } };
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true } };
   }
 
   // Default to the user's PRIMARY location; a valid ?site switches. Forced out-of-scope ?site
@@ -887,6 +902,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const fin = financeVisibility(vis, perms);
   const rangeStartMs = rangeStart.getTime(), rangeEndMs = rangeEnd.getTime();
   let bookedPennies = 0, marginPennies = 0;
+  const dayAgg: Record<string, { booked: number; margin: number }> = {}; // per-day totals (week view)
   const cards: DiaryCard[] = cardRows.map((c) => {
     const totals = computeQuoteTotals(
       (c.items as any[]).map((it) => ({ item_type: it.item_type, qty: num(it.qty), unit_price_pennies: poundsToPennies(num(it.unit_price)), unit_cost_pennies: poundsToPennies(num(it.unit_cost)), vatable: num(it.vat_rate) > 0 })),
@@ -905,31 +921,40 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     const labels = fixedNames.length ? fixedNames : items.map((it) => firstLine(it.description)).filter(Boolean);
     const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : ''; // week: compact
     const services = labels; // day: full list, one per line
-    // Period totals (jobs whose BOOKING falls in the visible week/day — no cross-period double-count).
-    // Value = inc-VAT quoted total. Margin = ex-VAT revenue − parts cost (labour EXCLUDED — fixed
-    // overhead); a comeback contributes £0 revenue but still its parts-cost drag (locked formula).
+    // ALL figures EX-VAT — this is a P&L view, and VAT nets out of margin (output VAT on sales →
+    // HMRC, input VAT on purchases reclaimed). Booked = ex-VAT revenue (labour + parts sold); Margin =
+    // ex-VAT revenue − ex-VAT parts cost (labour EXCLUDED — fixed overhead). A comeback = £0 revenue,
+    // still its parts-cost drag. Period-matched by BOOKING day (no cross-period double-count).
+    const revenueEx = c.is_comeback ? 0 : (totals.labour_pennies + totals.parts_pennies);
     const startMs = (c.start_at as Date).getTime();
     if (startMs >= rangeStartMs && startMs < rangeEndMs) {
-      bookedPennies += totals.total_pennies;
-      const revenueEx = c.is_comeback ? 0 : (totals.labour_pennies + totals.parts_pennies);
+      bookedPennies += revenueEx;
       marginPennies += revenueEx - totals.parts_cost_pennies;
+      const dk = ymd(new Date(startMs));
+      const d = (dayAgg[dk] ??= { booked: 0, margin: 0 });
+      d.booked += revenueEx; d.margin += revenueEx - totals.parts_cost_pennies;
     }
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string,
-      // Block value: normal job = inc-VAT retail; comeback = the DRAIN it represents = −(parts cost,
-      // ex-VAT) — matches what the margin total already subtracts. Booked/margin totals compute from
-      // `totals` directly (above), so this display choice never affects them. SERVER-GATED.
-      valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : totals.total_pennies) : 0,
+      // Block value (EX-VAT): normal job = ex-VAT revenue; comeback = the DRAIN = −(ex-VAT parts cost),
+      // matching what the margin total subtracts. Totals compute from `totals` directly, unaffected.
+      valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
       segments: fp.segments,
     };
   });
+  // Per-day totals for week view (gated the same as the period totals).
+  const days_finance: Record<string, { bookedPennies: number; marginPennies: number }> = {};
+  for (const [dk, agg] of Object.entries(dayAgg)) {
+    days_finance[dk] = { bookedPennies: fin.seeValues ? agg.booked : 0, marginPennies: fin.seeMargin ? agg.margin : 0 };
+  }
   const finance = {
-    canSeeValues: fin.seeValues, canSeeMargin: fin.seeMargin,
+    canSeeValues: fin.seeValues, canSeeMargin: fin.seeMargin, vatRegistered: vat.registered,
     bookedPennies: fin.seeValues ? bookedPennies : 0,
     marginPennies: fin.seeMargin ? marginPennies : 0,
+    days: days_finance,
   };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 

@@ -9,6 +9,9 @@
   "finance": {
     "booked": "Booked",
     "margin": "Margin",
+    "bookedShort": "B",
+    "marginShort": "M",
+    "exVat": "(Ex-VAT)",
     "showValues": "Show values",
     "hidden": "Values hidden"
   },
