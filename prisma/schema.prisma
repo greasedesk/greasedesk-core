@@ -148,6 +148,7 @@ model Group {
   services   ServiceCatalogue[] // Services at Group level (master list)
   parts      PartCatalogue[]
   tax_rates  TaxRate[]
+  promos     Promo[]
   audit_logs AuditLog[]
   bookings   Booking[]
   job_cards  JobCard[]
@@ -885,6 +886,32 @@ model CatalogueItemTierPrice {
   @@unique([catalogue_item_id, tier_id])
   @@index([catalogue_item_id])
   @@index([tier_id])
+}
+
+// Reusable discount codes ("promotions"). VAT-aware: `amount` is entered/advertised INC-VAT for a
+// fixed promo (£ off) or is the percentage for a percentage promo. Applied on an estimate as ONE
+// negative EX-VAT part line via the existing discount mechanism (the VAT split falls out of the
+// aggregate recompute in lib/quote-totals). A promo is NOT sellable — its own section, not a product.
+enum PromoType {
+  fixed      // amount = £ off, INC-VAT
+  percentage // amount = percent off the inc-VAT total at apply-time
+}
+
+model Promo {
+  id         String    @id @default(uuid())
+  group_id   String // TENANT-level — one shared promo list across all sites
+  code       String // short code / match key, unique per tenant (e.g. "BMW50")
+  label      String // human label shown on the discount line ("10% off")
+  promo_type PromoType
+  amount     Decimal   @db.Decimal(12, 2) // fixed: £ inc-VAT; percentage: the percent (e.g. 10.00)
+  active     Boolean   @default(true) // archive (false) preferred over delete — keeps history legible
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, code])
+  @@index([group_id])
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

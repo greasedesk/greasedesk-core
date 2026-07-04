@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle } from '@/components/jobcard/EstimateBuilder';
+import { PromoLite } from '@/lib/promo';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -37,7 +38,7 @@ type Props = {
   flags: string[];
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
-  lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; hasEstimate: boolean;
+  lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
   resources: Resource[]; booking: CardBooking;
   siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
@@ -189,7 +190,7 @@ export default function JobCardWorkspace(p: Props) {
             resources={p.resources} booking={p.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
-          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} />
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
         </div>
       )}
 

@@ -27,6 +27,7 @@ const navItems: NavItemDef[] = [
   { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true, locScope: 'diary' },
   { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true, locScope: 'jobcards' },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
+  { key: 'promotions', href: '/admin/promos', icon: '🏷️', ready: true },
   { key: 'customers', href: '/admin/customers', icon: '👤', ready: false },
   { key: 'reports', href: '/admin/reports', icon: '📊', ready: false },
 ];

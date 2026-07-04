@@ -13,6 +13,7 @@ import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
 import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
+import { PromoLite, promoDiscountPennies, promoLineLabel } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
 
 export type EstimateLine = {
@@ -55,6 +56,7 @@ type Props = {
   catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
   fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
   tiers?: TierLite[]; // active tenant tiers
+  promos?: PromoLite[]; // active promotions for the apply-promo picker
 };
 
 const CODES_DATALIST = 'gd-catalogue-codes';
@@ -133,11 +135,12 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
 // "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
 export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [] }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [] }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
+  const [pickPromo, setPickPromo] = useState('');
 
   // Add a fixed-price service: resolve the tier price + spec entirely client-side and explode into
   // ONE line. The customer-facing line text is the product's Title (heading) + Description (spec) —
@@ -206,6 +209,26 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     ),
     [lines, vatRate, vatRegistered],
   );
+
+  // Apply a promotion → ONE negative EX-VAT discount line (vatable, so lib/quote-totals reduces both
+  // ex-VAT and VAT proportionally). The £/% is turned into money by the lib/promo chokepoint against the
+  // CURRENT inc-VAT total + the card's rate. It's an ordinary line afterwards (editable / removable).
+  function addPromo() {
+    const promo = promos.find((p) => p.id === pickPromo);
+    if (!promo) return;
+    const { exPennies } = promoDiscountPennies(promo, totals.total_pennies, Number(vatRate || 0), vatRegistered);
+    if (exPennies <= 0) { setPickPromo(''); return; }
+    setLines((p) => [...p, {
+      _uid: uid(), item_type: 'part',
+      description: promoLineLabel(promo.code, promo.label),
+      qty: '1',
+      unit_price: (-exPennies / 100).toFixed(2), // negative ex-VAT = discount
+      unit_cost: '0',
+      vatable: vatRegistered, // reduce VAT proportionally when registered
+      code: '', catalogue_item_id: null,
+    }]);
+    setPickPromo('');
+  }
 
   const update = (idx: number, patch: Partial<EstimateLine>) =>
     setLines((p) => p.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
@@ -300,6 +323,18 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
             )
           )}
         </>
+      )}
+
+      {/* Promotions — apply a reusable discount code as a correctly VAT-split negative line. */}
+      {canEdit && promos.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-ink">{t('estimate.promo')}</span>
+          <select value={pickPromo} onChange={(e) => setPickPromo(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+            <option value="">{t('estimate.pickPromo')}</option>
+            {promos.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.label}</option>)}
+          </select>
+          <button onClick={addPromo} disabled={!pickPromo} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">+ {t('estimate.applyPromo')}</button>
+        </div>
       )}
 
       {/* VAT rate + summary. VAT rate + line hidden entirely when the tenant isn't VAT registered. */}

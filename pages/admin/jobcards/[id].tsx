@@ -21,6 +21,7 @@ import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { withI18n } from '@/lib/gssp-i18n';
 import { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
+import { PromoLite } from '@/lib/promo';
 import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
@@ -48,6 +49,7 @@ type PageProps = {
   catalogue: CatalogueLite[];
   fixedServices: FixedServiceLite[];
   tiers: TierLite[];
+  promos: PromoLite[];
   hasEstimate: boolean;
   resources: Array<{ id: string; name: string }>;
   booking: CardBooking;
@@ -98,6 +100,7 @@ export default function JobCardDetailPage(props: PageProps) {
         lines={props.lines}
         catalogue={props.catalogue}
         fixedServices={props.fixedServices}
+        promos={props.promos}
         tiers={props.tiers}
         hasEstimate={props.hasEstimate}
         resources={props.resources}
@@ -208,7 +211,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
-  const [catalogueRows, tierRows] = await Promise.all([
+  const [catalogueRows, tierRows, promoRows] = await Promise.all([
     prisma.catalogueItem.findMany({
       where: { group_id: user.group_id, active: true },
       orderBy: { code: 'asc' },
@@ -219,6 +222,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       },
     }) as Promise<any[]>,
     prisma.serviceTier.findMany({ where: { group_id: user.group_id, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
+    prisma.promo.findMany({ where: { group_id: user.group_id, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true } }) as Promise<any[]>,
   ]);
   const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
@@ -232,6 +236,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
   }));
   const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
+  const promos: PromoLite[] = promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount) }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
@@ -292,7 +297,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       },
       flags,
       garageNotes: row.garage_notes ?? '',
-      lines, catalogue, fixedServices, tiers,
+      lines, catalogue, fixedServices, tiers, promos,
       hasEstimate: (row.items as any[]).length > 0,
       resources, booking, stages, tabsState, invoice, events,
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6], breaks: parseBreaks(site?.breaks) },

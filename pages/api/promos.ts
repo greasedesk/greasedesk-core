@@ -1,0 +1,94 @@
+/**
+ * File: pages/api/promos.ts
+ * Promotions CRUD — reusable VAT-aware discount codes. ADMIN-only, tenant-scoped. A promo is NOT a
+ * product (not sellable); it's applied on an estimate as a negative discount line (see lib/promo.ts).
+ *   GET                                                → { promos[], defaultVatRate, vatRegistered }
+ *   POST   { code, label, type, amount }
+ *   PATCH  { id, code?, label?, type?, amount?, active? }
+ *   DELETE { id }
+ * `amount` is INC-VAT £ for a fixed promo, or the percentage for a percentage promo.
+ */
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { Prisma, PromoType } from '@prisma/client';
+import { prisma } from '@/lib/db';
+import { requireAdminApi } from '@/lib/admin-guard';
+import { getTenantVat } from '@/lib/tenant-vat';
+
+const TYPES: PromoType[] = ['fixed', 'percentage'];
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const vis = await requireAdminApi(req, res);
+  if (!vis) return;
+  if (!vis.groupId) return res.status(400).json({ message: 'No tenant context.' });
+  const groupId = vis.groupId;
+
+  if (req.method === 'GET') {
+    const [promoRows, vat] = await Promise.all([
+      prisma.promo.findMany({ where: { group_id: groupId }, orderBy: [{ active: 'desc' }, { code: 'asc' }], select: { id: true, code: true, label: true, promo_type: true, amount: true, active: true } }) as Promise<any[]>,
+      getTenantVat(groupId),
+    ]);
+    return res.status(200).json({
+      promos: promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), active: p.active })),
+      defaultVatRate: vat.defaultRate, vatRegistered: vat.registered,
+    });
+  }
+
+  if (req.method === 'POST' || req.method === 'PATCH') {
+    const body = (req.body || {}) as any;
+    const isPatch = req.method === 'PATCH';
+    const id = typeof body.id === 'string' ? body.id : '';
+    if (isPatch && !id) return res.status(400).json({ message: 'Missing id.' });
+
+    const data: Prisma.PromoUncheckedUpdateInput = {};
+    if (body.code !== undefined || !isPatch) {
+      const code = String(body.code ?? '').trim();
+      if (!code) return res.status(400).json({ message: 'A promo code is required.' });
+      data.code = code;
+    }
+    if (body.label !== undefined || !isPatch) {
+      const label = String(body.label ?? '').trim();
+      if (!label) return res.status(400).json({ message: 'A label is required.' });
+      data.label = label;
+    }
+    if (body.type !== undefined || !isPatch) {
+      const type = String(body.type) as PromoType;
+      if (!TYPES.includes(type)) return res.status(400).json({ message: 'Type must be fixed or percentage.' });
+      data.promo_type = type;
+    }
+    if (body.amount !== undefined || !isPatch) {
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ message: 'Amount must be a positive number.' });
+      // A percentage can't exceed 100.
+      const effType = (data.promo_type as PromoType) ?? undefined;
+      if (effType === 'percentage' && amount > 100) return res.status(400).json({ message: 'A percentage can’t exceed 100.' });
+      data.amount = new Prisma.Decimal(amount.toFixed(2));
+    }
+    if (body.active !== undefined) data.active = !!body.active;
+
+    try {
+      if (isPatch) {
+        const owned = await prisma.promo.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
+        if (!owned) return res.status(404).json({ message: 'Promo not found.' });
+        await prisma.promo.update({ where: { id }, data });
+        return res.status(200).json({ message: 'Promo updated.' });
+      }
+      const created = await prisma.promo.create({ data: { ...(data as any), group_id: groupId } as Prisma.PromoUncheckedCreateInput, select: { id: true } });
+      return res.status(201).json({ id: created.id, message: 'Promo added.' });
+    } catch (e: any) {
+      if (e?.code === 'P2002') return res.status(409).json({ message: 'That promo code is already in use.' });
+      console.error('Promo write error:', e);
+      return res.status(500).json({ message: 'Could not save the promo.' });
+    }
+  }
+
+  if (req.method === 'DELETE') {
+    const id = typeof req.query.id === 'string' ? req.query.id : (req.body?.id as string) || '';
+    if (!id) return res.status(400).json({ message: 'Missing id.' });
+    const del = await prisma.promo.deleteMany({ where: { id, group_id: groupId } });
+    if (del.count === 0) return res.status(404).json({ message: 'Promo not found.' });
+    return res.status(200).json({ message: 'Promo deleted.' });
+  }
+
+  res.setHeader('Allow', 'GET, POST, PATCH, DELETE');
+  return res.status(405).json({ message: 'Method Not Allowed' });
+}
