@@ -543,6 +543,29 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const [liftId, setLiftId] = useState(defaultResourceId ?? resources[0]?.id ?? '');
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
+  // Reg auto-fill: on reg-blur, look up a known car and pre-fill its vehicle + current-owner details so
+  // returning cars aren't re-typed. lastLookedRef guards against repeat calls; autoFilledRef remembers
+  // the reg we filled from, so switching to an unknown reg clears the STALE fill (but never a genuinely
+  // hand-typed new car). Display convenience only — the create path stays authoritative for a known reg.
+  const lastLookedRef = useRef<string>(''); const autoFilledRef = useRef<string | null>(null);
+  async function lookupReg() {
+    const r = reg.trim().toUpperCase();
+    if (!r || r === lastLookedRef.current) return;
+    lastLookedRef.current = r;
+    try {
+      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.found) {
+        setCust(data.owner?.name || ''); setPhone(data.owner?.phone || ''); setEmail(data.owner?.email || '');
+        setVin(data.vehicle?.vin || ''); setMileage(data.vehicle?.mileage != null ? String(data.vehicle.mileage) : '');
+        autoFilledRef.current = r;
+      } else if (autoFilledRef.current) {
+        setCust(''); setPhone(''); setEmail(''); setVin(''); setMileage(''); // clear stale auto-fill from a prior known reg
+        autoFilledRef.current = null;
+      }
+    } catch { /* lookup is best-effort — a failed pre-fill never blocks manual entry */ }
+  }
   // End is naive start + hours (the /api/jobcard bridge → workingMinutes = end-start = hours*60; the
   // footprint re-expands correctly around close/breaks). Duration is the source of truth.
   const endAt = new Date(Date.parse(info.startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString();
@@ -601,7 +624,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
           <div className="space-y-3">
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
-            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} /></div>
+            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={lookupReg} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.vin')}</label><input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} /></div>
               <div><label className={labelCls}>{t('create.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value)} /></div>
