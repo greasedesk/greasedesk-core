@@ -222,7 +222,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       },
     }) as Promise<any[]>,
     prisma.serviceTier.findMany({ where: { group_id: user.group_id, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
-    prisma.promo.findMany({ where: { group_id: user.group_id, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true } }) as Promise<any[]>,
+    prisma.promo.findMany({ where: { group_id: user.group_id, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true, targets: { select: { catalogue_item_id: true } } } }) as Promise<any[]>,
   ]);
   const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
@@ -236,7 +236,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
   }));
   const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
-  const promos: PromoLite[] = promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount) }));
+  const promos: PromoLite[] = promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targetIds: p.targets.map((t: any) => t.catalogue_item_id) }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,

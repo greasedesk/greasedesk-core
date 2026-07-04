@@ -24,11 +24,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') {
     const [promoRows, vat] = await Promise.all([
-      prisma.promo.findMany({ where: { group_id: groupId }, orderBy: [{ active: 'desc' }, { code: 'asc' }], select: { id: true, code: true, label: true, promo_type: true, amount: true, active: true } }) as Promise<any[]>,
+      prisma.promo.findMany({ where: { group_id: groupId }, orderBy: [{ active: 'desc' }, { code: 'asc' }], select: { id: true, code: true, label: true, promo_type: true, amount: true, active: true, targets: { select: { catalogue_item_id: true } } } }) as Promise<any[]>,
       getTenantVat(groupId),
     ]);
     return res.status(200).json({
-      promos: promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), active: p.active })),
+      promos: promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), active: p.active, targetIds: p.targets.map((t: any) => t.catalogue_item_id) })),
       defaultVatRate: vat.defaultRate, vatRegistered: vat.registered,
     });
   }
@@ -65,15 +65,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (body.active !== undefined) data.active = !!body.active;
 
+    // Targets (percentage only). Validate ids belong to THIS tenant's catalogue; a fixed promo clears
+    // them. `undefined` (field omitted on a PATCH) = leave targets untouched.
+    const effType = (data.promo_type as PromoType) ?? undefined;
+    let targetIds: string[] | undefined;
+    if (body.targetProductIds !== undefined || (!isPatch)) {
+      const raw = Array.isArray(body.targetProductIds) ? body.targetProductIds.filter((x: any) => typeof x === 'string') : [];
+      if (effType === 'fixed') targetIds = [];
+      else if (raw.length) {
+        const owned = (await prisma.catalogueItem.findMany({ where: { id: { in: raw }, group_id: groupId }, select: { id: true } })) as Array<{ id: string }>;
+        targetIds = owned.map((o) => o.id);
+      } else targetIds = [];
+    }
+
     try {
-      if (isPatch) {
-        const owned = await prisma.promo.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
-        if (!owned) return res.status(404).json({ message: 'Promo not found.' });
-        await prisma.promo.update({ where: { id }, data });
-        return res.status(200).json({ message: 'Promo updated.' });
-      }
-      const created = await prisma.promo.create({ data: { ...(data as any), group_id: groupId } as Prisma.PromoUncheckedCreateInput, select: { id: true } });
-      return res.status(201).json({ id: created.id, message: 'Promo added.' });
+      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        let promoId = id;
+        if (isPatch) {
+          const owned = await tx.promo.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
+          if (!owned) return { notFound: true };
+          await tx.promo.update({ where: { id }, data });
+        } else {
+          const created = await tx.promo.create({ data: { ...(data as any), group_id: groupId } as Prisma.PromoUncheckedCreateInput, select: { id: true } });
+          promoId = created.id;
+        }
+        if (targetIds !== undefined) {
+          await tx.promoTarget.deleteMany({ where: { promo_id: promoId } });
+          if (targetIds.length) await tx.promoTarget.createMany({ data: targetIds.map((cid) => ({ promo_id: promoId, catalogue_item_id: cid })) });
+        }
+        return { id: promoId };
+      });
+      if ((result as any).notFound) return res.status(404).json({ message: 'Promo not found.' });
+      return res.status(isPatch ? 200 : 201).json({ id: (result as any).id, message: isPatch ? 'Promo updated.' : 'Promo added.' });
     } catch (e: any) {
       if (e?.code === 'P2002') return res.status(409).json({ message: 'That promo code is already in use.' });
       console.error('Promo write error:', e);

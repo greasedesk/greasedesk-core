@@ -12,6 +12,7 @@ import { useTranslation } from 'next-i18next';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import PromotionsSection from '@/components/products/PromotionsSection';
 
 type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Comp = { description: string; qty: number; unitCostExVat: number };
@@ -168,6 +169,12 @@ export default function ProductsPage() {
           </div>
         </details>
 
+        {/* Promotions (discount codes) — managed here, applied garage-side on the estimate. */}
+        <PromotionsSection
+          products={items.filter((i) => i.active).map((i) => ({ id: i.id, code: i.code, title: i.title, name: i.name }))}
+          defaultVatRate={Number(defaultVatRate || 0)} vatRegistered={vatRegistered}
+        />
+
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         {form && (
@@ -300,7 +307,7 @@ export default function ProductsPage() {
   );
 }
 
-export const getServerSideProps = withI18n(['products'])(async (ctx) => {
+export const getServerSideProps = withI18n(['products', 'promos'])(async (ctx) => {
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
   return { props: {} };

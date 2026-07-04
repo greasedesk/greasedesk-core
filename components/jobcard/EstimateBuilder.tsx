@@ -13,7 +13,7 @@ import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
 import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
-import { PromoLite, promoDiscountPennies, promoLineLabel } from '@/lib/promo';
+import { PromoLite, computePromoDiscounts } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
 
 export type EstimateLine = {
@@ -141,6 +141,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
   const [pickPromo, setPickPromo] = useState('');
+  const [promoMsg, setPromoMsg] = useState<string | null>(null);
 
   // Add a fixed-price service: resolve the tier price + spec entirely client-side and explode into
   // ONE line. The customer-facing line text is the product's Title (heading) + Description (spec) —
@@ -210,24 +211,30 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     [lines, vatRate, vatRegistered],
   );
 
-  // Apply a promotion → ONE negative EX-VAT discount line (vatable, so lib/quote-totals reduces both
-  // ex-VAT and VAT proportionally). The £/% is turned into money by the lib/promo chokepoint against the
-  // CURRENT inc-VAT total + the card's rate. It's an ordinary line afterwards (editable / removable).
-  function addPromo() {
+  // Apply a discount code → negative EX-VAT discount line(s) via the lib/promo chokepoint. Fixed £ =
+  // whole-job; percentage = its targeted products matched to THIS job's lines (each keeping its own VAT
+  // flag). Lines are vatable per their flag, so lib/quote-totals reduces ex-VAT + VAT correctly. Ordinary
+  // editable/removable lines afterwards. A % promo whose targets aren't on the job → "no applicable items".
+  function applyPromo() {
     const promo = promos.find((p) => p.id === pickPromo);
     if (!promo) return;
-    const { exPennies } = promoDiscountPennies(promo, totals.total_pennies, Number(vatRate || 0), vatRegistered);
-    if (exPennies <= 0) { setPickPromo(''); return; }
-    setLines((p) => [...p, {
-      _uid: uid(), item_type: 'part',
-      description: promoLineLabel(promo.code, promo.label),
+    const estLines = lines.map((l) => ({
+      catalogueItemId: l.catalogue_item_id ?? null,
+      exPennies: Math.round(Number(l.unit_price || 0) * Math.max(0, Number(l.qty || 0)) * 100),
+      vatable: l.vatable,
+    }));
+    const discounts = computePromoDiscounts(promo, estLines, Number(vatRate || 0), vatRegistered);
+    if (discounts.length === 0) { setPromoMsg(t('estimate.promoNoMatch')); return; }
+    setLines((p) => [...p, ...discounts.map((d) => ({
+      _uid: uid(), item_type: 'part' as QuoteItemType,
+      description: d.label,
       qty: '1',
-      unit_price: (-exPennies / 100).toFixed(2), // negative ex-VAT = discount
+      unit_price: (-d.exPennies / 100).toFixed(2), // negative ex-VAT = discount
       unit_cost: '0',
-      vatable: vatRegistered, // reduce VAT proportionally when registered
+      vatable: d.vatable,
       code: '', catalogue_item_id: null,
-    }]);
-    setPickPromo('');
+    }))]);
+    setPickPromo(''); setPromoMsg(null);
   }
 
   const update = (idx: number, patch: Partial<EstimateLine>) =>
@@ -325,15 +332,18 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         </>
       )}
 
-      {/* Promotions — apply a reusable discount code as a correctly VAT-split negative line. */}
+      {/* Discount codes — apply a promo as correctly VAT-split negative line(s). */}
       {canEdit && promos.length > 0 && (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-ink">{t('estimate.promo')}</span>
-          <select value={pickPromo} onChange={(e) => setPickPromo(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
-            <option value="">{t('estimate.pickPromo')}</option>
-            {promos.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.label}</option>)}
-          </select>
-          <button onClick={addPromo} disabled={!pickPromo} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">+ {t('estimate.applyPromo')}</button>
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-ink">{t('estimate.promo')}</span>
+            <select value={pickPromo} onChange={(e) => { setPickPromo(e.target.value); setPromoMsg(null); }} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+              <option value="">{t('estimate.pickPromo')}</option>
+              {promos.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.label}</option>)}
+            </select>
+            <button onClick={applyPromo} disabled={!pickPromo} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">{t('estimate.applyPromo')}</button>
+          </div>
+          {promoMsg && <p className="text-xs text-warn mt-1">{promoMsg}</p>}
         </div>
       )}
 

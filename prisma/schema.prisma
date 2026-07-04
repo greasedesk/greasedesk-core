@@ -834,9 +834,10 @@ model CatalogueItem {
   updated_at DateTime @updatedAt
 
   group       Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  job_lines   JobCardItem[]
-  components  CatalogueComponent[]
-  tier_prices CatalogueItemTierPrice[]
+  job_lines     JobCardItem[]
+  components    CatalogueComponent[]
+  tier_prices   CatalogueItemTierPrice[]
+  promo_targets PromoTarget[]
 
   @@unique([group_id, code])
   @@index([group_id])
@@ -908,10 +909,27 @@ model Promo {
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
 
-  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  group   Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  targets PromoTarget[] // for a percentage promo: the catalogue items it applies to
 
   @@unique([group_id, code])
   @@index([group_id])
+}
+
+// A percentage promo's targeted products — the estimate matches these catalogue ids to job lines
+// (via JobCardItem.catalogue_item_id) so the % discounts only the covered services, each keeping its
+// own VAT treatment. Fixed-£ promos ignore targets (whole-job discount).
+model PromoTarget {
+  id                String @id @default(uuid())
+  promo_id          String
+  catalogue_item_id String
+
+  promo Promo         @relation(fields: [promo_id], references: [id], onDelete: Cascade)
+  item  CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([promo_id, catalogue_item_id])
+  @@index([promo_id])
+  @@index([catalogue_item_id])
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
