@@ -17,7 +17,7 @@ import { prisma } from '@/lib/db';
 import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
-import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
+import { getTenantPermissions, canCreateDiaryEntry, financeVisibility } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
@@ -37,8 +37,10 @@ type PageProps = {
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
   weekStart: number; today: string;
+  finance: FinanceProps;
   noSites?: boolean;
 };
+type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; bookedPennies: number; marginPennies: number };
 
 function ymd(d: Date) { return d.toISOString().slice(0, 10); }
 function dayStartMs(date: string) { return Date.parse(`${date}T00:00:00.000Z`); }
@@ -103,8 +105,15 @@ function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose 
 }
 
 export default function DiaryPage(props: PageProps) {
-  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, noSites } = props;
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites } = props;
   const { t } = useTranslation('diary');
+  // Runtime "Show values" toggle — hides already-permitted money ("turn the screen to the customer").
+  // The permission gates what's SENT; this only hides what was sent. Persisted per browser.
+  const hasFinance = finance.canSeeValues || finance.canSeeMargin;
+  const [showValues, setShowValues] = useState(true);
+  useEffect(() => { try { setShowValues(localStorage.getItem('gd-diary-show-values') !== '0'); } catch {} }, []);
+  const toggleValues = () => setShowValues((v) => { const n = !v; try { localStorage.setItem('gd-diary-show-values', n ? '1' : '0'); } catch {} return n; });
+  const showMoney = hasFinance && showValues;
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   // STAGE 1 — the grid now spans the FULL 24h day (00:00–24:00); it scrolls and lands on the working
@@ -257,6 +266,8 @@ export default function DiaryPage(props: PageProps) {
         {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
           <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
         ))}
+        {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
+        {showMoney && finance.canSeeValues && height > 28 && <span className="block text-[10px] font-semibold text-ink px-1 tabular-nums">{formatMoney(c.valuePennies, { currency, locale })}</span>}
       </div>
     );
   }
@@ -319,6 +330,28 @@ export default function DiaryPage(props: PageProps) {
             </div>
           )}
         </div>
+
+        {/* Financial glance — only rendered for users the SERVER permitted (numbers omitted otherwise).
+            The "Show values" toggle hides them at runtime ("turn the screen to the customer"). */}
+        {hasFinance && (
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+              {showMoney && finance.canSeeValues && (
+                <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums">{formatMoney(finance.bookedPennies, { currency, locale })}</span></span>
+              )}
+              {showMoney && finance.canSeeMargin && (
+                <span><span className="text-muted">{t('finance.margin')}: </span><span className="text-ink font-semibold tabular-nums">{formatMoney(finance.marginPennies, { currency, locale })}</span></span>
+              )}
+              {!showValues && <span className="text-muted italic">{t('finance.hidden')}</span>}
+            </div>
+            <button onClick={toggleValues} role="switch" aria-checked={showValues} className="shrink-0 flex items-center gap-2 text-sm text-ink">
+              <span className="text-muted">{t('finance.showValues')}</span>
+              <span className={`w-11 h-6 rounded-full flex items-center transition-colors ${showValues ? 'bg-accent justify-end' : 'bg-surface border border-line justify-start'}`}>
+                <span className="w-5 h-5 mx-0.5 rounded-full bg-white shadow" />
+              </span>
+            </button>
+          </div>
+        )}
 
         {resources.length === 0 ? (
           <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('noResources')}</div>
@@ -419,7 +452,7 @@ export default function DiaryPage(props: PageProps) {
               <div><span className="text-muted">{t('peek.lift')}: </span><span className="text-ink">{peek.card.resourceName}</span></div>
               <div><span className="text-muted">{t('peek.time')}: </span><span className="text-ink">{timeLabel(peek.card)}</span></div>
               <div><span className="text-muted">{t('peek.status')}: </span><span className="text-ink">{t(`status.${peek.card.status}`)}</span></div>
-              <div><span className="text-muted">{t('peek.value')}: </span><span className="text-ink font-medium">{formatMoney(peek.card.valuePennies, { currency, locale })}</span></div>
+              {showMoney && finance.canSeeValues && <div><span className="text-muted">{t('peek.value')}: </span><span className="text-ink font-medium">{formatMoney(peek.card.valuePennies, { currency, locale })}</span></div>}
             </div>
             <Link href={cardHref(peek.card.id)} className="mt-2 inline-block text-accent hover:underline font-medium">{t('peek.open')} →</Link>
           </div>
@@ -783,7 +816,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const vis = await getVisibility(user.id as string);
   if (vis.siteIds.length === 0) {
     const today = ymd(new Date());
-    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, noSites: true } };
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, finance: { canSeeValues: false, canSeeMargin: false, bookedPennies: 0, marginPennies: 0 }, noSites: true } };
   }
 
   // Default to the user's PRIMARY location; a valid ?site switches. Forced out-of-scope ?site
@@ -837,7 +870,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     prisma.jobCard.findMany({
       where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
       select: {
-        id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true,
+        id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true,
         resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
         items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
       },
@@ -850,6 +883,10 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
 
   const resources: ResourceCol[] = resourceRows.map((r) => ({ id: r.id, name: r.name, type: r.type, colour: r.colour }));
   const num = (d: any) => (d == null ? 0 : Number(d));
+  // Financial visibility for THIS user — decides what money is even sent to the client (server-gated).
+  const fin = financeVisibility(vis, perms);
+  const rangeStartMs = rangeStart.getTime(), rangeEndMs = rangeEnd.getTime();
+  let bookedPennies = 0, marginPennies = 0;
   const cards: DiaryCard[] = cardRows.map((c) => {
     const totals = computeQuoteTotals(
       (c.items as any[]).map((it) => ({ item_type: it.item_type, qty: num(it.qty), unit_price_pennies: poundsToPennies(num(it.unit_price)), unit_cost_pennies: poundsToPennies(num(it.unit_cost)), vatable: num(it.vat_rate) > 0 })),
@@ -868,15 +905,30 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     const labels = fixedNames.length ? fixedNames : items.map((it) => firstLine(it.description)).filter(Boolean);
     const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : ''; // week: compact
     const services = labels; // day: full list, one per line
+    // Period totals (jobs whose BOOKING falls in the visible week/day — no cross-period double-count).
+    // Value = inc-VAT quoted total. Margin = ex-VAT revenue − parts cost (labour EXCLUDED — fixed
+    // overhead); a comeback contributes £0 revenue but still its parts-cost drag (locked formula).
+    const startMs = (c.start_at as Date).getTime();
+    if (startMs >= rangeStartMs && startMs < rangeEndMs) {
+      bookedPennies += totals.total_pennies;
+      const revenueEx = c.is_comeback ? 0 : (totals.labour_pennies + totals.parts_pennies);
+      marginPennies += revenueEx - totals.parts_cost_pennies;
+    }
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
-      status: c.status as string, valuePennies: totals.total_pennies,
+      status: c.status as string,
+      valuePennies: fin.seeValues ? totals.total_pennies : 0, // SERVER-GATED — no value sent if not permitted
       segments: fp.segments,
     };
   });
+  const finance = {
+    canSeeValues: fin.seeValues, canSeeMargin: fin.seeMargin,
+    bookedPennies: fin.seeValues ? bookedPennies : 0,
+    marginPennies: fin.seeMargin ? marginPennies : 0,
+  };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()) } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), finance } };
 });

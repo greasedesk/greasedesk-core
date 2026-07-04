@@ -16,10 +16,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!vis) return;
   if (!vis.groupId) return res.status(400).json({ message: 'No tenant context.' });
 
-  const { standardEditPricing, standardDiaryEntries } = (req.body || {}) as { standardEditPricing?: boolean; standardDiaryEntries?: boolean };
+  const b = (req.body || {}) as Record<string, boolean | undefined>;
   const data: any = {};
-  if (standardEditPricing !== undefined) data.perm_standard_edit_pricing = !!standardEditPricing;
-  if (standardDiaryEntries !== undefined) data.perm_standard_diary_entries = !!standardDiaryEntries;
+  if (b.standardEditPricing !== undefined) data.perm_standard_edit_pricing = !!b.standardEditPricing;
+  if (b.standardDiaryEntries !== undefined) data.perm_standard_diary_entries = !!b.standardDiaryEntries;
+  if (b.managerSeeValues !== undefined) data.perm_manager_see_values = !!b.managerSeeValues;
+  if (b.managerSeeMargin !== undefined) data.perm_manager_see_margin = !!b.managerSeeMargin;
+  if (b.standardSeeValues !== undefined) data.perm_standard_see_values = !!b.standardSeeValues;
+  if (b.standardSeeMargin !== undefined) data.perm_standard_see_margin = !!b.standardSeeMargin;
   if (Object.keys(data).length === 0) return res.status(400).json({ message: 'Nothing to update.' });
 
   await prisma.group.update({ where: { id: vis.groupId }, data });

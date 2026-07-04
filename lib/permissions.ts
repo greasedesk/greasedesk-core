@@ -14,18 +14,42 @@ import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 export type TenantPermissions = {
   standardEditPricing: boolean;    // STANDARD may edit estimates/pricing on job cards
   standardDiaryEntries: boolean;   // STANDARD may add/edit diary notes + create entries from the diary
+  // Diary financial visibility, per role (ADMIN/owner always sees both — see financeVisibility).
+  managerSeeValues: boolean; managerSeeMargin: boolean;
+  standardSeeValues: boolean; standardSeeMargin: boolean;
 };
 
-const OFF: TenantPermissions = { standardEditPricing: false, standardDiaryEntries: false };
+const OFF: TenantPermissions = {
+  standardEditPricing: false, standardDiaryEntries: false,
+  managerSeeValues: false, managerSeeMargin: false, standardSeeValues: false, standardSeeMargin: false,
+};
 
 export async function getTenantPermissions(groupId: string | null | undefined): Promise<TenantPermissions> {
   if (!groupId) return OFF;
   const g = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { perm_standard_edit_pricing: true, perm_standard_diary_entries: true },
-  })) as { perm_standard_edit_pricing: boolean; perm_standard_diary_entries: boolean } | null;
+    select: {
+      perm_standard_edit_pricing: true, perm_standard_diary_entries: true,
+      perm_manager_see_values: true, perm_manager_see_margin: true,
+      perm_standard_see_values: true, perm_standard_see_margin: true,
+    },
+  })) as any;
   if (!g) return OFF;
-  return { standardEditPricing: !!g.perm_standard_edit_pricing, standardDiaryEntries: !!g.perm_standard_diary_entries };
+  return {
+    standardEditPricing: !!g.perm_standard_edit_pricing, standardDiaryEntries: !!g.perm_standard_diary_entries,
+    managerSeeValues: !!g.perm_manager_see_values, managerSeeMargin: !!g.perm_manager_see_margin,
+    standardSeeValues: !!g.perm_standard_see_values, standardSeeMargin: !!g.perm_standard_see_margin,
+  };
+}
+
+// Diary financial visibility for a user. ADMIN/owner always sees both (they own the business + author
+// the config). SITE_MANAGER / STANDARD are gated by the per-tenant, per-role toggles. THE one place the
+// SSR decides which financial numbers a user may RECEIVE — a role without a flag is never sent them.
+export type FinanceVisibility = { seeValues: boolean; seeMargin: boolean };
+export function financeVisibility(vis: Visibility, perms: TenantPermissions): FinanceVisibility {
+  if (vis.isAdmin) return { seeValues: true, seeMargin: true };
+  if (vis.role === 'SITE_MANAGER') return { seeValues: perms.managerSeeValues, seeMargin: perms.managerSeeMargin };
+  return { seeValues: perms.standardSeeValues, seeMargin: perms.standardSeeMargin };
 }
 
 // Edit an estimate/pricing on a card at `siteId`: managers/admins always; STANDARD only if the

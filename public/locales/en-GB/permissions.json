@@ -9,6 +9,14 @@
     "label": "Mechanics can add diary notes & create entries",
     "desc": "When on, standard users can add/edit diary notes and create new entries from the diary at their location. Off: only managers and admins."
   },
+  "finance": {
+    "heading": "Diary financials",
+    "intro": "Who can see money on the diary. Admins/owners always see everything. Values = per-job value + the “booked” total; margin = the profit total (exposes cost structure, so it’s tighter).",
+    "managerValues": { "label": "Site managers can see values", "desc": "Per-block values and the “booked” total on the diary." },
+    "managerMargin": { "label": "Site managers can see margin", "desc": "The margin total on the diary." },
+    "standardValues": { "label": "Mechanics can see values", "desc": "Per-block values and the “booked” total. Off by default." },
+    "standardMargin": { "label": "Mechanics can see margin", "desc": "The margin total. Off by default — margin exposes cost." }
+  },
   "on": "On",
   "off": "Off",
   "save": "Save permissions",

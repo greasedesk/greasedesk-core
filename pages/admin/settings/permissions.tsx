@@ -11,7 +11,10 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 
-type PageProps = { standardEditPricing: boolean; standardDiaryEntries: boolean };
+type PageProps = {
+  standardEditPricing: boolean; standardDiaryEntries: boolean;
+  managerSeeValues: boolean; managerSeeMargin: boolean; standardSeeValues: boolean; standardSeeMargin: boolean;
+};
 
 function Toggle({ on, onChange, label, desc }: { on: boolean; onChange: (v: boolean) => void; label: string; desc: string }) {
   const { t } = useTranslation('permissions');
@@ -32,10 +35,14 @@ function Toggle({ on, onChange, label, desc }: { on: boolean; onChange: (v: bool
   );
 }
 
-export default function PermissionsSettings({ standardEditPricing, standardDiaryEntries }: PageProps) {
+export default function PermissionsSettings(props: PageProps) {
   const { t } = useTranslation('permissions');
-  const [pricing, setPricing] = useState(standardEditPricing);
-  const [diary, setDiary] = useState(standardDiaryEntries);
+  const [pricing, setPricing] = useState(props.standardEditPricing);
+  const [diary, setDiary] = useState(props.standardDiaryEntries);
+  const [mgrValues, setMgrValues] = useState(props.managerSeeValues);
+  const [mgrMargin, setMgrMargin] = useState(props.managerSeeMargin);
+  const [stdValues, setStdValues] = useState(props.standardSeeValues);
+  const [stdMargin, setStdMargin] = useState(props.standardSeeMargin);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -44,7 +51,7 @@ export default function PermissionsSettings({ standardEditPricing, standardDiary
     try {
       const res = await fetch('/api/permissions', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ standardEditPricing: pricing, standardDiaryEntries: diary }),
+        body: JSON.stringify({ standardEditPricing: pricing, standardDiaryEntries: diary, managerSeeValues: mgrValues, managerSeeMargin: mgrMargin, standardSeeValues: stdValues, standardSeeMargin: stdMargin }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); setBusy(false); return; }
@@ -66,6 +73,13 @@ export default function PermissionsSettings({ standardEditPricing, standardDiary
         <Toggle on={pricing} onChange={setPricing} label={t('editPricing.label')} desc={t('editPricing.desc')} />
         <Toggle on={diary} onChange={setDiary} label={t('diaryEntries.label')} desc={t('diaryEntries.desc')} />
 
+        <h3 className="text-sm font-semibold text-ink mt-6 mb-1">{t('finance.heading')}</h3>
+        <p className="text-sm text-muted mb-2">{t('finance.intro')}</p>
+        <Toggle on={mgrValues} onChange={setMgrValues} label={t('finance.managerValues.label')} desc={t('finance.managerValues.desc')} />
+        <Toggle on={mgrMargin} onChange={setMgrMargin} label={t('finance.managerMargin.label')} desc={t('finance.managerMargin.desc')} />
+        <Toggle on={stdValues} onChange={setStdValues} label={t('finance.standardValues.label')} desc={t('finance.standardValues.desc')} />
+        <Toggle on={stdMargin} onChange={setStdMargin} label={t('finance.standardMargin.label')} desc={t('finance.standardMargin.desc')} />
+
         <div className="mt-5">
           <button onClick={save} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 w-full sm:w-auto">
             {busy ? t('saving') : t('save')}
@@ -81,12 +95,20 @@ export const getServerSideProps = withI18n(['permissions'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
-    select: { perm_standard_edit_pricing: true, perm_standard_diary_entries: true },
-  })) as { perm_standard_edit_pricing: boolean; perm_standard_diary_entries: boolean } | null;
+    select: {
+      perm_standard_edit_pricing: true, perm_standard_diary_entries: true,
+      perm_manager_see_values: true, perm_manager_see_margin: true,
+      perm_standard_see_values: true, perm_standard_see_margin: true,
+    },
+  })) as any;
   return {
     props: {
       standardEditPricing: !!g?.perm_standard_edit_pricing,
       standardDiaryEntries: !!g?.perm_standard_diary_entries,
+      managerSeeValues: !!g?.perm_manager_see_values,
+      managerSeeMargin: !!g?.perm_manager_see_margin,
+      standardSeeValues: !!g?.perm_standard_see_values,
+      standardSeeMargin: !!g?.perm_standard_see_margin,
     },
   };
 });
