@@ -583,6 +583,9 @@ model JobCard {
   flag_customer_car Boolean @default(false)
   flag_mot          Boolean @default(false) // MOT bay needed
   flag_diag         Boolean @default(false) // Diagnostic
+  // Warranty / comeback: work redone free (a job came back). REAL cost (parts/labour still on the
+  // estimate) but ZERO revenue — reporting reads revenue as 0 when set, cost unchanged. Faithful margin.
+  is_comeback       Boolean @default(false)
 
   // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
   stage_details_done  Boolean @default(false) // 1. Job Card (details/estimate)

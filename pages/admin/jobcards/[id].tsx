@@ -44,6 +44,7 @@ type PageProps = {
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
   vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
   flags: string[];
+  isComeback: boolean;
   garageNotes: string;
   lines: EstimateLine[];
   catalogue: CatalogueLite[];
@@ -92,6 +93,7 @@ export default function JobCardDetailPage(props: PageProps) {
         owner={props.owner}
         vehicle={props.vehicle}
         flags={props.flags}
+        isComeback={props.isComeback}
         garageNotes={props.garageNotes}
         currency={props.currency}
         locale={props.locale}
@@ -295,7 +297,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
         mileageIn: row.odometer_in ?? row.vehicle?.mileage_at_create ?? null,
         mileageOut: row.odometer_out ?? null,
       },
-      flags,
+      flags, isComeback: !!row.is_comeback,
       garageNotes: row.garage_notes ?? '',
       lines, catalogue, fixedServices, tiers, promos,
       hasEstimate: (row.items as any[]).length > 0,

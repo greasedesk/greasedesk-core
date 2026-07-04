@@ -124,6 +124,12 @@
   },
   "createdAt": "Created {{when}}",
   "cancelledBanner": "This job is cancelled — everything is read-only.",
+  "comeback": {
+    "label": "Warranty / comeback (no charge)",
+    "hint": "Work redone free — the parts & labour below stay as the real cost, but the job counts as £0 revenue on reports.",
+    "banner": "Warranty / comeback — this job counts as £0 revenue (cost still counted) on reports.",
+    "invoiceNote": "This is a comeback — no charge to the customer; it counts as £0 revenue on reports."
+  },
   "delete": {
     "button": "Delete card",
     "confirmTitle": "Delete this job card?",
@@ -224,6 +230,7 @@
     "booking": { "moved": "Booking scheduled / moved", "removed": "Removed from the diary" },
     "owner": { "edited": "Customer details edited" },
     "vehicle": { "edited": "Vehicle details edited" },
-    "invoice": { "minted": "Invoice raised", "paid": "Invoice marked paid" }
+    "invoice": { "minted": "Invoice raised", "paid": "Invoice marked paid" },
+    "comeback": { "marked": "Marked as warranty / comeback", "cleared": "Comeback flag removed" }
   }
 }

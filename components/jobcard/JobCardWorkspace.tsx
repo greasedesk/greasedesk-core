@@ -36,6 +36,7 @@ type Props = {
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
   vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
   flags: string[];
+  isComeback: boolean;
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
@@ -91,6 +92,7 @@ export default function JobCardWorkspace(p: Props) {
 
   const setStage = (stage: StageKey, done: boolean) => run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }));
   const setStatus = (to: JobStatus) => run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }));
+  const setComeback = (v: boolean) => run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }));
 
   const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: p.tabsState[k].reachable, complete: p.tabsState[k].complete }));
 
@@ -152,6 +154,7 @@ export default function JobCardWorkspace(p: Props) {
     return (
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
+        {p.isComeback && <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>}
         {p.invoice ? (
           <>
             <Link href={`/admin/invoices/${p.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
@@ -177,6 +180,7 @@ export default function JobCardWorkspace(p: Props) {
   return (
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
+      {p.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
       <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
@@ -191,6 +195,14 @@ export default function JobCardWorkspace(p: Props) {
             onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
           <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
+          {/* Warranty/comeback — commercial decision (manager/admin). Makes the job zero-revenue for
+              reporting; the estimate lines stay as the true COST. */}
+          {p.canManage && !cancelled && (
+            <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
+              <input type="checkbox" className="w-5 h-5 mt-0.5" checked={p.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
+              <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
+            </label>
+          )}
         </div>
       )}
 

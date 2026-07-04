@@ -19,6 +19,8 @@ export type AuditAction =
   | 'booking.removed'
   | 'owner.edited'
   | 'vehicle.edited'
+  | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
+  | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'
   | 'invoice.paid';
 
