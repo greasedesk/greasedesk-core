@@ -28,7 +28,7 @@ import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 const PX_PER_MIN = 1;
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
+type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type PageProps = {
@@ -253,7 +253,10 @@ export default function DiaryPage(props: PageProps) {
         {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
             overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
         {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
-        {view === 'day' && c.serviceSummary && height > 54 && <span className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{c.serviceSummary}</span>}
+        {/* Day view lists ALL service titles, one per line (wraps + clips to block height). */}
+        {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
+          <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
+        ))}
       </div>
     );
   }
@@ -863,10 +866,11 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     const items = c.items as any[];
     const fixedNames = items.filter((it) => it.item_type === 'fixed').map((it) => firstLine(it.description)).filter(Boolean);
     const labels = fixedNames.length ? fixedNames : items.map((it) => firstLine(it.description)).filter(Boolean);
-    const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : '';
+    const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : ''; // week: compact
+    const services = labels; // day: full list, one per line
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
-      reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary,
+      reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string, valuePennies: totals.total_pennies,
       segments: fp.segments,
