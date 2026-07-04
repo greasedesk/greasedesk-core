@@ -28,7 +28,7 @@ import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 const PX_PER_MIN = 1;
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
+type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type PageProps = {
@@ -112,6 +112,9 @@ export default function DiaryPage(props: PageProps) {
   // — footprints still live inside working hours; out-of-hours is display space only.
   const DAY_MIN = 24 * 60;                                    // 1440 — full day height in px (PX_PER_MIN=1)
   const HOURS = Array.from({ length: 25 }, (_, i) => i);      // 0..24 (labels + gridlines)
+  // Resting window: working hours + ~1h either side (e.g. 09–18 → shows 08:00–19:00). The grid is still
+  // fully scrollable to 00:00/24:00 — this only sets how much is visible at rest.
+  const REST_MIN = Math.min(DAY_MIN, (closeHour - openHour + 2) * 60);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Land on the working day: 09:00 (open) near the top with ~1h of pre-open context (08:00) above it.
@@ -244,10 +247,12 @@ export default function DiaryPage(props: PageProps) {
         onTouchMove={cancelPress}
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
         className="diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none"
-        title={`${c.reg} · ${c.customer} · ${c.resourceName} · ${timeLabel(c)}`}
+        title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
       >
-        <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5">{c.reg}</span>
-        {view === 'day' && height > 40 && <span className="block text-[10px] text-muted px-1 truncate">{c.customer}</span>}
+        <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
+        {height > 40 && <span className="block text-[10px] text-muted px-1 truncate">{c.customer}</span>}
+        {/* Day view has wide columns — add the service title so the mechanic sees what each job is. */}
+        {view === 'day' && c.serviceSummary && height > 54 && <span className="block text-[10px] text-ink/80 px-1 truncate">{c.serviceSummary}</span>}
       </div>
     );
   }
@@ -298,11 +303,13 @@ export default function DiaryPage(props: PageProps) {
           </div>
         </div>
 
-        {/* Month header (both views) + date header (day view) — Outlook-style, dynamic from the anchor. */}
+        {/* Header — Outlook-style, dynamic from the anchor. WEEK: month ("June 2026", where dates are
+            less prominent). DAY: the full date + weekday only (the month header would be redundant). */}
         <div className="text-center mb-4">
-          <div className="text-xl font-semibold text-ink tracking-tight">{monthLabel}</div>
-          {view === 'day' && (
-            <div className="mt-1">
+          {view === 'week' ? (
+            <div className="text-xl font-semibold text-ink tracking-tight">{monthLabel}</div>
+          ) : (
+            <div>
               <div className="text-lg font-bold text-ink">{dateLong}</div>
               <div className="text-sm text-muted">{weekdayLong}</div>
             </div>
@@ -328,7 +335,7 @@ export default function DiaryPage(props: PageProps) {
             )}
             {/* ONE scroll pane: 24h tall (vertical scroll) + week columns (horizontal). Column headers are
                 sticky-top, the time axis sticky-left. On load it lands scrolled to the working day. */}
-            <div ref={scrollRef} className="overflow-auto border border-line rounded-lg" style={{ maxHeight: '72vh' }}>
+            <div ref={scrollRef} className="overflow-auto border border-line rounded-lg" style={{ height: (REST_MIN + 28) * PX_PER_MIN, maxHeight: '78vh' }}>
               <div className="flex min-w-full">
                 <div className="w-14 shrink-0 sticky left-0 z-20 bg-surface">
                   <div className="h-7 sticky top-0 z-30 bg-surface border-b border-r border-line" />
@@ -828,7 +835,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
       select: {
         id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true,
         resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
-        items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true } },
+        items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
       },
     }) as Promise<any[]>,
     prisma.diaryNote.findMany({
@@ -849,9 +856,16 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
     // Occupancy footprint from the WORKING duration (source of truth; fallback (end - start) pre-backfill).
     const mins = c.booking_duration_minutes ?? Math.round(((c.end_at as Date).getTime() - (c.start_at as Date).getTime()) / 60000);
     const fp = computeFootprint(startAt, mins, openHour, closeHour, openDays, breaks);
+    // Day-view block label: the clean service TITLE (first line of a fixed line = the Title per the
+    // title model). Prefer fixed services; else fall back to the labour/parts line names. "First +N".
+    const firstLine = (s: string) => (s || '').split('\n')[0].trim();
+    const items = c.items as any[];
+    const fixedNames = items.filter((it) => it.item_type === 'fixed').map((it) => firstLine(it.description)).filter(Boolean);
+    const labels = fixedNames.length ? fixedNames : items.map((it) => firstLine(it.description)).filter(Boolean);
+    const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : '';
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
-      reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—',
+      reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string, valuePennies: totals.total_pennies,
       segments: fp.segments,
