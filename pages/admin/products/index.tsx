@@ -48,7 +48,7 @@ export default function ProductsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const [newTier, setNewTier] = useState('');
-  const [editTier, setEditTier] = useState<{ id: string; name: string; position: string } | null>(null);
+  const [editTier, setEditTier] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -131,14 +131,33 @@ export default function ProductsPage() {
   async function addTier() { if (!newTier.trim()) return; setBusy(true); try { const r = await fetch('/api/service-tiers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newTier.trim() }) }); if (r.ok) { setNewTier(''); await load(); } } finally { setBusy(false); } }
   async function tierActive(tt: Tier, active: boolean) { setBusy(true); try { const r = await fetch('/api/service-tiers', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: tt.id, active }) }); if (r.ok) await load(); } finally { setBusy(false); } }
   async function tierDelete(tt: Tier) { if (!confirm(t('tiers.confirmDelete'))) return; setBusy(true); try { const r = await fetch(`/api/service-tiers?id=${encodeURIComponent(tt.id)}`, { method: 'DELETE' }); if (r.ok) await load(); } finally { setBusy(false); } }
-  // Rename + reorder in one PATCH (identity preserved → attached tier-prices survive). Position is a
-  // free-form sort key (like resource display_order); all three tier renders order by it.
+  // Rename via the existing PATCH — an UPDATE (not delete+add), so the tier keeps its identity and its
+  // attached CatalogueItemTierPrice rows survive.
   async function saveTierEdit() {
     if (!editTier || !editTier.name.trim()) return;
     setBusy(true);
     try {
-      const r = await fetch('/api/service-tiers', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: editTier.id, name: editTier.name.trim(), position: Number(editTier.position || 0) }) });
+      const r = await fetch('/api/service-tiers', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: editTier.id, name: editTier.name.trim() }) });
       if (r.ok) { setEditTier(null); await load(); }
+    } finally { setBusy(false); }
+  }
+  // ▲▼ reorder: move a tier one slot, then reindex positions 0..N-1 in the new order (fixes legacy
+  // all-zero positions in one pass) and PATCH only the rows whose position changed. The tiers list,
+  // fixed-product price grid, and card tier-picker all sort by position, so the order flows to all three.
+  async function moveTier(id: string, dir: -1 | 1) {
+    const ordered = [...tiers];
+    const i = ordered.findIndex((x) => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ordered.length) return;
+    [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
+    setBusy(true);
+    try {
+      for (let k = 0; k < ordered.length; k++) {
+        if (ordered[k].position !== k) {
+          await fetch('/api/service-tiers', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: ordered[k].id, position: k }) });
+        }
+      }
+      await load();
     } finally { setBusy(false); }
   }
 
@@ -163,19 +182,22 @@ export default function ProductsPage() {
           <summary className="cursor-pointer font-semibold text-ink">{t('tiers.heading')} <span className="text-muted font-normal text-sm">({tiers.length})</span></summary>
           <p className="text-xs text-muted mt-2">{t('tiers.intro')}</p>
           <ul className="mt-3 space-y-1">
-            {tiers.map((tt) => (
+            {tiers.map((tt, idx) => (
               <li key={tt.id} className={`flex flex-wrap items-center gap-2 text-sm ${tt.active ? '' : 'opacity-60'}`}>
                 {editTier?.id === tt.id ? (
                   <>
                     <input value={editTier.name} onChange={(e) => setEditTier({ ...editTier, name: e.target.value })} placeholder={t('tiers.name')} className="flex-1 min-w-[8rem] bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink" autoFocus />
-                    <input value={editTier.position} onChange={(e) => setEditTier({ ...editTier, position: e.target.value })} type="number" title={t('tiers.order')} className="w-16 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink" />
                     <button onClick={saveTierEdit} disabled={busy || !editTier.name.trim()} className="text-xs bg-accent hover:bg-accent-hover text-white rounded px-2 py-1 disabled:opacity-50">{t('tiers.save')}</button>
                     <button onClick={() => setEditTier(null)} disabled={busy} className="text-xs text-muted hover:text-ink">{t('tiers.cancel')}</button>
                   </>
                 ) : (
                   <>
-                    <span className="text-ink flex-1">{tt.name}<span className="text-muted ml-2 text-xs">· {t('tiers.order')} {tt.position}</span>{!tt.active && <span className="ml-2 text-[10px] uppercase text-muted">{t('tiers.archived')}</span>}</span>
-                    <button onClick={() => setEditTier({ id: tt.id, name: tt.name, position: String(tt.position) })} disabled={busy} className="text-xs text-accent hover:underline">{t('tiers.edit')}</button>
+                    <span className="flex flex-col leading-none mr-1">
+                      <button onClick={() => moveTier(tt.id, -1)} disabled={busy || idx === 0} aria-label={t('tiers.moveUp')} className="text-muted hover:text-ink disabled:opacity-30 text-xs leading-none">▲</button>
+                      <button onClick={() => moveTier(tt.id, 1)} disabled={busy || idx === tiers.length - 1} aria-label={t('tiers.moveDown')} className="text-muted hover:text-ink disabled:opacity-30 text-xs leading-none">▼</button>
+                    </span>
+                    <span className="text-ink flex-1">{tt.name}{!tt.active && <span className="ml-2 text-[10px] uppercase text-muted">{t('tiers.archived')}</span>}</span>
+                    <button onClick={() => setEditTier({ id: tt.id, name: tt.name })} disabled={busy} className="text-xs text-accent hover:underline">{t('tiers.edit')}</button>
                     {tt.active
                       ? <button onClick={() => tierActive(tt, false)} disabled={busy} className="text-xs text-muted hover:text-ink">{t('tiers.archive')}</button>
                       : <button onClick={() => tierActive(tt, true)} disabled={busy} className="text-xs text-accent hover:underline">{t('tiers.restore')}</button>}
