@@ -250,9 +250,10 @@ export default function DiaryPage(props: PageProps) {
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
       >
         <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
-        {height > 40 && <span className="block text-[10px] text-muted px-1 truncate">{c.customer}</span>}
-        {/* Day view has wide columns — add the service title so the mechanic sees what each job is. */}
-        {view === 'day' && c.serviceSummary && height > 54 && <span className="block text-[10px] text-ink/80 px-1 truncate">{c.serviceSummary}</span>}
+        {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
+            overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
+        {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
+        {view === 'day' && c.serviceSummary && height > 54 && <span className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{c.serviceSummary}</span>}
       </div>
     );
   }
