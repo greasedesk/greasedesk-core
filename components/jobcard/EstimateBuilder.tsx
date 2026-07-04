@@ -220,6 +220,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     if (!promo) return;
     const estLines = lines.map((l) => ({
       catalogueItemId: l.catalogue_item_id ?? null,
+      title: (l.description || '').split('\n')[0].trim(), // line heading — title-match fallback for refless lines
       exPennies: Math.round(Number(l.unit_price || 0) * Math.max(0, Number(l.qty || 0)) * 100),
       vatable: l.vatable,
     }));

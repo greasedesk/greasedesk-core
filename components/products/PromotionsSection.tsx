@@ -10,7 +10,7 @@ import { useTranslation } from 'next-i18next';
 import { formatMoney } from '@/lib/format-money';
 
 type PromoType = 'fixed' | 'percentage';
-type Promo = { id: string; code: string; label: string; type: PromoType; amount: number; active: boolean; targetIds: string[] };
+type Promo = { id: string; code: string; label: string; type: PromoType; amount: number; active: boolean; targets: { id: string; title: string }[] };
 type ProductLite = { id: string; code: string; title: string | null; name: string };
 type FormState = { id: string | null; code: string; label: string; type: PromoType; amount: string; active: boolean; targetIds: string[] };
 
@@ -35,7 +35,7 @@ export default function PromotionsSection({ products, defaultVatRate, vatRegiste
   useEffect(() => { load(); }, []);
 
   const openAdd = () => { setMsg(null); setForm({ id: null, code: '', label: '', type: 'fixed', amount: '', active: true, targetIds: [] }); };
-  const openEdit = (p: Promo) => { setMsg(null); setForm({ id: p.id, code: p.code, label: p.label, type: p.type, amount: String(p.amount), active: p.active, targetIds: p.targetIds }); };
+  const openEdit = (p: Promo) => { setMsg(null); setForm({ id: p.id, code: p.code, label: p.label, type: p.type, amount: String(p.amount), active: p.active, targetIds: p.targets.map((t) => t.id) }); };
 
   const amountNum = Number(form?.amount || 0);
   const canSave = !!form && form.code.trim() !== '' && form.label.trim() !== '' && Number.isFinite(amountNum) && amountNum >= 0
@@ -56,7 +56,7 @@ export default function PromotionsSection({ products, defaultVatRate, vatRegiste
 
   const toggleTarget = (id: string) => setForm((f) => f && ({ ...f, targetIds: f.targetIds.includes(id) ? f.targetIds.filter((x) => x !== id) : [...f.targetIds, id] }));
   const amountLabel = (p: Promo) => p.type === 'percentage'
-    ? `${p.amount}% · ${p.targetIds.length} ${t('productsWord')}`
+    ? `${p.amount}% · ${p.targets.length} ${t('productsWord')}`
     : `${money(p.amount)} ${t('incVat')}${vatRegistered ? ` · ${money(p.amount / (1 + defaultVatRate / 100))} ${t('exVat')}` : ''}`;
 
   return (

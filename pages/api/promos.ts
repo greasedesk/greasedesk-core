@@ -24,11 +24,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') {
     const [promoRows, vat] = await Promise.all([
-      prisma.promo.findMany({ where: { group_id: groupId }, orderBy: [{ active: 'desc' }, { code: 'asc' }], select: { id: true, code: true, label: true, promo_type: true, amount: true, active: true, targets: { select: { catalogue_item_id: true } } } }) as Promise<any[]>,
+      prisma.promo.findMany({ where: { group_id: groupId }, orderBy: [{ active: 'desc' }, { code: 'asc' }], select: { id: true, code: true, label: true, promo_type: true, amount: true, active: true, targets: { select: { item: { select: { id: true, title: true, name: true } } } } } }) as Promise<any[]>,
       getTenantVat(groupId),
     ]);
     return res.status(200).json({
-      promos: promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), active: p.active, targetIds: p.targets.map((t: any) => t.catalogue_item_id) })),
+      promos: promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), active: p.active, targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) })),
       defaultVatRate: vat.defaultRate, vatRegistered: vat.registered,
     });
   }
