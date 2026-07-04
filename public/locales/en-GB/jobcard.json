@@ -122,12 +122,13 @@
   "cancelledBanner": "This job is cancelled — everything is read-only.",
   "delete": {
     "button": "Delete card",
-    "confirmQ": "Permanently delete this card and its data? This cannot be undone.",
+    "confirmTitle": "Delete this job card?",
+    "confirmBody": "Permanently delete this card, its estimate, its diary booking, and its history? This cannot be undone.",
     "confirmYes": "Delete",
     "cancel": "Cancel",
     "working": "Deleting…",
     "failed": "Could not delete the card.",
-    "invoiceBlocked": "This card has an issued invoice and can’t be deleted."
+    "invoiceBlocked": "This card has an invoice and can’t be deleted — cancel it instead."
   },
   "tab": {
     "details": "Customer Details",

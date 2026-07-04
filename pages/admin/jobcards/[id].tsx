@@ -112,12 +112,13 @@ export default function JobCardDetailPage(props: PageProps) {
   );
 }
 
-// Admin-only hard-delete (distinct from cancel). Two-step inline confirm; the server re-enforces
-// admin + the issued-invoice guard, so this UI can't authorise anything on its own.
+// Admin-only hard-delete (distinct from cancel). Opens a confirmation MODAL that NAMES exactly what's
+// destroyed — weightier than cancel because delete is irreversible. The server re-enforces admin + the
+// any-invoice guard, so this UI can't authorise anything on its own.
 function DeleteCardButton({ jobCardId, hasInvoice }: { jobCardId: string; hasInvoice: boolean }) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
-  const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -129,23 +130,27 @@ function DeleteCardButton({ jobCardId, hasInvoice }: { jobCardId: string; hasInv
     setBusy(true); setErr(null);
     const res = await fetch(`/api/jobcard?id=${jobCardId}`, { method: 'DELETE' });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setBusy(false); setConfirming(false); setErr(data?.message || t('delete.failed')); return; }
+    if (!res.ok) { setBusy(false); setErr(data?.message || t('delete.failed')); return; }
     router.replace('/admin/jobcards');
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      {!confirming ? (
-        <button onClick={() => { setErr(null); setConfirming(true); }} className="text-sm text-danger hover:underline">{t('delete.button')}</button>
-      ) : (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-ink">{t('delete.confirmQ')}</span>
-          <button disabled={busy} onClick={del} className="text-sm bg-danger text-white rounded-lg px-3 py-1.5 disabled:opacity-50">{busy ? t('delete.working') : t('delete.confirmYes')}</button>
-          <button disabled={busy} onClick={() => setConfirming(false)} className="text-sm text-muted hover:text-ink">{t('delete.cancel')}</button>
+    <>
+      <button onClick={() => { setErr(null); setOpen(true); }} className="text-sm text-danger hover:underline">{t('delete.button')}</button>
+      {open && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !busy && setOpen(false)}>
+          <div className="bg-surface w-full max-w-md rounded-2xl border border-line shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-ink mb-2">{t('delete.confirmTitle')}</h2>
+            <p className="text-sm text-muted mb-5">{t('delete.confirmBody')}</p>
+            {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-4">{err}</div>}
+            <div className="flex justify-end gap-2">
+              <button disabled={busy} onClick={() => setOpen(false)} className="text-sm text-muted hover:text-ink px-4 py-2">{t('delete.cancel')}</button>
+              <button disabled={busy} onClick={del} className="text-sm bg-danger text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">{busy ? t('delete.working') : t('delete.confirmYes')}</button>
+            </div>
+          </div>
         </div>
       )}
-      {err && <span className="text-xs text-danger">{err}</span>}
-    </div>
+    </>
   );
 }
 

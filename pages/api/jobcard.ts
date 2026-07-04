@@ -203,27 +203,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Hard-delete (admin only) — distinct from cancel (which keeps a read-only record). Removes the card
-  // and everything that hangs off it: estimate lines + photos (FK cascade) and the polymorphic audit
-  // trail (no FK — deleted explicitly). The booking lives on the card row itself, so deleting the card
-  // frees the diary slot. The VEHICLE + ownership edge are NOT touched (car-first: the car outlives any
-  // one job). REFUSED when an issued/paid Invoice is attached — issued VAT invoices are legal records.
+  // and everything that hangs off it. Children are deleted EXPLICITLY inside the tx (not relying on FK
+  // cascade) so the destruction is auditable in one place: estimate lines, photos, and the polymorphic
+  // audit trail (no FK). The booking lives on the card row itself, so deleting the card frees the diary
+  // slot. The VEHICLE + ownership edge are NOT touched (car-first: the car outlives any one job).
+  // REFUSED if ANY Invoice row exists — protects the sequential VAT numbering chain (real invoiced
+  // cards must be cancelled, not deleted).
   if (req.method === 'DELETE') {
     if (!vis.isAdmin) return res.status(403).json({ message: 'Admin access required to delete a job card.' });
     const id = (req.query.id as string) || (req.body && (req.body.id as string)) || '';
     if (!id) return res.status(400).json({ message: 'Missing job card id.' });
 
-    // Group-scoped (admin sees every group site). Invoice presence = issued/paid (no draft invoices exist).
+    // Group-scoped (admin sees every group site). ANY invoice row blocks (issued|paid — no drafts exist).
     const card = await prisma.jobCard.findFirst({
       where: { id, site_id: { in: vis.siteIds } },
       select: { id: true, invoice: { select: { id: true } } },
     });
     if (!card) return res.status(404).json({ message: 'Job card not found.' });
-    if (card.invoice) return res.status(409).json({ message: 'This card has an issued invoice and can’t be deleted.' });
+    if (card.invoice) return res.status(409).json({ message: 'This card has an invoice and can’t be deleted. Cancel it instead.' });
 
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await tx.jobCardItem.deleteMany({ where: { job_card_id: id } });   // estimate lines — explicit
+        await tx.jobCardPhoto.deleteMany({ where: { job_card_id: id } });  // intake/completion photos — explicit
         await tx.auditLog.deleteMany({ where: { group_id: groupId, entity: 'job_card', entity_id: id } });
-        await tx.jobCard.delete({ where: { id } }); // JobCardItem + JobCardPhoto cascade via FK
+        await tx.jobCard.delete({ where: { id } }); // booking fields live on the row → diary slot freed
       });
     } catch (error) {
       console.error('Job Card Delete Error:', error);
