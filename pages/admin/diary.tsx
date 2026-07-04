@@ -536,8 +536,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hours, setHours] = useState('1');
-  // job fields
+  // job fields — Registration + Customer anchor the card; the rest are OPTIONAL (capture-if-available so
+  // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
+  const [vin, setVin] = useState(''); const [phone, setPhone] = useState(''); const [email, setEmail] = useState('');
   const [liftId, setLiftId] = useState(defaultResourceId ?? resources[0]?.id ?? '');
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
@@ -551,7 +553,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     setBusy(true); setErr(null);
     const res = await fetch('/api/jobcard', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ registration: reg, customerName: cust, mileage: mileage || undefined, siteId, resourceId: liftId, startAt: info.startAt, endAt }),
+      body: JSON.stringify({ registration: reg, customerName: cust, mileage: mileage || undefined, vin: vin.trim() || undefined, phone: phone.trim() || undefined, email: email.trim() || undefined, siteId, resourceId: liftId, startAt: info.startAt, endAt }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
@@ -583,7 +585,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold text-ink">{t('create.title')}</h2>
         <p className="text-sm text-muted mb-4">{when}</p>
         {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
@@ -597,17 +599,30 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
 
         {mode === 'job' && (
           <div className="space-y-3">
-            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} onChange={(e) => setReg(e.target.value)} /></div>
+            {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
+            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>{t('create.vin')}</label><input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value)} /></div>
+            </div>
+            {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupOwner')}</div>
             <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} value={cust} onChange={(e) => setCust(e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>{t('create.mileage')}</label><input className={inputCls} type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.email')}</label><input className={inputCls} type="email" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+            </div>
+            {/* Booking */}
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupBooking')}</div>
+            <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.lift')}</label>
                 <select className={inputCls} value={liftId} onChange={(e) => setLiftId(e.target.value)}>
                   {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>
+              {durationField}
             </div>
-            {durationField}
             <div className="flex gap-2 pt-1">
               <button onClick={createJob} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
               <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
