@@ -553,6 +553,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   // the reg we filled from, so switching to an unknown reg clears the STALE fill (but never a genuinely
   // hand-typed new car). Display convenience only — the create path stays authoritative for a known reg.
   const lastLookedRef = useRef<string>(''); const autoFilledRef = useRef<string | null>(null);
+  // DVSA MOT metadata captured on lookup (not shown as fields) → sent on create for the banked reminders.
+  const motMetaRef = useRef<{ motExpiry: string | null; lastMotMileage: number | null }>({ motExpiry: null, lastMotMileage: null });
   // Reg blur: canonicalise VISIBLY (uppercase, spaces stripped) so the user sees the stored form, then
   // look the car up on the canonical key.
   function onRegBlur() {
@@ -576,22 +578,31 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         setVin(v.vin || ''); setMileage(v.mileage != null ? String(v.mileage) : '');
         setMake(v.make || ''); setModel(v.model || ''); setVColour(v.colour || '');
         setFuel(v.fuel || ''); setYear(v.year != null ? String(v.year) : ''); setEngineCc(v.engineCc != null ? String(v.engineCc) : '');
+        motMetaRef.current = { motExpiry: null, lastMotMileage: null }; // returning car — record already holds it
         autoFilledRef.current = r;
         return;
       }
-      // New car: clear any stale auto-fill from a prior known reg, then try DVLA VES for vehicle data.
+      // New car: clear any stale auto-fill from a prior known reg, then enrich from DVSA / DVLA.
       if (autoFilledRef.current) {
         setCust(''); setPhone(''); setEmail(''); setVin(''); setMileage('');
         setMake(''); setModel(''); setVColour(''); setFuel(''); setYear(''); setEngineCc('');
         autoFilledRef.current = null;
       }
+      motMetaRef.current = { motExpiry: null, lastMotMileage: null };
       setDvlaBusy(true);
       try {
-        const dres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`);
-        const d = dres.ok ? await dres.json() : { found: false };
-        if (d.found) { // fill make/colour/year/fuel/engine; MODEL stays manual (not in free VES)
-          if (d.make) setMake(d.make); if (d.colour) setVColour(d.colour); if (d.fuel) setFuel(d.fuel);
-          if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
+        // DVSA MOT History first (richer — make AND model + MOT metadata); DVLA VES as a fallback.
+        let d: any = { found: false };
+        const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`).catch(() => null);
+        if (sres?.ok) d = await sres.json();
+        if (!d.found) {
+          const dres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`).catch(() => null);
+          if (dres?.ok) d = await dres.json();
+        }
+        if (d.found) { // fill what the source gave; blank model (DVLA) stays manual
+          if (d.make) setMake(d.make); if (d.model) setModel(d.model); if (d.colour) setVColour(d.colour);
+          if (d.fuel) setFuel(d.fuel); if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
+          motMetaRef.current = { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null };
         }
       } finally { setDvlaBusy(false); }
     } catch { /* best-effort — a failed pre-fill / DVLA error never blocks manual entry */ }
@@ -619,6 +630,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
         make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
         fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
+        motExpiry: motMetaRef.current.motExpiry ?? undefined, lastMotMileage: motMetaRef.current.lastMotMileage ?? undefined,
         siteId, resourceId: liftId, startAt: info.startAt, endAt,
       }),
     });

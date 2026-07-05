@@ -434,6 +434,9 @@ model Vehicle {
   engine_code       String?
   engine_cc         Int? // DVLA VES engine capacity (cc) — also the seed for a future auto-tier hook
   year              Int? // DVLA VES (yearOfManufacture)
+  // DVSA MOT History — captured for the banked service-reminder feature (mot_expiry) + mileage trend.
+  mot_expiry        DateTime? @db.Date
+  last_mot_mileage  Int?
   mileage_at_create Int?
   created_at        DateTime @default(now())
 

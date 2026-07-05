@@ -28,8 +28,10 @@ type CreateJobCardBody = {
   email?: string;
   vin?: string;
   mileage?: number | string;
-  // Vehicle data (make/colour/year/fuel/engineCc auto-fill from DVLA VES; model is manual).
+  // Vehicle data (make/model/colour/year/fuel/engineCc auto-fill from DVSA MOT / DVLA VES).
   make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
+  // DVSA MOT metadata (for the banked reminder feature): ISO date + miles.
+  motExpiry?: string; lastMotMileage?: number | string;
   flag_urgent?: boolean;
   flag_sales_car?: boolean;
   flag_customer_car?: boolean;
@@ -48,6 +50,12 @@ const intOrNull = (v: unknown): number | null => {
   if (v === undefined || v === null || `${v}`.trim() === '') return null;
   const n = Number(v);
   return Number.isInteger(n) && n >= 0 ? n : null;
+};
+// Coerce an optional ISO/parseable date (MOT expiry) to a Date, else null. Never throws on bad input.
+const dateOrNull = (v: unknown): Date | null => {
+  if (v === undefined || v === null || `${v}`.trim() === '') return null;
+  const t = Date.parse(`${v}`);
+  return Number.isFinite(t) ? new Date(t) : null;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -172,6 +180,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               fuel_type: body.fuel?.trim() || null,
               year: intOrNull(body.year),
               engine_cc: intOrNull(body.engineCc),
+              mot_expiry: dateOrNull(body.motExpiry),
+              last_mot_mileage: intOrNull(body.lastMotMileage),
               mileage_at_create: mileage,
             },
             select: { id: true },
