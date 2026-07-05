@@ -6,13 +6,14 @@
  * JobCard (and find-or-creates Customer + Vehicle) scoped to the session's group_id/site_id.
  * Auth-guarded in getServerSideProps, mirroring the Settings page.
  */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { normalizeReg } from '@/lib/vehicle-identity';
 
 const inputClass =
   'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
@@ -43,6 +44,12 @@ export default function NewJobCardPage() {
     email: '',
     vin: '',
     mileage: '',
+    make: '',
+    model: '',
+    colour: '',
+    year: '',
+    fuel: '',
+    engineCc: '',
   });
   const [flags, setFlags] = useState<Flags>({
     flag_urgent: false,
@@ -63,6 +70,48 @@ export default function NewJobCardPage() {
     setFlags((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  // Reg auto-fill: on blur, canonicalise the reg then look it up — OUR records first (returning car →
+  // fill owner + vehicle), else DVSA MOT History (make/model/colour/fuel/engine). Best-effort; a failure
+  // never blocks manual entry. lastLookedRef guards repeat calls; motMetaRef carries MOT metadata to save.
+  const lastLookedRef = useRef('');
+  const motMetaRef = useRef<{ motExpiry: string | null; lastMotMileage: number | null }>({ motExpiry: null, lastMotMileage: null });
+  const [looking, setLooking] = useState(false);
+  async function onRegBlur() {
+    const r = normalizeReg(form.registration) || '';
+    if (r !== form.registration) setForm((p) => ({ ...p, registration: r }));
+    if (!r || r === lastLookedRef.current) return;
+    lastLookedRef.current = r;
+    setLooking(true);
+    try {
+      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' });
+      const data = res.ok ? await res.json() : { found: false };
+      if (data.found) {
+        const v = data.vehicle || {}, o = data.owner || {};
+        setForm((p) => ({
+          ...p, registration: r,
+          customerName: o.name || '', phone: o.phone || '', email: o.email || '',
+          vin: v.vin || '', mileage: v.mileage != null ? String(v.mileage) : '',
+          make: v.make || '', model: v.model || '', colour: v.colour || '',
+          year: v.year != null ? String(v.year) : '', fuel: v.fuel || '', engineCc: v.engineCc != null ? String(v.engineCc) : '',
+        }));
+        motMetaRef.current = { motExpiry: null, lastMotMileage: null };
+        return;
+      }
+      // New car → DVSA MOT History (make AND model + MOT metadata).
+      motMetaRef.current = { motExpiry: null, lastMotMileage: null };
+      const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
+      const d = sres?.ok ? await sres.json() : { found: false };
+      if (d.found) {
+        setForm((p) => ({
+          ...p,
+          make: d.make || p.make, model: d.model || p.model, colour: d.colour || p.colour,
+          fuel: d.fuel || p.fuel, year: d.year != null ? String(d.year) : p.year, engineCc: d.engineCc != null ? String(d.engineCc) : p.engineCc,
+        }));
+        motMetaRef.current = { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null };
+      }
+    } catch { /* best-effort — never blocks manual entry */ } finally { setLooking(false); }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -72,7 +121,11 @@ export default function NewJobCardPage() {
       const res = await fetch('/api/jobcard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, ...flags }),
+        body: JSON.stringify({
+          ...form, ...flags,
+          motExpiry: motMetaRef.current.motExpiry ?? undefined,
+          lastMotMileage: motMetaRef.current.lastMotMileage ?? undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to create job card.');
@@ -109,14 +162,40 @@ export default function NewJobCardPage() {
                 name="registration"
                 value={form.registration}
                 onChange={handleField}
+                onBlur={onRegBlur}
                 required
                 placeholder="e.g. AB12 CDE"
                 className={`${inputClass} uppercase`}
               />
+              {looking && <p className="text-xs text-muted mt-1">Looking up vehicle…</p>}
             </div>
             <div>
               <label className={labelClass}>Customer name *</label>
               <input name="customerName" value={form.customerName} onChange={handleField} required className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Make</label>
+              <input name="make" value={form.make} onChange={handleField} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Model</label>
+              <input name="model" value={form.model} onChange={handleField} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Colour</label>
+              <input name="colour" value={form.colour} onChange={handleField} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Year</label>
+              <input name="year" type="number" min="0" value={form.year} onChange={handleField} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Fuel</label>
+              <input name="fuel" value={form.fuel} onChange={handleField} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Engine (cc)</label>
+              <input name="engineCc" type="number" min="0" value={form.engineCc} onChange={handleField} className={inputClass} />
             </div>
             <div>
               <label className={labelClass}>Phone</label>
