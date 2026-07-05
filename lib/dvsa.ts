@@ -25,7 +25,7 @@ export function dvsaConfigured(): boolean {
 let cached: { token: string; expiresAt: number } | null = null;
 
 async function getToken(): Promise<string | null> {
-  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+  if (cached && cached.expiresAt > Date.now() + 60_000) { console.log('[dvsa] token: reusing cached'); return cached.token; }
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
     client_id: process.env.DVSA_MOT_CLIENT_ID as string,
@@ -35,15 +35,19 @@ async function getToken(): Promise<string | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
+    console.log('[dvsa] token: POST', process.env.DVSA_MOT_TOKEN_URL);
     const res = await fetch(process.env.DVSA_MOT_TOKEN_URL as string, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: ctrl.signal,
     });
-    if (!res.ok) return null;
+    console.log('[dvsa] token: status', res.status);
+    if (!res.ok) { console.error('[dvsa] token FAILED', res.status, (await res.text()).slice(0, 300)); return null; }
     const j = (await res.json()) as any;
-    if (!j?.access_token) return null;
+    if (!j?.access_token) { console.error('[dvsa] token: no access_token in response'); return null; }
     cached = { token: j.access_token, expiresAt: Date.now() + (Number(j.expires_in) || 1800) * 1000 };
+    console.log('[dvsa] token: OK, expires_in', j.expires_in);
     return cached.token;
-  } catch {
+  } catch (e: any) {
+    console.error('[dvsa] token: exception', e?.name || e?.message);
     return null;
   } finally {
     clearTimeout(timer);
@@ -64,7 +68,12 @@ const parseMotDate = (v: any): string | undefined => {
 
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!dvsaConfigured() || !reg) return null;
+  // Env presence — NAMES/booleans only, never values.
+  console.log('[dvsa] lookup', reg, 'env:', {
+    CLIENT_ID: !!process.env.DVSA_MOT_CLIENT_ID, CLIENT_SECRET: !!process.env.DVSA_MOT_CLIENT_SECRET,
+    API_KEY: !!process.env.DVSA_MOT_API_KEY, SCOPE_URL: !!process.env.DVSA_MOT_SCOPE_URL, TOKEN_URL: !!process.env.DVSA_MOT_TOKEN_URL,
+  });
+  if (!dvsaConfigured() || !reg) { console.warn('[dvsa] not configured or empty reg → skipping'); return null; }
   const token = await getToken();
   if (!token) return null;
 
@@ -72,17 +81,19 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
+    console.log('[dvsa] MOT API: GET', url);
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}`, 'X-API-Key': process.env.DVSA_MOT_API_KEY as string, Accept: 'application/json' },
       signal: ctrl.signal,
     });
-    if (!res.ok) return null; // 404 unknown / 403 auth / 429 rate-limited / 5xx → manual
+    console.log('[dvsa] MOT API: status', res.status);
+    if (!res.ok) { console.error('[dvsa] MOT API FAILED', res.status, (await res.text()).slice(0, 300)); return null; } // 404 unknown / 403 auth / 429 rate-limited / 5xx → manual
     const d = (await res.json()) as any;
     // motTests are newest-first; take the most recent expiry + odometer where present.
     const tests: any[] = Array.isArray(d.motTests) ? d.motTests : [];
     const withExpiry = tests.find((t) => t?.expiryDate);
     const withOdo = tests.find((t) => t?.odometerValue);
-    return {
+    const out = {
       make: d.make ? String(d.make) : undefined,
       model: d.model ? String(d.model) : undefined,
       colour: d.primaryColour ? String(d.primaryColour) : undefined,
@@ -91,7 +102,10 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
       motExpiry: parseMotDate(withExpiry?.expiryDate),
       lastMotMileage: parseInt10(withOdo?.odometerValue),
     };
-  } catch {
+    console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc });
+    return out;
+  } catch (e: any) {
+    console.error('[dvsa] MOT API: exception', e?.name || e?.message);
     return null;
   } finally {
     clearTimeout(timer);

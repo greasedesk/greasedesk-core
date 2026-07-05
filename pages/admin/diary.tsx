@@ -591,15 +591,12 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
       motMetaRef.current = { motExpiry: null, lastMotMileage: null };
       setDvlaBusy(true);
       try {
-        // DVSA MOT History first (richer — make AND model + MOT metadata); DVLA VES as a fallback.
+        // Enrich from DVSA MOT History (make AND model + MOT metadata). cache:'no-store' so the browser
+        // never serves a 304 — every reg must actually hit the route.
         let d: any = { found: false };
-        const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`).catch(() => null);
+        const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
         if (sres?.ok) d = await sres.json();
-        if (!d.found) {
-          const dres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`).catch(() => null);
-          if (dres?.ok) d = await dres.json();
-        }
-        if (d.found) { // fill what the source gave; blank model (DVLA) stays manual
+        if (d.found) { // fill what DVSA gave
           if (d.make) setMake(d.make); if (d.model) setModel(d.model); if (d.colour) setVColour(d.colour);
           if (d.fuel) setFuel(d.fuel); if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
           motMetaRef.current = { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null };

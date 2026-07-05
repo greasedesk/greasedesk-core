@@ -12,6 +12,7 @@ import { normalizeReg } from '@/lib/vehicle-identity';
 import { dvlaLookup } from '@/lib/dvla';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0'); // never cache external lookups
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ message: 'Method Not Allowed' });

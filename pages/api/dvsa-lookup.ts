@@ -12,6 +12,9 @@ import { normalizeReg } from '@/lib/vehicle-identity';
 import { dvsaLookup } from '@/lib/dvsa';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // NEVER cache — this fetches fresh external data. Prevents the browser/Next ETag 304 that would
+  // short-circuit the DVSA call. Every lookup must actually execute.
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ message: 'Method Not Allowed' });
