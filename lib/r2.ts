@@ -4,8 +4,8 @@
  * client). Cloudflare R2 is S3-compatible. Browsers upload/read via PRESIGNED URLs (bytes go straight
  * browser↔R2, never through the function). Bucket stays PRIVATE — customer vehicle photos.
  *
- * Env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET. Endpoint is derived from the
- * account id. Best-effort: no creds → null (feature dormant, never crashes).
+ * Env: R2_ACCOUNT_ID, R2_ENDPOINT, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY. The endpoint
+ * is read directly (not derived). Best-effort: no creds → null (feature dormant, never crashes).
  *
  * Key layout (tenant-partitioned): {groupId}/{jobCardId}/{stage}/{slot}/{photoId}.jpg
  */
@@ -13,29 +13,30 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export function r2Configured(): boolean {
-  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET);
+  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ENDPOINT && process.env.R2_BUCKET_NAME
+    && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY);
 }
 
 let _client: S3Client | null = null;
 function client(): S3Client | null {
   if (!r2Configured()) {
     console.warn('[r2] not configured — env presence:', {
-      ACCOUNT_ID: !!process.env.R2_ACCOUNT_ID, ACCESS_KEY_ID: !!process.env.R2_ACCESS_KEY_ID,
-      SECRET_ACCESS_KEY: !!process.env.R2_SECRET_ACCESS_KEY, BUCKET: !!process.env.R2_BUCKET,
+      ACCOUNT_ID: !!process.env.R2_ACCOUNT_ID, ENDPOINT: !!process.env.R2_ENDPOINT, BUCKET_NAME: !!process.env.R2_BUCKET_NAME,
+      ACCESS_KEY_ID: !!process.env.R2_ACCESS_KEY_ID, SECRET_ACCESS_KEY: !!process.env.R2_SECRET_ACCESS_KEY,
     });
     return null;
   }
   if (!_client) {
     _client = new S3Client({
       region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      endpoint: process.env.R2_ENDPOINT as string,
       credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID as string, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY as string },
     });
   }
   return _client;
 }
 
-const bucket = () => process.env.R2_BUCKET as string;
+const bucket = () => process.env.R2_BUCKET_NAME as string;
 
 /** Tenant-partitioned object key. */
 export function photoKey(groupId: string, jobCardId: string, stage: string, slot: string, photoId: string): string {
