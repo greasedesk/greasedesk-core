@@ -74,7 +74,8 @@ export default function NewJobCardPage() {
   // fill owner + vehicle), else DVSA MOT History (make/model/colour/fuel/engine). Best-effort; a failure
   // never blocks manual entry. lastLookedRef guards repeat calls; motMetaRef carries MOT metadata to save.
   const lastLookedRef = useRef('');
-  const motMetaRef = useRef<{ motExpiry: string | null; lastMotMileage: number | null }>({ motExpiry: null, lastMotMileage: null });
+  // MOT reference (DVSA) — distinct from the current mileage the mechanic enters. Display + sent on create.
+  const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
   const [looking, setLooking] = useState(false);
   async function onRegBlur() {
     const r = normalizeReg(form.registration) || '';
@@ -94,11 +95,11 @@ export default function NewJobCardPage() {
           make: v.make || '', model: v.model || '', colour: v.colour || '',
           year: v.year != null ? String(v.year) : '', fuel: v.fuel || '', engineCc: v.engineCc != null ? String(v.engineCc) : '',
         }));
-        motMetaRef.current = { motExpiry: null, lastMotMileage: null };
+        setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
         return;
       }
       // New car → DVSA MOT History (make AND model + MOT metadata).
-      motMetaRef.current = { motExpiry: null, lastMotMileage: null };
+      setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
       const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
       const d = sres?.ok ? await sres.json() : { found: false };
       if (d.found) {
@@ -107,7 +108,7 @@ export default function NewJobCardPage() {
           make: d.make || p.make, model: d.model || p.model, colour: d.colour || p.colour,
           fuel: d.fuel || p.fuel, year: d.year != null ? String(d.year) : p.year, engineCc: d.engineCc != null ? String(d.engineCc) : p.engineCc,
         }));
-        motMetaRef.current = { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null };
+        setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
       }
     } catch { /* best-effort — never blocks manual entry */ } finally { setLooking(false); }
   }
@@ -123,8 +124,9 @@ export default function NewJobCardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form, ...flags,
-          motExpiry: motMetaRef.current.motExpiry ?? undefined,
-          lastMotMileage: motMetaRef.current.lastMotMileage ?? undefined,
+          motExpiry: mot.motExpiry ?? undefined,
+          lastMotMileage: mot.lastMotMileage ?? undefined,
+          lastMotDate: mot.lastMotDate ?? undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -214,6 +216,14 @@ export default function NewJobCardPage() {
               <input name="mileage" type="number" min="0" value={form.mileage} onChange={handleField} className={inputClass} />
             </div>
           </div>
+
+          {(mot.motExpiry || mot.lastMotMileage != null) && (
+            <p className="text-xs text-muted">
+              {mot.motExpiry && <>MOT expires <span className="text-ink">{mot.motExpiry}</span></>}
+              {mot.lastMotMileage != null && <> · Mileage at last MOT <span className="text-ink">{mot.lastMotMileage}{mot.lastMotDate ? ` (${mot.lastMotDate})` : ''}</span></>}
+              {' '}— from DVSA
+            </p>
+          )}
 
           <div>
             <label className={labelClass}>Flags</label>

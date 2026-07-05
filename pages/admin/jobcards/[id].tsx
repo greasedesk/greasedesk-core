@@ -42,7 +42,11 @@ type PageProps = {
   vatRate: number;
   vatRegistered: boolean;
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
-  vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
+  vehicle: {
+    registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
+    make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
+    motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
+  };
   flags: string[];
   isComeback: boolean;
   garageNotes: string;
@@ -172,7 +176,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     where: { id, site_id: { in: vis.siteIds } },
     include: {
       customer: { select: { name: true, phone: true, email: true } },
-      vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true } },
+      vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
       items: { orderBy: { created_at: 'asc' } },
     },
   })) as any;
@@ -296,6 +300,15 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
         vin: row.vehicle?.vin ?? null,
         mileageIn: row.odometer_in ?? row.vehicle?.mileage_at_create ?? null,
         mileageOut: row.odometer_out ?? null,
+        make: row.vehicle?.make ?? null,
+        model: row.vehicle?.model ?? null,
+        colour: row.vehicle?.colour ?? null,
+        year: row.vehicle?.year ?? null,
+        fuel: row.vehicle?.fuel_type ?? null,
+        engineCc: row.vehicle?.engine_cc ?? null,
+        motExpiry: row.vehicle?.mot_expiry ? (row.vehicle.mot_expiry as Date).toISOString().slice(0, 10) : null,
+        lastMotMileage: row.vehicle?.last_mot_mileage ?? null,
+        lastMotDate: row.vehicle?.last_mot_date ? (row.vehicle.last_mot_date as Date).toISOString().slice(0, 10) : null,
       },
       flags, isComeback: !!row.is_comeback,
       garageNotes: row.garage_notes ?? '',

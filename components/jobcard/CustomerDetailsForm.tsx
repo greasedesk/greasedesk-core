@@ -9,7 +9,11 @@ import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
 
 type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
-type Vehicle = { registration: string; vin: string | null; mileageIn: number | null };
+type Vehicle = {
+  registration: string; vin: string | null; mileageIn: number | null;
+  make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
+  motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
+};
 type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void };
 
 const inputCls = 'w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
@@ -24,12 +28,19 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   const [registration, setRegistration] = useState(vehicle.registration === '—' ? '' : vehicle.registration);
   const [vin, setVin] = useState(vehicle.vin ?? '');
   const [mileageIn, setMileageIn] = useState(vehicle.mileageIn != null ? String(vehicle.mileageIn) : '');
+  // Vehicle data (DVSA-populated at creation, lightly editable — a garage can correct a wrong value).
+  const [make, setMake] = useState(vehicle.make ?? '');
+  const [model, setModel] = useState(vehicle.model ?? '');
+  const [colour, setColour] = useState(vehicle.colour ?? '');
+  const [vyear, setVYear] = useState(vehicle.year != null ? String(vehicle.year) : '');
+  const [fuel, setFuel] = useState(vehicle.fuel ?? '');
+  const [engineCc, setEngineCc] = useState(vehicle.engineCc != null ? String(vehicle.engineCc) : '');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   async function submit(confirmReg: boolean) {
     setBusy(true); setMsg(null);
-    const body = { jobCardId, confirmReg, owner: { name, phone, email, address }, vehicle: { registration, vin, mileageIn } };
+    const body = { jobCardId, confirmReg, owner: { name, phone, email, address }, vehicle: { registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc } };
     try {
       const res = await fetch('/api/jobcard-details', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
@@ -53,8 +64,16 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
         <h2 className="text-lg font-semibold text-ink mb-4">{t('tab.details')}</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Row label={t('field.registration')} value={vehicle.registration} />
+          <Row label={t('field.make')} value={vehicle.make} />
+          <Row label={t('field.model')} value={vehicle.model} />
+          <Row label={t('field.colour')} value={vehicle.colour} />
+          <Row label={t('field.year')} value={vehicle.year} />
+          <Row label={t('field.fuel')} value={vehicle.fuel} />
+          <Row label={t('field.engineCc')} value={vehicle.engineCc} />
           <Row label={t('field.vin')} value={vehicle.vin} />
           <Row label={t('field.mileage')} value={vehicle.mileageIn} />
+          <Row label={t('field.motExpiry')} value={vehicle.motExpiry} />
+          <Row label={t('field.lastMotMileage')} value={vehicle.lastMotMileage != null ? `${vehicle.lastMotMileage}${vehicle.lastMotDate ? ` · ${vehicle.lastMotDate}` : ''}` : null} />
           <Row label={t('field.customer')} value={owner.name} />
           <Row label={t('field.phone')} value={owner.phone} />
           <Row label={t('field.email')} value={owner.email} />
@@ -71,8 +90,20 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
       <p className="text-xs text-muted mb-4">{t('field.ownerFromEdge')}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div><label className={labelCls}>{t('field.registration')}</label><input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" /></div>
+        <div><label className={labelCls}>{t('field.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.colour')}</label><input className={inputCls} value={colour} onChange={(e) => setColour(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.year')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={vyear} onChange={(e) => setVYear(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.fuel')}</label><input className={inputCls} value={fuel} onChange={(e) => setFuel(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.engineCc')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={engineCc} onChange={(e) => setEngineCc(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.vin')}</label><input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} autoCapitalize="characters" /></div>
         <div><label className={labelCls}>{t('field.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={mileageIn} onChange={(e) => setMileageIn(e.target.value)} /></div>
+        {(vehicle.motExpiry || vehicle.lastMotMileage != null) && (
+          <div className="sm:col-span-2 text-xs text-muted">
+            {vehicle.motExpiry && <span>{t('field.motExpiry')}: <span className="text-ink">{vehicle.motExpiry}</span></span>}
+            {vehicle.lastMotMileage != null && <span className="ml-3">{t('field.lastMotMileage')}: <span className="text-ink">{vehicle.lastMotMileage}{vehicle.lastMotDate ? ` · ${vehicle.lastMotDate}` : ''}</span></span>}
+          </div>
+        )}
         <div><label className={labelCls}>{t('field.customer')}</label><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.email')}</label><input className={inputCls} type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>

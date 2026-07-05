@@ -437,6 +437,7 @@ model Vehicle {
   // DVSA MOT History — captured for the banked service-reminder feature (mot_expiry) + mileage trend.
   mot_expiry        DateTime? @db.Date
   last_mot_mileage  Int?
+  last_mot_date     DateTime? @db.Date
   mileage_at_create Int?
   created_at        DateTime @default(now())
 

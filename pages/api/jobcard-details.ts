@@ -24,7 +24,7 @@ import { getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-ide
 import { writeAudit } from '@/lib/audit';
 
 type OwnerIn = { name?: string; phone?: string; email?: string; address?: string };
-type VehicleIn = { registration?: string; vin?: string; mileageIn?: number | string };
+type VehicleIn = { registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string };
 const clean = (v?: string) => { const s = (v ?? '').trim(); return s.length ? s : null; };
 const emailish = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const card = (await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
-    select: { id: true, site_id: true, vehicle_id: true, odometer_in: true, vehicle: { select: { registration: true, vin: true } } },
+    select: { id: true, site_id: true, vehicle_id: true, odometer_in: true, vehicle: { select: { registration: true, vin: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true } } },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
 
@@ -105,6 +105,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const nv = clean(vehicle.vin);
           if (nv !== card.vehicle?.vin) { vnext.vin = nv; vnext.vin_normalized = normalizeVin(nv); vdiff.vin = { from: card.vehicle?.vin, to: nv }; }
         }
+        // DVSA-populated vehicle data — lightly editable. Set only on change (keeps the audit clean).
+        const cv = card.vehicle || {};
+        const vnum = (v: any) => { const s = String(v ?? '').trim(); if (!s) return null; const n = Number(s); return Number.isInteger(n) && n >= 0 ? n : null; };
+        const setV = (col: string, next: any, cur: any, key: string) => { if (next !== cur) { vnext[col] = next; vdiff[key] = { from: cur, to: next }; } };
+        if (vehicle.make !== undefined) setV('make', clean(vehicle.make), cv.make ?? null, 'make');
+        if (vehicle.model !== undefined) setV('model', clean(vehicle.model), cv.model ?? null, 'model');
+        if (vehicle.colour !== undefined) setV('colour', clean(vehicle.colour), cv.colour ?? null, 'colour');
+        if (vehicle.fuel !== undefined) setV('fuel_type', clean(vehicle.fuel), cv.fuel_type ?? null, 'fuel');
+        if (vehicle.year !== undefined) setV('year', vnum(vehicle.year), cv.year ?? null, 'year');
+        if (vehicle.engineCc !== undefined) setV('engine_cc', vnum(vehicle.engineCc), cv.engine_cc ?? null, 'engineCc');
         if (Object.keys(vnext).length) await tx.vehicle.update({ where: { id: card.vehicle_id }, data: vnext });
         if (mileageVal !== undefined && mileageVal !== card.odometer_in) { await tx.jobCard.update({ where: { id: jobCardId }, data: { odometer_in: mileageVal } }); vdiff.mileageIn = { from: card.odometer_in, to: mileageVal }; }
         if (Object.keys(vdiff).length) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'vehicle.edited', diff: vdiff });

@@ -553,8 +553,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   // the reg we filled from, so switching to an unknown reg clears the STALE fill (but never a genuinely
   // hand-typed new car). Display convenience only — the create path stays authoritative for a known reg.
   const lastLookedRef = useRef<string>(''); const autoFilledRef = useRef<string | null>(null);
-  // DVSA MOT metadata captured on lookup (not shown as fields) → sent on create for the banked reminders.
-  const motMetaRef = useRef<{ motExpiry: string | null; lastMotMileage: number | null }>({ motExpiry: null, lastMotMileage: null });
+  // DVSA MOT reference (distinct from current mileage) — displayed + sent on create.
+  const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
   // Reg blur: canonicalise VISIBLY (uppercase, spaces stripped) so the user sees the stored form, then
   // look the car up on the canonical key.
   function onRegBlur() {
@@ -578,7 +578,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         setVin(v.vin || ''); setMileage(v.mileage != null ? String(v.mileage) : '');
         setMake(v.make || ''); setModel(v.model || ''); setVColour(v.colour || '');
         setFuel(v.fuel || ''); setYear(v.year != null ? String(v.year) : ''); setEngineCc(v.engineCc != null ? String(v.engineCc) : '');
-        motMetaRef.current = { motExpiry: null, lastMotMileage: null }; // returning car — record already holds it
+        setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null }); // returning car — record already holds it
         autoFilledRef.current = r;
         return;
       }
@@ -588,7 +588,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         setMake(''); setModel(''); setVColour(''); setFuel(''); setYear(''); setEngineCc('');
         autoFilledRef.current = null;
       }
-      motMetaRef.current = { motExpiry: null, lastMotMileage: null };
+      setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
       setDvlaBusy(true);
       try {
         // Enrich from DVSA MOT History (make AND model + MOT metadata). cache:'no-store' so the browser
@@ -599,7 +599,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         if (d.found) { // fill what DVSA gave
           if (d.make) setMake(d.make); if (d.model) setModel(d.model); if (d.colour) setVColour(d.colour);
           if (d.fuel) setFuel(d.fuel); if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
-          motMetaRef.current = { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null };
+          setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
         }
       } finally { setDvlaBusy(false); }
     } catch { /* best-effort — a failed pre-fill / DVLA error never blocks manual entry */ }
@@ -627,7 +627,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
         make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
         fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
-        motExpiry: motMetaRef.current.motExpiry ?? undefined, lastMotMileage: motMetaRef.current.lastMotMileage ?? undefined,
+        motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined,
         siteId, resourceId: liftId, startAt: info.startAt, endAt,
       }),
     });
@@ -708,6 +708,12 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
                 {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
               </div>
             </div>
+            {(mot.motExpiry || mot.lastMotMileage != null) && (
+              <p className="text-[11px] text-muted">
+                {mot.motExpiry && <>{t('create.motExpiry')}: <span className="text-ink">{mot.motExpiry}</span></>}
+                {mot.lastMotMileage != null && <> · {t('create.lastMotMileage')}: <span className="text-ink">{mot.lastMotMileage}{mot.lastMotDate ? ` (${mot.lastMotDate})` : ''}</span></>}
+              </p>
+            )}
             {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupOwner')}</div>
             <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} value={cust} onChange={(e) => setCust(e.target.value)} /></div>

@@ -34,7 +34,11 @@ type Props = {
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
-  vehicle: { registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null };
+  vehicle: {
+    registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
+    make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
+    motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
+  };
   flags: string[];
   isComeback: boolean;
   garageNotes: string;

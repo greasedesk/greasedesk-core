@@ -42,8 +42,16 @@
     "emptyParts": "No parts lines yet.",
     "discountHint": "Tip: enter a negative unit price for a discount line."
   },
-  "back": { "diary": "← Back to diary", "list": "← Back to list" },
-  "itemType": { "labour": "Labour", "part": "Part", "misc": "Misc", "fixed": "Fixed price" },
+  "back": {
+    "diary": "← Back to diary",
+    "list": "← Back to list"
+  },
+  "itemType": {
+    "labour": "Labour",
+    "part": "Part",
+    "misc": "Misc",
+    "fixed": "Fixed price"
+  },
   "status": {
     "label": "Status",
     "draft": "Draft",
@@ -168,7 +176,15 @@
     "address": "Address",
     "flags": "Flags",
     "noFlags": "No flags set.",
-    "ownerFromEdge": "Owner shown is the vehicle's current owner — edits apply to them."
+    "ownerFromEdge": "Owner shown is the vehicle's current owner — edits apply to them.",
+    "make": "Make",
+    "model": "Model",
+    "colour": "Colour",
+    "year": "Year",
+    "fuel": "Fuel",
+    "engineCc": "Engine (cc)",
+    "motExpiry": "MOT expiry",
+    "lastMotMileage": "Mileage at last MOT"
   },
   "detailsEdit": {
     "save": "Save details",
@@ -222,16 +238,43 @@
       "cancelled": "Job cancelled"
     },
     "stage": {
-      "details": { "done": "Customer Details completed", "undone": "Customer Details reopened" },
-      "intake": { "done": "Intake photos completed", "undone": "Intake photos reopened" },
-      "injob": { "done": "In-Job photos completed", "undone": "In-Job photos reopened" },
-      "complete": { "done": "Completion photos completed", "undone": "Completion photos reopened" }
+      "details": {
+        "done": "Customer Details completed",
+        "undone": "Customer Details reopened"
+      },
+      "intake": {
+        "done": "Intake photos completed",
+        "undone": "Intake photos reopened"
+      },
+      "injob": {
+        "done": "In-Job photos completed",
+        "undone": "In-Job photos reopened"
+      },
+      "complete": {
+        "done": "Completion photos completed",
+        "undone": "Completion photos reopened"
+      }
     },
-    "accept": { "booked": "Accepted & booked onto the diary" },
-    "booking": { "moved": "Booking scheduled / moved", "removed": "Removed from the diary" },
-    "owner": { "edited": "Customer details edited" },
-    "vehicle": { "edited": "Vehicle details edited" },
-    "invoice": { "minted": "Invoice raised", "paid": "Invoice marked paid" },
-    "comeback": { "marked": "Marked as warranty / comeback", "cleared": "Comeback flag removed" }
+    "accept": {
+      "booked": "Accepted & booked onto the diary"
+    },
+    "booking": {
+      "moved": "Booking scheduled / moved",
+      "removed": "Removed from the diary"
+    },
+    "owner": {
+      "edited": "Customer details edited"
+    },
+    "vehicle": {
+      "edited": "Vehicle details edited"
+    },
+    "invoice": {
+      "minted": "Invoice raised",
+      "paid": "Invoice marked paid"
+    },
+    "comeback": {
+      "marked": "Marked as warranty / comeback",
+      "cleared": "Comeback flag removed"
+    }
   }
 }

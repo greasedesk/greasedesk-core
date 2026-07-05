@@ -30,8 +30,8 @@ type CreateJobCardBody = {
   mileage?: number | string;
   // Vehicle data (make/model/colour/year/fuel/engineCc auto-fill from DVSA MOT / DVLA VES).
   make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
-  // DVSA MOT metadata (for the banked reminder feature): ISO date + miles.
-  motExpiry?: string; lastMotMileage?: number | string;
+  // DVSA MOT metadata (for the banked reminder feature): ISO dates + miles.
+  motExpiry?: string; lastMotMileage?: number | string; lastMotDate?: string;
   flag_urgent?: boolean;
   flag_sales_car?: boolean;
   flag_customer_car?: boolean;
@@ -182,6 +182,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               engine_cc: intOrNull(body.engineCc),
               mot_expiry: dateOrNull(body.motExpiry),
               last_mot_mileage: intOrNull(body.lastMotMileage),
+              last_mot_date: dateOrNull(body.lastMotDate),
               mileage_at_create: mileage,
             },
             select: { id: true },

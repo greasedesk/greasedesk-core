@@ -9,8 +9,9 @@
  *      DVSA_MOT_TOKEN_URL, optional DVSA_MOT_API_URL (defaults to the live trade endpoint).
  */
 export type DvsaVehicle = {
-  make?: string; model?: string; colour?: string; fuel?: string; engineCc?: number;
-  motExpiry?: string; lastMotMileage?: number; // ISO date + miles, for the banked reminder feature
+  make?: string; model?: string; colour?: string; fuel?: string; engineCc?: number; year?: number;
+  // MOT reference (from the most recent test) — feeds the display + the banked reminder feature.
+  motExpiry?: string; lastMotMileage?: number; lastMotDate?: string; // ISO dates + miles
 };
 
 const API_BASE = 'https://history.mot.api.gov.uk/v1/trade/vehicles/registration/';
@@ -89,20 +90,30 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
     console.log('[dvsa] MOT API: status', res.status);
     if (!res.ok) { console.error('[dvsa] MOT API FAILED', res.status, (await res.text()).slice(0, 300)); return null; } // 404 unknown / 403 auth / 429 rate-limited / 5xx → manual
     const d = (await res.json()) as any;
-    // motTests are newest-first; take the most recent expiry + odometer where present.
+    // motTests are newest-first; take the most recent expiry + odometer + test date where present.
     const tests: any[] = Array.isArray(d.motTests) ? d.motTests : [];
     const withExpiry = tests.find((t) => t?.expiryDate);
     const withOdo = tests.find((t) => t?.odometerValue);
+    // Year of manufacture — DVSA gives dates, not a bare year; take the first 4-digit year we find.
+    const yearOf = (): number | undefined => {
+      for (const f of [d.manufactureDate, d.firstUsedDate, d.registrationDate]) {
+        const y = parseInt(String(f ?? '').slice(0, 4), 10);
+        if (y >= 1900 && y <= 2100) return y;
+      }
+      return undefined;
+    };
     const out = {
       make: d.make ? String(d.make) : undefined,
       model: d.model ? String(d.model) : undefined,
       colour: d.primaryColour ? String(d.primaryColour) : undefined,
       fuel: d.fuelType ? String(d.fuelType) : undefined,
       engineCc: parseInt10(d.engineSize),
+      year: yearOf(),
       motExpiry: parseMotDate(withExpiry?.expiryDate),
       lastMotMileage: parseInt10(withOdo?.odometerValue),
+      lastMotDate: parseMotDate(tests[0]?.completedDate),
     };
-    console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc });
+    console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc, year: out.year, motExpiry: out.motExpiry, lastMotMileage: out.lastMotMileage });
     return out;
   } catch (e: any) {
     console.error('[dvsa] MOT API: exception', e?.name || e?.message);
