@@ -426,12 +426,14 @@ model Vehicle {
   registration_normalized String?
   vin               String?
   make              String?
-  model             String?
+  model             String? // NOT in free DVLA VES — captured manually
   derivative        String?
-  fuel_type         String?
+  colour            String? // DVLA VES
+  fuel_type         String? // DVLA VES (fuelType)
   transmission      String?
   engine_code       String?
-  year              Int?
+  engine_cc         Int? // DVLA VES engine capacity (cc) — also the seed for a future auto-tier hook
+  year              Int? // DVLA VES (yearOfManufacture)
   mileage_at_create Int?
   created_at        DateTime @default(now())
 

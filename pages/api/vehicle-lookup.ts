@@ -29,8 +29,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vehicle = (await prisma.vehicle.findFirst({
     where: { group_id: user.group_id, registration_normalized: reg },
     orderBy: { created_at: 'desc' },
-    select: { id: true, registration: true, vin: true, mileage_at_create: true },
-  })) as { id: string; registration: string; vin: string | null; mileage_at_create: number | null } | null;
+    select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, fuel_type: true, year: true, engine_cc: true },
+  })) as any;
   if (!vehicle) return res.status(200).json({ found: false });
 
   // Current owner via the ownership edge.
@@ -41,7 +41,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({
     found: true,
-    vehicle: { registration: vehicle.registration, vin: vehicle.vin ?? '', mileage: vehicle.mileage_at_create ?? null },
+    vehicle: {
+      registration: vehicle.registration, vin: vehicle.vin ?? '', mileage: vehicle.mileage_at_create ?? null,
+      make: vehicle.make ?? '', model: vehicle.model ?? '', colour: vehicle.colour ?? '',
+      fuel: vehicle.fuel_type ?? '', year: vehicle.year ?? null, engineCc: vehicle.engine_cc ?? null,
+    },
     owner: { name: owner?.name ?? '', phone: owner?.phone ?? '', email: owner?.email ?? '' },
   });
 }

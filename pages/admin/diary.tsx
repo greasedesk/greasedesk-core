@@ -542,6 +542,9 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
   const [vin, setVin] = useState(''); const [phone, setPhone] = useState(''); const [email, setEmail] = useState('');
+  // Vehicle data — make/colour/year/fuel/engine auto-fill from DVLA VES on a new reg; model is manual.
+  const [make, setMake] = useState(''); const [model, setModel] = useState(''); const [vColour, setVColour] = useState('');
+  const [year, setYear] = useState(''); const [fuel, setFuel] = useState(''); const [engineCc, setEngineCc] = useState('');
   const [liftId, setLiftId] = useState(defaultResourceId ?? resources[0]?.id ?? '');
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
@@ -557,6 +560,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     if (canon !== reg) setReg(canon);
     lookupReg(canon);
   }
+  const [dvlaBusy, setDvlaBusy] = useState(false);
   async function lookupReg(regArg?: string) {
     const r = normalizeReg(regArg ?? reg) || '';
     if (!r || r === lastLookedRef.current) return;
@@ -566,14 +570,31 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
       if (!res.ok) return;
       const data = await res.json();
       if (data.found) {
+        // Returning car — fill from OUR record (owner + vehicle). No DVLA call.
+        const v = data.vehicle || {};
         setCust(data.owner?.name || ''); setPhone(data.owner?.phone || ''); setEmail(data.owner?.email || '');
-        setVin(data.vehicle?.vin || ''); setMileage(data.vehicle?.mileage != null ? String(data.vehicle.mileage) : '');
+        setVin(v.vin || ''); setMileage(v.mileage != null ? String(v.mileage) : '');
+        setMake(v.make || ''); setModel(v.model || ''); setVColour(v.colour || '');
+        setFuel(v.fuel || ''); setYear(v.year != null ? String(v.year) : ''); setEngineCc(v.engineCc != null ? String(v.engineCc) : '');
         autoFilledRef.current = r;
-      } else if (autoFilledRef.current) {
-        setCust(''); setPhone(''); setEmail(''); setVin(''); setMileage(''); // clear stale auto-fill from a prior known reg
+        return;
+      }
+      // New car: clear any stale auto-fill from a prior known reg, then try DVLA VES for vehicle data.
+      if (autoFilledRef.current) {
+        setCust(''); setPhone(''); setEmail(''); setVin(''); setMileage('');
+        setMake(''); setModel(''); setVColour(''); setFuel(''); setYear(''); setEngineCc('');
         autoFilledRef.current = null;
       }
-    } catch { /* lookup is best-effort — a failed pre-fill never blocks manual entry */ }
+      setDvlaBusy(true);
+      try {
+        const dres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`);
+        const d = dres.ok ? await dres.json() : { found: false };
+        if (d.found) { // fill make/colour/year/fuel/engine; MODEL stays manual (not in free VES)
+          if (d.make) setMake(d.make); if (d.colour) setVColour(d.colour); if (d.fuel) setFuel(d.fuel);
+          if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
+        }
+      } finally { setDvlaBusy(false); }
+    } catch { /* best-effort — a failed pre-fill / DVLA error never blocks manual entry */ }
   }
   // End is naive start + hours (the /api/jobcard bridge → workingMinutes = end-start = hours*60; the
   // footprint re-expands correctly around close/breaks). Duration is the source of truth.
@@ -596,6 +617,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
       body: JSON.stringify({
         registration: regCanon, customerName: cust.trim(), mileage: mileage.trim() || undefined,
         vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
+        make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
+        fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
         siteId, resourceId: liftId, startAt: info.startAt, endAt,
       }),
     });
@@ -646,17 +669,34 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
           <div className="space-y-3">
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
-            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={onRegBlur} /></div>
+            <div>
+              <label className={labelCls}>{t('create.reg')}</label>
+              <input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={onRegBlur} />
+              {dvlaBusy && <p className="text-[11px] text-muted mt-1">{t('create.dvlaLooking')}</p>}
+            </div>
             <div className="grid grid-cols-2 gap-3">
+              <div><label className={labelCls}>{t('create.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className={labelCls}>{t('create.colour')}</label><input className={inputCls} value={vColour} onChange={(e) => setVColour(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.year')}</label><input className={inputCls} type="number" inputMode="numeric" value={year} onChange={(e) => setYear(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.fuel')}</label><input className={inputCls} value={fuel} onChange={(e) => setFuel(e.target.value)} /></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className={labelCls}>{t('create.vin')}</label>
-                <input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} />
-                {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
+                <label className={labelCls}>{t('create.engineCc')}</label>
+                <input className={inputCls} type="number" inputMode="numeric" value={engineCc} onChange={(e) => setEngineCc(e.target.value)} />
               </div>
               <div>
                 <label className={labelCls}>{t('create.mileage')}</label>
                 <input className={inputCls} type="number" inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value)} />
                 {mileErr && <p className="text-[11px] text-danger mt-1">{t(mileErr === 'overflow' ? 'create.warn.mileageOverflow' : 'create.warn.mileageNan')}</p>}
+              </div>
+              <div>
+                <label className={labelCls}>{t('create.vin')}</label>
+                <input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} />
+                {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
               </div>
             </div>
             {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}

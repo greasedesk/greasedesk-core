@@ -28,6 +28,8 @@ type CreateJobCardBody = {
   email?: string;
   vin?: string;
   mileage?: number | string;
+  // Vehicle data (make/colour/year/fuel/engineCc auto-fill from DVLA VES; model is manual).
+  make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
   flag_urgent?: boolean;
   flag_sales_car?: boolean;
   flag_customer_car?: boolean;
@@ -39,6 +41,13 @@ type CreateJobCardBody = {
   resourceId?: string;
   startAt?: string;
   endAt?: string;
+};
+
+// Coerce an optional numeric field (year / engine cc) to a clean non-negative integer, else null.
+const intOrNull = (v: unknown): number | null => {
+  if (v === undefined || v === null || `${v}`.trim() === '') return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -157,6 +166,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               registration_normalized: registration, // registration is already canonical
               vin: body.vin?.trim() || null,
               vin_normalized: normalizeVin(body.vin),
+              make: body.make?.trim() || null,
+              model: body.model?.trim() || null,
+              colour: body.colour?.trim() || null,
+              fuel_type: body.fuel?.trim() || null,
+              year: intOrNull(body.year),
+              engine_cc: intOrNull(body.engineCc),
               mileage_at_create: mileage,
             },
             select: { id: true },
