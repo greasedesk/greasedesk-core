@@ -200,7 +200,17 @@
   },
   "photos": {
     "placeholder": "Photo upload arrives with cloud storage next.",
-    "placeholderHint": "This step still gates the workflow — mark it complete when the photos are taken."
+    "placeholderHint": "This step still gates the workflow — mark it complete when the photos are taken.",
+    "title": "Photos",
+    "add": "Add photo",
+    "uploading": "Uploading…",
+    "uploaded": "Photo added.",
+    "empty": "No photos yet.",
+    "locked": "This stage is complete — photos are locked.",
+    "delete": "Delete photo",
+    "confirmDelete": "Delete this photo?",
+    "uploadError": "Couldn’t upload the photo — please try again.",
+    "deleteError": "Couldn’t delete the photo."
   },
   "quoteActions": {
     "title": "Quote actions",

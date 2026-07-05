@@ -16,6 +16,7 @@ import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLit
 import { PromoLite } from '@/lib/promo';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
+import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
@@ -220,7 +221,7 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
-          <PhotoPlaceholder />
+          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !cancelled} locked={p.stages.intake} locale={p.locale} />
           <div className="flex flex-wrap gap-3 justify-end">
             {p.status === 'accepted' && p.canOperate && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>

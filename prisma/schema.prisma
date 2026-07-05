@@ -645,8 +645,13 @@ model JobCard {
 model JobCardPhoto {
   id          String   @id @default(uuid())
   job_card_id String
+  group_id    String? // TENANT partition (also the R2 key prefix) — garages never see each other's photos
+  stage       String? // intake | injob | completion
+  slot        String? // angle key (front/rear/…) | 'freeform' | 'damage'
+  label       String? // free-text (damage note, e.g. "Scratch — nearside door")
+  r2_key      String? // private R2 object key; display via presigned GET (URL never stored)
   photo_type  String?
-  file_url    String
+  file_url    String? // legacy (pre-R2); nullable now
   uploaded_by String?
   uploaded_at DateTime @default(now())
 
@@ -654,6 +659,7 @@ model JobCardPhoto {
   user     User?   @relation("JobCardPhotoUploader", fields: [uploaded_by], references: [id], onDelete: SetNull)
 
   @@index([job_card_id])
+  @@index([job_card_id, stage])
 }
 
 model JobCardItem {
