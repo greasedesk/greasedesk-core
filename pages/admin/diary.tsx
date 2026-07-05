@@ -22,6 +22,8 @@ import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
+import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
+import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 
@@ -548,8 +550,15 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   // the reg we filled from, so switching to an unknown reg clears the STALE fill (but never a genuinely
   // hand-typed new car). Display convenience only — the create path stays authoritative for a known reg.
   const lastLookedRef = useRef<string>(''); const autoFilledRef = useRef<string | null>(null);
-  async function lookupReg() {
-    const r = reg.trim().toUpperCase();
+  // Reg blur: canonicalise VISIBLY (uppercase, spaces stripped) so the user sees the stored form, then
+  // look the car up on the canonical key.
+  function onRegBlur() {
+    const canon = normalizeReg(reg) || '';
+    if (canon !== reg) setReg(canon);
+    lookupReg(canon);
+  }
+  async function lookupReg(regArg?: string) {
+    const r = normalizeReg(regArg ?? reg) || '';
     if (!r || r === lastLookedRef.current) return;
     lastLookedRef.current = r;
     try {
@@ -571,16 +580,28 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const endAt = new Date(Date.parse(info.startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString();
   const when = `${info.date} · ${info.startAt.slice(11, 16)} · ${hours} hr`;
 
+  // Blocking checks: required (reg, customer) + mileage (overflow breaks the DB write). Optional-field
+  // format issues (VIN/phone/email) only WARN inline — messy real data is allowed through.
+  const mileErr = mileageError(mileage);
+  const regCanon = normalizeReg(reg) || '';
+  const canSubmit = !!regCanon && !!cust.trim() && !!liftId && Number(hours) > 0 && !mileErr;
   async function createJob() {
-    if (!reg.trim() || !cust.trim() || !liftId || !(Number(hours) > 0)) { setErr(t('create.jobFailed')); return; }
+    if (!regCanon) { setErr(t('create.err.regRequired')); return; }
+    if (!cust.trim()) { setErr(t('create.err.customerRequired')); return; }
+    if (!liftId || !(Number(hours) > 0)) { setErr(t('create.err.booking')); return; }
+    if (mileErr) { setErr(t(mileErr === 'overflow' ? 'create.warn.mileageOverflow' : 'create.warn.mileageNan')); return; }
     setBusy(true); setErr(null);
     const res = await fetch('/api/jobcard', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ registration: reg, customerName: cust, mileage: mileage || undefined, vin: vin.trim() || undefined, phone: phone.trim() || undefined, email: email.trim() || undefined, siteId, resourceId: liftId, startAt: info.startAt, endAt }),
+      body: JSON.stringify({
+        registration: regCanon, customerName: cust.trim(), mileage: mileage.trim() || undefined,
+        vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
+        siteId, resourceId: liftId, startAt: info.startAt, endAt,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('create.jobFailed')); return; }
+    if (!res.ok) { setErr(data?.message || t('create.err.generic')); return; }
     onDone();
   }
   async function addNote() {
@@ -598,6 +619,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
 
   const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
   const labelCls = 'block text-xs text-muted mb-1';
+  const warnCls = 'text-[11px] text-warn mt-1'; // optional-field format warning (non-blocking)
   const durationField = (
     <div><label className={labelCls}>{t('create.duration')}</label>
       <select className={inputCls} value={hours} onChange={(e) => setHours(e.target.value)}>
@@ -624,17 +646,33 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
           <div className="space-y-3">
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
-            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={lookupReg} /></div>
+            <div><label className={labelCls}>{t('create.reg')}</label><input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={onRegBlur} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>{t('create.vin')}</label><input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} /></div>
-              <div><label className={labelCls}>{t('create.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value)} /></div>
+              <div>
+                <label className={labelCls}>{t('create.vin')}</label>
+                <input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} />
+                {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
+              </div>
+              <div>
+                <label className={labelCls}>{t('create.mileage')}</label>
+                <input className={inputCls} type="number" inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value)} />
+                {mileErr && <p className="text-[11px] text-danger mt-1">{t(mileErr === 'overflow' ? 'create.warn.mileageOverflow' : 'create.warn.mileageNan')}</p>}
+              </div>
             </div>
             {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupOwner')}</div>
             <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} value={cust} onChange={(e) => setCust(e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>{t('create.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
-              <div><label className={labelCls}>{t('create.email')}</label><input className={inputCls} type="email" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+              <div>
+                <label className={labelCls}>{t('create.phone')}</label>
+                <input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                {phoneWarn(phone) && <p className={warnCls}>{t('create.warn.phone')}</p>}
+              </div>
+              <div>
+                <label className={labelCls}>{t('create.email')}</label>
+                <input className={inputCls} type="email" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={email} onChange={(e) => setEmail(e.target.value)} />
+                {emailWarn(email) && <p className={warnCls}>{t('create.warn.email')}</p>}
+              </div>
             </div>
             {/* Booking */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupBooking')}</div>
@@ -647,7 +685,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
               {durationField}
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={createJob} disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
+              <button onClick={createJob} disabled={busy || !canSubmit} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
               <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
             </div>
           </div>

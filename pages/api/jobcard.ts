@@ -19,7 +19,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
-import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin } from '@/lib/vehicle-identity';
+import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
 
 type CreateJobCardBody = {
   registration: string;
@@ -72,7 +72,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     const body = (req.body || {}) as CreateJobCardBody;
 
-    const registration = (body.registration || '').trim().toUpperCase();
+    // Canonical registration (uppercase, non-alphanumeric stripped) — both the stored/display value and
+    // the match key, so "BK69 YAV" and "BK69YAV" are ONE vehicle.
+    const registration = normalizeReg(body.registration) || '';
     const customerName = (body.customerName || '').trim();
 
     if (!registration) return res.status(400).json({ message: 'Registration is required.' });
@@ -99,7 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let mileage: number | null = null;
     if (body.mileage !== undefined && body.mileage !== null && `${body.mileage}`.trim() !== '') {
       const m = Number(body.mileage);
-      if (!Number.isFinite(m) || m < 0) return res.status(400).json({ message: 'Invalid mileage.' });
+      if (!Number.isFinite(m) || m < 0 || !Number.isInteger(m)) return res.status(400).json({ message: 'Mileage must be a whole number.' });
+      if (m > 999999) return res.status(400).json({ message: 'Mileage must be under 1,000,000.' }); // 7+ digits overflow the column
       mileage = Math.trunc(m);
     }
 
@@ -117,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Find-or-create Vehicle by registration within the tenant. Owner is resolved from the
         // ownership EDGE (Stage B) — customer_id is never read here.
         const vehicle = await tx.vehicle.findFirst({
-          where: { group_id: groupId, registration },
+          where: { group_id: groupId, registration_normalized: registration }, // canonical match (no-space)
           select: { id: true },
         });
 
@@ -151,6 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // Stage C: Vehicle.customer_id is retired — no longer written. The owner lives on the
               // VehicleOwnership edge (created just below). The column stays nullable + vestigial.
               registration,
+              registration_normalized: registration, // registration is already canonical
               vin: body.vin?.trim() || null,
               vin_normalized: normalizeVin(body.vin),
               mileage_at_create: mileage,
@@ -197,8 +201,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m.startsWith('CLASH:')) return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
-      console.error('Job Card Create Error:', error);
-      return res.status(500).json({ message: 'Failed to create job card. Check logs for details.' });
+      console.error('Job Card Create Error:', error); // real detail stays in the server log, never the user
+      return res.status(500).json({ message: 'Something went wrong — please try again.' });
     }
   }
 

@@ -75,6 +75,19 @@
     "groupVehicle": "Vehicle",
     "groupOwner": "Owner",
     "groupBooking": "Booking",
+    "warn": {
+      "vin": "A VIN is 17 characters, letters and numbers, no I, O or Q.",
+      "phone": "That doesn’t look like a phone number.",
+      "email": "That doesn’t look like a valid email.",
+      "mileageNan": "Mileage must be a whole number.",
+      "mileageOverflow": "That looks like a phone number — did you mean the Phone field? Mileage must be under 1,000,000."
+    },
+    "err": {
+      "regRequired": "Registration is required.",
+      "customerRequired": "Customer is required.",
+      "booking": "Pick a lift and a duration.",
+      "generic": "Something went wrong — please try again."
+    },
     "noteTitle": "Title",
     "notePlaceholder": "e.g. Parts delivery, bay 3",
     "colour": "Colour",

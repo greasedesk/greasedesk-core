@@ -20,7 +20,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
-import { getCurrentOwnerId, normalizeVin } from '@/lib/vehicle-identity';
+import { getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
 
 type OwnerIn = { name?: string; phone?: string; email?: string; address?: string };
@@ -61,12 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let mileageVal: number | null | undefined = undefined;
   if (vehicle) {
     if (vehicle.registration !== undefined) {
-      newReg = clean(vehicle.registration);
+      newReg = normalizeReg(vehicle.registration); // canonical (uppercase, no spaces)
       if (!newReg) return res.status(400).json({ message: 'Registration cannot be empty.' });
     }
     if (vehicle.mileageIn !== undefined && vehicle.mileageIn !== null && String(vehicle.mileageIn).trim() !== '') {
       const n = Number(vehicle.mileageIn);
-      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: 'Invalid mileage.' });
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return res.status(400).json({ message: 'Mileage must be a whole number.' });
+      if (n > 999999) return res.status(400).json({ message: 'Mileage must be under 1,000,000.' });
       mileageVal = Math.trunc(n);
     } else if (vehicle.mileageIn !== undefined) {
       mileageVal = null;
@@ -75,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ----- registration soft-guard (non-blocking) -----
   if (newReg && newReg !== card.vehicle?.registration && !confirmReg) {
-    const other = await prisma.vehicle.findFirst({ where: { group_id: user.group_id, registration: newReg, id: { not: card.vehicle_id } }, select: { id: true } });
+    const other = await prisma.vehicle.findFirst({ where: { group_id: user.group_id, registration_normalized: newReg, id: { not: card.vehicle_id } }, select: { id: true } });
     if (other) return res.status(409).json({ code: 'REG_COLLISION', message: 'A vehicle with this registration already exists here. Continue anyway?' });
   }
 
@@ -99,7 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (vehicle) {
         const vnext: any = {};
         const vdiff: any = {};
-        if (newReg !== null && newReg !== card.vehicle?.registration) { vnext.registration = newReg; vdiff.registration = { from: card.vehicle?.registration, to: newReg }; }
+        if (newReg !== null && newReg !== card.vehicle?.registration) { vnext.registration = newReg; vnext.registration_normalized = newReg; vdiff.registration = { from: card.vehicle?.registration, to: newReg }; }
         if (vehicle.vin !== undefined) {
           const nv = clean(vehicle.vin);
           if (nv !== card.vehicle?.vin) { vnext.vin = nv; vnext.vin_normalized = normalizeVin(nv); vdiff.vin = { from: card.vehicle?.vin, to: nv }; }

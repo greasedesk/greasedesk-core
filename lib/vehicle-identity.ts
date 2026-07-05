@@ -17,6 +17,16 @@ export function normalizeVin(vin?: string | null): string | null {
 }
 
 /**
+ * Canonical registration match key: uppercase, every non-alphanumeric char stripped (spaces, dashes).
+ * "BK69 YAV" / "bk69-yav" → "BK69YAV". THE one place reg matching is derived — find-or-create + the reg
+ * lookup compare on this so inconsistent spacing can't spawn duplicate vehicles. Returns null if empty.
+ */
+export function normalizeReg(reg?: string | null): string | null {
+  const n = (reg || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return n.length ? n : null;
+}
+
+/**
  * Stage B owner resolution: the CURRENT owner of a vehicle, read from the ownership edge — never
  * from Vehicle.customer_id. Returns the customer_id of the single is_current edge, or null if the
  * vehicle has no current owner (a genuinely new vehicle, or a pre-backfill anomaly the caller heals).

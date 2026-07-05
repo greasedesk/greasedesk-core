@@ -421,6 +421,9 @@ model Vehicle {
   identity_id       String?
   vin_normalized    String?
   registration      String
+  // Canonical match key (uppercase, non-alphanumeric stripped) so "BK69 YAV" / "bk69yav" resolve to
+  // ONE vehicle — mirrors vin_normalized. find-or-create + reg lookup compare on this, never the raw.
+  registration_normalized String?
   vin               String?
   make              String?
   model             String?
@@ -443,6 +446,7 @@ model Vehicle {
   @@index([registration])
   @@index([identity_id])
   @@index([group_id, vin_normalized])
+  @@index([group_id, registration_normalized])
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped

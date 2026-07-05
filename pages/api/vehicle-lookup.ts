@@ -11,7 +11,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
-import { getCurrentOwnerId } from '@/lib/vehicle-identity';
+import { getCurrentOwnerId, normalizeReg } from '@/lib/vehicle-identity';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -22,12 +22,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const reg = String(req.query.reg || '').trim().toUpperCase();
+  const reg = normalizeReg(req.query.reg as string);
   if (!reg) return res.status(400).json({ message: 'Missing reg.' });
 
-  // Tenant-scoped find-by-reg (same match key the create path uses). Latest wins if a reg somehow dupes.
+  // Tenant-scoped find-by-CANONICAL-reg (same key the create path matches). Latest wins if a reg dupes.
   const vehicle = (await prisma.vehicle.findFirst({
-    where: { group_id: user.group_id, registration: reg },
+    where: { group_id: user.group_id, registration_normalized: reg },
     orderBy: { created_at: 'desc' },
     select: { id: true, registration: true, vin: true, mileage_at_create: true },
   })) as { id: string; registration: string; vin: string | null; mileage_at_create: number | null } | null;
