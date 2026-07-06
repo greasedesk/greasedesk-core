@@ -160,14 +160,16 @@ export default function NewJobCardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Registration *</label>
+              {/* Plate-sized + live-normalised via the same normalizeReg the blur/submit path uses. */}
               <input
                 name="registration"
                 value={form.registration}
-                onChange={handleField}
+                maxLength={8}
+                onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
                 onBlur={onRegBlur}
                 required
-                placeholder="e.g. AB12 CDE"
-                className={`${inputClass} uppercase`}
+                placeholder="e.g. AB12CDE"
+                className={`${inputClass} uppercase max-w-[12rem] tracking-wider`}
               />
               {looking && <p className="text-xs text-muted mt-1">Looking up vehicle…</p>}
             </div>

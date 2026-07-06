@@ -756,7 +756,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     onDone();
   }
 
-  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent'; // ≥16px on mobile — under 16px iOS Safari zooms on focus
   const labelCls = 'block text-xs text-muted mb-1';
   const warnCls = 'text-[11px] text-warn mt-1'; // optional-field format warning (non-blocking)
   const durationField = (
@@ -787,7 +787,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
             <div>
               <label className={labelCls}>{t('create.reg')}</label>
-              <input className={inputCls} value={reg} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(e.target.value)} onBlur={onRegBlur} />
+              <input className={`${inputCls} max-w-[11rem] tracking-wider`} value={reg} maxLength={8} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(normalizeReg(e.target.value) || '')} onBlur={onRegBlur} />
               {dvlaBusy && <p className="text-[11px] text-muted mt-1">{t('create.dvlaLooking')}</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -932,7 +932,7 @@ function MoveDialog({ card, resources, onClose, onDone }: {
     onDone();
   }
 
-  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent'; // ≥16px on mobile — under 16px iOS Safari zooms on focus
   const labelCls = 'block text-xs text-muted mb-1';
 
   return (
@@ -984,7 +984,7 @@ function EditNoteDialog({ note, resources, onClose, onDone }: {
   const [confirmDel, setConfirmDel] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const fieldBase = 'p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
+  const fieldBase = 'p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent'; // ≥16px on mobile (iOS zoom threshold)
   const inputCls = `w-full ${fieldBase}`;
   const labelCls = 'block text-xs text-muted mb-1';
 
