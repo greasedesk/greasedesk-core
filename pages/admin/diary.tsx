@@ -140,6 +140,15 @@ export default function DiaryPage(props: PageProps) {
     const el = scrollRef.current;
     if (el) el.scrollTop = Math.max(0, (openHour - 1) * 60 * PX_PER_MIN);
   }, [openHour, view, anchor]);
+  // MOBILE DEFAULT = Day. Only when the URL carries NO explicit view (the URL stays the single view-
+  // state source) and the viewport is under the tablet breakpoint. One replace on first mobile visit.
+  useEffect(() => {
+    if (!router.isReady || noSites) return;
+    if (router.query.view === undefined && typeof window !== 'undefined' && window.innerWidth < 768) {
+      router.replace(`/admin/diary?site=${siteId}&view=day&date=${anchor}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady]);
 
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
   // Right-click / long-press context menu. Empty-space form: {date, resourceId?, atMin}. Booking form: {card}.
@@ -249,6 +258,27 @@ export default function DiaryPage(props: PageProps) {
 
   // Day-level notes (no lift) shown as a banner strip in day view.
   const dayLevelNotes = view === 'day' ? notes.filter((n) => !n.resourceId && segmentsForDay(n, anchor).length > 0) : [];
+
+  // MOBILE day list: the day's cards + timed (lift) notes, time-sorted. A vertical list makes
+  // concurrent bookings stack card-above-card by construction — the grid's layoutOverlap column
+  // packing has no role here. Same server-gated data; nothing re-fetched.
+  const listItems = view === 'day'
+    ? ([
+        ...cards.map((c) => ({ kind: 'job' as const, at: Date.parse(c.startAt), card: c })),
+        ...notes.filter((n) => !!n.resourceId).map((n) => ({ kind: 'note' as const, at: Date.parse(n.startAt), note: n })),
+      ].sort((a, b) => a.at - b.at))
+    : [];
+  // Swipe left/right on the list = next/prev day (Apple-calendar-style). Threshold beats scroll noise.
+  const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  const onListTouchStart = (e: React.TouchEvent) => { const t0 = e.touches[0]; swipeRef.current = { x: t0.clientX, y: t0.clientY }; };
+  const onListTouchEnd = (e: React.TouchEvent) => {
+    const s = swipeRef.current; swipeRef.current = null;
+    if (!s) return;
+    const t0 = e.changedTouches[0];
+    const dx = t0.clientX - s.x, dy = t0.clientY - s.y;
+    if (Math.abs(dx) < 60 || Math.abs(dy) > 80) return; // too short / mostly vertical (a scroll)
+    router.push(`/admin/diary?site=${siteId}&view=day&date=${dx < 0 ? next : prev}`);
+  };
 
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
@@ -383,9 +413,61 @@ export default function DiaryPage(props: PageProps) {
                 ))}
               </div>
             )}
+            {/* MOBILE DAY LIST (<md, day view only): full-width stacked cards on a vertical time axis —
+                concurrent bookings stack card-above-card (time-sorted; no side-by-side columns). Reads
+                the SAME server-gated data as the grid (valuePennies zeroed w/o see-values; day totals
+                already in `finance` since the day IS the period). Week view + md+ keep the grid. */}
+            {view === 'day' && (
+              <div className="md:hidden" onTouchStart={onListTouchStart} onTouchEnd={onListTouchEnd}>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    {showMoney && finance.canSeeValues && (
+                      <div className="text-sm"><span className="text-muted">{t('finance.booked')}: </span><span className="font-semibold text-ink tabular-nums">{money(finance.bookedPennies)}{exVatSuffix}</span></div>
+                    )}
+                    {showMoney && finance.canSeeMargin && (
+                      <div className="text-sm"><span className="text-muted">{t('finance.margin')}: </span><span className={`font-semibold tabular-nums ${finance.marginPennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(finance.marginPennies)}{exVatSuffix}</span></div>
+                    )}
+                  </div>
+                  {anchor !== today && (
+                    <Link href={`/admin/diary?site=${siteId}&view=day&date=${today}`} className="shrink-0 text-sm text-accent border border-line rounded-lg px-3 py-1.5 bg-surface">{t('todayBtn')}</Link>
+                  )}
+                </div>
+                {listItems.length === 0 ? (
+                  <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('mobileList.empty')}</div>
+                ) : (
+                  <div className="space-y-2">
+                    {listItems.map((it) => it.kind === 'job' ? (
+                      <button key={`j-${it.card.id}`} onClick={() => openCard(it.card.id)}
+                        className="w-full text-left bg-surface border border-line rounded-xl p-3 flex gap-3 items-start active:bg-surface-muted"
+                        style={{ borderLeft: `4px solid ${resolveColour(it.card.resourceColour)}` }}>
+                        <div className="shrink-0 text-sm text-muted tabular-nums pt-0.5 w-14">{hhmm(it.card.startAt)}<br /><span className="text-xs">{hhmm(it.card.endAt)}</span></div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-ink">{it.card.reg}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-muted whitespace-nowrap">{it.card.resourceName}</span>
+                          </div>
+                          <div className="text-sm text-ink">{it.card.customer}</div>
+                          {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
+                        </div>
+                        {showMoney && finance.canSeeValues && (
+                          <div className={`shrink-0 text-sm font-semibold tabular-nums ${it.card.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(it.card.valuePennies)}</div>
+                        )}
+                      </button>
+                    ) : (
+                      <div key={`n-${it.note.id}`} onDoubleClick={() => { if (canManage) setEditNote(it.note); }}
+                        className="w-full bg-surface-muted border-2 border-dashed rounded-xl p-3 flex gap-3 items-center"
+                        style={{ borderColor: it.note.colour || '#94a3b8' }}>
+                        <div className="shrink-0 text-sm text-muted tabular-nums w-14">{hhmm(it.note.startAt)}</div>
+                        <div className="min-w-0 flex-1 text-sm italic text-ink">{it.note.title}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {/* ONE scroll pane: 24h tall (vertical scroll) + week columns (horizontal). Column headers are
                 sticky-top, the time axis sticky-left. On load it lands scrolled to the working day. */}
-            <div ref={scrollRef} className="overflow-auto border border-line rounded-lg" style={{ height: (REST_MIN + 28) * PX_PER_MIN, maxHeight: '78vh' }}>
+            <div ref={scrollRef} className={`overflow-auto border border-line rounded-lg ${view === 'day' ? 'hidden md:block' : ''}`} style={{ height: (REST_MIN + 28) * PX_PER_MIN, maxHeight: '78vh' }}>
               <div className="flex min-w-full">
                 <div className="w-14 shrink-0 sticky left-0 z-20 bg-surface">
                   <div className={`${headH} sticky top-0 z-30 bg-surface border-b border-r border-line`} />

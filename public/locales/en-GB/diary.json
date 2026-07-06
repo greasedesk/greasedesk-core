@@ -154,5 +154,8 @@
     "confirmYes": "Yes, delete",
     "saveError": "Could not save the note.",
     "deleteError": "Could not delete the note."
+  },
+  "mobileList": {
+    "empty": "Nothing booked this day."
   }
 }
