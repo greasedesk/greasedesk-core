@@ -153,7 +153,7 @@ export default function DiaryPage(props: PageProps) {
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
   // Right-click / long-press context menu. Empty-space form: {date, resourceId?, atMin}. Booking form: {card}.
   const [menu, setMenu] = useState<{ x: number; y: number; date?: string; resourceId?: string; atMin?: number; card?: DiaryCard } | null>(null);
-  const [create, setCreate] = useState<{ date: string; startAt: string; resourceId?: string; mode: 'job' | 'note' } | null>(null);
+  const [create, setCreate] = useState<{ date: string; startAt: string; resourceId?: string; mode: 'job' | 'note'; pickWhen?: boolean } | null>(null);
   const [move, setMove] = useState<{ card: DiaryCard } | null>(null);
   const [editNote, setEditNote] = useState<DiaryNoteView | null>(null);
   const clickTimer = useRef<number | null>(null);
@@ -341,21 +341,34 @@ export default function DiaryPage(props: PageProps) {
       <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h1 className="text-2xl font-bold text-ink">{t('title')} — {siteName}</h1>
-          {/* flex-wrap + shrink-0 segments: at 390px the cluster wraps instead of crushing the toggle
-              (was clipping "Day" to "D"). No-op on desktop — there's no shrink pressure there. */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex shrink-0 rounded-lg overflow-hidden border border-line">
+          {/* MOBILE (<md): two lines — line 1 the Week/Day toggle, line 2 ‹ date › left + "+ Add booking"
+              right. md+: the wrapper divs use md:contents (they vanish from layout) so the toolbar is the
+              exact original single flex-wrap row — desktop/tablet untouched. */}
+          <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
+            <div className="flex shrink-0 self-start md:self-auto rounded-lg overflow-hidden border border-line">
               <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('week')}</Link>
               <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('day')}</Link>
             </div>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
-            <div className="relative">
-              <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
-              {pickerOpen && (
-                <DayPicker siteId={siteId} view={view} anchor={anchor} today={today} weekStart={weekStart} locale={locale} t={t} onClose={() => setPickerOpen(false)} />
+            <div className="flex items-center justify-between gap-2 md:contents">
+              <div className="flex items-center gap-2 md:contents">
+                <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
+                <div className="relative">
+                  <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
+                  {pickerOpen && (
+                    <DayPicker siteId={siteId} view={view} anchor={anchor} today={today} weekStart={weekStart} locale={locale} t={t} onClose={() => setPickerOpen(false)} />
+                  )}
+                </div>
+                <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} aria-label={t('next')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">→</Link>
+              </div>
+              {/* Mobile-only. Opens the SAME CreateDialog/create path as the grid gesture, blank: date
+                  pre-set to the viewed day, no default lift/time (pickWhen). */}
+              {canManage && (
+                <button onClick={() => setCreate({ date: anchor, startAt: '', mode: 'job', pickWhen: true })}
+                  className="md:hidden shrink-0 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5">
+                  {t('addBooking')}
+                </button>
               )}
             </div>
-            <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} aria-label={t('next')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">→</Link>
           </div>
         </div>
 
@@ -615,7 +628,10 @@ export default function DiaryPage(props: PageProps) {
 
 // ---- create dialogue (module scope so inputs don't remount on keystroke) ----
 function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onDone }: {
-  info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string };
+  // pickWhen = opened WITHOUT cell context (the mobile toolbar "+ Add booking"): date pre-set to the
+  // viewed day, but the user picks the start time AND the lift — no fabricated defaults. Same dialog,
+  // same /api/jobcard path as the grid gesture; the grid path is untouched.
+  info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string; pickWhen?: boolean };
   siteId: string; resources: ResourceCol[]; defaultResourceId: string | null;
   onClose: () => void; onDone: () => void;
 }) {
@@ -624,6 +640,9 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hours, setHours] = useState('1');
+  const pickWhen = !!info.pickWhen;
+  const [whenDate, setWhenDate] = useState(info.date);
+  const [whenTime, setWhenTime] = useState(''); // deliberately empty — the user must choose
   // job fields — Registration + Customer anchor the card; the rest are OPTIONAL (capture-if-available so
   // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
@@ -631,7 +650,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   // Vehicle data — make/colour/year/fuel/engine auto-fill from DVLA VES on a new reg; model is manual.
   const [make, setMake] = useState(''); const [model, setModel] = useState(''); const [vColour, setVColour] = useState('');
   const [year, setYear] = useState(''); const [fuel, setFuel] = useState(''); const [engineCc, setEngineCc] = useState('');
-  const [liftId, setLiftId] = useState(defaultResourceId ?? resources[0]?.id ?? '');
+  const [liftId, setLiftId] = useState(pickWhen ? '' : (defaultResourceId ?? resources[0]?.id ?? '')); // blank flow: no default lift
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
   // Reg auto-fill: on reg-blur, look up a known car and pre-fill its vehicle + current-owner details so
@@ -690,20 +709,22 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
       } finally { setDvlaBusy(false); }
     } catch { /* best-effort — a failed pre-fill / DVLA error never blocks manual entry */ }
   }
-  // End is naive start + hours (the /api/jobcard bridge → workingMinutes = end-start = hours*60; the
-  // footprint re-expands correctly around close/breaks). Duration is the source of truth.
-  const endAt = new Date(Date.parse(info.startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString();
-  const when = `${info.date} · ${info.startAt.slice(11, 16)} · ${hours} hr`;
+  // Start: seeded from the clicked cell, or user-picked (pickWhen). End is naive start + hours (the
+  // /api/jobcard bridge → workingMinutes = end-start = hours*60; the footprint re-expands correctly
+  // around close/breaks). Duration is the source of truth.
+  const startAt = pickWhen ? (whenTime ? `${whenDate}T${whenTime}:00.000Z` : '') : info.startAt;
+  const endAt = startAt ? new Date(Date.parse(startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString() : '';
+  const when = pickWhen ? '' : `${info.date} · ${info.startAt.slice(11, 16)} · ${hours} hr`;
 
   // Blocking checks: required (reg, customer) + mileage (overflow breaks the DB write). Optional-field
   // format issues (VIN/phone/email) only WARN inline — messy real data is allowed through.
   const mileErr = mileageError(mileage);
   const regCanon = normalizeReg(reg) || '';
-  const canSubmit = !!regCanon && !!cust.trim() && !!liftId && Number(hours) > 0 && !mileErr;
+  const canSubmit = !!regCanon && !!cust.trim() && !!liftId && Number(hours) > 0 && !mileErr && !!startAt;
   async function createJob() {
     if (!regCanon) { setErr(t('create.err.regRequired')); return; }
     if (!cust.trim()) { setErr(t('create.err.customerRequired')); return; }
-    if (!liftId || !(Number(hours) > 0)) { setErr(t('create.err.booking')); return; }
+    if (!liftId || !(Number(hours) > 0) || !startAt) { setErr(t('create.err.booking')); return; }
     if (mileErr) { setErr(t(mileErr === 'overflow' ? 'create.warn.mileageOverflow' : 'create.warn.mileageNan')); return; }
     setBusy(true); setErr(null);
     const res = await fetch('/api/jobcard', {
@@ -714,7 +735,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
         fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
         motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined,
-        siteId, resourceId: liftId, startAt: info.startAt, endAt,
+        siteId, resourceId: liftId, startAt, endAt,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -727,7 +748,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     setBusy(true); setErr(null);
     const res = await fetch('/api/diary-notes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteId, title, startAt: info.startAt, endAt, resourceId: noteLift || null, colour: colour || null }),
+      body: JSON.stringify({ siteId, title, startAt, endAt, resourceId: noteLift || null, colour: colour || null }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
@@ -750,7 +771,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
       <div className="bg-surface w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-line shadow-xl p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold text-ink">{t('create.title')}</h2>
-        <p className="text-sm text-muted mb-4">{when}</p>
+        {when ? <p className="text-sm text-muted mb-4">{when}</p> : <div className="mb-4" />}
         {err && <div className="bg-danger-soft text-danger rounded-lg p-2 text-sm mb-3">{err}</div>}
 
         {mode === 'choose' && (
@@ -817,9 +838,16 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             </div>
             {/* Booking */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupBooking')}</div>
+            {pickWhen && (
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>{t('create.date')}</label><input className={inputCls} type="date" value={whenDate} onChange={(e) => setWhenDate(e.target.value)} /></div>
+                <div><label className={labelCls}>{t('create.startTime')}</label><input className={inputCls} type="time" value={whenTime} onChange={(e) => setWhenTime(e.target.value)} /></div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.lift')}</label>
                 <select className={inputCls} value={liftId} onChange={(e) => setLiftId(e.target.value)}>
+                  {pickWhen && <option value="">{t('create.pickLift')}</option>}
                   {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>

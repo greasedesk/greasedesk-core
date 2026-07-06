@@ -124,7 +124,10 @@
     "jobFailed": "Could not create the job card.",
     "noteFailed": "Could not add the note.",
     "motExpiry": "MOT expiry",
-    "lastMotMileage": "Mileage at last MOT"
+    "lastMotMileage": "Mileage at last MOT",
+    "date": "Date",
+    "startTime": "Start time",
+    "pickLift": "Choose a lift…"
   },
   "menu": {
     "hint": "Right-click (or long-press) the diary to book a job or add a note.",
@@ -157,5 +160,6 @@
   },
   "mobileList": {
     "empty": "Nothing booked this day."
-  }
+  },
+  "addBooking": "+ Add booking"
 }
