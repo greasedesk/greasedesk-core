@@ -7,7 +7,7 @@
  * Env: R2_ACCOUNT_ID, R2_ENDPOINT, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY. The endpoint
  * is read directly (not derived). Best-effort: no creds → null (feature dormant, never crashes).
  *
- * Key layout (tenant-partitioned): {groupId}/{jobCardId}/{stage}/{slot}/{photoId}.jpg
+ * Key layout (tenant-partitioned): {groupId}/{jobCardId}/{stage}/{slot}/{photoId}.{ext} (jpg|png|mp4|webm|mov)
  */
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -38,10 +38,10 @@ function client(): S3Client | null {
 
 const bucket = () => process.env.R2_BUCKET_NAME as string;
 
-/** Tenant-partitioned object key. */
-export function photoKey(groupId: string, jobCardId: string, stage: string, slot: string, photoId: string): string {
+/** Tenant-partitioned object key. Extension follows the (server-validated) content type: jpg/png/mp4/webm/mov. */
+export function photoKey(groupId: string, jobCardId: string, stage: string, slot: string, photoId: string, ext = 'jpg'): string {
   const safe = (s: string) => (s || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return `${safe(groupId)}/${safe(jobCardId)}/${safe(stage)}/${safe(slot)}/${photoId}.jpg`;
+  return `${safe(groupId)}/${safe(jobCardId)}/${safe(stage)}/${safe(slot)}/${photoId}.${safe(ext)}`;
 }
 
 /** Presigned PUT for a browser upload (5 min). Returns null if R2 isn't configured. */

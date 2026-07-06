@@ -15,6 +15,17 @@ import { photoKey, presignPut, r2Configured } from '@/lib/r2';
 
 const STAGES = ['intake', 'injob', 'completion'];
 
+// Server-side content-type ALLOWLIST — never trust the client's declared type blindly. Maps each
+// permitted type to its key extension + media kind. video/quicktime included because iOS native
+// capture emits .mov; rejecting it would refuse every iPhone upload.
+const ALLOWED: Record<string, { ext: string; media: 'photo' | 'video' }> = {
+  'image/jpeg': { ext: 'jpg', media: 'photo' },
+  'image/png': { ext: 'png', media: 'photo' },
+  'video/mp4': { ext: 'mp4', media: 'video' },
+  'video/webm': { ext: 'webm', media: 'video' },
+  'video/quicktime': { ext: 'mov', media: 'video' },
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
@@ -25,6 +36,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { jobCardId, stage, slot, contentType } = (req.body || {}) as { jobCardId?: string; stage?: string; slot?: string; contentType?: string };
   if (!jobCardId || !stage || !slot || !STAGES.includes(stage)) return res.status(400).json({ message: 'jobCardId, stage and slot are required.' });
+  const allowed = ALLOWED[String(contentType || 'image/jpeg').toLowerCase()];
+  if (!allowed) return res.status(400).json({ message: 'That file type isn’t supported — use a photo (JPEG/PNG) or a video (MP4/WebM/MOV).' });
 
   const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, group_id: user.group_id }, select: { id: true, site_id: true } });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
@@ -32,9 +45,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
 
   const photoId = randomUUID();
-  const key = photoKey(user.group_id as string, jobCardId, stage, slot, photoId);
-  const uploadUrl = await presignPut(key, contentType || 'image/jpeg');
+  const key = photoKey(user.group_id as string, jobCardId, stage, slot, photoId, allowed.ext);
+  const uploadUrl = await presignPut(key, String(contentType || 'image/jpeg').toLowerCase());
   if (!uploadUrl) return res.status(502).json({ message: 'Could not prepare the upload.' });
 
-  return res.status(200).json({ photoId, key, uploadUrl });
+  // mediaType comes back to the client so the commit can't claim a video was a photo (or vice versa) —
+  // the commit route re-derives it from the key extension anyway (server-authoritative).
+  return res.status(200).json({ photoId, key, uploadUrl, mediaType: allowed.media });
 }

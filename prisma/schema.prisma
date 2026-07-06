@@ -649,6 +649,8 @@ model JobCardPhoto {
   stage       String? // intake | injob | completion
   slot        String? // angle key (front/rear/…) | 'freeform' | 'damage'
   label       String? // free-text (damage note, e.g. "Scratch — nearside door")
+  media_type  String? // 'photo' | 'video' — NULL means photo (pre-video rows; never backfilled)
+  duration_seconds Int? // video length (client-probed metadata; display only)
   r2_key      String? // private R2 object key; display via presigned GET (URL never stored)
   photo_type  String?
   file_url    String? // legacy (pre-R2); nullable now

@@ -210,7 +210,9 @@
     "delete": "Delete photo",
     "confirmDelete": "Delete this photo?",
     "uploadError": "Couldn’t upload the photo — please try again.",
-    "deleteError": "Couldn’t delete the photo."
+    "deleteError": "Couldn’t delete the photo.",
+    "videoAdd": "Video walkaround",
+    "videoSizeWarn": "That video is large ({{mb}} MB) — it will still upload, but may be slow on mobile data."
   },
   "quoteActions": {
     "title": "Quote actions",
