@@ -21,11 +21,14 @@ import { JobStatus, StageKey, QUOTE_DONE_STATUSES, INVOICE_DONE_STATUSES } from 
 export const TAB_KEYS = ['details', 'quote', 'intake', 'injob', 'completion', 'invoice'] as const;
 export type TabKey = typeof TAB_KEYS[number];
 
-export type TabState = { reachable: boolean; complete: boolean };
+export type TabState = { reachable: boolean; complete: boolean; skipped?: boolean };
 
 export type CardGateState = {
   status: JobStatus;
   stages: Record<StageKey, boolean>;
+  // Soft-gate skips (photo stages only): a skipped stage ADVANCES the spine like a completed one
+  // (complete OR skipped), but is displayed distinctly. Details never skips (data gate).
+  skipped?: Partial<Record<StageKey, boolean>>;
   hasOwner: boolean;         // a current owner resolves via the VehicleOwnership edge
   hasRegistration: boolean;  // the car has a registration
 };
@@ -41,26 +44,28 @@ export function detailsMinDataMet(s: Pick<CardGateState, 'hasOwner' | 'hasRegist
 }
 
 export function computeTabs(s: CardGateState): Record<TabKey, TabState> {
-  const detailsComplete = !!s.stages.details;
+  const skippedOf = (k: StageKey) => !s.stages[k] && !!s.skipped?.[k]; // display: skipped-not-done
+  const advanced = (k: StageKey) => !!s.stages[k] || !!s.skipped?.[k]; // spine: complete OR skipped
+  const detailsComplete = !!s.stages.details; // Details is done-only — never skippable
   const quoteComplete = QUOTE_DONE_STATUSES.includes(s.status);
-  const intakeComplete = !!s.stages.intake;
-  const injobComplete = !!s.stages.injob;
-  const completionComplete = !!s.stages.complete;
+  const intakeComplete = advanced('intake');
+  const injobComplete = advanced('injob');
+  const completionComplete = advanced('complete');
   const invoiceComplete = INVOICE_DONE_STATUSES.includes(s.status);
 
   const tabs: Record<TabKey, TabState> = {
     details: { reachable: true, complete: detailsComplete },
     quote: { reachable: detailsComplete, complete: quoteComplete },
-    intake: { reachable: quoteComplete, complete: intakeComplete },
-    injob: { reachable: intakeComplete, complete: injobComplete },
-    completion: { reachable: injobComplete, complete: completionComplete },
+    intake: { reachable: quoteComplete, complete: intakeComplete, skipped: skippedOf('intake') },
+    injob: { reachable: intakeComplete, complete: injobComplete, skipped: skippedOf('injob') },
+    completion: { reachable: injobComplete, complete: completionComplete, skipped: skippedOf('complete') },
     invoice: { reachable: completionComplete, complete: invoiceComplete },
   };
 
   // Cancelled: everything viewable (read-only). Reachability opened so history isn't stranded; the
   // page renders a cancelled banner and disables mutating controls. Completeness reflects reality.
   if (s.status === 'cancelled') {
-    for (const k of TAB_KEYS) tabs[k] = { reachable: true, complete: tabs[k].complete };
+    for (const k of TAB_KEYS) tabs[k] = { ...tabs[k], reachable: true };
   }
   return tabs;
 }

@@ -134,10 +134,10 @@
   "cancelledBanner": "This job is cancelled — everything is read-only.",
   "comeback": {
     "label": "Warranty / comeback (no charge)",
-    "hint": "Work redone free — the estimate lines below stay intact as the real cost. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job). It won’t be invoiced.",
-    "banner": "Warranty / comeback — £0 revenue; margin drag = parts cost only. This job won’t be invoiced.",
-    "invoiceNote": "This is a comeback — it isn’t invoiced (no charge, no invoice number). Complete it below; the parts cost is still captured for reporting.",
-    "complete": "Complete job (no invoice)"
+    "hint": "Work redone free — the estimate lines below stay intact as the real cost. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job). It invoices at £0 on the warranty series — never a chargeable invoice number.",
+    "banner": "Warranty / comeback — £0 revenue; margin drag = parts cost only. Invoices at £0 (warranty series), never a chargeable number.",
+    "invoiceNote": "Warranty comeback — it reaches Invoice at £0. No chargeable invoice number is used; the warranty number series arrives with the invoicing build.",
+    "markInvoiced": "Mark invoiced (£0 warranty)"
   },
   "delete": {
     "button": "Delete card",
@@ -256,15 +256,21 @@
       },
       "intake": {
         "done": "Intake photos completed",
-        "undone": "Intake photos reopened"
+        "undone": "Intake photos reopened",
+        "skipped": "Intake photos skipped",
+        "unskipped": "Intake photos skip undone"
       },
       "injob": {
         "done": "In-Job photos completed",
-        "undone": "In-Job photos reopened"
+        "undone": "In-Job photos reopened",
+        "skipped": "In-Job photos skipped",
+        "unskipped": "In-Job photos skip undone"
       },
       "complete": {
         "done": "Completion photos completed",
-        "undone": "Completion photos reopened"
+        "undone": "Completion photos reopened",
+        "skipped": "Completion photos skipped",
+        "unskipped": "Completion photos skip undone"
       }
     },
     "accept": {
@@ -288,5 +294,14 @@
       "marked": "Marked as warranty / comeback",
       "cleared": "Comeback flag removed"
     }
+  },
+  "spine": {
+    "booked": "Booked"
+  },
+  "stageSkip": {
+    "button": "Skip this step",
+    "reasonPh": "Reason (optional)",
+    "confirm": "Skip",
+    "skippedToggle": "{{label}} skipped — tap to undo"
   }
 }

@@ -49,6 +49,7 @@ type Props = {
   siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
   stages: Record<StageKey, boolean>;
+  skipped: { intake: boolean; injob: boolean; complete: boolean };
   invoice: { id: string; number: string } | null;
   events: AuditEvent[];
 };
@@ -96,25 +97,59 @@ export default function JobCardWorkspace(p: Props) {
   const postJSON = (url: string, body: unknown) => () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
   const setStage = (stage: StageKey, done: boolean) => run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }));
+  const setSkip = (stage: StageKey, skipTo: boolean, reason?: string) => run(`skip:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done: skipTo, skip: true, reason: reason || undefined }));
   const setStatus = (to: JobStatus) => run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }));
   const setComeback = (v: boolean) => run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }));
 
-  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: p.tabsState[k].reachable, complete: p.tabsState[k].complete }));
+  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: p.tabsState[k].reachable, complete: p.tabsState[k].complete, skipped: p.tabsState[k].skipped }));
 
   // ---------- panes ----------
   function StageComplete({ stage, label }: { stage: StageKey; label: string }) {
     const done = p.stages[stage];
+    const skippable = stage !== 'details'; // Details is a data gate — never skippable
+    const isSkipped = skippable && !done && p.skipped[stage === 'complete' ? 'complete' : stage as 'intake' | 'injob'];
+    const [skipOpen, setSkipOpen] = useState(false);
+    const [skipReason, setSkipReason] = useState('');
     const detailsBlocked = stage === 'details' && !(p.owner.name && p.owner.name !== '—' && p.vehicle.registration && p.vehicle.registration !== '—');
     return (
-      <button
-        type="button"
-        disabled={!p.canOperate || cancelled || busy !== null || (!done && detailsBlocked)}
-        title={!done && detailsBlocked ? t('tab.detailsMinData') : undefined}
-        onClick={() => setStage(stage, !done)}
-        className={`w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50 ${done ? 'bg-ok-soft text-ok border border-line' : 'bg-accent hover:bg-accent-hover text-white'}`}
-      >
-        {done ? t('stageComplete.doneToggle', { label }) : t('stageComplete.mark', { label })}
-      </button>
+      <div className="flex flex-col items-stretch sm:items-end gap-2">
+        <div className="flex flex-wrap gap-2 justify-end">
+          {/* Soft gate: skipped state — audited; undo re-opens the stage. */}
+          {isSkipped ? (
+            <button type="button" disabled={!p.canOperate || cancelled || busy !== null} onClick={() => setSkip(stage, false)}
+              className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-warn-soft text-warn border border-line disabled:opacity-50">
+              {t('stageSkip.skippedToggle', { label })}
+            </button>
+          ) : (
+            <>
+              {skippable && !done && p.canOperate && !cancelled && !skipOpen && (
+                <button type="button" disabled={busy !== null} onClick={() => setSkipOpen(true)}
+                  className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 border border-line text-muted hover:text-ink disabled:opacity-50">
+                  {t('stageSkip.button')}
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={!p.canOperate || cancelled || busy !== null || (!done && detailsBlocked)}
+                title={!done && detailsBlocked ? t('tab.detailsMinData') : undefined}
+                onClick={() => setStage(stage, !done)}
+                className={`w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50 ${done ? 'bg-ok-soft text-ok border border-line' : 'bg-accent hover:bg-accent-hover text-white'}`}
+              >
+                {done ? t('stageComplete.doneToggle', { label }) : t('stageComplete.mark', { label })}
+              </button>
+            </>
+          )}
+        </div>
+        {skipOpen && !isSkipped && (
+          <div className="flex flex-wrap gap-2 items-center justify-end">
+            <input value={skipReason} onChange={(e) => setSkipReason(e.target.value)} placeholder={t('stageSkip.reasonPh')}
+              className="flex-1 min-w-[10rem] p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+            <button type="button" disabled={busy !== null} onClick={() => { setSkip(stage, true, skipReason); setSkipOpen(false); setSkipReason(''); }}
+              className="text-sm font-semibold rounded-lg px-3 py-2 bg-warn-soft text-warn border border-line disabled:opacity-50">{t('stageSkip.confirm')}</button>
+            <button type="button" onClick={() => { setSkipOpen(false); setSkipReason(''); }} className="text-sm text-muted hover:text-ink px-2">{t('delete.cancel')}</button>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -160,11 +195,15 @@ export default function JobCardWorkspace(p: Props) {
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
         {p.isComeback ? (
-          // Comeback: no invoice ever (no sequential number burned). Completes straight to done.
+          // Comeback ON the spine: same invoiced/paid transitions as any card, but no chargeable
+          // number is minted (the warranty series arrives with the invoice-artifact build).
           <>
             <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>
-            {p.status === 'in_progress' && p.canOperate && !cancelled && (
-              <button disabled={busy !== null} onClick={() => setStatus('done')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.complete')}</button>
+            {p.status === 'in_progress' && p.canManage && !cancelled && (
+              <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
+            )}
+            {p.status === 'invoiced' && p.canManage && !cancelled && (
+              <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
           </>
         ) : p.invoice ? (
@@ -193,7 +232,7 @@ export default function JobCardWorkspace(p: Props) {
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
       {p.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
-      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
+      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} booked={{ label: t('spine.booked'), on: !!p.booking }} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
       {active === 'details' && <DetailsPane />}

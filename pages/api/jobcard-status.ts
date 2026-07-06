@@ -34,21 +34,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: {
       id: true, site_id: true, status: true, is_comeback: true,
       stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
+      stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
       _count: { select: { items: true } },
     },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
 
-  // Comeback = never invoiced (no bill, no sequential VAT number burned). Block the invoiced transition
-  // and give it a completion route instead: in_progress → done (operational, stages gated). Cost is
-  // still captured on the estimate lines; the job just never bills.
-  if (to === 'invoiced' && card.is_comeback) {
-    return res.status(409).json({ message: 'A comeback isn’t invoiced — mark it complete instead.' });
-  }
-  const comebackComplete = to === 'done' && card.status === 'in_progress' && card.is_comeback;
-  const tr = comebackComplete
-    ? { to: 'done' as JobStatus, kind: 'operational' as const, gate: 'all_stages_done' as const }
-    : findTransition(card.status as JobStatus, to);
+  // Comebacks stay ON the linear spine (ruling 2026-07-06 — supersedes the earlier invoiced-block +
+  // the comeback-only in_progress→done bypass): they reach `invoiced` like any card, but never mint
+  // from the CHARGEABLE sequence (see the numbering guard below).
+  const tr = findTransition(card.status as JobStatus, to);
   if (!tr) return res.status(400).json({ message: `Cannot move from ${card.status} to ${to}.` });
 
   const vis = await getVisibility(user.id as string);
@@ -66,8 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ message: 'Add at least one estimate line before quoting.' });
   }
   if (tr.gate === 'all_stages_done') {
-    const allDone = card.stage_details_done && card.stage_intake_done && card.stage_injob_done && card.stage_complete_done;
-    if (!allDone) return res.status(409).json({ message: 'Complete all four stages first.' });
+    // Soft gates: a photo stage counts when completed OR skipped (a skip is an audited first-class
+    // event). Details is done-only — it's a data gate, never skippable.
+    const allDone = card.stage_details_done
+      && (card.stage_intake_done || card.stage_intake_skipped)
+      && (card.stage_injob_done || card.stage_injob_skipped)
+      && (card.stage_complete_done || card.stage_complete_skipped);
+    if (!allDone) return res.status(409).json({ message: 'Complete (or skip) all four stages first.' });
   }
 
   // Apply the transition + its side effects atomically.
@@ -79,10 +79,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
       await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
       if (to === 'invoiced') {
-        const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
-        if (!existing) {
-          await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
-          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
+        // COMEBACK NUMBERING GUARD (locked planning decision): a £0 warranty invoice will use a
+        // SEPARATE warranty number series — never the chargeable customer-facing sequence. The
+        // warranty series itself is deferred to the invoice-artifact build; until then a comeback
+        // reaches `invoiced` WITHOUT minting anything (no chargeable number burned, no Invoice row).
+        // >>> FOLLOW-UP SLOT: the invoice-artifact build replaces this branch with
+        // >>> issueWarrantyInvoiceForCard(tx, ...) minting from the warranty series.
+        if (!card.is_comeback) {
+          const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
+          if (!existing) {
+            await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
+          }
         }
       } else if (to === 'paid') {
         await tx.invoice.updateMany({ where: { job_card_id: jobCardId, status: 'issued' }, data: { status: 'paid', paid_at: new Date() } });

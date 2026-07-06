@@ -57,3 +57,16 @@ export const STAGE_COLUMN: Record<StageKey, 'stage_details_done' | 'stage_intake
 export function isStageKey(v: unknown): v is StageKey {
   return typeof v === 'string' && (STAGE_KEYS as readonly string[]).includes(v);
 }
+
+// ---- soft-gate skips (photo/capture stages only — Details is a data gate, never skippable) ----
+// complete OR skipped advances the spine; the all_stages_done gate reads (done || skipped) for these.
+export const SKIPPABLE_STAGES = ['intake', 'injob', 'complete'] as const;
+export type SkippableStage = typeof SKIPPABLE_STAGES[number];
+export const SKIP_COLUMN: Record<SkippableStage, 'stage_intake_skipped' | 'stage_injob_skipped' | 'stage_complete_skipped'> = {
+  intake: 'stage_intake_skipped',
+  injob: 'stage_injob_skipped',
+  complete: 'stage_complete_skipped',
+};
+export function isSkippableStage(v: unknown): v is SkippableStage {
+  return typeof v === 'string' && (SKIPPABLE_STAGES as readonly string[]).includes(v);
+}

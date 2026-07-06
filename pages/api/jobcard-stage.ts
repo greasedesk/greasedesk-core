@@ -16,7 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
-import { isStageKey, STAGE_COLUMN, JobStatus, StageKey } from '@/lib/jobcard-status';
+import { isStageKey, STAGE_COLUMN, isSkippableStage, SKIP_COLUMN, JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, tabForStage, detailsMinDataMet } from '@/lib/jobcard-tabs';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
@@ -30,14 +30,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, stage, done } = (req.body || {}) as { jobCardId?: string; stage?: string; done?: boolean };
+  // skip=true toggles the SKIP flag instead of the done flag (soft gate — advances without capture).
+  // A skip is a first-class audited event: actor+timestamp from the audit row, optional free-text reason.
+  const { jobCardId, stage, done, skip, reason } = (req.body || {}) as { jobCardId?: string; stage?: string; done?: boolean; skip?: boolean; reason?: string };
   if (!jobCardId || !isStageKey(stage)) return res.status(400).json({ message: 'Missing jobCardId or invalid stage.' });
+  if (skip && !isSkippableStage(stage)) return res.status(400).json({ message: 'This step can’t be skipped.' });
 
   const card = (await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
     select: {
       id: true, site_id: true, status: true, vehicle_id: true,
       stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
+      stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
       vehicle: { select: { registration: true } },
     },
   })) as any;
@@ -56,6 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       details: card.stage_details_done, intake: card.stage_intake_done,
       injob: card.stage_injob_done, complete: card.stage_complete_done,
     } as Record<StageKey, boolean>,
+    skipped: { intake: card.stage_intake_skipped, injob: card.stage_injob_skipped, complete: card.stage_complete_skipped },
     hasOwner: !!ownerId,
     hasRegistration: !!(card.vehicle?.registration && String(card.vehicle.registration).trim()),
   };
@@ -67,15 +72,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ message: 'Add the customer and the registration before completing Customer Details.' });
   }
 
+  // Skip rules: can't skip an already-completed stage; completing a stage clears its skip flag
+  // (done wins — the honest state). Un-skip = skip:true, done:false.
+  if (skip && done && (card as any)[STAGE_COLUMN[stage]]) {
+    return res.status(409).json({ message: 'This step is already completed.' });
+  }
+
+  const data: any = skip
+    ? { [SKIP_COLUMN[stage as 'intake' | 'injob' | 'complete']]: !!done }
+    : { [STAGE_COLUMN[stage]]: !!done, ...(isSkippableStage(stage) && done ? { [SKIP_COLUMN[stage]]: false } : {}) };
+  const action = skip ? `stage.${stage}.${done ? 'skipped' : 'unskipped'}` : `stage.${stage}.${done ? 'done' : 'undone'}`;
+  const trimmedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 300) : null;
+
   const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const row = (await tx.jobCard.update({
       where: { id: jobCardId },
-      data: { [STAGE_COLUMN[stage]]: !!done },
-      select: { stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true },
+      data,
+      select: {
+        stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
+        stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
+      },
     })) as any;
     await writeAudit(tx, {
       groupId: user.group_id as string, userId: user.id as string, jobCardId,
-      action: `stage.${stage}.${done ? 'done' : 'undone'}`,
+      action: action as any,
+      diff: skip && done && trimmedReason ? { reason: trimmedReason } : undefined,
     });
     return row;
   });
@@ -85,6 +106,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stages: {
       details: updated.stage_details_done, intake: updated.stage_intake_done,
       injob: updated.stage_injob_done, complete: updated.stage_complete_done,
+    },
+    skipped: {
+      intake: updated.stage_intake_skipped, injob: updated.stage_injob_skipped, complete: updated.stage_complete_skipped,
     },
   });
 }

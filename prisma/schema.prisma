@@ -608,6 +608,12 @@ model JobCard {
   stage_intake_done   Boolean @default(false) // 2. Intake Photos
   stage_injob_done    Boolean @default(false) // 3. In-Job
   stage_complete_done Boolean @default(false) // 4. Complete Photos
+  // Photo stages are SOFT gates: complete OR skipped advances the spine (capture can't be enforced).
+  // A skip is a first-class audited event (actor + timestamp + optional reason in the audit diff).
+  // Details has NO skip — it's a data gate, not a capture stage.
+  stage_intake_skipped   Boolean @default(false)
+  stage_injob_skipped    Boolean @default(false)
+  stage_complete_skipped Boolean @default(false)
 
   // --- DIARY scheduling ---
   // start_at / end_at are the SOURCE OF TRUTH for scheduling (continuous time).

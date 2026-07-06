@@ -61,6 +61,7 @@ type PageProps = {
   siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
   stages: Record<StageKey, boolean>;
+  skipped: { intake: boolean; injob: boolean; complete: boolean };
   tabsState: Record<TabKey, TabState>;
   invoice: { id: string; number: string } | null;
   events: AuditEvent[];
@@ -120,6 +121,7 @@ export default function JobCardDetailPage(props: PageProps) {
         siteHours={props.siteHours}
         siteId={props.siteId}
         stages={props.stages}
+        skipped={props.skipped}
         invoice={props.invoice}
         events={props.events}
       />
@@ -270,9 +272,11 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
     details: !!row.stage_details_done, intake: !!row.stage_intake_done,
     injob: !!row.stage_injob_done, complete: !!row.stage_complete_done,
   };
+  const skipped = { intake: !!row.stage_intake_skipped, injob: !!row.stage_injob_skipped, complete: !!row.stage_complete_skipped };
   const tabsState = computeTabs({
     status: row.status as JobStatus,
     stages,
+    skipped,
     hasOwner: !!edgeOwnerId || !!row.customer,
     hasRegistration: !!(row.vehicle?.registration && String(row.vehicle.registration).trim()),
   });
@@ -320,7 +324,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
       garageNotes: row.garage_notes ?? '',
       lines, catalogue, fixedServices, tiers, promos,
       hasEstimate: (row.items as any[]).length > 0,
-      resources, booking, stages, tabsState, invoice, events,
+      resources, booking, stages, skipped, tabsState, invoice, events,
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6], breaks: parseBreaks(site?.breaks) },
       siteId: row.site_id,
     },
