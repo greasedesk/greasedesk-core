@@ -311,10 +311,12 @@ export default function DiaryPage(props: PageProps) {
       <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h1 className="text-2xl font-bold text-ink">{t('title')} — {siteName}</h1>
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-lg overflow-hidden border border-line">
-              <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('week')}</Link>
-              <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('day')}</Link>
+          {/* flex-wrap + shrink-0 segments: at 390px the cluster wraps instead of crushing the toggle
+              (was clipping "Day" to "D"). No-op on desktop — there's no shrink pressure there. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex shrink-0 rounded-lg overflow-hidden border border-line">
+              <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('week')}</Link>
+              <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('day')}</Link>
             </div>
             <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
             <div className="relative">
@@ -343,7 +345,9 @@ export default function DiaryPage(props: PageProps) {
         {/* Financial glance — only rendered for users the SERVER permitted (numbers omitted otherwise).
             The "Show values" toggle hides them at runtime ("turn the screen to the customer"). */}
         {hasFinance && (
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
+          // hidden below the tablet breakpoint — the Booked/Margin/Show-values panel is a large-screen
+          // detail (per-block values on the grid stay as-is; that call comes with the day-list redesign).
+          <div className="hidden md:flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
               {showMoney && finance.canSeeValues && (
                 <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums">{money(finance.bookedPennies)}{exVatSuffix}</span></span>

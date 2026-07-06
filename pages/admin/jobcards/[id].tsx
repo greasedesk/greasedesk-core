@@ -82,7 +82,13 @@ export default function JobCardDetailPage(props: PageProps) {
           <p className="text-muted text-sm mt-1">{t('createdAt', { when: new Date(props.createdAt).toLocaleString(props.locale) })}</p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <Link href={back.href} className="text-sm text-muted hover:text-ink">{back.label}</Link>
+          {/* Mobile: a real bordered button (≥44px tap target). sm+: the same subtle text link as before. */}
+          <Link
+            href={back.href}
+            className="text-sm inline-flex items-center justify-center min-h-[44px] px-3 rounded-lg border border-line bg-surface text-ink sm:min-h-0 sm:px-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:text-muted sm:hover:text-ink"
+          >
+            {back.label}
+          </Link>
           {props.isAdmin && <DeleteCardButton jobCardId={props.jobCardId} hasInvoice={!!props.invoice} />}
         </div>
       </div>
