@@ -7,6 +7,7 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
+import { normalizeReg } from '@/lib/vehicle-identity';
 
 type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
 type Vehicle = {
@@ -38,9 +39,47 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
+  // Manual DVSA re-lookup (returning-car backfill: creation skipped DVSA because the record existed).
+  // FILL-BLANKS-ONLY on the editable fields — a manual correction is never clobbered. The MOT trio
+  // has no manual input, so a lookup always refreshes it (a returning car's MOT data HAS changed);
+  // it's saved with the form and displayed immediately below.
+  const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null } | null>(null);
+  const [lookBusy, setLookBusy] = useState(false);
+  async function dvsaLookup() {
+    const r = normalizeReg(registration) || '';
+    if (!r) return;
+    setLookBusy(true); setMsg(null);
+    try {
+      const res = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' });
+      const d = res.ok ? await res.json() : { found: false };
+      if (!d.found) { setMsg({ text: t('detailsEdit.dvsaNone'), ok: false }); return; }
+      if (!make.trim() && d.make) setMake(d.make);
+      if (!model.trim() && d.model) setModel(d.model);
+      if (!colour.trim() && d.colour) setColour(d.colour);
+      if (!fuel.trim() && d.fuel) setFuel(d.fuel);
+      if (!vyear.trim() && d.year != null) setVYear(String(d.year));
+      if (!engineCc.trim() && d.engineCc != null) setEngineCc(String(d.engineCc));
+      setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
+      setMsg({ text: t('detailsEdit.dvsaDone'), ok: true });
+    } catch { setMsg({ text: t('detailsEdit.dvsaError'), ok: false }); }
+    finally { setLookBusy(false); }
+  }
+  const motShow = {
+    motExpiry: mot ? mot.motExpiry : vehicle.motExpiry,
+    lastMotMileage: mot ? mot.lastMotMileage : vehicle.lastMotMileage,
+    lastMotDate: mot ? mot.lastMotDate : vehicle.lastMotDate,
+  };
+
   async function submit(confirmReg: boolean) {
     setBusy(true); setMsg(null);
-    const body = { jobCardId, confirmReg, owner: { name, phone, email, address }, vehicle: { registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc } };
+    const body = {
+      jobCardId, confirmReg,
+      owner: { name, phone, email, address },
+      vehicle: {
+        registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc,
+        ...(mot ? { motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined } : {}),
+      },
+    };
     try {
       const res = await fetch('/api/jobcard-details', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
@@ -89,7 +128,15 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
       <h2 className="text-lg font-semibold text-ink mb-1">{t('tab.details')}</h2>
       <p className="text-xs text-muted mb-4">{t('field.ownerFromEdge')}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div><label className={labelCls}>{t('field.registration')}</label><input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" /></div>
+        <div>
+          <label className={labelCls}>{t('field.registration')}</label>
+          <input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" />
+          {/* Deliberate button press — returning cars never auto-fire DVSA (skip-on-existing stays). */}
+          <button type="button" disabled={lookBusy || busy || !registration.trim()} onClick={dvsaLookup}
+            className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline">
+            {lookBusy ? t('detailsEdit.dvsaBusy') : t('detailsEdit.dvsaButton')}
+          </button>
+        </div>
         <div><label className={labelCls}>{t('field.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.colour')}</label><input className={inputCls} value={colour} onChange={(e) => setColour(e.target.value)} /></div>
@@ -98,10 +145,10 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
         <div><label className={labelCls}>{t('field.engineCc')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={engineCc} onChange={(e) => setEngineCc(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.vin')}</label><input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} autoCapitalize="characters" /></div>
         <div><label className={labelCls}>{t('field.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={mileageIn} onChange={(e) => setMileageIn(e.target.value)} /></div>
-        {(vehicle.motExpiry || vehicle.lastMotMileage != null) && (
+        {(motShow.motExpiry || motShow.lastMotMileage != null) && (
           <div className="sm:col-span-2 text-xs text-muted">
-            {vehicle.motExpiry && <span>{t('field.motExpiry')}: <span className="text-ink">{vehicle.motExpiry}</span></span>}
-            {vehicle.lastMotMileage != null && <span className="ml-3">{t('field.lastMotMileage')}: <span className="text-ink">{vehicle.lastMotMileage}{vehicle.lastMotDate ? ` · ${vehicle.lastMotDate}` : ''}</span></span>}
+            {motShow.motExpiry && <span>{t('field.motExpiry')}: <span className="text-ink">{motShow.motExpiry}</span></span>}
+            {motShow.lastMotMileage != null && <span className="ml-3">{t('field.lastMotMileage')}: <span className="text-ink">{motShow.lastMotMileage}{motShow.lastMotDate ? ` · ${motShow.lastMotDate}` : ''}</span></span>}
           </div>
         )}
         <div><label className={labelCls}>{t('field.customer')}</label><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></div>

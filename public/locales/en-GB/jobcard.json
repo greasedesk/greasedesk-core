@@ -188,6 +188,11 @@
     "lastMotMileage": "Mileage at last MOT"
   },
   "detailsEdit": {
+    "dvsaButton": "Look up vehicle details (DVSA)",
+    "dvsaBusy": "Looking up…",
+    "dvsaDone": "Vehicle details filled from DVSA — review and save.",
+    "dvsaNone": "DVSA has no record for this registration.",
+    "dvsaError": "The DVSA lookup didn’t respond — please try again.",
     "save": "Save details",
     "saving": "Saving…",
     "saved": "Details saved.",

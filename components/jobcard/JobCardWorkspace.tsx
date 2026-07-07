@@ -621,7 +621,10 @@ function QuoteActions(props: {
 // ---------- Completion mileage-out (advisories grain seed) ----------
 function MileageOut(props: { jobCardId: string; initial: number | null; canEdit: boolean; busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; t: (k: string, o?: any) => string; mileageIn: number | null; locale: string }) {
   const { t } = props;
-  const [val, setVal] = useState(props.initial != null ? String(props.initial) : '');
+  // Unset mileage-out DEFAULTS to mileage-in (keeps the car's mileage timeline gapless for the
+  // future service-interval grain) but stays fully editable — road tests differ. Saved on the
+  // button as before; the default is a starting value, never a lock.
+  const [val, setVal] = useState(props.initial != null ? String(props.initial) : (props.mileageIn != null ? String(props.mileageIn) : ''));
   const delta = props.mileageIn != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) - props.mileageIn : null;
   async function save() {
     props.setBusy('mileage'); props.setErr(null);

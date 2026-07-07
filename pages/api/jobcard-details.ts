@@ -24,7 +24,11 @@ import { getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-ide
 import { writeAudit } from '@/lib/audit';
 
 type OwnerIn = { name?: string; phone?: string; email?: string; address?: string };
-type VehicleIn = { registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string };
+type VehicleIn = {
+  registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
+  // MOT metadata (the manual DVSA re-lookup persists these; ISO date strings yyyy-mm-dd)
+  motExpiry?: string; lastMotMileage?: number | string; lastMotDate?: string;
+};
 const clean = (v?: string) => { const s = (v ?? '').trim(); return s.length ? s : null; };
 const emailish = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -42,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const card = (await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
-    select: { id: true, site_id: true, vehicle_id: true, odometer_in: true, vehicle: { select: { registration: true, vin: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true } } },
+    select: { id: true, site_id: true, vehicle_id: true, odometer_in: true, vehicle: { select: { registration: true, vin: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } } },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
 
@@ -115,6 +119,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (vehicle.fuel !== undefined) setV('fuel_type', clean(vehicle.fuel), cv.fuel_type ?? null, 'fuel');
         if (vehicle.year !== undefined) setV('year', vnum(vehicle.year), cv.year ?? null, 'year');
         if (vehicle.engineCc !== undefined) setV('engine_cc', vnum(vehicle.engineCc), cv.engine_cc ?? null, 'engineCc');
+        // MOT metadata (manual DVSA re-lookup). Dates arrive as yyyy-mm-dd; invalid values are ignored.
+        const vdate = (v: any) => { const s = String(v ?? '').trim(); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return undefined; const d = new Date(`${s}T00:00:00.000Z`); return Number.isNaN(d.getTime()) ? undefined : d; };
+        const curDate = (d: any) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+        if (vehicle.motExpiry !== undefined) { const nd = vdate(vehicle.motExpiry); if (nd && curDate(cv.mot_expiry) !== nd.toISOString().slice(0, 10)) { vnext.mot_expiry = nd; vdiff.motExpiry = { from: curDate(cv.mot_expiry), to: nd.toISOString().slice(0, 10) }; } }
+        if (vehicle.lastMotMileage !== undefined) setV('last_mot_mileage', vnum(vehicle.lastMotMileage), cv.last_mot_mileage ?? null, 'lastMotMileage');
+        if (vehicle.lastMotDate !== undefined) { const nd = vdate(vehicle.lastMotDate); if (nd && curDate(cv.last_mot_date) !== nd.toISOString().slice(0, 10)) { vnext.last_mot_date = nd; vdiff.lastMotDate = { from: curDate(cv.last_mot_date), to: nd.toISOString().slice(0, 10) }; } }
         if (Object.keys(vnext).length) await tx.vehicle.update({ where: { id: card.vehicle_id }, data: vnext });
         if (mileageVal !== undefined && mileageVal !== card.odometer_in) { await tx.jobCard.update({ where: { id: jobCardId }, data: { odometer_in: mileageVal } }); vdiff.mileageIn = { from: card.odometer_in, to: mileageVal }; }
         if (Object.keys(vdiff).length) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'vehicle.edited', diff: vdiff });
