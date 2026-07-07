@@ -237,7 +237,13 @@
     "readyToMint": "All stages complete — raise the invoice.",
     "readyToStart": "All steps are complete — start the work, then raise the invoice.",
     "stagesRemaining": "To invoice, complete (or skip) these steps first: {{list}}.",
-    "notYet": "The invoice becomes available once the job is worked and completed."
+    "notYet": "The invoice becomes available once the job is worked and completed.",
+    "missingTitle": "This invoice is missing: {{list}}. Add it now, or skip and invoice anyway.",
+    "addAndInvoice": "Add & invoice",
+    "skipAndInvoice": "Skip and invoice anyway"
+  },
+  "startWork": {
+    "hint": "Intake done — mark the work as started. In-job photos record it as it happens."
   },
   "audit": {
     "title": "Audit trail",
@@ -294,6 +300,8 @@
     "invoice": {
       "minted": "Invoice raised",
       "warranty_minted": "Warranty invoice raised (£0)",
+      "vin_skipped": "Invoiced without VIN (skipped)",
+      "mileage_skipped": "Invoiced without mileage (skipped)",
       "paid": "Invoice marked paid",
       "unlocked": "Paid invoice unlocked by admin",
       "sent": "Invoice emailed to the customer"

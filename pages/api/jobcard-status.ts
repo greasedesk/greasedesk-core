@@ -36,6 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       id: true, site_id: true, status: true, is_comeback: true,
       stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
       stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
+      odometer_in: true, vehicle: { select: { vin: true, mileage_at_create: true } },
       _count: { select: { items: true } },
     },
   })) as any;
@@ -85,6 +86,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // independently gapless. Sticky either way: one invoice per card, never re-minted.
         const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
         if (!existing) {
+          // PRE-MINT VIN/MILEAGE BACKSTOP (never a block — older cars legitimately lack a VIN):
+          // minting without either field is a first-class audited skip, same shape as photo-stage
+          // skips (actor + timestamp on the row). Written server-side IN the mint tx, so no client
+          // can invoice past missing data without leaving a trail. The UI's prompt-and-skip is the
+          // add-now convenience in front of this.
+          const vinMissing = !(card.vehicle?.vin && String(card.vehicle.vin).trim());
+          const mileageMissing = card.odometer_in == null && card.vehicle?.mileage_at_create == null;
+          if (vinMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.vin_skipped' });
+          if (mileageMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.mileage_skipped' });
           if (card.is_comeback) {
             await issueWarrantyInvoiceForCard(tx, jobCardId, user.group_id as string);
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.warranty_minted' });

@@ -22,10 +22,11 @@ import { resolveCompanyIdentity } from '@/lib/invoice';
 
 const CARD_SELECT = {
   site_id: true,
+  odometer_in: true,
   group: { select: { group_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true } },
-  vehicle: { select: { registration: true, make: true, model: true } },
+  vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
 } as const;
 
 async function createInvoiceRow(
@@ -69,6 +70,8 @@ async function createInvoiceRow(
       customer_address_snapshot: card.customer?.address ?? null,
       vehicle_reg_snapshot: card.vehicle?.registration ?? null,
       vehicle_desc_snapshot: vehicleDesc,
+      vehicle_vin_snapshot: card.vehicle?.vin ?? null,
+      vehicle_mileage_snapshot: card.odometer_in ?? card.vehicle?.mileage_at_create ?? null, // same resolution as the card's "Mileage in"
       vat_registered_at_issue: !!card.group.vat_registered,
     },
     select: { id: true },

@@ -9,6 +9,11 @@
   "notRegistered": "Not VAT registered.",
   "billTo": "Bill to",
   "vehicle": "Vehicle",
+  "vehicleBlock": {
+    "registration": "Registration",
+    "vin": "VIN",
+    "mileage": "Mileage"
+  },
   "cols": {
     "description": "Description",
     "qty": "Qty",

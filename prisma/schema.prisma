@@ -816,6 +816,8 @@ model Invoice {
   customer_address_snapshot   String?
   vehicle_reg_snapshot        String?
   vehicle_desc_snapshot       String?
+  vehicle_vin_snapshot        String?
+  vehicle_mileage_snapshot    Int? // odometer_in at issue (falls back to mileage_at_create)
   vat_registered_at_issue     Boolean
   created_at                  DateTime @default(now())
 

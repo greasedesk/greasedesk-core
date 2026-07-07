@@ -170,6 +170,35 @@ export default function JobCardWorkspace(p: Props) {
     run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }),
       { isComeback: v });
 
+  // ---- PRE-MINT VIN/MILEAGE BACKSTOP (prompt-and-skip, never a block) ----
+  // State lives HERE (not in the nested pane component) so optimistic re-renders can't wipe it.
+  // Missing fields → inline add-now inputs OR "skip and invoice anyway"; the server audits any
+  // mint that proceeds without the data (invoice.vin_skipped / invoice.mileage_skipped), so the
+  // trail exists regardless of which client invoices.
+  const [mintOpen, setMintOpen] = useState(false);
+  const [mintVin, setMintVin] = useState('');
+  const [mintMileage, setMintMileage] = useState('');
+  const mintVinMissing = !(eff.vehicle.vin && eff.vehicle.vin.trim());
+  const mintMileageMissing = eff.vehicle.mileageIn == null;
+  const mintMissing = [mintVinMissing && t('field.vin'), mintMileageMissing && t('field.mileage')].filter(Boolean) as string[];
+  const startMint = () => { if (mintMissing.length) { setMintOpen(true); } else { setStatus('invoiced'); } };
+  async function addAndMint() {
+    const vehicle: Record<string, string> = {};
+    if (mintVinMissing && mintVin.trim()) vehicle.vin = mintVin.trim();
+    if (mintMileageMissing && mintMileage.trim() !== '') vehicle.mileageIn = mintMileage.trim();
+    setBusy('mint'); setErr(null);
+    try {
+      if (Object.keys(vehicle).length) {
+        const r = await fetch('/api/jobcard-details', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, vehicle }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { setErr(d?.message || t('action.error')); setBusy(null); return; }
+      }
+      setBusy(null); setMintOpen(false); setMintVin(''); setMintMileage('');
+      await setStatus('invoiced');
+    } catch { setErr(t('action.error')); setBusy(null); }
+  }
+  const skipAndMint = () => { setMintOpen(false); setStatus('invoiced'); };
+
   const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped }));
 
   // ---------- panes ----------
@@ -283,6 +312,29 @@ export default function JobCardWorkspace(p: Props) {
     const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
     );
+    // Last-chance VIN/mileage prompt — only for what's actually missing; skip always available.
+    const mintPanel = mintOpen && (
+      <div className="bg-warn-soft border border-line rounded-xl p-4 space-y-3">
+        <p className="text-sm text-warn font-medium">{t('invoiceTab.missingTitle', { list: mintMissing.join(', ') })}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {mintVinMissing && (
+            <input value={mintVin} onChange={(e) => setMintVin(e.target.value)} placeholder={t('field.vin')} maxLength={17}
+              className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+          )}
+          {mintMileageMissing && (
+            <input type="number" inputMode="numeric" min={0} value={mintMileage} onChange={(e) => setMintMileage(e.target.value)} placeholder={t('field.mileage')}
+              className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+          )}
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button disabled={busy !== null || (!(mintVinMissing && mintVin.trim()) && !(mintMileageMissing && mintMileage.trim()))} onClick={addAndMint}
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('invoiceTab.addAndInvoice')}</button>
+          <button disabled={busy !== null} onClick={skipAndMint}
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{t('invoiceTab.skipAndInvoice')}</button>
+          <button onClick={() => setMintOpen(false)} className="text-sm text-muted hover:text-ink px-2 py-2.5">{t('delete.cancel')}</button>
+        </div>
+      </div>
+    );
 
     return (
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
@@ -299,9 +351,10 @@ export default function JobCardWorkspace(p: Props) {
               </Link>
             )}
             {startWorkBtn}
-            {eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled && (
-              <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
+            {eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled && !mintOpen && (
+              <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
+            {mintPanel}
             {eff.status === 'invoiced' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
@@ -320,7 +373,10 @@ export default function JobCardWorkspace(p: Props) {
         ) : eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled ? (
           <>
             <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
-            <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.invoiced')}</button>
+            {!mintOpen && (
+              <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.invoiced')}</button>
+            )}
+            {mintPanel}
           </>
         ) : startWorkBtn ? (
           startWorkBtn
@@ -366,17 +422,21 @@ export default function JobCardWorkspace(p: Props) {
       {active === 'intake' && (
         <div className="space-y-5">
           <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !cancelled} locked={eff.stages.intake} locale={p.locale} />
-          <div className="flex flex-wrap gap-3 justify-end">
-            {eff.status === 'accepted' && p.canOperate && !cancelled && (
-              <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
-            )}
-            <StageComplete stage="intake" label={t('tab.intake')} />
-          </div>
+          <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>
       )}
 
       {active === 'injob' && (
         <div className="space-y-5">
+          {/* Start-work lives HERE on the spine — after Intake, before In-Job photos (which evidence
+              the work). SOFT: a guide, not a gate — stages tick in any order; the Invoice-tab rescue
+              remains the backstop. in_progress anchors the future clocking/labour-actuals grain. */}
+          {eff.status === 'accepted' && p.canOperate && !cancelled && (
+            <div className="bg-accent-soft border border-line rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-sm text-ink">{t('startWork.hint')}</p>
+              <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto shrink-0 text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
+            </div>
+          )}
           <PhotoPlaceholder />
           <div className="flex justify-end"><StageComplete stage="injob" label={t('tab.injob')} /></div>
         </div>

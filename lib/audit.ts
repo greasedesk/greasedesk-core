@@ -23,6 +23,8 @@ export type AuditAction =
   | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'
   | 'invoice.warranty_minted' // comeback £0 invoice from the warranty series
+  | 'invoice.vin_skipped'     // minted without a VIN on the card (pre-mint backstop skip)
+  | 'invoice.mileage_skipped' // minted without a mileage on the card
   | 'invoice.paid'
   | 'invoice.unlocked'      // ADMIN-only escape hatch: paid → issued for corrections
   | 'invoice.sent';         // emailed to the customer (PDF attached)

@@ -34,7 +34,7 @@ export type InvoiceDoc = {
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
-  vehicle: { reg: string | null; desc: string | null };
+  vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   lines: InvoiceDocLine[];
   totals: InvoiceTotals;
   currency: string;
@@ -48,7 +48,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, job_card_id: true,
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
-      vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vat_registered_at_issue: true,
+      vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
     },
@@ -101,7 +101,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },
-    vehicle: { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot },
+    vehicle: { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
     lines,
     totals,
     currency: inv.site?.currency_code ?? 'GBP',

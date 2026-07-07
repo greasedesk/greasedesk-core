@@ -64,11 +64,14 @@ function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
             <Text>{doc.customer.name}</Text>
             {doc.customer.address ? <Text style={S.muted}>{doc.customer.address}</Text> : null}
           </View>
-          {(doc.vehicle.reg || doc.vehicle.desc) ? (
+          {(doc.vehicle.reg || doc.vehicle.desc || doc.vehicle.vin || doc.vehicle.mileage != null) ? (
+            // Stacked Registration / VIN / Mileage (TMBS layout) — absent fields omit their line.
             <View>
               <Text style={[S.label, { textAlign: 'right' }]}>{t('vehicle')}</Text>
-              {doc.vehicle.reg ? <Text style={{ textAlign: 'right' }}>{doc.vehicle.reg}</Text> : null}
+              {doc.vehicle.reg ? <Text style={{ textAlign: 'right' }}>{t('vehicleBlock.registration')}: {doc.vehicle.reg}</Text> : null}
               {doc.vehicle.desc ? <Text style={[S.muted, { textAlign: 'right' }]}>{doc.vehicle.desc}</Text> : null}
+              {doc.vehicle.vin ? <Text style={[S.muted, { textAlign: 'right' }]}>{t('vehicleBlock.vin')}: {doc.vehicle.vin}</Text> : null}
+              {doc.vehicle.mileage != null ? <Text style={[S.muted, { textAlign: 'right' }]}>{t('vehicleBlock.mileage')}: {doc.vehicle.mileage.toLocaleString(doc.locale)}</Text> : null}
             </View>
           ) : null}
         </View>

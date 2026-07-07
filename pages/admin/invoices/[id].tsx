@@ -32,7 +32,7 @@ type PageProps = {
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
-  vehicle: { reg: string | null; desc: string | null };
+  vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   lines: Line[];
   totals: Totals;
   currency: string;
@@ -130,11 +130,13 @@ export default function InvoicePage(props: PageProps) {
               <div className="text-sm text-ink font-medium">{props.customer.name}</div>
               {props.customer.address && <div className="text-sm text-muted whitespace-pre-line">{props.customer.address}</div>}
             </div>
-            {(props.vehicle.reg || props.vehicle.desc) && (
+            {(props.vehicle.reg || props.vehicle.desc || props.vehicle.vin || props.vehicle.mileage != null) && (
               <div className="text-right">
                 <div className="text-xs uppercase tracking-wide text-muted mb-1">{t('vehicle')}</div>
-                {props.vehicle.reg && <div className="text-sm text-ink font-medium">{props.vehicle.reg}</div>}
+                {props.vehicle.reg && <div className="text-sm text-ink font-medium">{t('vehicleBlock.registration')}: {props.vehicle.reg}</div>}
                 {props.vehicle.desc && <div className="text-sm text-muted">{props.vehicle.desc}</div>}
+                {props.vehicle.vin && <div className="text-sm text-muted">{t('vehicleBlock.vin')}: {props.vehicle.vin}</div>}
+                {props.vehicle.mileage != null && <div className="text-sm text-muted">{t('vehicleBlock.mileage')}: {props.vehicle.mileage.toLocaleString(props.locale)}</div>}
               </div>
             )}
           </div>
