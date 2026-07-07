@@ -260,13 +260,18 @@ export default function JobCardWorkspace(p: Props) {
     );
   }
 
-  function DetailsPane() {
-    return (
+  // PLAIN JSX, not a nested component: a function defined in the render body gets a NEW identity
+  // every parent re-render, so React REMOUNTS the whole subtree — that wiped the details form's
+  // state right after Save (the reconcile's setOv re-rendered the parent, the form remounted and
+  // re-initialised from stale page-load props → "DVSA values cleared"). Inline JSX keeps child
+  // element types stable across renders; the form's state now survives overlay updates. Props come
+  // from eff.* (the reconciled overlay), so a genuine remount re-initialises with the FRESHEST data.
+  const detailsPane = (
       <div className="space-y-5">
         <CustomerDetailsForm
           jobCardId={p.jobCardId}
-          owner={p.owner}
-          vehicle={p.vehicle}
+          owner={eff.owner}
+          vehicle={eff.vehicle}
           canEdit={p.canOperate && !cancelled}
           locale={p.locale}
           onSaved={refreshCard}
@@ -285,8 +290,7 @@ export default function JobCardWorkspace(p: Props) {
 
         <div className="flex justify-end"><StageComplete stage="details" label={t('tab.details')} /></div>
       </div>
-    );
-  }
+  );
 
   function InvoicePane() {
     // Which stages still block the all_stages_done gate (done OR skipped advances; Details is
@@ -396,7 +400,7 @@ export default function JobCardWorkspace(p: Props) {
       <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
-      {active === 'details' && <DetailsPane />}
+      {active === 'details' && detailsPane}
 
       {active === 'quote' && (
         <div className="space-y-5">
