@@ -58,6 +58,13 @@ enum InvoiceStatus {
   paid
 }
 
+// Chargeable vs warranty invoices draw from SEPARATE counters — both independently gapless.
+// A comeback must never burn a chargeable number.
+enum InvoiceSeries {
+  chargeable
+  warranty
+}
+
 // Cost-capture (per-site P&L foundation). Raw cost grains only — no aggregation in-schema.
 enum CostType {
   salary // amount_pennies = annual salary
@@ -122,6 +129,14 @@ model Group {
   // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").
   invoice_prefix    String @default("")
   invoice_pad_width Int    @default(4)
+  // Fiscal-year DISPLAY segment (e.g. INV-26-0042): 0 = off, 2 or 4 digits of the year the FY
+  // started in. The counter underneath stays continuous — FY is formatting, never a reset.
+  invoice_fy_digits Int    @default(0)
+  fy_start_month    Int    @default(4) // 1-12; UK default April
+  // Warranty-series prefix (comeback £0 invoices) — the filter key for the future comebacks tile.
+  invoice_warranty_prefix String @default("W")
+  // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
+  invoice_email_footer    Boolean @default(true)
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
   created_at       DateTime @default(now())
@@ -787,6 +802,7 @@ model Invoice {
   job_card_id    String        @unique // one invoice per card; sticky number on re-issue
   site_id        String
   status         InvoiceStatus @default(issued)
+  series         InvoiceSeries @default(chargeable) // which counter minted sequence_value
   sequence_value Int // monotonic counter value underneath the rendered number
   invoice_number String? // rendered string; set at issue, sticky thereafter
   issued_at      DateTime      @default(now())
@@ -808,7 +824,7 @@ model Invoice {
   job_card JobCard       @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
   lines    InvoiceLine[]
 
-  @@unique([group_id, sequence_value]) // no duplicate sequence per tenant
+  @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   @@index([group_id])
   @@index([site_id])
 }
@@ -833,9 +849,10 @@ model InvoiceLine {
 }
 
 model InvoiceSequence {
-  group_id   String   @id // one row per tenant
-  last_value Int      @default(0) // monotonic — never resets, never reused. NOT seeded (business decision pending).
-  updated_at DateTime @default(now())
+  group_id            String   @id // one row per tenant
+  last_value          Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
+  warranty_last_value Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
+  updated_at          DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }

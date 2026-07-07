@@ -22,7 +22,10 @@ export type AuditAction =
   | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
   | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'
-  | 'invoice.paid';
+  | 'invoice.warranty_minted' // comeback £0 invoice from the warranty series
+  | 'invoice.paid'
+  | 'invoice.unlocked'      // ADMIN-only escape hatch: paid → issued for corrections
+  | 'invoice.sent';         // emailed to the customer (PDF attached)
 
 export async function writeAudit(
   tx: Prisma.TransactionClient,

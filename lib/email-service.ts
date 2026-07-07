@@ -15,22 +15,36 @@ if (!RESEND_API_KEY) {
 const resend = new Resend(RESEND_API_KEY);
 
 
+export type SendEmailOpts = {
+  /** Display name rendered on the GreaseDesk-owned From address (deliverability-correct: the
+   *  address stays ours, the tenant appears as the sender name). */
+  fromName?: string;
+  /** Tenant's real address — replies go to them, not to our no-reply. */
+  replyTo?: string;
+  attachments?: Array<{ filename: string; content: Buffer }>;
+};
+
 /**
  * Sends a generic email using the configured Resend service.
  * @returns {boolean} True if the email was successfully accepted by Resend.
  */
-export const sendEmail = async (to: string, subject: string, html: string) => {
+export const sendEmail = async (to: string, subject: string, html: string, opts: SendEmailOpts = {}) => {
   if (!RESEND_API_KEY) {
     // Fail gracefully if config is missing
     return false;
   }
 
   try {
+    // EMAIL_FROM may itself be "Name <addr>" — extract the bare address before re-naming,
+    // otherwise the from field nests brackets and Resend rejects it (422).
+    const bareFrom = EMAIL_FROM.includes('<') ? (EMAIL_FROM.match(/<([^>]+)>/)?.[1] ?? EMAIL_FROM) : EMAIL_FROM;
     const { data, error } = await resend.emails.send({
-      from: EMAIL_FROM,
+      from: opts.fromName ? `${opts.fromName.replace(/[<>"]/g, '')} <${bareFrom}>` : EMAIL_FROM,
       to: [to], // Resend expects an array for 'to'
       subject: subject,
       html: html,
+      ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+      ...(opts.attachments?.length ? { attachments: opts.attachments.map((a) => ({ filename: a.filename, content: a.content })) } : {}),
     });
 
     if (error) {

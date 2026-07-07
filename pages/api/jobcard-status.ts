@@ -14,8 +14,9 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
-import { issueInvoiceForCard } from '@/lib/invoice-issue';
+import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotPaidLines } from '@/lib/invoice-issue';
 import { writeAudit } from '@/lib/audit';
+import { tServer } from '@/lib/server-i18n';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -79,22 +80,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
       await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
       if (to === 'invoiced') {
-        // COMEBACK NUMBERING GUARD (locked planning decision): a £0 warranty invoice will use a
-        // SEPARATE warranty number series — never the chargeable customer-facing sequence. The
-        // warranty series itself is deferred to the invoice-artifact build; until then a comeback
-        // reaches `invoiced` WITHOUT minting anything (no chargeable number burned, no Invoice row).
-        // >>> FOLLOW-UP SLOT: the invoice-artifact build replaces this branch with
-        // >>> issueWarrantyInvoiceForCard(tx, ...) minting from the warranty series.
-        if (!card.is_comeback) {
-          const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
-          if (!existing) {
+        // COMEBACK NUMBERING GUARD (locked): a comeback mints a £0 invoice from the SEPARATE
+        // warranty series — never the chargeable customer-facing sequence. Both counters stay
+        // independently gapless. Sticky either way: one invoice per card, never re-minted.
+        const existing = await tx.invoice.findUnique({ where: { job_card_id: jobCardId }, select: { id: true } });
+        if (!existing) {
+          if (card.is_comeback) {
+            await issueWarrantyInvoiceForCard(tx, jobCardId, user.group_id as string);
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.warranty_minted' });
+          } else {
             await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
           }
         }
       } else if (to === 'paid') {
-        await tx.invoice.updateMany({ where: { job_card_id: jobCardId, status: 'issued' }, data: { status: 'paid', paid_at: new Date() } });
-        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid' });
+        // FREEZE: snapshot the card's live lines into InvoiceLine — the immutable income grain.
+        // One-object model: until this moment the invoice rendered the card's items directly.
+        const inv = (await tx.invoice.findUnique({
+          where: { job_card_id: jobCardId },
+          select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site: { select: { locale: true } } },
+        })) as any;
+        if (inv && inv.status === 'issued') {
+          await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
+          await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: new Date() } });
+          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid' });
+        }
       }
     });
   } catch (e) {

@@ -30,9 +30,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const groupId = sUser.group_id as string;
 
-  const { group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width } = (req.body || {}) as {
+  const {
+    group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
+    invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number,
+  } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
+    invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
+    invoice_next_number?: number | string;
   };
 
   const data: any = {};
@@ -57,10 +62,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data.invoice_pad_width = w;
   }
 
-  if (Object.keys(data).length === 0) {
+  if (invoice_fy_digits !== undefined) {
+    const d = Math.trunc(Number(invoice_fy_digits));
+    if (![0, 2, 4].includes(d)) return res.status(400).json({ message: 'Fiscal-year digits must be 0, 2 or 4.' });
+    data.invoice_fy_digits = d;
+  }
+  if (fy_start_month !== undefined) {
+    const m = Math.trunc(Number(fy_start_month));
+    if (!Number.isFinite(m) || m < 1 || m > 12) return res.status(400).json({ message: 'Fiscal-year start month must be 1–12.' });
+    data.fy_start_month = m;
+  }
+  if (invoice_warranty_prefix !== undefined) {
+    const p = String(invoice_warranty_prefix).trim();
+    if (!p) return res.status(400).json({ message: 'The warranty prefix cannot be empty — it keeps warranty numbers distinct from chargeable ones.' });
+    data.invoice_warranty_prefix = p;
+  }
+  if (invoice_email_footer !== undefined) data.invoice_email_footer = !!invoice_email_footer;
+
+  // Starting-number seed — allowed ONLY while the chargeable sequence is unused (no chargeable
+  // invoice exists). Once a number is minted the counter is immutable (the no-gaps guarantee).
+  let seedTo: number | null = null;
+  if (invoice_next_number !== undefined && String(invoice_next_number).trim() !== '') {
+    const n = Math.trunc(Number(invoice_next_number));
+    if (!Number.isFinite(n) || n < 1 || n > 100_000_000) return res.status(400).json({ message: 'The next invoice number must be a positive whole number.' });
+    const used = await prisma.invoice.count({ where: { group_id: groupId, series: 'chargeable' } });
+    if (used > 0) return res.status(409).json({ message: 'Invoices have already been issued — the number sequence can no longer be re-seeded.' });
+    seedTo = n - 1; // last_value; the next mint returns n
+  }
+
+  if (Object.keys(data).length === 0 && seedTo === null) {
     return res.status(400).json({ message: 'Nothing to update.' });
   }
 
-  await prisma.group.update({ where: { id: groupId }, data });
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    if (Object.keys(data).length) await tx.group.update({ where: { id: groupId }, data });
+    if (seedTo !== null) {
+      await tx.invoiceSequence.upsert({
+        where: { group_id: groupId },
+        update: { last_value: seedTo },
+        create: { group_id: groupId, last_value: seedTo },
+      });
+    }
+  });
   return res.status(200).json({ message: 'Company details saved.' });
 }

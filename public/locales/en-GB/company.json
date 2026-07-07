@@ -26,8 +26,21 @@
   "invoice": {
     "heading": "Invoice numbering",
     "prefix": "Prefix",
-    "prefixPlaceholder": "e.g. INV- or FY26-",
+    "prefixPlaceholder": "e.g. INV-",
     "padWidth": "Zero-padding width",
-    "preview": "Next number preview"
+    "preview": "Next number preview",
+    "previewWarranty": "Warranty",
+    "fyDigits": "Fiscal-year in the number",
+    "fyOff": "Off",
+    "fy2": "2 digits (e.g. INV-26-0042)",
+    "fy4": "4 digits (e.g. INV-2026-0042)",
+    "fyStartMonth": "Fiscal year starts in",
+    "nextNumber": "Next invoice number",
+    "nextNumberHint": "Set your starting number before the first invoice is issued.",
+    "nextNumberLocked": "Invoices have been issued — the sequence can no longer be changed (numbers must stay gapless).",
+    "warrantyPrefix": "Warranty prefix",
+    "warrantyPrefixHint": "Warranty / comeback invoices (£0) use their own number series with this prefix.",
+    "emailFooter": "\"Sent with GreaseDesk\" email footer",
+    "emailFooterHint": "A small footer line in invoice emails. Never printed on the invoice itself."
   }
 }

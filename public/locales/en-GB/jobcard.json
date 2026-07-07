@@ -136,7 +136,7 @@
     "label": "Warranty / comeback (no charge)",
     "hint": "Work redone free — the estimate lines below stay intact as the real cost. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job). It invoices at £0 on the warranty series — never a chargeable invoice number.",
     "banner": "Warranty / comeback — £0 revenue; margin drag = parts cost only. Invoices at £0 (warranty series), never a chargeable number.",
-    "invoiceNote": "Warranty comeback — it reaches Invoice at £0. No chargeable invoice number is used; the warranty number series arrives with the invoicing build.",
+    "invoiceNote": "Warranty comeback — it invoices at £0 on the warranty number series. A chargeable invoice number is never used.",
     "markInvoiced": "Mark invoiced (£0 warranty)"
   },
   "delete": {
@@ -290,7 +290,10 @@
     },
     "invoice": {
       "minted": "Invoice raised",
-      "paid": "Invoice marked paid"
+      "warranty_minted": "Warranty invoice raised (£0)",
+      "paid": "Invoice marked paid",
+      "unlocked": "Paid invoice unlocked by admin",
+      "sent": "Invoice emailed to the customer"
     },
     "comeback": {
       "marked": "Marked as warranty / comeback",

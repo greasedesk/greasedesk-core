@@ -16,12 +16,15 @@ import { withI18n } from '@/lib/gssp-i18n';
 type PageProps = {
   groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string;
   invoicePrefix: string; invoicePadWidth: string;
+  invoiceFyDigits: string; fyStartMonth: string; warrantyPrefix: string; emailFooter: boolean;
+  nextNumber: string; canSeed: boolean;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
 
-export default function CompanyDetails({ groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, invoicePrefix, invoicePadWidth }: PageProps) {
+export default function CompanyDetails(props: PageProps) {
+  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, invoicePrefix, invoicePadWidth } = props;
   const { t } = useTranslation('company');
   const [name, setName] = useState(groupName);
   const [num, setNum] = useState(companyNumber);
@@ -31,10 +34,21 @@ export default function CompanyDetails({ groupName, companyNumber, address, vatR
   const [rate, setRate] = useState(defaultVatRate);
   const [invPrefix, setInvPrefix] = useState(invoicePrefix);
   const [invPad, setInvPad] = useState(invoicePadWidth);
+  const [fyDigits, setFyDigits] = useState(props.invoiceFyDigits);
+  const [fyMonth, setFyMonth] = useState(props.fyStartMonth);
+  const [wPrefix, setWPrefix] = useState(props.warrantyPrefix);
+  const [footer, setFooter] = useState(props.emailFooter);
+  const [nextNo, setNextNo] = useState(props.nextNumber);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const previewNumber = `${invPrefix}${'1'.padStart(Math.max(0, Math.min(10, Number(invPad) || 0)), '0')}`;
+  // Live preview mirrors formatInvoiceNumber: prefix + optional FY segment + padded counter.
+  const pad = (v: string | number) => String(v).padStart(Math.max(0, Math.min(10, Number(invPad) || 0)), '0');
+  const now = new Date();
+  const fyStartYear = now.getMonth() + 1 >= (Number(fyMonth) || 1) ? now.getFullYear() : now.getFullYear() - 1;
+  const fySeg = fyDigits === '2' ? `${String(fyStartYear).slice(-2)}-` : fyDigits === '4' ? `${fyStartYear}-` : '';
+  const previewNumber = `${invPrefix}${fySeg}${pad(props.canSeed && Number(nextNo) > 0 ? Number(nextNo) : 1)}`;
+  const previewWarranty = `${wPrefix}${fySeg}${pad(1)}`;
 
   async function save(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setMsg(null);
@@ -46,6 +60,9 @@ export default function CompanyDetails({ groupName, companyNumber, address, vatR
           vat_registered: vatReg, vat_number: vatReg ? vat : '', // clear number when de-registering
           ...(vatReg ? { default_vat_rate: Number(rate || 0) } : {}), // rate only meaningful when registered
           invoice_prefix: invPrefix, invoice_pad_width: Number(invPad || 0),
+          invoice_fy_digits: Number(fyDigits || 0), fy_start_month: Number(fyMonth || 4),
+          invoice_warranty_prefix: wPrefix, invoice_email_footer: footer,
+          ...(props.canSeed && nextNo.trim() !== '' && nextNo !== props.nextNumber ? { invoice_next_number: Number(nextNo) } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -95,7 +112,49 @@ export default function CompanyDetails({ groupName, companyNumber, address, vatR
                 <input type="number" inputMode="numeric" min={0} max={10} value={invPad} onChange={(e) => setInvPad(e.target.value)} className={inputClass} />
               </label>
             </div>
-            <p className="text-xs text-muted mt-1">{t('invoice.preview')}: <span className="font-mono text-ink">{previewNumber}</span></p>
+            <div className="grid gap-3 sm:grid-cols-2 mt-3">
+              <label className="block">
+                <span className={labelClass}>{t('invoice.fyDigits')}</span>
+                <select value={fyDigits} onChange={(e) => setFyDigits(e.target.value)} className={inputClass}>
+                  <option value="0">{t('invoice.fyOff')}</option>
+                  <option value="2">{t('invoice.fy2')}</option>
+                  <option value="4">{t('invoice.fy4')}</option>
+                </select>
+              </label>
+              {fyDigits !== '0' && (
+                <label className="block">
+                  <span className={labelClass}>{t('invoice.fyStartMonth')}</span>
+                  <select value={fyMonth} onChange={(e) => setFyMonth(e.target.value)} className={inputClass}>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString(undefined, { month: 'long' })}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="block">
+                <span className={labelClass}>{t('invoice.nextNumber')}</span>
+                <input type="number" inputMode="numeric" min={1} value={nextNo} disabled={!props.canSeed}
+                  onChange={(e) => setNextNo(e.target.value)} className={`${inputClass} disabled:opacity-50`} />
+                <span className="text-xs text-muted mt-0.5 block">{props.canSeed ? t('invoice.nextNumberHint') : t('invoice.nextNumberLocked')}</span>
+              </label>
+              <label className="block">
+                <span className={labelClass}>{t('invoice.warrantyPrefix')}</span>
+                <input value={wPrefix} onChange={(e) => setWPrefix(e.target.value)} className={inputClass} />
+                <span className="text-xs text-muted mt-0.5 block">{t('invoice.warrantyPrefixHint')}</span>
+              </label>
+            </div>
+            <p className="text-xs text-muted mt-2">
+              {t('invoice.preview')}: <span className="font-mono text-ink">{previewNumber}</span>
+              <span className="mx-2 text-line">|</span>
+              {t('invoice.previewWarranty')}: <span className="font-mono text-ink">{previewWarranty}</span>
+            </p>
+            <label className="flex items-start gap-3 py-2 cursor-pointer">
+              <input type="checkbox" checked={footer} onChange={(e) => setFooter(e.target.checked)} className="w-5 h-5 mt-0.5" />
+              <span>
+                <span className="text-sm font-medium text-ink block">{t('invoice.emailFooter')}</span>
+                <span className="text-xs text-muted">{t('invoice.emailFooterHint')}</span>
+              </span>
+            </label>
           </div>
           <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
             {busy ? t('details.saving') : t('details.save')}
@@ -111,8 +170,14 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
-    select: { group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, invoice_prefix: true, invoice_pad_width: true },
-  })) as { group_name: string; company_number: string | null; address: string | null; vat_registered: boolean; vat_number: string | null; default_vat_rate: unknown; invoice_prefix: string; invoice_pad_width: number } | null;
+    select: {
+      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true,
+      invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_email_footer: true,
+      invoice_sequence: { select: { last_value: true } },
+    },
+  })) as any;
+  // Seedable only while the chargeable sequence is genuinely unused (no chargeable invoice ever minted).
+  const chargeableUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, series: 'chargeable' } });
   return {
     props: {
       groupName: g?.group_name ?? '',
@@ -123,6 +188,12 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : '20.00',
       invoicePrefix: g?.invoice_prefix ?? '',
       invoicePadWidth: g && g.invoice_pad_width != null ? String(g.invoice_pad_width) : '4',
+      invoiceFyDigits: String(g?.invoice_fy_digits ?? 0),
+      fyStartMonth: String(g?.fy_start_month ?? 4),
+      warrantyPrefix: g?.invoice_warranty_prefix ?? 'W',
+      emailFooter: g?.invoice_email_footer ?? true,
+      nextNumber: String((g?.invoice_sequence?.last_value ?? 0) + 1),
+      canSeed: chargeableUsed === 0,
     },
   };
 });

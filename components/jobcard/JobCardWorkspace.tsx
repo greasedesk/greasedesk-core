@@ -264,10 +264,16 @@ export default function JobCardWorkspace(p: Props) {
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
         {eff.isComeback ? (
-          // Comeback ON the spine: same invoiced/paid transitions as any card, but no chargeable
-          // number is minted (the warranty series arrives with the invoice-artifact build).
+          // Comeback ON the spine: same invoiced/paid transitions as any card, but the £0 invoice
+          // mints from the WARRANTY series — a chargeable number is never used.
           <>
             <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>
+            {eff.invoice && (
+              <Link href={`/admin/invoices/${eff.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
+                <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{eff.invoice.number}</span></span>
+                <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
+              </Link>
+            )}
             {eff.status === 'in_progress' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
@@ -317,7 +323,7 @@ export default function JobCardWorkspace(p: Props) {
           <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
-              intact as the true cost. It also suppresses invoicing (see the Invoice tab). */}
+              intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}
           {p.canOperate && !cancelled && (
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
               <input type="checkbox" className="w-5 h-5 mt-0.5" checked={eff.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
