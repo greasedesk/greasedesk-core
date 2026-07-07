@@ -152,16 +152,23 @@ export default function JobCardWorkspace(p: Props) {
   }
   const postJSON = (url: string, body: unknown) => () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+  // Client twin of the server's soft auto-advance: in-job/completion activity on an accepted card
+  // moves it to in_progress (the server does this authoritatively in the same tx; this keeps the
+  // optimistic overlay honest until refreshCard reconciles).
+  const autoAdvanceStatus = (stage: StageKey, done: boolean): JobStatus | undefined =>
+    eff.status === 'accepted' && done && (stage === 'injob' || stage === 'complete') ? 'in_progress' : undefined;
   const setStage = (stage: StageKey, done: boolean) => {
     const stages = { ...eff.stages, [stage]: done };
     const skipped = stage !== 'details' && done ? { ...eff.skipped, [stage]: false } : eff.skipped; // done wins
+    const status = autoAdvanceStatus(stage, done);
     return run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }),
-      { stages, skipped, tabsState: clientTabs({ stages, skipped }) });
+      { stages, skipped, ...(status ? { status } : {}), tabsState: clientTabs({ stages, skipped, ...(status ? { status } : {}) }) });
   };
   const setSkip = (stage: StageKey, skipTo: boolean, reason?: string) => {
     const skipped = { ...eff.skipped, [stage === 'complete' ? 'complete' : stage]: skipTo } as Overlay['skipped'];
+    const status = autoAdvanceStatus(stage, skipTo);
     return run(`skip:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done: skipTo, skip: true, reason: reason || undefined }),
-      { skipped, tabsState: clientTabs({ skipped }) });
+      { skipped, ...(status ? { status } : {}), tabsState: clientTabs({ skipped, ...(status ? { status } : {}) }) });
   };
   const setStatus = (to: JobStatus) =>
     run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }),
@@ -304,13 +311,14 @@ export default function JobCardWorkspace(p: Props) {
     const allAdvanced = remaining.length === 0;
     const preInvoice = ['draft', 'quoted', 'declined', 'accepted', 'in_progress'].includes(eff.status);
 
-    // TWO explicit audited clicks (ruling): Start work (→ in_progress, operational — anchors the
-    // future clocking/labour-actuals grain) then Mark invoiced (→ invoiced, commercial). Both live
-    // here so nobody hunts back to the Intake tab; the server still gates every move.
+    // BACKSTOP only (ruling 2026-07-07): the normal path enters in_progress at the In-Job stage
+    // (Start-work button there + server auto-advance on in-job/completion activity), so a card
+    // reaching Invoice still `accepted` is an anomaly — a muted note + secondary button, never a
+    // prescribed "start work then invoice" step.
     const startWorkBtn = eff.status === 'accepted' && allAdvanced && p.canOperate && !cancelled && (
       <>
-        <p className="text-sm text-muted">{t('invoiceTab.readyToStart')}</p>
-        <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
+        <p className="text-sm text-muted">{t('invoiceTab.neverStarted')}</p>
+        <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{t('action.in_progress')}</button>
       </>
     );
     const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (

@@ -84,11 +84,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const action = skip ? `stage.${stage}.${done ? 'skipped' : 'unskipped'}` : `stage.${stage}.${done ? 'done' : 'undone'}`;
   const trimmedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 300) : null;
 
+  // SOFT AUTO-ADVANCE (ruling 2026-07-07): in-job or completion activity IS evidence work began —
+  // an accepted card auto-fires accepted→in_progress in the same tx, audited with auto:true (an
+  // INFERRED start; a deliberate Start-work press audits without it — different-quality grains for
+  // the future clocking/labour-actuals feature). No gate, no block: the spine follows the evidence.
+  const autoStart = card.status === 'accepted' && done === true && (stage === 'injob' || stage === 'complete');
+
   const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    if (autoStart) {
+      await tx.jobCard.update({ where: { id: jobCardId }, data: { status: 'in_progress' } });
+      await writeAudit(tx, {
+        groupId: user.group_id as string, userId: user.id as string, jobCardId,
+        action: 'status.in_progress', diff: { from: 'accepted', to: 'in_progress', auto: true, trigger: `stage.${stage}.${skip ? 'skipped' : 'done'}` },
+      });
+    }
     const row = (await tx.jobCard.update({
       where: { id: jobCardId },
       data,
       select: {
+        status: true,
         stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
         stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
       },
@@ -103,6 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({
     message: 'Stage updated.',
+    status: updated.status, // may have auto-advanced to in_progress
     stages: {
       details: updated.stage_details_done, intake: updated.stage_intake_done,
       injob: updated.stage_injob_done, complete: updated.stage_complete_done,

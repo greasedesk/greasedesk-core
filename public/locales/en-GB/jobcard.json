@@ -240,7 +240,7 @@
     "number": "Invoice",
     "view": "View invoice",
     "readyToMint": "All stages complete — raise the invoice.",
-    "readyToStart": "All steps are complete — start the work, then raise the invoice.",
+    "neverStarted": "This job was never marked as started.",
     "stagesRemaining": "To invoice, complete (or skip) these steps first: {{list}}.",
     "notYet": "The invoice becomes available once the job is worked and completed.",
     "missingTitle": "This invoice is missing: {{list}}. Add it now, or skip and invoice anyway.",
