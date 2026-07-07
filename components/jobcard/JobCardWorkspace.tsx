@@ -20,7 +20,7 @@ import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
-import { TAB_KEYS, TabKey, TabState } from '@/lib/jobcard-tabs';
+import { TAB_KEYS, TabKey, TabState, computeTabs } from '@/lib/jobcard-tabs';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
 
@@ -67,47 +67,116 @@ export default function JobCardWorkspace(p: Props) {
   const estimateRef = useRef<EstimateHandle>(null);
   const commitEstimate = () => estimateRef.current ? estimateRef.current.commit() : Promise.resolve({ ok: true as const });
 
-  const cancelled = p.status === 'cancelled';
+  // ---- OPTIMISTIC SAVE / NO FULL-PAGE REFRESH -------------------------------------------------
+  // Mutations no longer router.replace(asPath) (a full 11-query gssp re-run — the save "blank").
+  // Instead: an OVERLAY over the SSR props is patched optimistically at click time (tab gating
+  // recomputed client-side with the SAME computeTabs chokepoint, so greying still can't drift from
+  // the server), the API call runs in the background, and on success ONE narrow request to
+  // /api/jobcard-pane quietly reconciles everything (audit, invoice number, server-derived state).
+  // On failure the overlay reverts to its pre-click snapshot + a friendly error. Server-side save
+  // logic (validation/guards/audit/money) is byte-identical — this is client data flow only.
+  type Overlay = {
+    status?: JobStatus;
+    stages?: Record<StageKey, boolean>;
+    skipped?: { intake: boolean; injob: boolean; complete: boolean };
+    isComeback?: boolean;
+    invoice?: { id: string; number: string } | null;
+    events?: AuditEvent[];
+    booking?: CardBooking;
+    tabsState?: Record<TabKey, TabState>;
+    vehicle?: Props['vehicle'];
+    owner?: Props['owner'];
+  };
+  const [ov, setOv] = useState<Overlay>({});
+  const eff = {
+    status: ov.status ?? p.status,
+    stages: ov.stages ?? p.stages,
+    skipped: ov.skipped ?? p.skipped,
+    isComeback: ov.isComeback ?? p.isComeback,
+    invoice: ov.invoice !== undefined ? ov.invoice : p.invoice,
+    events: ov.events ?? p.events,
+    booking: ov.booking !== undefined ? ov.booking : p.booking,
+    tabsState: ov.tabsState ?? p.tabsState,
+    vehicle: ov.vehicle ?? p.vehicle,
+    owner: ov.owner ?? p.owner,
+  };
+  // Client-side twin of the SSR gating inputs (reconciled by refreshCard; server still enforces).
+  const clientTabs = (patch: Partial<Overlay>) => computeTabs({
+    status: (patch.status ?? eff.status) as JobStatus,
+    stages: patch.stages ?? eff.stages,
+    skipped: patch.skipped ?? eff.skipped,
+    hasOwner: !!(eff.owner.name && eff.owner.name !== '—'),
+    hasRegistration: !!(eff.vehicle.registration && eff.vehicle.registration !== '—'),
+  });
+  async function refreshCard() {
+    try {
+      const res = await fetch(`/api/jobcard-pane?id=${encodeURIComponent(p.jobCardId)}`, { cache: 'no-store' });
+      if (!res.ok) return; // quiet — the optimistic state stands; a manual reload reconciles
+      const d = await res.json();
+      setOv({
+        status: d.status, stages: d.stages, skipped: d.skipped, isComeback: d.isComeback,
+        invoice: d.invoice, events: d.events, booking: d.booking, tabsState: d.tabsState,
+        vehicle: d.vehicle, owner: d.owner,
+      });
+    } catch { /* quiet */ }
+  }
+
+  const cancelled = eff.status === 'cancelled';
 
   // ----- active tab from URL, defaulting to the first reachable-incomplete step -----
   const firstOpen = useMemo(() => {
-    const open = TAB_KEYS.find((k) => p.tabsState[k].reachable && !p.tabsState[k].complete);
+    const open = TAB_KEYS.find((k) => eff.tabsState[k].reachable && !eff.tabsState[k].complete);
     if (open) return open;
-    const lastReachable = [...TAB_KEYS].reverse().find((k) => p.tabsState[k].reachable);
+    const lastReachable = [...TAB_KEYS].reverse().find((k) => eff.tabsState[k].reachable);
     return lastReachable ?? 'details';
-  }, [p.tabsState]);
+  }, [eff.tabsState]);
   const urlTab = (router.query.tab as string) as TabKey | undefined;
-  const active: TabKey = urlTab && TAB_KEYS.includes(urlTab) && p.tabsState[urlTab].reachable ? urlTab : firstOpen;
+  const active: TabKey = urlTab && TAB_KEYS.includes(urlTab) && eff.tabsState[urlTab].reachable ? urlTab : firstOpen;
 
   function selectTab(k: TabKey) {
     router.replace({ pathname: router.pathname, query: { ...router.query, tab: k } }, undefined, { shallow: true });
   }
 
-  async function run(key: string, fn: () => Promise<Response>) {
+  async function run(key: string, fn: () => Promise<Response>, optimistic?: Partial<Overlay>) {
+    const snapshot = ov; // revert point — honest reconcile on failure
+    if (optimistic) setOv((prev) => ({ ...prev, ...optimistic }));
     setBusy(key); setErr(null);
     try {
       const res = await fn();
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(data?.message || t('action.error')); return false; }
-      router.replace(router.asPath); // refresh SSR-derived tab state + audit
+      if (!res.ok) { setOv(snapshot); setErr(data?.message || t('action.error')); return false; }
+      refreshCard(); // ONE narrow background request — no route transition, no page blank
       return true;
-    } catch { setErr(t('action.error')); return false; }
+    } catch { setOv(snapshot); setErr(t('action.error')); return false; }
     finally { setBusy(null); }
   }
   const postJSON = (url: string, body: unknown) => () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-  const setStage = (stage: StageKey, done: boolean) => run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }));
-  const setSkip = (stage: StageKey, skipTo: boolean, reason?: string) => run(`skip:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done: skipTo, skip: true, reason: reason || undefined }));
-  const setStatus = (to: JobStatus) => run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }));
-  const setComeback = (v: boolean) => run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }));
+  const setStage = (stage: StageKey, done: boolean) => {
+    const stages = { ...eff.stages, [stage]: done };
+    const skipped = stage !== 'details' && done ? { ...eff.skipped, [stage]: false } : eff.skipped; // done wins
+    return run(`stage:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done }),
+      { stages, skipped, tabsState: clientTabs({ stages, skipped }) });
+  };
+  const setSkip = (stage: StageKey, skipTo: boolean, reason?: string) => {
+    const skipped = { ...eff.skipped, [stage === 'complete' ? 'complete' : stage]: skipTo } as Overlay['skipped'];
+    return run(`skip:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done: skipTo, skip: true, reason: reason || undefined }),
+      { skipped, tabsState: clientTabs({ skipped }) });
+  };
+  const setStatus = (to: JobStatus) =>
+    run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }),
+      { status: to, tabsState: clientTabs({ status: to }) });
+  const setComeback = (v: boolean) =>
+    run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }),
+      { isComeback: v });
 
-  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: p.tabsState[k].reachable, complete: p.tabsState[k].complete, skipped: p.tabsState[k].skipped }));
+  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped }));
 
   // ---------- panes ----------
   function StageComplete({ stage, label }: { stage: StageKey; label: string }) {
-    const done = p.stages[stage];
+    const done = eff.stages[stage];
     const skippable = stage !== 'details'; // Details is a data gate — never skippable
-    const isSkipped = skippable && !done && p.skipped[stage === 'complete' ? 'complete' : stage as 'intake' | 'injob'];
+    const isSkipped = skippable && !done && eff.skipped[stage === 'complete' ? 'complete' : stage as 'intake' | 'injob'];
     const [skipOpen, setSkipOpen] = useState(false);
     const [skipReason, setSkipReason] = useState('');
     const detailsBlocked = stage === 'details' && !(p.owner.name && p.owner.name !== '—' && p.vehicle.registration && p.vehicle.registration !== '—');
@@ -171,7 +240,7 @@ export default function JobCardWorkspace(p: Props) {
           vehicle={p.vehicle}
           canEdit={p.canOperate && !cancelled}
           locale={p.locale}
-          onSaved={() => router.replace(router.asPath)}
+          onSaved={refreshCard}
         />
 
         <div className="bg-surface border border-line rounded-xl p-5">
@@ -194,29 +263,29 @@ export default function JobCardWorkspace(p: Props) {
     return (
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
-        {p.isComeback ? (
+        {eff.isComeback ? (
           // Comeback ON the spine: same invoiced/paid transitions as any card, but no chargeable
           // number is minted (the warranty series arrives with the invoice-artifact build).
           <>
             <div className="bg-warn-soft text-warn rounded-lg px-3 py-2 text-sm">{t('comeback.invoiceNote')}</div>
-            {p.status === 'in_progress' && p.canManage && !cancelled && (
+            {eff.status === 'in_progress' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
-            {p.status === 'invoiced' && p.canManage && !cancelled && (
+            {eff.status === 'invoiced' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
           </>
-        ) : p.invoice ? (
+        ) : eff.invoice ? (
           <>
-            <Link href={`/admin/invoices/${p.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
-              <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{p.invoice.number}</span></span>
+            <Link href={`/admin/invoices/${eff.invoice.id}`} className="flex items-center justify-between gap-2 bg-accent-soft border border-line rounded-xl px-4 py-3 hover:bg-accent-soft/70">
+              <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{eff.invoice.number}</span></span>
               <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
             </Link>
-            {p.status === 'invoiced' && p.canManage && !cancelled && (
+            {eff.status === 'invoiced' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
           </>
-        ) : p.status === 'in_progress' && p.canManage && !cancelled ? (
+        ) : eff.status === 'in_progress' && p.canManage && !cancelled ? (
           <>
             <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
             <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.invoiced')}</button>
@@ -231,8 +300,8 @@ export default function JobCardWorkspace(p: Props) {
   return (
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
-      {p.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
-      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} booked={{ label: t('spine.booked'), on: !!p.booking }} />
+      {eff.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
+      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} booked={{ label: t('spine.booked'), on: !!eff.booking }} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
       {active === 'details' && <DetailsPane />}
@@ -241,9 +310,9 @@ export default function JobCardWorkspace(p: Props) {
         <div className="space-y-5">
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
-            status={p.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
-            resources={p.resources} booking={p.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
-            onDone={() => router.replace(router.asPath)} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
+            status={eff.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
+            resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
+            onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
           <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
@@ -251,7 +320,7 @@ export default function JobCardWorkspace(p: Props) {
               intact as the true cost. It also suppresses invoicing (see the Invoice tab). */}
           {p.canOperate && !cancelled && (
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
-              <input type="checkbox" className="w-5 h-5 mt-0.5" checked={p.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
+              <input type="checkbox" className="w-5 h-5 mt-0.5" checked={eff.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
             </label>
           )}
@@ -260,9 +329,9 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
-          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !cancelled} locked={p.stages.intake} locale={p.locale} />
+          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !cancelled} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex flex-wrap gap-3 justify-end">
-            {p.status === 'accepted' && p.canOperate && !cancelled && (
+            {eff.status === 'accepted' && p.canOperate && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
             )}
             <StageComplete stage="intake" label={t('tab.intake')} />
@@ -280,14 +349,14 @@ export default function JobCardWorkspace(p: Props) {
       {active === 'completion' && (
         <div className="space-y-5">
           <PhotoPlaceholder />
-          <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !cancelled} busy={busy} setBusy={setBusy} setErr={setErr} onDone={() => router.replace(router.asPath)} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
+          <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !cancelled} busy={busy} setBusy={setBusy} setErr={setErr} onDone={refreshCard} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>
       )}
 
       {active === 'invoice' && <InvoicePane />}
 
-      <JobCardAudit events={p.events} />
+      <JobCardAudit events={eff.events} />
     </>
   );
 }
