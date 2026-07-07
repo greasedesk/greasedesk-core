@@ -22,6 +22,8 @@ import { getTenantVat } from '@/lib/tenant-vat';
 import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
+import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
+import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -152,6 +154,28 @@ export default function DiaryPage(props: PageProps) {
   }, [router.isReady]);
 
   const [peek, setPeek] = useState<{ card: DiaryCard; x: number; y: number } | null>(null);
+  // DESKTOP DAY VIEW inline card: clicking a booking renders the FULL job card (same JobCardWorkspace
+  // as the routed page, same builder via /api/jobcard-pane) in the whitespace below the day grid.
+  // Replaces the peek popup for bookings THERE ONLY — week view + the mobile list keep their behaviour.
+  const [pane, setPane] = useState<{ cardId: string; data: JobCardPageProps | null } | null>(null);
+  const paneIdRef = useRef<string | null>(null);
+  async function openPane(cardId: string) {
+    paneIdRef.current = cardId;
+    setPane({ cardId, data: null });
+    try {
+      const res = await fetch(`/api/jobcard-pane?id=${encodeURIComponent(cardId)}`, { cache: 'no-store' });
+      if (res.ok && paneIdRef.current === cardId) setPane({ cardId, data: await res.json() });
+    } catch { /* pane load is best-effort; the header link still opens the full page */ }
+  }
+  // The workspace refreshes itself after every mutation via router.replace(asPath) — that re-runs the
+  // DIARY SSR; refetch the pane on route completion so its tab/stage state stays live too.
+  useEffect(() => {
+    const onDone = () => { if (paneIdRef.current) openPane(paneIdRef.current); };
+    router.events.on('routeChangeComplete', onDone);
+    return () => router.events.off('routeChangeComplete', onDone);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const closePane = () => { paneIdRef.current = null; setPane(null); };
   // Right-click / long-press context menu. Empty-space form: {date, resourceId?, atMin}. Booking form: {card}.
   const [menu, setMenu] = useState<{ x: number; y: number; date?: string; resourceId?: string; atMin?: number; card?: DiaryCard } | null>(null);
   const [create, setCreate] = useState<{ date: string; startAt: string; resourceId?: string; mode: 'job' | 'note'; pickWhen?: boolean } | null>(null);
@@ -211,7 +235,15 @@ export default function DiaryPage(props: PageProps) {
     e.stopPropagation();
     const x = e.clientX, y = e.clientY;
     if (clickTimer.current) return;
-    clickTimer.current = window.setTimeout(() => { clickTimer.current = null; setPeek({ card, x, y }); }, 200);
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null;
+      // Desktop day view: inline card below the grid (week view + mobile keep the peek/tap behaviour).
+      if (view === 'day' && typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches) {
+        setPeek(null); openPane(card.id);
+      } else {
+        setPeek({ card, x, y });
+      }
+    }, 200);
   }
   function onBlockDbl(card: DiaryCard, e: React.MouseEvent) {
     e.stopPropagation();
@@ -602,6 +634,36 @@ export default function DiaryPage(props: PageProps) {
               </div>
             </div>
             {canManage && <p className="text-xs text-muted mt-2">{t('menu.hint')}</p>}
+
+            {/* INLINE JOB CARD (desktop day view): the full six-tab workspace below the grid — the
+                same component + data builder as the routed page (via /api/jobcard-pane), so the day
+                stays visible above while the selected job is worked below. */}
+            {view === 'day' && pane && (
+              <div className="hidden md:block mt-6 border-t-2 border-line pt-4">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <h2 className="text-xl font-bold text-ink">{pane.data?.registration ?? '…'}</h2>
+                  <div className="flex items-center gap-3">
+                    <Link href={`/admin/jobcards/${pane.cardId}?from=diary&site=${siteId}&view=day&date=${anchor}`} className="text-sm text-accent hover:underline">{t('pane.openFull')} →</Link>
+                    <button onClick={closePane} aria-label={t('pane.close')} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted hover:text-ink">✕</button>
+                  </div>
+                </div>
+                {pane.data ? (
+                  <JobCardWorkspace
+                    jobCardId={pane.data.jobCardId} status={pane.data.status} tabsState={pane.data.tabsState}
+                    canManage={pane.data.canEdit} canOperate={pane.data.canOperate} canEditPricing={pane.data.canEditPricing}
+                    owner={pane.data.owner} vehicle={pane.data.vehicle} flags={pane.data.flags} isComeback={pane.data.isComeback}
+                    garageNotes={pane.data.garageNotes} currency={pane.data.currency} locale={pane.data.locale}
+                    vatRate={pane.data.vatRate} vatRegistered={pane.data.vatRegistered} lines={pane.data.lines}
+                    catalogue={pane.data.catalogue} fixedServices={pane.data.fixedServices} promos={pane.data.promos} tiers={pane.data.tiers}
+                    hasEstimate={pane.data.hasEstimate} resources={pane.data.resources} booking={pane.data.booking}
+                    siteHours={pane.data.siteHours} siteId={pane.data.siteId} stages={pane.data.stages} skipped={pane.data.skipped}
+                    invoice={pane.data.invoice} events={pane.data.events}
+                  />
+                ) : (
+                  <p className="text-sm text-muted py-8 text-center">{t('pane.loading')}</p>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1118,7 +1180,7 @@ function EditNoteDialog({ note, resources, onClose, onDone }: {
   );
 }
 
-export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
+export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };

@@ -167,5 +167,10 @@
   "revenue": {
     "placeholderTitle": "Revenue view",
     "placeholderBody": "Revenue for this period — arrives with invoicing."
+  },
+  "pane": {
+    "openFull": "Open full page",
+    "close": "Close",
+    "loading": "Loading job card…"
   }
 }
