@@ -68,9 +68,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const pdf = await renderInvoicePdf(doc);
+    // BCC the garage's own address so it keeps a copy of exactly what the customer received.
+    // Fixed to billing_email for now (skipped if it IS the recipient); a configurable copy
+    // address/toggle arrives with the Invoice Settings tab.
+    const garageCopy = (group.billing_email || '').trim();
     const ok = await sendEmail(to, subject, html, {
       fromName: group.group_name,
       replyTo: group.billing_email || undefined,
+      bcc: garageCopy && garageCopy.toLowerCase() !== to.toLowerCase() ? [garageCopy] : undefined,
       attachments: [{ filename: `${(doc.number || 'invoice').replace(/[^\w.-]/g, '_')}.pdf`, content: pdf }],
     });
     if (!ok) return res.status(502).json({ message: 'The email service didn’t accept the message — please try again shortly.' });

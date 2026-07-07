@@ -206,6 +206,21 @@ export default function JobCardWorkspace(p: Props) {
   }
   const skipAndMint = () => { setMintOpen(false); setStatus('invoiced'); };
 
+  // Email-invoice from the Invoice tab — SAME endpoint as the view page (one send path, no fork).
+  // State hoisted here (never inside a pane — remount rule). Success refreshes the audit foot.
+  const [emailMsg, setEmailMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  async function emailInvoice() {
+    if (!eff.invoice) return;
+    setBusy('invoice-email'); setEmailMsg(null);
+    try {
+      const res = await fetch('/api/invoice-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: eff.invoice.id }) });
+      const d = await res.json().catch(() => ({}));
+      setEmailMsg(res.ok ? { text: t('invoiceTab.emailSent'), ok: true } : { text: d?.message || t('invoiceTab.emailError'), ok: false });
+      if (res.ok) refreshCard();
+    } catch { setEmailMsg({ text: t('invoiceTab.emailError'), ok: false }); }
+    finally { setBusy(null); }
+  }
+
   const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped }));
 
   // ---------- panes ----------
@@ -324,6 +339,18 @@ export default function JobCardWorkspace(p: Props) {
     const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
     );
+    // Email-invoice action + result, shown wherever the invoice link renders (normal + comeback).
+    const invoiceActions = eff.invoice && (
+      <>
+        {p.canManage && !cancelled && (
+          <button disabled={busy !== null} onClick={emailInvoice}
+            className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
+            {busy === 'invoice-email' ? t('invoiceTab.emailSending') : t('invoiceTab.emailSend')}
+          </button>
+        )}
+        {emailMsg && <div className={`rounded-lg p-2 text-sm ${emailMsg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{emailMsg.text}</div>}
+      </>
+    );
     // Last-chance VIN/mileage prompt — only for what's actually missing; skip always available.
     const mintPanel = mintOpen && (
       <div className="bg-warn-soft border border-line rounded-xl p-4 space-y-3">
@@ -362,6 +389,7 @@ export default function JobCardWorkspace(p: Props) {
                 <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
               </Link>
             )}
+            {invoiceActions}
             {startWorkBtn}
             {eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled && !mintOpen && (
               <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
@@ -378,6 +406,7 @@ export default function JobCardWorkspace(p: Props) {
               <span className="text-sm text-ink font-medium">{t('invoiceTab.number')} <span className="font-mono">{eff.invoice.number}</span></span>
               <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
             </Link>
+            {invoiceActions}
             {eff.status === 'invoiced' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}

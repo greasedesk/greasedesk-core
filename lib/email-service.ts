@@ -21,6 +21,8 @@ export type SendEmailOpts = {
   fromName?: string;
   /** Tenant's real address — replies go to them, not to our no-reply. */
   replyTo?: string;
+  /** Silent copies (e.g. the garage's own record of an invoice send). */
+  bcc?: string[];
   attachments?: Array<{ filename: string; content: Buffer }>;
 };
 
@@ -44,6 +46,7 @@ export const sendEmail = async (to: string, subject: string, html: string, opts:
       subject: subject,
       html: html,
       ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+      ...(opts.bcc?.length ? { bcc: opts.bcc } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments.map((a) => ({ filename: a.filename, content: a.content })) } : {}),
     });
 

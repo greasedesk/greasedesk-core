@@ -245,7 +245,11 @@
     "notYet": "The invoice becomes available once the job is worked and completed.",
     "missingTitle": "This invoice is missing: {{list}}. Add it now, or skip and invoice anyway.",
     "addAndInvoice": "Add & invoice",
-    "skipAndInvoice": "Skip and invoice anyway"
+    "skipAndInvoice": "Skip and invoice anyway",
+    "emailSend": "Email invoice",
+    "emailSending": "Sending…",
+    "emailSent": "Invoice emailed to the customer (copy to your inbox).",
+    "emailError": "Could not send the invoice."
   },
   "startWork": {
     "hint": "Intake done — mark the work as started. In-job photos record it as it happens."
