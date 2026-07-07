@@ -4,6 +4,10 @@
  * getServerSideProps AND /api/jobcard-pane (the diary's inline-card pane). One data shape, one
  * JobCardWorkspace component, so the inline card can never drift from the routed page.
  * Returns null when the card isn't visible to the caller. All values are JSON-serialisable.
+ *
+ * Queries run in three concurrency waves (not one-by-one) — the DB round trip is the dominant
+ * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
+ * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
@@ -20,8 +24,36 @@ import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
-  const vis = await getVisibility(userId);
+  // Wave 1 — param-keyed queries, all fired together. Invoice + audit key on the cardId param
+  // (not the fetched row), so they can start now; if the card turns out to be invisible their
+  // results are simply discarded (nothing is returned).
+  const [vis, perms, vat, invoiceRow, [catalogueRows, tierRows, promoRows], auditRows] = await Promise.all([
+    getVisibility(userId),
+    getTenantPermissions(groupId),
+    getTenantVat(groupId),
+    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true } }) as Promise<{ id: string; invoice_number: string | null } | null>,
+    Promise.all([
+      prisma.catalogueItem.findMany({
+        where: { group_id: groupId, active: true },
+        orderBy: { code: 'asc' },
+        select: {
+          id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
+          components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
+          tier_prices: { select: { tier_id: true, price_ex_vat: true } },
+        },
+      }) as Promise<any[]>,
+      prisma.serviceTier.findMany({ where: { group_id: groupId, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
+      prisma.promo.findMany({ where: { group_id: groupId, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true, targets: { select: { item: { select: { id: true, title: true, name: true } } } } } }) as Promise<any[]>,
+    ]),
+    prisma.auditLog.findMany({
+      where: { entity: 'job_card', entity_id: cardId },
+      orderBy: { created_at: 'desc' },
+      take: 100,
+      select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
+    }) as Promise<any[]>,
+  ]);
 
+  // Wave 2 — the card row (must wait for visibility: the site filter IS the access control).
   const row = (await prisma.jobCard.findFirst({
     where: { id: cardId, site_id: { in: vis.siteIds } },
     include: {
@@ -32,26 +64,30 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   })) as any;
   if (!row) return null;
 
-  const site = (await prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } })) as { currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null;
+  // Wave 3 — row-keyed queries, fired together. The owner chain keeps its internal order:
+  // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
+  // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
+  // live vehicles).
+  const [site, resources, { edgeOwnerId, ownerRow }] = await Promise.all([
+    prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
+    prisma.resource.findMany({
+      where: { site_id: row.site_id, is_active: true },
+      orderBy: { display_order: 'asc' },
+      select: { id: true, name: true },
+    }) as Promise<Array<{ id: string; name: string }>>,
+    (async () => {
+      const ownerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
+      const or = ownerId
+        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, email: true, address: true } })
+        : (row.customer ?? null);
+      return { edgeOwnerId: ownerId, ownerRow: or };
+    })(),
+  ]);
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
-  const perms = await getTenantPermissions(groupId);
   const canEditPricing = canEditEstimate(vis, row.site_id, perms);
-  const vat = await getTenantVat(groupId);
-
-  // CAR-FIRST: resolve the CURRENT owner via the ownership edge (falls back to the card's own customer
-  // link only if a card somehow predates its vehicle's edge — the backfill covered all live vehicles).
-  const edgeOwnerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
-  const ownerRow = edgeOwnerId
-    ? (await prisma.customer.findUnique({ where: { id: edgeOwnerId }, select: { name: true, phone: true, email: true, address: true } }))
-    : (row.customer ?? null);
   const owner = { name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null };
 
-  const resources = ((await prisma.resource.findMany({
-    where: { site_id: row.site_id, is_active: true },
-    orderBy: { display_order: 'asc' },
-    select: { id: true, name: true },
-  })) as Array<{ id: string; name: string }>);
   const booking: CardBooking = (row.resource_id && row.start_at && row.end_at)
     ? {
         resourceId: row.resource_id,
@@ -63,23 +99,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       }
     : null;
 
-  const invoiceRow = (await prisma.invoice.findUnique({ where: { job_card_id: row.id }, select: { id: true, invoice_number: true } })) as { id: string; invoice_number: string | null } | null;
   const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
-  const [catalogueRows, tierRows, promoRows] = await Promise.all([
-    prisma.catalogueItem.findMany({
-      where: { group_id: groupId, active: true },
-      orderBy: { code: 'asc' },
-      select: {
-        id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
-        components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
-        tier_prices: { select: { tier_id: true, price_ex_vat: true } },
-      },
-    }) as Promise<any[]>,
-    prisma.serviceTier.findMany({ where: { group_id: groupId, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
-    prisma.promo.findMany({ where: { group_id: groupId, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true, targets: { select: { item: { select: { id: true, title: true, name: true } } } } } }) as Promise<any[]>,
-  ]);
   const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
     unit_cost: Number(c.unit_cost), unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
@@ -124,12 +146,6 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   });
 
   // Audit trail — this card's events, newest first. Empty for cards created before this shipped.
-  const auditRows = (await prisma.auditLog.findMany({
-    where: { entity: 'job_card', entity_id: row.id },
-    orderBy: { created_at: 'desc' },
-    take: 100,
-    select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
-  })) as any[];
   const events: AuditEvent[] = auditRows.map((a) => ({
     id: a.id, action: a.action, actor: a.user?.name ?? a.user?.email ?? null, at: (a.created_at as Date).toISOString(),
   }));
