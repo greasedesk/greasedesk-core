@@ -260,6 +260,30 @@ export default function JobCardWorkspace(p: Props) {
   }
 
   function InvoicePane() {
+    // Which stages still block the all_stages_done gate (done OR skipped advances; Details is
+    // done-only). Same inputs computeTabs reads — guidance can't drift from the server's refusal.
+    const remaining = [
+      !eff.stages.details && ('details' as const),
+      !eff.stages.intake && !eff.skipped.intake && ('intake' as const),
+      !eff.stages.injob && !eff.skipped.injob && ('injob' as const),
+      !eff.stages.complete && !eff.skipped.complete && ('completion' as const),
+    ].filter(Boolean) as Array<'details' | 'intake' | 'injob' | 'completion'>;
+    const allAdvanced = remaining.length === 0;
+    const preInvoice = ['draft', 'quoted', 'declined', 'accepted', 'in_progress'].includes(eff.status);
+
+    // TWO explicit audited clicks (ruling): Start work (→ in_progress, operational — anchors the
+    // future clocking/labour-actuals grain) then Mark invoiced (→ invoiced, commercial). Both live
+    // here so nobody hunts back to the Intake tab; the server still gates every move.
+    const startWorkBtn = eff.status === 'accepted' && allAdvanced && p.canOperate && !cancelled && (
+      <>
+        <p className="text-sm text-muted">{t('invoiceTab.readyToStart')}</p>
+        <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
+      </>
+    );
+    const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
+      <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
+    );
+
     return (
       <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
         <h2 className="text-lg font-semibold text-ink">{t('tab.invoice')}</h2>
@@ -274,12 +298,14 @@ export default function JobCardWorkspace(p: Props) {
                 <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
               </Link>
             )}
-            {eff.status === 'in_progress' && p.canManage && !cancelled && (
+            {startWorkBtn}
+            {eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
             {eff.status === 'invoiced' && p.canManage && !cancelled && (
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
+            {stagesRemainingMsg}
           </>
         ) : eff.invoice ? (
           <>
@@ -291,11 +317,15 @@ export default function JobCardWorkspace(p: Props) {
               <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
           </>
-        ) : eff.status === 'in_progress' && p.canManage && !cancelled ? (
+        ) : eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled ? (
           <>
             <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
             <button disabled={busy !== null} onClick={() => setStatus('invoiced')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.invoiced')}</button>
           </>
+        ) : startWorkBtn ? (
+          startWorkBtn
+        ) : stagesRemainingMsg ? (
+          stagesRemainingMsg
         ) : (
           <p className="text-sm text-muted">{t('invoiceTab.notYet')}</p>
         )}
@@ -307,7 +337,7 @@ export default function JobCardWorkspace(p: Props) {
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
       {eff.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
-      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} booked={{ label: t('spine.booked'), on: !!eff.booking }} />
+      <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
       {active === 'details' && <DetailsPane />}
@@ -457,7 +487,14 @@ function QuoteActions(props: {
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-ink">{t('quoteActions.title')}</h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-ink">{t('quoteActions.title')}</h3>
+        {/* Booked-at-a-glance lives HERE, beside the booking fields — not as a phantom tab
+            (the standalone strip chip was removed; booking is part of the Quote). */}
+        <span className={`text-xs font-medium rounded-full px-2.5 py-1 ${booking ? 'bg-ok-soft text-ok' : 'bg-surface-muted text-muted'}`}>
+          {booking ? `✓ ${t('booking.booked')}` : t('booking.notBookedShort')}
+        </span>
+      </div>
 
       {(isBookingStage || isAcceptedOnwards) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

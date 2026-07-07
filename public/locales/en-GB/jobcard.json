@@ -114,6 +114,7 @@
     "rebook": "Update booking",
     "unbook": "Unbook",
     "booked": "Booked",
+    "notBookedShort": "Not booked",
     "booking": "Booking…",
     "needLiftAndTimes": "Choose a lift, a start and an end.",
     "endAfterStart": "End must be after start.",
@@ -234,6 +235,8 @@
     "number": "Invoice",
     "view": "View invoice",
     "readyToMint": "All stages complete — raise the invoice.",
+    "readyToStart": "All steps are complete — start the work, then raise the invoice.",
+    "stagesRemaining": "To invoice, complete (or skip) these steps first: {{list}}.",
     "notYet": "The invoice becomes available once the job is worked and completed."
   },
   "audit": {
@@ -299,9 +302,6 @@
       "marked": "Marked as warranty / comeback",
       "cleared": "Comeback flag removed"
     }
-  },
-  "spine": {
-    "booked": "Booked"
   },
   "stageSkip": {
     "button": "Skip this step",
