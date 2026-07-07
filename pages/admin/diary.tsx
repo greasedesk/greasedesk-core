@@ -33,8 +33,9 @@ type ResourceCol = { id: string; name: string; type: string; colour: string | nu
 type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
+type DiaryView = 'day' | 'week' | 'month' | 'year';
 type PageProps = {
-  siteId: string; siteName: string; view: 'week' | 'day'; anchor: string;
+  siteId: string; siteName: string; view: DiaryView; anchor: string;
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
@@ -56,7 +57,7 @@ const HOUR_OPTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 0.5); // 0.5 �
 // Clicking a day jumps the diary to it (day view → that day; week view → that day's week — SSR derives
 // the week from the date param). ‹ › page the DISPLAYED month; Today jumps to the real today.
 function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose }: {
-  siteId: string; view: 'week' | 'day'; anchor: string; today: string; weekStart: number; locale: string;
+  siteId: string; view: string; anchor: string; today: string; weekStart: number; locale: string;
   t: (k: string, o?: any) => string; onClose: () => void;
 }) {
   const router = useRouter();
@@ -332,25 +333,59 @@ export default function DiaryPage(props: PageProps) {
   const monthLabel = anchorUTC.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const dateLong = anchorUTC.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const weekdayLong = anchorUTC.toLocaleDateString(locale, { weekday: 'long', timeZone: 'UTC' });
-  const pillLabel = view === 'week' ? t('weekOf', { date: days[0]?.date ?? anchor }) : dateLong;
+  const yearLabel = String(anchorUTC.getUTCFullYear());
+  const pillLabel = view === 'week' ? t('weekOf', { date: days[0]?.date ?? anchor })
+    : view === 'month' ? monthLabel
+    : view === 'year' ? yearLabel
+    : dateLong;
+  const isRevenueView = view === 'month' || view === 'year';
 
   return (
     <>
       <Head><title>{t('title')} - GreaseDesk</title></Head>
 
       <div className="bg-surface text-ink rounded-xl border border-line p-4 shadow">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        {/* DESKTOP toolbar (Outlook/Apple-style): title left, the four-way view toggle centre-top,
+            and ‹ Today › lower-right. Month/Year are revenue-view placeholders (see below). */}
+        <div className="hidden md:flex items-center gap-3 mb-2">
           <h1 className="text-2xl font-bold text-ink">{t('title')} — {siteName}</h1>
-          {/* MOBILE (<md): two lines — line 1 the Week/Day toggle, line 2 ‹ date › left + "+ Add booking"
-              right. md+: the wrapper divs use md:contents (they vanish from layout) so the toolbar is the
-              exact original single flex-wrap row — desktop/tablet untouched. */}
-          <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
-            <div className="flex shrink-0 self-start md:self-auto rounded-lg overflow-hidden border border-line">
+          <div className="flex-1 flex justify-center">
+            <div className="flex rounded-lg overflow-hidden border border-line">
+              {(['day', 'week', 'month', 'year'] as const).map((v) => (
+                <Link key={v} href={`/admin/diary?site=${siteId}&view=${v}&date=${anchor}`}
+                  className={`shrink-0 whitespace-nowrap px-4 py-1.5 text-sm ${view === v ? 'bg-accent text-white' : 'bg-surface-muted text-ink hover:bg-surface'}`}>
+                  {t(v === 'day' ? 'day' : v)}
+                </Link>
+              ))}
+            </div>
+          </div>
+          {/* right-side spacer roughly balancing the title so the toggle sits near centre */}
+          <div className="w-40" aria-hidden />
+        </div>
+        <div className="hidden md:flex justify-end items-center gap-2 mb-3">
+          <div className="relative">
+            <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
+            {pickerOpen && (
+              <DayPicker siteId={siteId} view={view} anchor={anchor} today={today} weekStart={weekStart} locale={locale} t={t} onClose={() => setPickerOpen(false)} />
+            )}
+          </div>
+          <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
+          <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${today}`} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{t('todayBtn')}</Link>
+          <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${next}`} aria-label={t('next')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">→</Link>
+        </div>
+
+        {/* MOBILE toolbar — unchanged two-line layout: (1) Week/Day toggle, (2) ‹ date › + Add booking. */}
+        <div className="md:hidden mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+            <h1 className="text-2xl font-bold text-ink">{t('title')} — {siteName}</h1>
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="flex shrink-0 self-start rounded-lg overflow-hidden border border-line">
               <Link href={`/admin/diary?site=${siteId}&view=week&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'week' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('week')}</Link>
               <Link href={`/admin/diary?site=${siteId}&view=day&date=${anchor}`} className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-sm ${view === 'day' ? 'bg-accent text-white' : 'bg-surface-muted text-ink'}`}>{t('day')}</Link>
             </div>
-            <div className="flex items-center justify-between gap-2 md:contents">
-              <div className="flex items-center gap-2 md:contents">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
                 <Link href={`/admin/diary?site=${siteId}&view=${view}&date=${prev}`} aria-label={t('prev')} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink">←</Link>
                 <div className="relative">
                   <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
@@ -364,7 +399,7 @@ export default function DiaryPage(props: PageProps) {
                   pre-set to the viewed day, no default lift/time (pickWhen). */}
               {canManage && (
                 <button onClick={() => setCreate({ date: anchor, startAt: '', mode: 'job', pickWhen: true })}
-                  className="md:hidden shrink-0 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5">
+                  className="shrink-0 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5">
                   {t('addBooking')}
                 </button>
               )}
@@ -375,8 +410,10 @@ export default function DiaryPage(props: PageProps) {
         {/* Header — Outlook-style, dynamic from the anchor. WEEK: month ("June 2026", where dates are
             less prominent). DAY: the full date + weekday only (the month header would be redundant). */}
         <div className="text-center mb-4">
-          {view === 'week' ? (
+          {view === 'week' || view === 'month' ? (
             <div className="text-xl font-semibold text-ink tracking-tight">{monthLabel}</div>
+          ) : view === 'year' ? (
+            <div className="text-xl font-semibold text-ink tracking-tight">{yearLabel}</div>
           ) : (
             <div>
               <div className="text-lg font-bold text-ink">{dateLong}</div>
@@ -387,7 +424,7 @@ export default function DiaryPage(props: PageProps) {
 
         {/* Financial glance — only rendered for users the SERVER permitted (numbers omitted otherwise).
             The "Show values" toggle hides them at runtime ("turn the screen to the customer"). */}
-        {hasFinance && (
+        {hasFinance && !isRevenueView && (
           // hidden below the tablet breakpoint — the Booked/Margin/Show-values panel is a large-screen
           // detail (per-block values on the grid stay as-is; that call comes with the day-list redesign).
           <div className="hidden md:flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
@@ -409,7 +446,16 @@ export default function DiaryPage(props: PageProps) {
           </div>
         )}
 
-        {resources.length === 0 ? (
+        {isRevenueView ? (
+          /* Month/Year are REVENUE views, not booking calendars: they will show the period's aggregate
+             revenue from the same paid-ledger the dashboard reads — which requires the invoice artifact
+             to exist first. Until then they render this labelled placeholder and must NOT display
+             quoted-pipeline figures as if they were revenue. */
+          <div className="bg-surface-muted border border-line rounded-xl p-12 text-center">
+            <div className="text-lg font-semibold text-ink mb-1">{t('revenue.placeholderTitle')}</div>
+            <p className="text-sm text-muted">{t('revenue.placeholderBody')}</p>
+          </div>
+        ) : resources.length === 0 ? (
           <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('noResources')}</div>
         ) : (
           <>
@@ -505,15 +551,19 @@ export default function DiaryPage(props: PageProps) {
                     const placed = layoutOverlap(items);
                     return (
                       <div key={col.key} className="flex-1 min-w-[46px] border-l border-line">
-                        <div className={`${headH} sticky top-0 z-10 bg-surface border-b border-line px-1 flex flex-col items-center justify-center`}>
-                          <span className="text-sm text-ink font-medium truncate w-full text-center leading-tight">{col.label}</span>
+                        {(() => { const isToday = view === 'week' && col.date === today; return (
+                        /* Today's column: black header cell, white text — the HEADER only, never the
+                           column body (it must not fight the booking-block colours). */
+                        <div className={`${headH} sticky top-0 z-10 border-b border-line px-1 flex flex-col items-center justify-center ${isToday ? 'bg-black text-white' : 'bg-surface'}`}>
+                          <span className={`text-sm font-medium truncate w-full text-center leading-tight ${isToday ? 'text-white' : 'text-ink'}`}>{col.label}</span>
                           {showDayTotals && (() => { const d = finance.days[col.date] ?? { bookedPennies: 0, marginPennies: 0 }; return (
                             <span className="text-[9px] leading-tight text-center tabular-nums">
-                              {finance.canSeeValues && <span className="block text-muted">{t('finance.bookedShort')} {money(d.bookedPennies)}</span>}
-                              {finance.canSeeMargin && <span className={`block ${d.marginPennies < 0 ? 'text-danger' : 'text-muted'}`}>{t('finance.marginShort')} {money(d.marginPennies)}</span>}
+                              {finance.canSeeValues && <span className={`block ${isToday ? 'text-white/80' : 'text-muted'}`}>{t('finance.bookedShort')} {money(d.bookedPennies)}</span>}
+                              {finance.canSeeMargin && <span className={`block ${d.marginPennies < 0 ? (isToday ? 'text-red-300' : 'text-danger') : (isToday ? 'text-white/80' : 'text-muted')}`}>{t('finance.marginShort')} {money(d.marginPennies)}</span>}
                             </span>
                           ); })()}
                         </div>
+                        ); })()}
                         <div
                           className="relative bg-surface"
                           style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
@@ -1098,14 +1148,22 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   const canManage = canCreateDiaryEntry(vis, site.id, perms); // create gesture + note edit (manager OR STANDARD+toggle)
   const vat = await getTenantVat(user.group_id as string); // master switch — peek value must respect it
 
-  const view: 'week' | 'day' = ctx.query.view === 'day' ? 'day' : 'week';
+  const viewParam = String(ctx.query.view || '');
+  const view: DiaryView = viewParam === 'day' || viewParam === 'month' || viewParam === 'year' ? viewParam : 'week';
   const dateParam = (ctx.query.date as string) || '';
   const anchorObj = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? new Date(`${dateParam}T00:00:00.000Z`) : new Date(`${ymd(new Date())}T00:00:00.000Z`);
   const anchor = ymd(anchorObj);
   const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   let rangeStart: Date, rangeEnd: Date, days: DayCol[], prev: string, next: string;
-  if (view === 'week') {
+  if (view === 'month' || view === 'year') {
+    // Revenue-view PLACEHOLDERS: no booking data is fetched or shown at these zooms (they will show
+    // the paid-ledger aggregate once the invoice artifact exists — never quoted-pipeline figures).
+    rangeStart = anchorObj; rangeEnd = anchorObj; days = [];
+    const m = anchorObj.getUTCMonth(), y = anchorObj.getUTCFullYear();
+    prev = view === 'month' ? ymd(new Date(Date.UTC(y, m - 1, 1))) : ymd(new Date(Date.UTC(y - 1, m, 1)));
+    next = view === 'month' ? ymd(new Date(Date.UTC(y, m + 1, 1))) : ymd(new Date(Date.UTC(y + 1, m, 1)));
+  } else if (view === 'week') {
     const dow = anchorObj.getUTCDay();
     const offset = (dow - weekStart + 7) % 7;
     const weekStartObj = new Date(anchorObj.getTime() - offset * 86400000);
@@ -1127,7 +1185,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
   type ResRow = { id: string; name: string; type: string; colour: string | null };
   const [resourceRows, cardRows, noteRows] = await Promise.all([
     prisma.resource.findMany({ where: { site_id: site.id, is_active: true }, orderBy: { display_order: 'asc' }, select: { id: true, name: true, type: true, colour: true } }) as Promise<ResRow[]>,
-    prisma.jobCard.findMany({
+    (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.jobCard.findMany({
       where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
       select: {
         id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true,
@@ -1135,7 +1193,7 @@ export const getServerSideProps = withI18n(['diary'])(async (ctx) => {
         items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
       },
     }) as Promise<any[]>,
-    prisma.diaryNote.findMany({
+    (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.diaryNote.findMany({
       where: { site_id: site.id, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
       select: { id: true, title: true, resource_id: true, colour: true, start_at: true, end_at: true },
     }) as Promise<any[]>,
