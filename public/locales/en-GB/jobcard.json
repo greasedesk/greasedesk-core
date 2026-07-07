@@ -206,13 +206,15 @@
     "uploading": "Uploading…",
     "uploaded": "Photo added.",
     "empty": "No photos yet.",
-    "locked": "This stage is complete — photos are locked.",
+    "locked": "This stage is complete — its photos and videos are locked. To delete one, reopen the stage (the “complete — tap to reopen” button below), delete, then mark it complete again.",
     "delete": "Delete photo",
-    "confirmDelete": "Delete this photo?",
+    "confirmDelete": "Delete this photo? It can’t be recovered.",
     "uploadError": "Couldn’t upload the photo — please try again.",
     "deleteError": "Couldn’t delete the photo.",
     "videoAdd": "Video walkaround",
-    "videoSizeWarn": "That video is large ({{mb}} MB) — it will still upload, but may be slow on mobile data."
+    "videoSizeWarn": "That video is large ({{mb}} MB) — it will still upload, but may be slow on mobile data.",
+    "confirmDeleteVideo": "Delete this video? It can’t be recovered.",
+    "deleteVideo": "Delete video"
   },
   "quoteActions": {
     "title": "Quote actions",

@@ -91,8 +91,9 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
     finally { setBusy(false); if (videoRef.current) videoRef.current.value = ''; }
   }
 
-  async function del(id: string) {
-    if (!window.confirm(t('photos.confirmDelete'))) return;
+  async function del(id: string, mediaType: 'photo' | 'video') {
+    // Unrecoverable once gone — always confirm, with media-specific wording.
+    if (!window.confirm(t(mediaType === 'video' ? 'photos.confirmDeleteVideo' : 'photos.confirmDelete'))) return;
     setBusy(true); setErr(null);
     const res = await fetch(`/api/photos/${id}`, { method: 'DELETE' });
     if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d?.message || t('photos.deleteError')); }
@@ -139,8 +140,11 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
               {p.mediaType === 'video' && p.durationSeconds != null && (
                 <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5 pointer-events-none">{fmtDur(p.durationSeconds)}</span>
               )}
+              {/* Always visible while the stage is OPEN (hover-only was undiscoverable on touch).
+                  Locked stage → no control here; the note above points at the reopen route. */}
               {canEdit && !locked && (
-                <button onClick={() => del(p.id)} aria-label={t('photos.delete')} className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100">✕</button>
+                <button onClick={() => del(p.id, p.mediaType)} aria-label={t(p.mediaType === 'video' ? 'photos.deleteVideo' : 'photos.delete')}
+                  className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white rounded-full w-7 h-7 text-sm flex items-center justify-center shadow">✕</button>
               )}
             </div>
           ))}
