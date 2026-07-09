@@ -9,7 +9,8 @@
     "settings": "Settings",
     "signOut": "Sign Out",
     "toggleMenu": "Toggle Menu",
-    "allLocations": "All locations"
+    "allLocations": "All locations",
+    "invoices": "Invoices"
   },
   "dashboard": {
     "welcome": "Welcome Back!",

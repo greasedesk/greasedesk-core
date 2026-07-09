@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
+import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -40,7 +41,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       select: { id: true, site_name: true },
     });
     // primarySiteId drives the nav's default-location highlight when no ?site is set.
-    return res.status(200).json({ currentSiteId, primarySiteId: vis.primarySiteId, locations: sites });
+    // canViewInvoices gates the Invoices nav item (the page + API re-check server-side).
+    const perms = await getTenantPermissions(groupId);
+    return res.status(200).json({ currentSiteId, primarySiteId: vis.primarySiteId, locations: sites, canViewInvoices: canViewInvoices(vis, perms) });
   }
 
   if (req.method === 'POST') {

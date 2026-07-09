@@ -20,6 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const data: any = {};
   if (b.standardEditPricing !== undefined) data.perm_standard_edit_pricing = !!b.standardEditPricing;
   if (b.standardDiaryEntries !== undefined) data.perm_standard_diary_entries = !!b.standardDiaryEntries;
+  if (b.standardViewInvoices !== undefined) data.perm_standard_view_invoices = !!b.standardViewInvoices;
   if (b.managerSeeValues !== undefined) data.perm_manager_see_values = !!b.managerSeeValues;
   if (b.managerSeeMargin !== undefined) data.perm_manager_see_margin = !!b.managerSeeMargin;
   if (b.standardSeeValues !== undefined) data.perm_standard_see_values = !!b.standardSeeValues;

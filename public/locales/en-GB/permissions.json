@@ -12,15 +12,31 @@
   "finance": {
     "heading": "Diary financials",
     "intro": "Who can see money on the diary. Admins/owners always see everything. Values = per-job value + the “booked” total; margin = the profit total (exposes cost structure, so it’s tighter).",
-    "managerValues": { "label": "Site managers can see values", "desc": "Per-block values and the “booked” total on the diary." },
-    "managerMargin": { "label": "Site managers can see margin", "desc": "The margin total on the diary." },
-    "standardValues": { "label": "Mechanics can see values", "desc": "Per-block values and the “booked” total. Off by default." },
-    "standardMargin": { "label": "Mechanics can see margin", "desc": "The margin total. Off by default — margin exposes cost." }
+    "managerValues": {
+      "label": "Site managers can see values",
+      "desc": "Per-block values and the “booked” total on the diary."
+    },
+    "managerMargin": {
+      "label": "Site managers can see margin",
+      "desc": "The margin total on the diary."
+    },
+    "standardValues": {
+      "label": "Mechanics can see values",
+      "desc": "Per-block values and the “booked” total. Off by default."
+    },
+    "standardMargin": {
+      "label": "Mechanics can see margin",
+      "desc": "The margin total. Off by default — margin exposes cost."
+    }
   },
   "on": "On",
   "off": "Off",
   "save": "Save permissions",
   "saving": "Saving…",
   "saved": "Permissions saved.",
-  "error": "Could not save permissions."
+  "error": "Could not save permissions.",
+  "viewInvoices": {
+    "label": "Standard users can view Invoices",
+    "desc": "Opens the Invoices list (numbers, customers and amounts — the accounts view) to standard users at their assigned locations. Managers and admins always see it."
+  }
 }

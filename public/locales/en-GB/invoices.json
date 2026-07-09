@@ -1,0 +1,42 @@
+{
+  "title": "Invoices",
+  "totalShown": "Total shown",
+  "searchPh": "Search customer, reg or number…",
+  "loading": "Loading…",
+  "empty": "No invoices match.",
+  "footnote": "Invoices are edited from their job card. Pending payments confirm automatically after the clearance window.",
+  "filter": {
+    "all": "All",
+    "unpaid": "Unpaid",
+    "pending": "Pending",
+    "paid": "Paid",
+    "warranty": "Warranty"
+  },
+  "col": {
+    "number": "Invoice",
+    "customer": "Customer",
+    "reg": "Reg",
+    "amount": "Amount",
+    "date": "Issued",
+    "status": "Status",
+    "actions": "Actions"
+  },
+  "chip": {
+    "unpaid": "Unpaid",
+    "pending": "Pending clearance",
+    "paid": "Paid",
+    "warranty": "Warranty £0"
+  },
+  "action": {
+    "view": "View",
+    "pdf": "PDF",
+    "resend": "Re-send",
+    "sending": "Sending…"
+  },
+  "resend": {
+    "confirm": "Re-send invoice {{number}} to {{email}}?",
+    "sent": "Invoice {{number}} re-sent (copy to your inbox).",
+    "error": "Could not send the invoice.",
+    "noEmail": "This customer has no email address on file — add one on the job card's Customer Details tab first."
+  }
+}

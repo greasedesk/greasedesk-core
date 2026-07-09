@@ -12,6 +12,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 
 type PageProps = {
+  standardViewInvoices: boolean;
   standardEditPricing: boolean; standardDiaryEntries: boolean;
   managerSeeValues: boolean; managerSeeMargin: boolean; standardSeeValues: boolean; standardSeeMargin: boolean;
 };
@@ -39,6 +40,7 @@ export default function PermissionsSettings(props: PageProps) {
   const { t } = useTranslation('permissions');
   const [pricing, setPricing] = useState(props.standardEditPricing);
   const [diary, setDiary] = useState(props.standardDiaryEntries);
+  const [viewInv, setViewInv] = useState(props.standardViewInvoices);
   const [mgrValues, setMgrValues] = useState(props.managerSeeValues);
   const [mgrMargin, setMgrMargin] = useState(props.managerSeeMargin);
   const [stdValues, setStdValues] = useState(props.standardSeeValues);
@@ -51,7 +53,7 @@ export default function PermissionsSettings(props: PageProps) {
     try {
       const res = await fetch('/api/permissions', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ standardEditPricing: pricing, standardDiaryEntries: diary, managerSeeValues: mgrValues, managerSeeMargin: mgrMargin, standardSeeValues: stdValues, standardSeeMargin: stdMargin }),
+        body: JSON.stringify({ standardEditPricing: pricing, standardDiaryEntries: diary, standardViewInvoices: viewInv, managerSeeValues: mgrValues, managerSeeMargin: mgrMargin, standardSeeValues: stdValues, standardSeeMargin: stdMargin }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); setBusy(false); return; }
@@ -72,6 +74,7 @@ export default function PermissionsSettings(props: PageProps) {
 
         <Toggle on={pricing} onChange={setPricing} label={t('editPricing.label')} desc={t('editPricing.desc')} />
         <Toggle on={diary} onChange={setDiary} label={t('diaryEntries.label')} desc={t('diaryEntries.desc')} />
+        <Toggle on={viewInv} onChange={setViewInv} label={t('viewInvoices.label')} desc={t('viewInvoices.desc')} />
 
         <h3 className="text-sm font-semibold text-ink mt-6 mb-1">{t('finance.heading')}</h3>
         <p className="text-sm text-muted mb-2">{t('finance.intro')}</p>
@@ -96,7 +99,7 @@ export const getServerSideProps = withI18n(['permissions'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      perm_standard_edit_pricing: true, perm_standard_diary_entries: true,
+      perm_standard_edit_pricing: true, perm_standard_diary_entries: true, perm_standard_view_invoices: true,
       perm_manager_see_values: true, perm_manager_see_margin: true,
       perm_standard_see_values: true, perm_standard_see_margin: true,
     },
@@ -105,6 +108,7 @@ export const getServerSideProps = withI18n(['permissions'])(async (ctx) => {
     props: {
       standardEditPricing: !!g?.perm_standard_edit_pricing,
       standardDiaryEntries: !!g?.perm_standard_diary_entries,
+      standardViewInvoices: !!g?.perm_standard_view_invoices,
       managerSeeValues: !!g?.perm_manager_see_values,
       managerSeeMargin: !!g?.perm_manager_see_margin,
       standardSeeValues: !!g?.perm_standard_see_values,

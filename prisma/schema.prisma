@@ -163,6 +163,9 @@ model Group {
   perm_manager_see_margin  Boolean @default(true)
   perm_standard_see_values Boolean @default(false)
   perm_standard_see_margin Boolean @default(false)
+  // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).
+  // Managers/admins always; this extends it to STANDARD.
+  perm_standard_view_invoices Boolean @default(false)
 
   billing    GroupBilling?
   features   GroupFeature[]

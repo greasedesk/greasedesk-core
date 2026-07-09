@@ -18,7 +18,7 @@ import { useTranslation } from 'next-i18next';
 import BrandLogo from '@/components/BrandLogo';
 
 type Loc = { id: string; site_name: string };
-type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards' };
+type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards'; needsInvoicePerm?: boolean };
 
 // `key` is a stable i18n key (translated via t(`nav.${key}`)); display text lives in locale files.
 // locScope marks sections that expand a per-location sub-menu.
@@ -26,6 +26,7 @@ const navItems: NavItemDef[] = [
   { key: 'dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
   { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true, locScope: 'diary' },
   { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true, locScope: 'jobcards' },
+  { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'customers', href: '/admin/customers', icon: '👤', ready: false },
   { key: 'reports', href: '/admin/reports', icon: '📊', ready: false },
@@ -48,14 +49,14 @@ const subLink = (active: boolean) =>
 
 // Shared nav renderer (desktop sidebar + mobile overlay). onNavigate closes the mobile menu.
 function NavList({
-  pathname, siteQuery, locations, primarySiteId, t, onNavigate,
+  pathname, siteQuery, locations, primarySiteId, t, onNavigate, canViewInvoices,
 }: {
   pathname: string; siteQuery: string; locations: Loc[]; primarySiteId: string | null;
-  t: (k: string) => string; onNavigate?: () => void;
+  t: (k: string) => string; onNavigate?: () => void; canViewInvoices?: boolean;
 }) {
   return (
     <>
-      {visibleNavItems.map((item) => {
+      {visibleNavItems.filter((item) => !item.needsInvoicePerm || canViewInvoices).map((item) => {
         const active = pathname === item.href || pathname.startsWith(item.href + '/');
         const showSub = !!item.locScope && active && locations.length > 0;
         // Which location the current view is showing (for highlight). "All" only applies to Job Cards.
@@ -94,6 +95,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [locations, setLocations] = useState<Loc[]>([]);
   const [primarySiteId, setPrimarySiteId] = useState<string | null>(null);
+  const [canViewInvoices, setCanViewInvoices] = useState(false);
 
   // Fetches ONCE for the whole admin session (this shell is persistent — never remounts on nav).
   useEffect(() => {
@@ -104,6 +106,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         if (active && d) {
           setLocations(d.locations || []);
           setPrimarySiteId(d.primarySiteId ?? null);
+          setCanViewInvoices(!!d.canViewInvoices);
         }
       })
       .catch(() => {});
@@ -119,7 +122,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         <div className="mb-8"><BrandLogo /></div>
 
         <nav className="space-y-2">
-          <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} />
+          <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} canViewInvoices={canViewInvoices} />
         </nav>
 
         {/* Settings (cog) sits at the bottom, directly above Sign Out. */}
@@ -164,7 +167,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             <nav className="space-y-2">
               <NavList
                 pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId}
-                t={t} onNavigate={() => setIsSidebarOpen(false)}
+                t={t} onNavigate={() => setIsSidebarOpen(false)} canViewInvoices={canViewInvoices}
               />
             </nav>
             <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/settings'))}`}>
