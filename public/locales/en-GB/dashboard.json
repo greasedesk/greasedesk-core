@@ -1,0 +1,28 @@
+{
+  "title": "Dashboard",
+  "loading": "Loading…",
+  "footnote": "All figures come from the invoice ledger — the same numbers as the Invoices view. Debtors is the current outstanding total, independent of the period.",
+  "period": {
+    "this_month": "This month",
+    "this_quarter": "This quarter",
+    "this_fy": "This financial year",
+    "last_month": "Last month",
+    "last_quarter": "Last quarter",
+    "last_fy": "Last financial year",
+    "mtd": "Month to date",
+    "qtd": "Quarter to date",
+    "ytd": "Year to date",
+    "custom": "Custom range…"
+  },
+  "tiles": {
+    "revenue": "Revenue (paid)",
+    "revenueSub": "{{count}} paid invoices in the period",
+    "issuedVsPaid": "Invoices issued vs paid",
+    "issued": "Issued",
+    "paid": "Paid",
+    "debtors": "Debtors / outstanding",
+    "debtorsSub": "{{count}} unpaid invoices (current)",
+    "warranty": "Warranty jobs",
+    "warrantySub": "warranty invoices in the period"
+  }
+}

@@ -1,29 +1,83 @@
 /**
  * File: pages/admin/dashboard.tsx
- * Authenticated landing page. Now SSR-loads the tenant's trial status for a DISPLAY-ONLY
- * countdown banner (no enforcement at expiry — toothless by design).
- * (The three metric tiles below remain placeholders — out of scope for this slice.)
+ * The admin dashboard — a PLATFORM of period-aware tiles, not a fixed page. The server computes
+ * every registered tile (lib/dashboard-tiles — add a compute there) over the caller's visible
+ * sites; this page holds the matching CLIENT registry (TILE_RENDERERS — add a renderer here).
+ * Registering both IS adding a tile; the grid and the period plumbing never change.
+ * Period: Xero-style presets (FY-aware via the tenant's fy_start_month) + custom range —
+ * dashboard-wide, all tiles recompute together. Manager sees only their sites' figures
+ * (server-scoped); STANDARD is redirected to the diary (money surface, same rule as landing).
  */
+import React, { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
 import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
+import { getVisibility } from '@/lib/site-visibility';
 import { daysLeft } from '@/lib/trial';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
+import { PERIOD_PRESETS, PeriodPreset } from '@/lib/dashboard-periods';
 
 type PageProps = {
-  groupName: string;
-  accountRef: string;
-  status: string;
-  trialEndsAt: string | null;
-  currency: string;
-  locale: string;
+  groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
+  currency: string; locale: string;
 };
 
+// ---------- Tile framework (client side) ----------
+// A renderer receives its tile's server data + shared formatting context. Adding a tile = one
+// entry here + one compute in lib/dashboard-tiles.ts. Order here is display order.
+type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string };
+type TileRenderer = { key: string; render: (data: any, f: Fmt) => React.ReactNode };
+
+const TILE_RENDERERS: TileRenderer[] = [
+  {
+    key: 'revenue',
+    render: (d, f) => (
+      <>
+        <p className="text-3xl font-bold text-ink tabular-nums">{f.money(d.grossPennies)}</p>
+        <p className="text-xs text-muted mt-1">{f.t('tiles.revenueSub', { count: d.count })}</p>
+        {d.perSite?.length > 0 && (
+          <div className="mt-2 space-y-0.5">
+            {d.perSite.map((s: any) => (
+              <div key={s.site} className="flex justify-between text-xs"><span className="text-muted">{s.site}</span><span className="text-ink tabular-nums">{f.money(s.grossPennies)}</span></div>
+            ))}
+          </div>
+        )}
+      </>
+    ),
+  },
+  {
+    key: 'issuedVsPaid',
+    render: (d, f) => (
+      <div className="space-y-1.5">
+        <div className="flex justify-between items-baseline"><span className="text-xs text-muted">{f.t('tiles.issued')}</span><span className="text-lg font-semibold text-ink tabular-nums">{d.issuedCount} · {f.money(d.issuedPennies)}</span></div>
+        <div className="flex justify-between items-baseline"><span className="text-xs text-muted">{f.t('tiles.paid')}</span><span className="text-lg font-semibold text-ok tabular-nums">{d.paidCount} · {f.money(d.paidPennies)}</span></div>
+      </div>
+    ),
+  },
+  {
+    key: 'debtors',
+    render: (d, f) => (
+      <>
+        <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
+        <p className="text-xs text-muted mt-1">{f.t('tiles.debtorsSub', { count: d.count })}</p>
+      </>
+    ),
+  },
+  {
+    key: 'warranty',
+    render: (d, f) => (
+      <>
+        <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
+        <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
+      </>
+    ),
+  },
+];
+
 function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: string | null }) {
-  // Display only. A passed date just shows "trial ended" — nothing is gated.
   let text: string;
   let tone = 'bg-surface border-line text-ink';
   if (status !== 'trial') {
@@ -39,53 +93,85 @@ function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: str
   return <div className={`rounded-xl border p-4 mb-6 ${tone}`}>{text}</div>;
 }
 
-export default function AdminDashboard({ groupName, accountRef, status, trialEndsAt, currency, locale }: PageProps) {
-  const { t } = useTranslation('common');
+export default function AdminDashboard(props: PageProps) {
+  const { t } = useTranslation('dashboard');
+  const [preset, setPreset] = useState<PeriodPreset | 'custom'>('this_month');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [tiles, setTiles] = useState<Record<string, any> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const qs = preset === 'custom'
+      ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
+      : `preset=${preset}`;
+    if (!qs) return; // custom picked but incomplete — wait for both dates
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/dashboard-tiles?${qs}`, { cache: 'no-store' });
+      if (res.ok) setTiles((await res.json()).tiles);
+    } catch { /* tiles keep last values */ }
+    setLoading(false);
+  }, [preset, customFrom, customTo]);
+  useEffect(() => { load(); }, [load]);
+
+  const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t };
+
   return (
     <>
-      <Head>
-        <title>Dashboard - GreaseDesk</title>
-      </Head>
-
-      <h1 className="text-4xl font-bold text-accent mb-1">{t('dashboard.welcome')}</h1>
-      <p className="text-muted mb-6">{groupName} · <span className="font-mono">{accountRef}</span></p>
-
-      <TrialBanner status={status} trialEndsAt={trialEndsAt} />
-
-      {/* --- Dashboard Content (placeholder metrics — not wired yet) --- */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-surface p-6 rounded-xl border border-line shadow-lg">
-          <h2 className="text-xl font-semibold text-ink mb-3">{t('dashboard.liveJobCards')}</h2>
-          <p className="text-3xl text-warn">4</p>
-        </div>
-        <div className="bg-surface p-6 rounded-xl border border-line shadow-lg">
-          <h2 className="text-xl font-semibold text-ink mb-3">{t('dashboard.todaysBookings')}</h2>
-          <p className="text-3xl text-ok">2</p>
-        </div>
-        <div className="bg-surface p-6 rounded-xl border border-line shadow-lg">
-          <h2 className="text-xl font-semibold text-ink mb-3">{t('dashboard.revenueToday')}</h2>
-          {/* Demo figure (45000 pennies) — proves the single money chokepoint, site currency/locale. */}
-          <p className="text-3xl text-accent">{formatMoney(45000, { currency, locale })}</p>
+      <Head><title>{t('title')} - GreaseDesk</title></Head>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+        <h1 className="text-2xl font-bold text-ink">{t('title')}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={preset} onChange={(e) => setPreset(e.target.value as any)}
+            className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
+            {PERIOD_PRESETS.map((p) => <option key={p} value={p}>{t(`period.${p}`)}</option>)}
+            <option value="custom">{t('period.custom')}</option>
+          </select>
+          {preset === 'custom' && (
+            <>
+              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+              <span className="text-muted text-sm">→</span>
+              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+            </>
+          )}
         </div>
       </div>
+      <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
+
+      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {TILE_RENDERERS.map(({ key, render }) => (
+          <div key={key} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+            <h2 className="text-sm font-semibold text-muted mb-2">{t(`tiles.${key}`)}</h2>
+            {tiles?.[key] != null ? render(tiles[key], fmt) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-muted mt-3">{t('footnote')}</p>
     </>
   );
 }
 
-export const getServerSideProps = withI18n()(async (ctx) => {
+export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) {
     return { redirect: { destination: '/admin/login', permanent: false } };
   }
+  // Money surface: manager/admin only — STANDARD goes to their diary (same rule as landing).
+  const vis = await getVisibility(user.id as string);
+  if (!(vis.isAdmin || vis.role === 'SITE_MANAGER')) {
+    const site = vis.primarySiteId ?? vis.siteIds[0] ?? null;
+    return { redirect: { destination: site ? `/admin/diary?site=${encodeURIComponent(site)}` : '/admin/diary', permanent: false } };
+  }
   const group = (await prisma.group.findUnique({
     where: { id: user.group_id },
     select: { group_name: true, ref: true, status: true, trial_ends_at: true },
   })) as { group_name: string; ref: string; status: string; trial_ends_at: Date | null } | null;
-
-  // Money formats against the SITE's currency/locale (already on the Site model).
-  const site = user.site_id
-    ? ((await prisma.site.findUnique({ where: { id: user.site_id }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null)
+  const site = vis.primarySiteId
+    ? ((await prisma.site.findUnique({ where: { id: vis.primarySiteId }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null)
     : null;
 
   return {
