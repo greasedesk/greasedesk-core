@@ -43,6 +43,29 @@
     "emailFooter": "\"Sent with GreaseDesk\" email footer",
     "emailFooterHint": "A small footer line in invoice emails. Never printed on the invoice itself.",
     "paidWindow": "Payment clearance window (hours)",
-    "paidWindowHint": "Marking an invoice paid holds it for this long before the customer's confirmation is sent — you can quietly unmark it in the window (e.g. a card payment that doesn't clear)."
+    "paidWindowHint": "Marking an invoice paid holds it for this long before the customer's confirmation is sent — you can quietly unmark it in the window (e.g. a card payment that doesn't clear).",
+    "movedNote": "Invoice numbering and sending options have moved to Settings → Invoicing."
+  },
+  "invoicing": {
+    "title": "Invoicing",
+    "intro": "How your invoices look and how they reach customers. Numbering, sending, terms and logo live here.",
+    "sending": "Sending",
+    "senderName": "Sender display name",
+    "senderNameHint": "Shown as the sender of invoice emails. The sending address stays GreaseDesk-owned for deliverability.",
+    "replyTo": "Reply-To email",
+    "replyToHint": "Customer replies go here — your business address, not the login email.",
+    "bcc": "Copy (BCC) address",
+    "bccHint": "Every invoice email is silently copied here so you keep a record.",
+    "footerText": "Payment terms / invoice footer",
+    "footerTextPh": "Payment due within 14 days.\nWe reserve the right to charge interest under the Late Payment of Commercial Debts Act.\nPlease quote your invoice number when paying.",
+    "footerTextHint": "Printed at the foot of every invoice, exactly as written.",
+    "logo": "Logo",
+    "noLogo": "No logo uploaded.",
+    "logoUpload": "Upload logo",
+    "logoUploading": "Uploading…",
+    "logoSaved": "Logo saved — it now appears top-centre of the invoice PDF.",
+    "logoError": "Could not upload the logo.",
+    "logoHint": "PNG or JPEG. Rendered top-centre of the PDF, auto-sized.",
+    "save": "Save invoicing settings"
   }
 }

@@ -13,9 +13,9 @@
     "unmarkError": "Could not unmark the payment.",
     "receiptNotSent": "Payment confirmed, but the receipt could not be sent — use “Email invoice” to send it now."
   },
-  "vatNumber": "VAT no.",
+  "vatNumber": "{{label}} no.",
   "companyNumber": "Company no.",
-  "notRegistered": "Not VAT registered.",
+  "notRegistered": "Not {{label}} registered.",
   "billTo": "Bill to",
   "vehicle": "Vehicle",
   "vehicleBlock": {
@@ -28,13 +28,13 @@
     "qty": "Qty",
     "unitPrice": "Unit price",
     "net": "Net",
-    "vatRate": "VAT %",
-    "vat": "VAT",
+    "vatRate": "{{label}} %",
+    "vat": "{{label}}",
     "amount": "Amount"
   },
-  "subtotal": "Subtotal (ex VAT)",
-  "vatAt": "VAT at {{rate}}%",
-  "totalVat": "Total VAT",
+  "subtotal": "Subtotal (ex {{label}})",
+  "vatAt": "{{label}} at {{rate}}%",
+  "totalVat": "Total {{label}}",
   "grandTotal": "Total due",
   "total": "Total",
   "editOnCard": "Edit on job card",
@@ -58,5 +58,13 @@
     "signoff": "Kind regards,",
     "footer": "Sent with GreaseDesk"
   },
-  "back": "Back to job card"
+  "back": "Back to job card",
+  "lessAmountPaid": "Less amount paid",
+  "amountDue": "AMOUNT DUE",
+  "datePaid": {
+    "label": "Date paid (on the document)",
+    "save": "Save date",
+    "saving": "Saving…",
+    "error": "Could not save the paid date."
+  }
 }

@@ -6,7 +6,7 @@
  * browser, serverless-friendly. Strings via tServer (same locale JSON as the client). Server-only.
  */
 import React from 'react';
-import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
+import { Document, Page, Text, View, StyleSheet, Image, renderToBuffer } from '@react-pdf/renderer';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
@@ -36,18 +36,25 @@ const S = StyleSheet.create({
   footer: { position: 'absolute', bottom: 32, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
 });
 
-function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
+function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);
   const fmt = (p: number) => formatMoney(p, { currency: doc.currency, locale: doc.locale });
   const reg = doc.vatRegistered;
+  const isPaidState = doc.status === 'paid' || doc.status === 'paid_pending';
   return (
     <Document title={`${t('title')} ${doc.number}`}>
       <Page size="A4" style={S.page}>
+        {logo ? (
+          // Tenant logo, auto-placed top-centre (no position controls — banked with the designer).
+          <View style={{ alignItems: 'center', marginBottom: 14 }}>
+            <Image src={{ data: logo, format: doc.logoFormat === 'png' ? 'png' : 'jpg' }} style={{ maxHeight: 56, maxWidth: 180, objectFit: 'contain' }} />
+          </View>
+        ) : null}
         <View style={S.headerRow}>
           <View style={{ maxWidth: 260 }}>
             <Text style={S.companyName}>{doc.company.name}</Text>
             {doc.company.address ? <Text style={S.muted}>{doc.company.address}</Text> : null}
-            {reg && doc.company.vatNumber ? <Text style={S.muted}>{t('vatNumber')} {doc.company.vatNumber}</Text> : null}
+            {reg && doc.company.vatNumber ? <Text style={S.muted}>{t('vatNumber', { label: doc.taxLabel })} {doc.company.vatNumber}</Text> : null}
           </View>
           <View>
             <Text style={S.docTitle}>{t('title').toUpperCase()}</Text>
@@ -82,7 +89,7 @@ function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
           <Text style={[S.th, S.cDesc]}>{t('cols.description')}</Text>
           <Text style={[S.th, S.cQty]}>{t('cols.qty')}</Text>
           <Text style={[S.th, S.cPrice]}>{t('cols.unitPrice')}</Text>
-          {reg ? <Text style={[S.th, S.cRate]}>{t('cols.vatRate')}</Text> : null}
+          {reg ? <Text style={[S.th, S.cRate]}>{t('cols.vatRate', { label: doc.taxLabel })}</Text> : null}
           <Text style={[S.th, S.cNet]}>{reg ? t('cols.net') : t('cols.amount')}</Text>
         </View>
         {doc.lines.map((l, i) => (
@@ -99,20 +106,36 @@ function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
           <View style={S.totals}>
             {reg ? (
               <>
-                <View style={S.totalRow}><Text style={S.muted}>{t('subtotal')}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>
+                <View style={S.totalRow}><Text style={S.muted}>{t('subtotal', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>
                 {doc.totals.breakdown.map((b) => (
-                  <View key={b.rate} style={S.totalRow}><Text style={S.muted}>{t('vatAt', { rate: b.rate })}</Text><Text>{fmt(b.vatPennies)}</Text></View>
+                  <View key={b.rate} style={S.totalRow}><Text style={S.muted}>{t('vatAt', { rate: b.rate, label: doc.taxLabel })}</Text><Text>{fmt(b.vatPennies)}</Text></View>
                 ))}
-                <View style={S.totalRow}><Text style={S.muted}>{t('totalVat')}</Text><Text>{fmt(doc.totals.vatPennies)}</Text></View>
+                <View style={S.totalRow}><Text style={S.muted}>{t('totalVat', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.vatPennies)}</Text></View>
                 <View style={[S.totalRow, S.grand]}><Text>{t('grandTotal')}</Text><Text>{fmt(doc.totals.grossPennies)}</Text></View>
               </>
             ) : (
               <View style={[S.totalRow, S.grand]}><Text>{t('total')}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>
             )}
+            {/* Status-aware footer (Xero-style): marked/confirmed paid → Less Amount Paid + date +
+                AMOUNT DUE 0. Unpaid renders nothing here — the terms block below covers it. */}
+            {isPaidState ? (
+              <>
+                <View style={S.totalRow}>
+                  <Text style={S.muted}>{t('lessAmountPaid')}{doc.datePaid ? ` (${doc.datePaid.toLocaleDateString(doc.locale, { timeZone: 'UTC' })})` : ''}</Text>
+                  <Text>{fmt(-(reg ? doc.totals.grossPennies : doc.totals.netPennies))}</Text>
+                </View>
+                <View style={[S.totalRow, S.grand]}><Text>{t('amountDue')}</Text><Text>{fmt(0)}</Text></View>
+              </>
+            ) : null}
           </View>
         </View>
 
-        {!reg ? <Text style={[S.muted, { marginTop: 12 }]}>{t('notRegistered')}</Text> : null}
+        {doc.footerText ? (
+          // Payment terms / footer block (Invoicing tab) — multi-line, verbatim.
+          <Text style={[S.muted, { marginTop: 18, fontSize: 8, lineHeight: 1.5 }]}>{doc.footerText}</Text>
+        ) : null}
+
+        {!reg ? <Text style={[S.muted, { marginTop: 12 }]}>{t('notRegistered', { label: doc.taxLabel })}</Text> : null}
         <Text style={S.footer} fixed>{doc.company.name} — {t('title')} {doc.number}</Text>
       </Page>
     </Document>
@@ -120,5 +143,12 @@ function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
 }
 
 export async function renderInvoicePdf(doc: InvoiceDoc): Promise<Buffer> {
-  return await renderToBuffer(<InvoicePdf doc={doc} />);
+  let logo: Buffer | null = null;
+  if (doc.logoUrl) {
+    try {
+      const r = await fetch(doc.logoUrl);
+      if (r.ok) logo = Buffer.from(await r.arrayBuffer());
+    } catch { /* logo is decoration — never fail the document for it */ }
+  }
+  return await renderToBuffer(<InvoicePdf doc={doc} logo={logo} />);
 }

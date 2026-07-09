@@ -45,6 +45,10 @@ const TABS: TopTab[] = [
     ],
   },
   {
+    name: 'Invoicing', key: 'invoicing', href: '/admin/settings/invoicing', adminOnly: true,
+    match: ['/admin/settings/invoicing'],
+  },
+  {
     name: 'Licence & Subscriptions', key: 'licence', href: '/admin/settings/licences', adminOnly: true,
     match: ['/admin/settings/licences'],
   },

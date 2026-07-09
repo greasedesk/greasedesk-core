@@ -118,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
           await tx.invoice.update({
             where: { id: inv.id },
-            data: { status: 'paid_pending', paid_at: new Date(), confirm_due_at: new Date(Date.now() + windowH * 3600_000) },
+            data: { status: 'paid_pending', paid_at: new Date(), date_paid: new Date(), confirm_due_at: new Date(Date.now() + windowH * 3600_000) },
           });
           await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { pendingHours: windowH } });
         }

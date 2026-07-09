@@ -12,6 +12,7 @@ import { prisma } from '@/lib/db';
 import { computeInvoiceLinePennies, invoiceTotals, InvoiceTotals } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { tServer } from '@/lib/server-i18n';
+import { presignGet } from '@/lib/r2';
 
 export type InvoiceDocLine = {
   description: string;
@@ -30,6 +31,11 @@ export type InvoiceDoc = {
   status: 'issued' | 'paid_pending' | 'paid';
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
+  datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)
+  taxLabel: string;             // admin-set (VAT/GST/Sales Tax…) — never derived from country
+  footerText: string | null;    // payment terms / footer block (multi-line)
+  logoUrl: string | null;       // presigned GET for the tenant logo (15-min; render-time use)
+  logoFormat: 'png' | 'jpg' | null;
   series: 'chargeable' | 'warranty';
   issuedAt: Date;
   paidAt: Date | null;
@@ -47,7 +53,8 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
@@ -103,6 +110,11 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     paidAt: inv.paid_at ? new Date(inv.paid_at) : null,
     confirmDueAt: inv.confirm_due_at ? new Date(inv.confirm_due_at) : null,
     receiptSentAt: inv.receipt_sent_at ? new Date(inv.receipt_sent_at) : null,
+    datePaid: inv.date_paid ? new Date(inv.date_paid) : (inv.paid_at ? new Date(inv.paid_at) : null),
+    taxLabel: inv.group?.tax_label || 'VAT',
+    footerText: inv.group?.invoice_footer_text || null,
+    logoUrl: inv.group?.logo_r2_key ? await presignGet(inv.group.logo_r2_key) : null,
+    logoFormat: inv.group?.logo_r2_key ? (String(inv.group.logo_r2_key).endsWith('.png') ? 'png' : 'jpg') : null,
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },

@@ -29,6 +29,9 @@ type PageProps = {
   status: 'issued' | 'paid_pending' | 'paid';
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
+  taxLabel: string;
+  footerText: string | null;
+  datePaid: string | null;       // yyyy-mm-dd (document fact, manager-editable)
   receiptNotSent: boolean;       // confirmed but the receipt never went — visible, resendable
   issuedAt: string;
   vatRegistered: boolean;
@@ -124,6 +127,9 @@ export default function InvoicePage(props: PageProps) {
         {props.status === 'paid' && props.receiptNotSent && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
         )}
+        {(props.status === 'paid' || props.status === 'paid_pending') && props.canManage && (
+          <DatePaidEditor invoiceId={props.invoiceId} initial={props.datePaid} t={t} onSaved={() => router.replace(router.asPath)} />
+        )}
         {props.status === 'paid' && <p className="text-xs text-muted mb-3">{t('paidLocked')}</p>}
 
         {/* The document */}
@@ -134,7 +140,7 @@ export default function InvoicePage(props: PageProps) {
               <div className="text-lg font-bold text-ink">{props.company.name}</div>
               {props.company.address && <div className="text-sm text-muted whitespace-pre-line">{props.company.address}</div>}
               {reg && props.company.vatNumber && (
-                <div className="text-xs text-muted mt-1">{t('vatNumber')} {props.company.vatNumber}</div>
+                <div className="text-xs text-muted mt-1">{t('vatNumber', { label: props.taxLabel })} {props.company.vatNumber}</div>
               )}
             </div>
             <div className="text-right">
@@ -178,7 +184,7 @@ export default function InvoicePage(props: PageProps) {
                   <th className="text-left font-medium py-2">{t('cols.description')}</th>
                   <th className="text-right font-medium py-2 px-2">{t('cols.qty')}</th>
                   <th className="text-right font-medium py-2 px-2">{t('cols.unitPrice')}</th>
-                  {reg && <th className="text-right font-medium py-2 px-2">{t('cols.vatRate')}</th>}
+                  {reg && <th className="text-right font-medium py-2 px-2">{t('cols.vatRate', { label: props.taxLabel })}</th>}
                   <th className="text-right font-medium py-2">{reg ? t('cols.net') : t('cols.amount')}</th>
                 </tr>
               </thead>
@@ -201,23 +207,58 @@ export default function InvoicePage(props: PageProps) {
             <div className="w-full sm:w-72 text-sm space-y-1">
               {reg ? (
                 <>
-                  <div className="flex justify-between"><span className="text-muted">{t('subtotal')}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted">{t('subtotal', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
                   {props.totals.breakdown.map((b) => (
-                    <div key={b.rate} className="flex justify-between"><span className="text-muted">{t('vatAt', { rate: b.rate })}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
+                    <div key={b.rate} className="flex justify-between"><span className="text-muted">{t('vatAt', { rate: b.rate, label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
                   ))}
-                  <div className="flex justify-between"><span className="text-muted">{t('totalVat')}</span><span className="text-ink tabular-nums">{fmt(props.totals.vatPennies)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted">{t('totalVat', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.vatPennies)}</span></div>
                   <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('grandTotal')}</span><span className="text-ink tabular-nums">{fmt(props.totals.grossPennies)}</span></div>
                 </>
               ) : (
                 <div className="flex justify-between text-base font-semibold"><span className="text-ink">{t('total')}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
               )}
+              {(props.status === 'paid' || props.status === 'paid_pending') && (
+                <>
+                  <div className="flex justify-between"><span className="text-muted">{t('lessAmountPaid', { label: props.taxLabel })}{props.datePaid ? ` (${props.datePaid})` : ''}</span><span className="text-ink tabular-nums">-{fmt(reg ? props.totals.grossPennies : props.totals.netPennies)}</span></div>
+                  <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('amountDue')}</span><span className="text-ink tabular-nums">{fmt(0)}</span></div>
+                </>
+              )}
             </div>
           </div>
+          {props.footerText && <p className="text-xs text-muted mt-6 whitespace-pre-line border-t border-line pt-4">{props.footerText}</p>}
 
-          {!reg && <p className="text-xs text-muted mt-4">{t('notRegistered')}</p>}
+          {!reg && <p className="text-xs text-muted mt-4">{t('notRegistered', { label: props.taxLabel })}</p>}
         </div>
       </div>
     </>
+  );
+}
+
+// Date-paid: the DOCUMENT fact — defaults from mark-paid, manager/admin-editable, audited server-side.
+function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string | null; t: (k: string, o?: any) => string; onSaved: () => void }) {
+  const [val, setVal] = useState(initial ?? '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch('/api/invoice-date-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId, datePaid: val }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(d?.message || t('datePaid.error')); setBusy(false); return; }
+      onSaved();
+    } catch { setErr(t('datePaid.error')); setBusy(false); }
+  }
+  return (
+    <div className="flex flex-wrap items-end gap-2 mb-3">
+      <label className="block">
+        <span className="block text-xs text-muted mb-1">{t('datePaid.label')}</span>
+        <input type="date" value={val} onChange={(e) => setVal(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+      </label>
+      <button onClick={save} disabled={busy || !val || val === initial} className="text-sm rounded-lg px-3 py-2 bg-surface-muted border border-line text-ink disabled:opacity-50">
+        {busy ? t('datePaid.saving') : t('datePaid.save')}
+      </button>
+      {err && <span className="text-sm text-danger">{err}</span>}
+    </div>
   );
 }
 
@@ -239,6 +280,9 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       status: doc.status,
       series: doc.series,
       confirmDueAt: doc.confirmDueAt ? doc.confirmDueAt.toLocaleString(doc.locale, { timeZone: 'UTC' }) : null,
+      taxLabel: doc.taxLabel,
+      footerText: doc.footerText,
+      datePaid: doc.datePaid ? doc.datePaid.toISOString().slice(0, 10) : null,
       receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
       issuedAt: doc.issuedAt.toLocaleDateString(doc.locale),
       vatRegistered: doc.vatRegistered,

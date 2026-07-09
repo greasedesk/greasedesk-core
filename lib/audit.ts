@@ -30,6 +30,7 @@ export type AuditAction =
   | 'invoice.paid_confirmed'  // clearance window elapsed → confirmed by the cron (system actor)
   | 'invoice.unlocked'      // ADMIN-only escape hatch: CONFIRMED paid → issued for corrections
   | 'invoice.renumbered'    // deliberate ledger correction of the rendered number (one-off, admin-approved)
+  | 'invoice.date_paid_edited' // the document's paid-date corrected (manager/admin)
   | 'invoice.sent';         // emailed to the customer (PDF attached)
 
 export async function writeAudit(

@@ -14,6 +14,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
+import { deleteObject } from '@/lib/r2';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PATCH') {
@@ -33,11 +34,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
+    invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label,
   } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
+    invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string;
   };
 
   const data: any = {};
@@ -78,6 +81,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data.invoice_warranty_prefix = p;
   }
   if (invoice_email_footer !== undefined) data.invoice_email_footer = !!invoice_email_footer;
+  const emailish = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  if (invoice_reply_to !== undefined) {
+    const v = String(invoice_reply_to).trim();
+    if (v && !emailish(v)) return res.status(400).json({ message: 'The Reply-To address doesn’t look like an email address.' });
+    data.invoice_reply_to = v || null;
+  }
+  if (invoice_bcc !== undefined) {
+    const v = String(invoice_bcc).trim();
+    if (v && !emailish(v)) return res.status(400).json({ message: 'The copy (BCC) address doesn’t look like an email address.' });
+    data.invoice_bcc = v || null;
+  }
+  if (invoice_sender_name !== undefined) data.invoice_sender_name = String(invoice_sender_name).trim() || null;
+  if (invoice_footer_text !== undefined) data.invoice_footer_text = String(invoice_footer_text).slice(0, 2000).trim() || null;
+  if (tax_label !== undefined) {
+    const v = String(tax_label).trim();
+    if (!v || v.length > 20) return res.status(400).json({ message: 'The tax label must be 1–20 characters (e.g. VAT, GST, Sales Tax).' });
+    data.tax_label = v;
+  }
+  // Logo key must belong to THIS tenant's branding space (defence against pointing at another
+  // tenant's object). Old object is deleted after a successful swap.
+  let oldLogoKey: string | null = null;
+  if (logo_r2_key !== undefined) {
+    const v = String(logo_r2_key).trim();
+    if (!v.startsWith(`${groupId}/branding/`)) return res.status(400).json({ message: 'Invalid logo reference.' });
+    const cur = (await prisma.group.findUnique({ where: { id: groupId }, select: { logo_r2_key: true } })) as any;
+    oldLogoKey = cur?.logo_r2_key && cur.logo_r2_key !== v ? cur.logo_r2_key : null;
+    data.logo_r2_key = v;
+  }
   if (paid_confirm_window_hours !== undefined) {
     const h = Math.trunc(Number(paid_confirm_window_hours));
     if (!Number.isFinite(h) || h < 1 || h > 168) return res.status(400).json({ message: 'The payment clearance window must be between 1 and 168 hours.' });
@@ -109,5 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
   });
+  // Old logo object is orphaned after a successful swap — tidy it (best-effort; never fails the save).
+  if (oldLogoKey) { try { await deleteObject(oldLogoKey); } catch { /* orphan is harmless */ } }
   return res.status(200).json({ message: 'Company details saved.' });
 }

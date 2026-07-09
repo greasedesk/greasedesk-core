@@ -129,10 +129,11 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin }: PageProps) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, taxLabelInitial }: PageProps & { taxLabelInitial?: string }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const [isSaving, setIsSaving] = useState(false);
+  const [taxLabel, setTaxLabel] = useState(taxLabelInitial ?? 'VAT');
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
 
   // Switching location reloads SSR with that site's settings (?site=<id>).
@@ -176,6 +177,8 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to save settings.');
+      // Tax LABEL is business-wide (Group) — saved via the admin company API alongside site settings.
+      await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tax_label: taxLabel }) }).catch(() => {});
       setMessage({ text: 'Settings saved successfully!', type: 'success' });
     } catch (err: any) {
       setMessage({ text: err?.message || 'Failed to save settings.', type: 'error' });
@@ -230,6 +233,11 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
               <div>
                 <label htmlFor="currencyCode" className={labelClass}>Primary Currency Code</label>
                 <input id="currencyCode" name="currencyCode" value={settings.currencyCode} onChange={handleChange} className={inputClass} />
+              </div>
+              <div>
+                <label htmlFor="taxLabel" className={labelClass}>Tax Label</label>
+                <input id="taxLabel" value={taxLabel} maxLength={20} onChange={(e) => setTaxLabel(e.target.value)} className={inputClass} placeholder="VAT" />
+                <p className="text-xs text-muted mt-1">What your sales tax is called on invoices — e.g. VAT, GST, Sales Tax. You set it; GreaseDesk never derives it from country.</p>
               </div>
             </div>
           </div>
@@ -308,5 +316,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true } };
+  const grpTax = (await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { tax_label: true } })) as any;
+  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, taxLabelInitial: grpTax?.tax_label ?? 'VAT' } };
 };

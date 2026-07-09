@@ -143,6 +143,14 @@ model Group {
   // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
   // cron confirms and sends the receipt. Flat window; working-day-aware is a banked refinement.
   paid_confirm_window_hours Int @default(24)
+  // --- Invoicing tab settings (ADMIN; Settings → Invoicing) ---
+  invoice_reply_to    String? // business Reply-To on invoice emails (fallback: billing_email)
+  invoice_sender_name String? // display name on the GreaseDesk-owned From (fallback: group_name)
+  invoice_footer_text String? // payment terms / footer block — multi-line, rendered on the document
+  invoice_bcc         String? // garage-copy BCC (fallback: billing_email)
+  logo_r2_key         String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
+  // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
+  tax_label           String  @default("VAT")
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
   created_at       DateTime @default(now())
@@ -816,6 +824,7 @@ model Invoice {
   invoice_number String? // rendered string; set at issue, sticky thereafter
   issued_at      DateTime      @default(now())
   paid_at        DateTime?
+  date_paid      DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
   confirm_due_at  DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
   receipt_sent_at DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
 

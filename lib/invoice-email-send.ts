@@ -36,8 +36,12 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
 
   const group = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { group_name: true, billing_email: true, invoice_email_footer: true },
+    select: { group_name: true, billing_email: true, invoice_email_footer: true, invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true },
   })) as any;
+  // Invoicing-tab settings with sensible fallbacks (pre-config tenants behave exactly as before).
+  const senderName = (group.invoice_sender_name || '').trim() || group.group_name;
+  const replyTo = (group.invoice_reply_to || '').trim() || group.billing_email || undefined;
+  const garageCopyAddr = (group.invoice_bcc || '').trim() || (group.billing_email || '').trim();
 
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);
   const total = formatMoney(doc.vatRegistered ? doc.totals.grossPennies : doc.totals.netPennies, { currency: doc.currency, locale: doc.locale });
@@ -53,13 +57,12 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
 
   try {
     const pdf = await renderInvoicePdf(doc);
-    // BCC the garage's own address so it keeps a copy of exactly what the customer received
-    // (skipped if it IS the recipient). Configurable copy address arrives with Invoice Settings.
-    const garageCopy = (group.billing_email || '').trim();
+    // BCC the garage's copy address (Invoicing tab; falls back to billing_email) — skipped when it
+    // IS the recipient. From stays GreaseDesk-owned; only the display name + Reply-To are tenant-set.
     const ok = await sendEmail(to, subject, html, {
-      fromName: group.group_name,
-      replyTo: group.billing_email || undefined,
-      bcc: garageCopy && garageCopy.toLowerCase() !== to.toLowerCase() ? [garageCopy] : undefined,
+      fromName: senderName,
+      replyTo,
+      bcc: garageCopyAddr && garageCopyAddr.toLowerCase() !== to.toLowerCase() ? [garageCopyAddr] : undefined,
       attachments: [{ filename: `${(doc.number || 'invoice').replace(/[^\w.-]/g, '_')}.pdf`, content: pdf }],
     });
     if (!ok) return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };

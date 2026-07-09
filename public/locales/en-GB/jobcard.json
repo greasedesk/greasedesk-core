@@ -318,7 +318,8 @@
       "paid_confirmed": "Payment confirmed (clearance window passed)",
       "unlocked": "Paid invoice unlocked by admin",
       "renumbered": "Invoice number corrected (ledger)",
-      "sent": "Invoice emailed to the customer"
+      "sent": "Invoice emailed to the customer",
+      "date_paid_edited": "Invoice paid-date corrected"
     },
     "comeback": {
       "marked": "Marked as warranty / comeback",
