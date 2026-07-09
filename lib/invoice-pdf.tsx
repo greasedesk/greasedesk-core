@@ -54,7 +54,9 @@ function InvoicePdf({ doc }: { doc: InvoiceDoc }) {
             <Text style={S.number}>{doc.number}</Text>
             <Text style={S.badge}>{t('issued')}: {doc.issuedAt.toLocaleDateString(doc.locale)}</Text>
             {doc.series === 'warranty' ? <Text style={S.badge}>{t('warrantyBadge')}</Text> : null}
+            {/* Pending NEVER wears the confirmed PAID face — settlement isn't final yet. */}
             {doc.status === 'paid' ? <Text style={S.badge}>{t('paidBadge')}</Text> : null}
+            {doc.status === 'paid_pending' ? <Text style={S.badge}>{t('pendingBadge')}</Text> : null}
           </View>
         </View>
 

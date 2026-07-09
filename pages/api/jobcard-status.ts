@@ -104,16 +104,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } else if (to === 'paid') {
-        // FREEZE: snapshot the card's live lines into InvoiceLine — the immutable income grain.
-        // One-object model: until this moment the invoice rendered the card's items directly.
+        // FREEZE + PENDING (bank-style): snapshot the card's live lines into InvoiceLine — the
+        // immutable income grain — and hold at paid_pending for the tenant's clearance window.
+        // The customer is told NOTHING yet; the clearance cron confirms (paid) and sends the
+        // receipt when the window elapses. Unmarking in the window is a silent revert.
         const inv = (await tx.invoice.findUnique({
           where: { job_card_id: jobCardId },
           select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site: { select: { locale: true } } },
         })) as any;
         if (inv && inv.status === 'issued') {
+          const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
+          const windowH = Math.min(168, Math.max(1, grp?.paid_confirm_window_hours ?? 24));
           await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
-          await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: new Date() } });
-          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid' });
+          await tx.invoice.update({
+            where: { id: inv.id },
+            data: { status: 'paid_pending', paid_at: new Date(), confirm_due_at: new Date(Date.now() + windowH * 3600_000) },
+          });
+          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { pendingHours: windowH } });
         }
       }
     });

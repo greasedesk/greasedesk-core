@@ -3,7 +3,16 @@
   "number": "Invoice number",
   "issued": "Date issued",
   "paidBadge": "PAID",
+  "pendingBadge": "PAID — PENDING CONFIRMATION",
   "issuedBadge": "ISSUED",
+  "pending": {
+    "note": "Marked as paid — the confirmation receipt goes to the customer once the clearance window passes (due {{when}} UTC). Unmark before then to silently revert; nothing has been sent.",
+    "unmark": "Unmark paid",
+    "unmarking": "Unmarking…",
+    "unmarkConfirm": "Unmark this payment? Nothing has been sent to the customer — the invoice quietly returns to unpaid.",
+    "unmarkError": "Could not unmark the payment.",
+    "receiptNotSent": "Payment confirmed, but the receipt could not be sent — use “Email invoice” to send it now."
+  },
   "vatNumber": "VAT no.",
   "companyNumber": "Company no.",
   "notRegistered": "Not VAT registered.",

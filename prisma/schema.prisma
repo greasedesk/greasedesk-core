@@ -52,9 +52,12 @@ enum TenantStatus {
   cancelled
 }
 
-// Invoice lifecycle. issued = number assigned, editable; paid = frozen (canEditInvoice → false).
+// Invoice lifecycle (bank-style). issued = number assigned, editable. paid_pending = attested
+// paid, snapshot FROZEN, reversible in the clearance window, customer told NOTHING yet.
+// paid = CONFIRMED by the clearance cron (receipt sent) — true settlement, the income grain.
 enum InvoiceStatus {
   issued
+  paid_pending
   paid
 }
 
@@ -137,6 +140,9 @@ model Group {
   invoice_warranty_prefix String @default("W")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
   invoice_email_footer    Boolean @default(true)
+  // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
+  // cron confirms and sends the receipt. Flat window; working-day-aware is a banked refinement.
+  paid_confirm_window_hours Int @default(24)
   billing_email    String   @unique
   is_franchise_grp Boolean  @default(false)
   created_at       DateTime @default(now())
@@ -807,6 +813,8 @@ model Invoice {
   invoice_number String? // rendered string; set at issue, sticky thereafter
   issued_at      DateTime      @default(now())
   paid_at        DateTime?
+  confirm_due_at  DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
+  receipt_sent_at DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
 
   // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
   company_name_snapshot       String

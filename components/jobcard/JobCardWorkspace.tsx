@@ -50,7 +50,7 @@ type Props = {
   siteId: string;
   stages: Record<StageKey, boolean>;
   skipped: { intake: boolean; injob: boolean; complete: boolean };
-  invoice: { id: string; number: string } | null;
+  invoice: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid' } | null;
   events: AuditEvent[];
 };
 
@@ -80,7 +80,7 @@ export default function JobCardWorkspace(p: Props) {
     stages?: Record<StageKey, boolean>;
     skipped?: { intake: boolean; injob: boolean; complete: boolean };
     isComeback?: boolean;
-    invoice?: { id: string; number: string } | null;
+    invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid' } | null;
     events?: AuditEvent[];
     booking?: CardBooking;
     tabsState?: Record<TabKey, TabState>;
@@ -339,9 +339,25 @@ export default function JobCardWorkspace(p: Props) {
     const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
     );
-    // Email-invoice action + result, shown wherever the invoice link renders (normal + comeback).
+    // Email-invoice action + paid-lifecycle state, shown wherever the invoice link renders
+    // (normal + comeback). Pending = amber, reversible, silently unmarkable; never the PAID face.
     const invoiceActions = eff.invoice && (
       <>
+        {eff.invoice.status === 'paid_pending' && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{t('invoiceTab.pendingChip')}</span>
+            {p.canManage && !cancelled && (
+              <button disabled={busy !== null}
+                onClick={() => { if (window.confirm(t('invoiceTab.unmarkConfirm'))) run('unmark-paid', postJSON('/api/invoice-unmark-paid', { invoiceId: eff.invoice!.id }), { status: 'invoiced', invoice: { ...eff.invoice!, status: 'issued' }, tabsState: clientTabs({ status: 'invoiced' }) }); }}
+                className="text-xs rounded-lg px-3 py-1.5 border border-line text-warn hover:bg-warn-soft disabled:opacity-50">
+                {t('invoiceTab.unmark')}
+              </button>
+            )}
+          </div>
+        )}
+        {eff.invoice.status === 'paid' && (
+          <span className="self-start text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('invoiceTab.paidChip')}</span>
+        )}
         {p.canManage && !cancelled && (
           <button disabled={busy !== null} onClick={emailInvoice}
             className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">

@@ -27,7 +27,9 @@ export type InvoiceDoc = {
   jobCardId: string;
   siteId: string;
   number: string;
-  status: 'issued' | 'paid';
+  status: 'issued' | 'paid_pending' | 'paid';
+  confirmDueAt: Date | null;
+  receiptSentAt: Date | null;
   series: 'chargeable' | 'warranty';
   issuedAt: Date;
   paidAt: Date | null;
@@ -45,7 +47,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, job_card_id: true,
+      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
@@ -59,8 +61,9 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const locale = inv.site?.locale ?? 'en-GB';
   let lines: InvoiceDocLine[];
 
-  if (inv.status === 'paid') {
-    // Frozen snapshot — render exactly what was locked at paid.
+  if (inv.status === 'paid' || inv.status === 'paid_pending') {
+    // Frozen snapshot — render exactly what was locked at mark-paid (pending freezes too;
+    // the window is for unmarking, never editing).
     lines = inv.lines.map((l: any) => ({
       description: l.description,
       qty: Number(l.qty),
@@ -98,6 +101,8 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     series: inv.series,
     issuedAt: new Date(inv.issued_at),
     paidAt: inv.paid_at ? new Date(inv.paid_at) : null,
+    confirmDueAt: inv.confirm_due_at ? new Date(inv.confirm_due_at) : null,
+    receiptSentAt: inv.receipt_sent_at ? new Date(inv.receipt_sent_at) : null,
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },

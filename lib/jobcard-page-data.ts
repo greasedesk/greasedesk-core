@@ -31,7 +31,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     getVisibility(userId),
     getTenantPermissions(groupId),
     getTenantVat(groupId),
-    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true } }) as Promise<{ id: string; invoice_number: string | null } | null>,
+    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true, status: true } }) as Promise<{ id: string; invoice_number: string | null; status: string } | null>,
     Promise.all([
       prisma.catalogueItem.findMany({
         where: { group_id: groupId, active: true },
@@ -99,7 +99,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       }
     : null;
 
-  const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '' } : null;
+  const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '', status: invoiceRow.status as 'issued' | 'paid_pending' | 'paid' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
   const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({

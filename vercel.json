@@ -1,3 +1,6 @@
 {
-  "regions": ["lhr1"]
+  "regions": ["lhr1"],
+  "crons": [
+    { "path": "/api/cron/confirm-paid", "schedule": "0 * * * *" }
+  ]
 }

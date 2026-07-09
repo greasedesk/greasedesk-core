@@ -32,12 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const {
     group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
-    invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number,
+    invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
   } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
-    invoice_next_number?: number | string;
+    invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
   };
 
   const data: any = {};
@@ -78,6 +78,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data.invoice_warranty_prefix = p;
   }
   if (invoice_email_footer !== undefined) data.invoice_email_footer = !!invoice_email_footer;
+  if (paid_confirm_window_hours !== undefined) {
+    const h = Math.trunc(Number(paid_confirm_window_hours));
+    if (!Number.isFinite(h) || h < 1 || h > 168) return res.status(400).json({ message: 'The payment clearance window must be between 1 and 168 hours.' });
+    data.paid_confirm_window_hours = h;
+  }
 
   // Starting-number seed — allowed ONLY while the chargeable sequence is unused (no chargeable
   // invoice exists). Once a number is minted the counter is immutable (the no-gaps guarantee).

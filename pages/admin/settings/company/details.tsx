@@ -17,7 +17,7 @@ type PageProps = {
   groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string;
   invoicePrefix: string; invoicePadWidth: string;
   invoiceFyDigits: string; fyStartMonth: string; warrantyPrefix: string; emailFooter: boolean;
-  nextNumber: string; canSeed: boolean;
+  nextNumber: string; canSeed: boolean; paidWindowHours: string;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
@@ -39,6 +39,7 @@ export default function CompanyDetails(props: PageProps) {
   const [wPrefix, setWPrefix] = useState(props.warrantyPrefix);
   const [footer, setFooter] = useState(props.emailFooter);
   const [nextNo, setNextNo] = useState(props.nextNumber);
+  const [payWindow, setPayWindow] = useState(props.paidWindowHours);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -62,6 +63,7 @@ export default function CompanyDetails(props: PageProps) {
           invoice_prefix: invPrefix, invoice_pad_width: Number(invPad || 0),
           invoice_fy_digits: Number(fyDigits || 0), fy_start_month: Number(fyMonth || 4),
           invoice_warranty_prefix: wPrefix, invoice_email_footer: footer,
+          paid_confirm_window_hours: Number(payWindow || 24),
           ...(props.canSeed && nextNo.trim() !== '' && nextNo !== props.nextNumber ? { invoice_next_number: Number(nextNo) } : {}),
         }),
       });
@@ -142,6 +144,11 @@ export default function CompanyDetails(props: PageProps) {
                 <input value={wPrefix} onChange={(e) => setWPrefix(e.target.value)} className={inputClass} />
                 <span className="text-xs text-muted mt-0.5 block">{t('invoice.warrantyPrefixHint')}</span>
               </label>
+              <label className="block">
+                <span className={labelClass}>{t('invoice.paidWindow')}</span>
+                <input type="number" inputMode="numeric" min={1} max={168} value={payWindow} onChange={(e) => setPayWindow(e.target.value)} className={inputClass} />
+                <span className="text-xs text-muted mt-0.5 block">{t('invoice.paidWindowHint')}</span>
+              </label>
             </div>
             <p className="text-xs text-muted mt-2">
               {t('invoice.preview')}: <span className="font-mono text-ink">{previewNumber}</span>
@@ -172,7 +179,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
     where: { id: gate.vis.groupId as string },
     select: {
       group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true,
-      invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_email_footer: true,
+      invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_email_footer: true, paid_confirm_window_hours: true,
       invoice_sequence: { select: { last_value: true } },
     },
   })) as any;
@@ -194,6 +201,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       emailFooter: g?.invoice_email_footer ?? true,
       nextNumber: String((g?.invoice_sequence?.last_value ?? 0) + 1),
       canSeed: chargeableUsed === 0,
+      paidWindowHours: String(g?.paid_confirm_window_hours ?? 24),
     },
   };
 });

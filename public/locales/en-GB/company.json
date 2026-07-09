@@ -41,6 +41,8 @@
     "warrantyPrefix": "Warranty prefix",
     "warrantyPrefixHint": "Warranty / comeback invoices (£0) use their own number series with this prefix.",
     "emailFooter": "\"Sent with GreaseDesk\" email footer",
-    "emailFooterHint": "A small footer line in invoice emails. Never printed on the invoice itself."
+    "emailFooterHint": "A small footer line in invoice emails. Never printed on the invoice itself.",
+    "paidWindow": "Payment clearance window (hours)",
+    "paidWindowHint": "Marking an invoice paid holds it for this long before the customer's confirmation is sent — you can quietly unmark it in the window (e.g. a card payment that doesn't clear)."
   }
 }

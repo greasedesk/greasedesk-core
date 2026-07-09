@@ -26,8 +26,10 @@ type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies:
 type PageProps = {
   invoiceId: string;
   number: string;
-  status: 'issued' | 'paid';
+  status: 'issued' | 'paid_pending' | 'paid';
   series: 'chargeable' | 'warranty';
+  confirmDueAt: string | null;   // pending: when the clearance window elapses
+  receiptNotSent: boolean;       // confirmed but the receipt never went — visible, resendable
   issuedAt: string;
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
@@ -38,6 +40,7 @@ type PageProps = {
   currency: string;
   locale: string;
   canEdit: boolean;   // issued + manager → edits happen on the card's Quote tab
+  canManage: boolean; // manager/admin — unmark-pending visibility (server re-checks)
   isAdmin: boolean;   // paid unlock visibility (server re-checks)
   jobCardId: string;
 };
@@ -71,6 +74,19 @@ export default function InvoicePage(props: PageProps) {
     } catch { setMsg({ text: t('unlockError'), ok: false }); setBusy(null); }
   }
 
+  // Silent unmark during the clearance window (paid_pending only) — nothing was sent, no confirm
+  // dialog theatrics needed beyond a plain confirm; distinct from the ADMIN unlock above.
+  async function unmarkPaid() {
+    if (!window.confirm(t('pending.unmarkConfirm'))) return;
+    setBusy('unmark'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-unmark-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('pending.unmarkError'), ok: false }); setBusy(null); return; }
+      router.replace(router.asPath); // pending → issued — reload the live document
+    } catch { setMsg({ text: t('pending.unmarkError'), ok: false }); setBusy(null); }
+  }
+
   return (
     <>
       <Head><title>{t('title')} {props.number} - GreaseDesk</title></Head>
@@ -85,6 +101,11 @@ export default function InvoicePage(props: PageProps) {
             <button onClick={emailInvoice} disabled={busy !== null} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
               {busy === 'email' ? t('emailSending') : t('emailSend')}
             </button>
+            {props.status === 'paid_pending' && props.canManage && (
+              <button onClick={unmarkPaid} disabled={busy !== null} className="text-sm text-warn border border-line rounded-lg px-4 py-2 hover:bg-warn-soft disabled:opacity-50">
+                {busy === 'unmark' ? t('pending.unmarking') : t('pending.unmark')}
+              </button>
+            )}
             {props.status === 'paid' && props.isAdmin && (
               <button onClick={unlock} disabled={busy !== null} className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger-soft disabled:opacity-50">
                 {busy === 'unlock' ? t('unlocking') : t('unlock')}
@@ -95,6 +116,14 @@ export default function InvoicePage(props: PageProps) {
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         {props.status === 'issued' && props.series === 'chargeable' && <p className="text-xs text-muted mb-3">{t('liveNote')}</p>}
+        {props.status === 'paid_pending' && (
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">
+            {t('pending.note', { when: props.confirmDueAt ?? '—' })}
+          </div>
+        )}
+        {props.status === 'paid' && props.receiptNotSent && (
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
+        )}
         {props.status === 'paid' && <p className="text-xs text-muted mb-3">{t('paidLocked')}</p>}
 
         {/* The document */}
@@ -117,7 +146,7 @@ export default function InvoicePage(props: PageProps) {
                   <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full bg-warn-soft text-warn">{t('warrantyBadge')}</span>
                 )}
                 <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${props.status === 'paid' ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'}`}>
-                  {props.status === 'paid' ? t('paidBadge') : t('issuedBadge')}
+                  {props.status === 'paid' ? t('paidBadge') : props.status === 'paid_pending' ? t('pendingBadge') : t('issuedBadge')}
                 </span>
               </div>
             </div>
@@ -209,6 +238,8 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       number: doc.number,
       status: doc.status,
       series: doc.series,
+      confirmDueAt: doc.confirmDueAt ? doc.confirmDueAt.toLocaleString(doc.locale, { timeZone: 'UTC' }) : null,
+      receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
       issuedAt: doc.issuedAt.toLocaleDateString(doc.locale),
       vatRegistered: doc.vatRegistered,
       company: doc.company,
@@ -218,7 +249,8 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       totals: doc.totals,
       currency: doc.currency,
       locale: doc.locale,
-      canEdit: doc.status !== 'paid' && doc.series === 'chargeable',
+      canEdit: doc.status === 'issued' && doc.series === 'chargeable',
+      canManage: true, // gssp already required canManageSite to view; server re-checks on POST
       isAdmin: vis.isAdmin,
       jobCardId: doc.jobCardId,
     },

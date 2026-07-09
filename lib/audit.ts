@@ -25,8 +25,10 @@ export type AuditAction =
   | 'invoice.warranty_minted' // comeback £0 invoice from the warranty series
   | 'invoice.vin_skipped'     // minted without a VIN on the card (pre-mint backstop skip)
   | 'invoice.mileage_skipped' // minted without a mileage on the card
-  | 'invoice.paid'
-  | 'invoice.unlocked'      // ADMIN-only escape hatch: paid → issued for corrections
+  | 'invoice.paid'            // attested paid → paid_pending (clearance window starts)
+  | 'invoice.paid_unmarked'   // silent revert during the window (manager/admin) — nothing was sent
+  | 'invoice.paid_confirmed'  // clearance window elapsed → confirmed by the cron (system actor)
+  | 'invoice.unlocked'      // ADMIN-only escape hatch: CONFIRMED paid → issued for corrections
   | 'invoice.sent';         // emailed to the customer (PDF attached)
 
 export async function writeAudit(

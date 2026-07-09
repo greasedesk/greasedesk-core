@@ -6,9 +6,11 @@
  */
 import { poundsToPennies } from '@/lib/quote-totals';
 
-/** Single freeze guard. Server-enforced on every invoice mutation — false once paid = immutable. */
+/** Single freeze guard. Server-enforced on every invoice mutation — editable ONLY while issued.
+ *  paid_pending freezes too (the snapshot is taken at mark-paid; the pending window is for
+ *  unmarking, not editing); paid (confirmed) stays frozen behind the ADMIN unlock. */
 export function canEditInvoice(invoice: { status: string }): boolean {
-  return invoice.status !== 'paid';
+  return invoice.status === 'issued';
 }
 
 // ---- Company identity for the header (decision D: Site's own number/VAT wins WHEN SET, else Group) ----
