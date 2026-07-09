@@ -1,9 +1,11 @@
 /**
  * File: components/jobcard/PhotoStage.tsx
- * Stage 1 photo capture for a job-card stage: pick/take a photo → client-side RESIZE (~1600px jpeg) →
- * presigned R2 PUT (bytes never touch our function) → commit the row → display. Mobile-first: camera
- * capture on phones, file-select on desktop. Deletable until the stage is locked. Free-form for now;
- * the slot checklist + guides land in Stage 2.
+ * Free-form photo + video capture for a job-card stage — THE one capture component, mounted on
+ * Intake, In-Job and Completion alike (media keyed per stage: {group}/{card}/{stage}/…):
+ * pick/take a photo → client-side RESIZE (~1600px jpeg) → presigned R2 PUT (bytes never touch our
+ * function) → commit the row → display. Mobile-first: camera capture on phones, file-select on
+ * desktop. Deletable until the stage is locked (manager override server-side). The angle-slot
+ * checklist + guides are a banked Intake-specific enhancement.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
@@ -108,11 +110,10 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
           <div className="flex gap-2">
             <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => onFiles(e.target.files)} />
             <input ref={videoRef} type="file" accept="video/*" capture="environment" className="hidden" onChange={(e) => onVideo(e.target.files)} />
-            {stage === 'intake' && (
-              <button onClick={() => videoRef.current?.click()} disabled={busy} className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-3 py-2 disabled:opacity-50">
-                {t('photos.videoAdd')}
-              </button>
-            )}
+            {/* Video capture on every stage (Stage 2/3 ruling) — same presign→PUT→commit pipe. */}
+            <button onClick={() => videoRef.current?.click()} disabled={busy} className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-3 py-2 disabled:opacity-50">
+              {t('photos.videoAdd')}
+            </button>
             <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">
               {busy ? t('photos.uploading') : t('photos.add')}
             </button>

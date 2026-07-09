@@ -273,15 +273,6 @@ export default function JobCardWorkspace(p: Props) {
     );
   }
 
-  function PhotoPlaceholder() {
-    return (
-      <div className="border-2 border-dashed border-line rounded-xl p-8 text-center bg-surface-muted">
-        <p className="text-sm text-muted">{t('photos.placeholder')}</p>
-        <p className="text-xs text-muted mt-1">{t('photos.placeholderHint')}</p>
-      </div>
-    );
-  }
-
   // PLAIN JSX, not a nested component: a function defined in the render body gets a NEW identity
   // every parent re-render, so React REMOUNTS the whole subtree — that wiped the details form's
   // state right after Save (the reconcile's setOv re-rendered the parent, the form remounted and
@@ -494,14 +485,14 @@ export default function JobCardWorkspace(p: Props) {
               <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto shrink-0 text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
             </div>
           )}
-          <PhotoPlaceholder />
+          <PhotoStage jobCardId={p.jobCardId} stage="injob" canEdit={p.canOperate && !cancelled} locked={eff.stages.injob} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="injob" label={t('tab.injob')} /></div>
         </div>
       )}
 
       {active === 'completion' && (
         <div className="space-y-5">
-          <PhotoPlaceholder />
+          <PhotoStage jobCardId={p.jobCardId} stage="completion" canEdit={p.canOperate && !cancelled} locked={eff.stages.complete} locale={p.locale} />
           <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !cancelled} busy={busy} setBusy={setBusy} setErr={setErr} onDone={refreshCard} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>

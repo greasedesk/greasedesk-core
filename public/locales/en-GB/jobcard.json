@@ -205,8 +205,6 @@
     "doneToggle": "{{label}} complete — tap to reopen"
   },
   "photos": {
-    "placeholder": "Photo upload arrives with cloud storage next.",
-    "placeholderHint": "This step still gates the workflow — mark it complete when the photos are taken.",
     "title": "Photos",
     "add": "Add photo",
     "uploading": "Uploading…",
