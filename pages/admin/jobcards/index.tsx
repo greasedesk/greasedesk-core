@@ -31,18 +31,20 @@ type JobCardRow = {
   invoiceNumber: string | null;
 };
 
-// Tab → card-status mapping (matches the Invoices view's pill pattern). Current = the car's still
-// in the shop (pre-invoice); Completed = work done regardless of payment (paid_pending is an
-// INVOICE state — the card sits at `paid` through the clearance window, so invoiced/paid/done
-// covers it); All = everything incl. draft/quoted/declined/cancelled.
-const TABS = ['current', 'completed', 'all'] as const;
+// Per-status tabs (ruling 2026-07-10, replaces Current/Completed). Paid includes cards in the
+// clearance window (paid_pending is an INVOICE state — the card sits at `paid` through it).
+// Statuses without a named tab (invoiced, done, declined, cancelled) appear under All only.
+const TABS = ['all', 'draft', 'quoted', 'accepted', 'in_progress', 'paid'] as const;
 type Tab = typeof TABS[number];
 const TAB_STATUSES: Record<Tab, string[] | null> = {
-  current: ['accepted', 'in_progress'],
-  completed: ['invoiced', 'paid', 'done'],
   all: null,
+  draft: ['draft'],
+  quoted: ['quoted'],
+  accepted: ['accepted'],
+  in_progress: ['in_progress'],
+  paid: ['paid'],
 };
-const TAB_LABELS: Record<Tab, string> = { current: 'Current', completed: 'Completed', all: 'All' };
+const TAB_LABELS: Record<Tab, string> = { all: 'All', draft: 'Draft', quoted: 'Quoted', accepted: 'Accepted', in_progress: 'In-Progress', paid: 'Paid' };
 
 type PageProps = { cards: JobCardRow[]; noSites: boolean; scopeLabel: string };
 
@@ -74,8 +76,8 @@ function StageBadges({ stages }: { stages: Stages }) {
 }
 
 export default function JobCardsListPage({ cards, noSites, scopeLabel }: PageProps) {
-  // Default = Current (the shop's open-the-page view — All buries today's work under history).
-  const [tab, setTab] = useState<Tab>('current');
+  // Default = All (per the six-tab ruling; the named tabs are one click away).
+  const [tab, setTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
   const shown = useMemo(() => {
     const statuses = TAB_STATUSES[tab];
