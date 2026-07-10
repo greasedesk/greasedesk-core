@@ -9,7 +9,7 @@
  *    starting-number seed stays locked once chargeable invoices exist; never re-enabled).
  * All saves go through PATCH /api/company (admin-gated server-side).
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import { useTranslation } from 'next-i18next';
 import { prisma } from '@/lib/db';
@@ -28,6 +28,71 @@ type PageProps = {
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
+
+// Payment methods (admin CRUD via /api/payment-methods; follows the service-tiers pattern).
+// Behaviour changes affect FUTURE mark-paids only — clearance is decided at mark-paid time.
+function PaymentMethodsSection({ t }: { t: (k: string, o?: any) => string }) {
+  const [rows, setRows] = useState<Array<{ id: string; name: string; behaviour: string; active: boolean }> | null>(null);
+  const [newName, setNewName] = useState('');
+  const [newBehaviour, setNewBehaviour] = useState('windowed');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = async () => {
+    try { const r = await fetch('/api/payment-methods?all=1', { cache: 'no-store' }); if (r.ok) setRows((await r.json()).methods); } catch { /* row stays */ }
+  };
+  useEffect(() => { load(); }, []);
+  async function patch(id: string, body: any) {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/payment-methods', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ...body }) });
+      if (!r.ok) setErr(((await r.json().catch(() => ({}))) as any)?.message || t('invoicing.pmError'));
+      await load();
+    } catch { setErr(t('invoicing.pmError')); }
+    setBusy(false);
+  }
+  async function add() {
+    if (!newName.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/payment-methods', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName.trim(), behaviour: newBehaviour }) });
+      if (!r.ok) setErr(((await r.json().catch(() => ({}))) as any)?.message || t('invoicing.pmError'));
+      else { setNewName(''); setNewBehaviour('windowed'); }
+      await load();
+    } catch { setErr(t('invoicing.pmError')); }
+    setBusy(false);
+  }
+  return (
+    <div className="pt-3 border-t border-line">
+      <div className="text-sm font-medium text-ink mb-1">{t('invoicing.pmHeading')}</div>
+      <p className="text-xs text-muted mb-2">{t('invoicing.pmIntro')}</p>
+      {err && <p className="text-sm text-danger mb-2">{err}</p>}
+      {(rows ?? []).map((m) => (
+        <div key={m.id} className={`flex flex-wrap items-center gap-2 py-1.5 ${m.active ? '' : 'opacity-50'}`}>
+          <span className="text-sm text-ink w-40 truncate">{m.name}</span>
+          <select value={m.behaviour} disabled={busy} onChange={(e) => patch(m.id, { behaviour: e.target.value })}
+            className="p-1.5 bg-surface border border-line rounded-lg text-ink text-xs">
+            <option value="instant">{t('invoicing.pmInstant')}</option>
+            <option value="windowed">{t('invoicing.pmWindowed')}</option>
+            <option value="manual">{t('invoicing.pmManual')}</option>
+          </select>
+          <button type="button" disabled={busy} onClick={() => patch(m.id, { active: !m.active })}
+            className="text-xs text-muted hover:text-ink underline">{m.active ? t('invoicing.pmArchive') : t('invoicing.pmRestore')}</button>
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center gap-2 mt-2">
+        <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('invoicing.pmNamePh')}
+          className="p-2 bg-surface border border-line rounded-lg text-ink text-sm w-40" />
+        <select value={newBehaviour} onChange={(e) => setNewBehaviour(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm">
+          <option value="instant">{t('invoicing.pmInstant')}</option>
+          <option value="windowed">{t('invoicing.pmWindowed')}</option>
+          <option value="manual">{t('invoicing.pmManual')}</option>
+        </select>
+        <button type="button" disabled={busy || !newName.trim()} onClick={add}
+          className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-3 py-2 disabled:opacity-50">{t('invoicing.pmAdd')}</button>
+      </div>
+    </div>
+  );
+}
 
 export default function InvoicingSettings(props: PageProps) {
   const { t } = useTranslation('company');
@@ -156,6 +221,8 @@ export default function InvoicingSettings(props: PageProps) {
             </div>
             <p className="text-xs text-muted mt-1">{t('invoicing.logoHint')}</p>
           </div>
+
+          <PaymentMethodsSection t={t} />
 
           {/* --- Numbering (relocated from Company Details; the seed lock is preserved) --- */}
           <div className="pt-3 border-t border-line">

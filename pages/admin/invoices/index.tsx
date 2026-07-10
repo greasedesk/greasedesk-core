@@ -24,7 +24,7 @@ import { formatMoney } from '@/lib/format-money';
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
   status: 'issued' | 'paid_pending' | 'paid'; series: 'chargeable' | 'warranty';
-  issuedAt: string; receiptSent: boolean; grossPennies: number; currency: string; locale: string;
+  issuedAt: string; receiptSent: boolean; manualPending?: boolean; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
 };
 const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty'] as const;
@@ -33,7 +33,7 @@ type Filter = typeof FILTERS[number];
 function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   if (row.series === 'warranty') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{t('chip.warranty')}</span>;
   if (row.status === 'paid') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('chip.paid')}</span>;
-  if (row.status === 'paid_pending') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{t('chip.pending')}</span>;
+  if (row.status === 'paid_pending') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
   return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
 }
 

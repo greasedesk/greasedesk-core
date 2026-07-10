@@ -206,6 +206,32 @@ export default function JobCardWorkspace(p: Props) {
   }
   const skipAndMint = () => { setMintOpen(false); setStatus('invoiced'); };
 
+  // ---- MARK-PAID METHOD PICKER (required — the method is the grain; no silent default) ----
+  // State hoisted (remount rule). Behaviour drives clearance server-side: instant/windowed/manual.
+  const [payOpen, setPayOpen] = useState(false);
+  const [payMethods, setPayMethods] = useState<Array<{ id: string; name: string; behaviour: string }> | null>(null);
+  const [payMethodId, setPayMethodId] = useState('');
+  async function openPay() {
+    setPayOpen(true);
+    if (!payMethods) {
+      try {
+        const r = await fetch('/api/payment-methods', { cache: 'no-store' });
+        if (r.ok) {
+          const d = await r.json();
+          setPayMethods(d.methods || []);
+          const pre = (d.methods || []).find((m: any) => m.behaviour === 'windowed') ?? (d.methods || [])[0];
+          if (pre) setPayMethodId(pre.id);
+        }
+      } catch { /* the select shows empty; server still validates */ }
+    }
+  }
+  const confirmPay = () => {
+    if (!payMethodId) return;
+    setPayOpen(false);
+    run('status:paid', postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to: 'paid', paymentMethodId: payMethodId }),
+      { status: 'paid', tabsState: clientTabs({ status: 'paid' }) });
+  };
+
   // Email-invoice from the Invoice tab — SAME endpoint as the view page (one send path, no fork).
   // State hoisted here (never inside a pane — remount rule). Success refreshes the audit foot.
   const [emailMsg, setEmailMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -358,6 +384,21 @@ export default function JobCardWorkspace(p: Props) {
         {emailMsg && <div className={`rounded-lg p-2 text-sm ${emailMsg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{emailMsg.text}</div>}
       </>
     );
+    // Method picker for Mark paid — required choice, pre-selected to the first windowed method.
+    const payPanel = payOpen && (
+      <div className="bg-surface-muted border border-line rounded-xl p-4 space-y-3">
+        <p className="text-sm font-medium text-ink">{t('invoiceTab.payMethodTitle')}</p>
+        <select value={payMethodId} onChange={(e) => setPayMethodId(e.target.value)}
+          className="w-full sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm">
+          {(payMethods ?? []).map((m) => <option key={m.id} value={m.id}>{m.name} — {t(`invoiceTab.clearance.${m.behaviour}`)}</option>)}
+        </select>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button disabled={busy !== null || !payMethodId} onClick={confirmPay}
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+          <button onClick={() => setPayOpen(false)} className="text-sm text-muted hover:text-ink px-2 py-2.5">{t('delete.cancel')}</button>
+        </div>
+      </div>
+    );
     // Last-chance VIN/mileage prompt — only for what's actually missing; skip always available.
     const mintPanel = mintOpen && (
       <div className="bg-warn-soft border border-line rounded-xl p-4 space-y-3">
@@ -402,9 +443,10 @@ export default function JobCardWorkspace(p: Props) {
               <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
             {mintPanel}
-            {eff.status === 'invoiced' && p.canManage && !cancelled && (
-              <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+            {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
+              <button disabled={busy !== null} onClick={openPay} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
+            {payPanel}
             {stagesRemainingMsg}
           </>
         ) : eff.invoice ? (
@@ -414,9 +456,10 @@ export default function JobCardWorkspace(p: Props) {
               <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
             </Link>
             {invoiceActions}
-            {eff.status === 'invoiced' && p.canManage && !cancelled && (
-              <button disabled={busy !== null} onClick={() => setStatus('paid')} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+            {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
+              <button disabled={busy !== null} onClick={openPay} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
+            {payPanel}
           </>
         ) : eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled ? (
           <>

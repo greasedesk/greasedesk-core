@@ -15,6 +15,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotPaidLines } from '@/lib/invoice-issue';
+import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
 
@@ -27,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, to } = (req.body || {}) as { jobCardId?: string; to?: JobStatus };
+  const { jobCardId, to, paymentMethodId } = (req.body || {}) as { jobCardId?: string; to?: JobStatus; paymentMethodId?: string };
   if (!jobCardId || !to) return res.status(400).json({ message: 'Missing jobCardId or target status.' });
 
   const card = (await prisma.jobCard.findFirst({
@@ -72,6 +73,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!allDone) return res.status(409).json({ message: 'Complete (or skip) all four stages first.' });
   }
 
+  // Marking PAID requires a payment method (the grain) — validated against THIS tenant's active
+  // list before the tx. No silent default: misrecorded grain is worse than a second click.
+  let method: { id: string; name: string; behaviour: string } | null = null;
+  let instantConfirmedInvoiceId: string | null = null;
+  if (to === 'paid') {
+    const hasUnpaidInvoice = await prisma.invoice.findFirst({ where: { job_card_id: jobCardId, status: 'issued' }, select: { id: true } });
+    if (hasUnpaidInvoice) {
+      if (!paymentMethodId) return res.status(400).json({ message: 'Choose how this invoice was paid.' });
+      method = (await prisma.paymentMethod.findFirst({ where: { id: paymentMethodId, group_id: user.group_id, active: true }, select: { id: true, name: true, behaviour: true } })) as any;
+      if (!method) return res.status(400).json({ message: 'Choose how this invoice was paid.' });
+    }
+  }
+
   // Apply the transition + its side effects atomically.
   //  - invoiced: mint the invoice (once — sticky via Invoice.job_card_id @unique). The mint runs in
   //    THIS tx, so if anything fails the sequence increment rolls back too (no gap, no burned number).
@@ -104,29 +118,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } else if (to === 'paid') {
-        // FREEZE + PENDING (bank-style): snapshot the card's live lines into InvoiceLine — the
-        // immutable income grain — and hold at paid_pending for the tenant's clearance window.
-        // The customer is told NOTHING yet; the clearance cron confirms (paid) and sends the
-        // receipt when the window elapses. Unmarking in the window is a silent revert.
+        // FREEZE + METHOD-DRIVEN CLEARANCE (bank-style): snapshot the card's live lines (the
+        // immutable income grain), record HOW it was paid, then clear per the method's behaviour:
+        //   instant  → confirmed immediately (cash is in the till); receipt sends after the tx.
+        //   windowed → paid_pending for the tenant's clearance window; the cron confirms.
+        //   manual   → paid_pending with confirm_due_at NULL — the cron's lte-now filter never
+        //              matches, so it stays pending until explicitly confirmed (warranty/EMAC).
         const inv = (await tx.invoice.findUnique({
           where: { job_card_id: jobCardId },
           select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site: { select: { locale: true } } },
         })) as any;
         if (inv && inv.status === 'issued') {
-          const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
-          const windowH = Math.min(168, Math.max(1, grp?.paid_confirm_window_hours ?? 24));
+          if (!method) throw new Error('METHOD_REQUIRED'); // validated pre-tx; belt-and-braces
           await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
-          await tx.invoice.update({
-            where: { id: inv.id },
-            data: { status: 'paid_pending', paid_at: new Date(), date_paid: new Date(), confirm_due_at: new Date(Date.now() + windowH * 3600_000) },
-          });
-          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { pendingHours: windowH } });
+          const now = new Date();
+          const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };
+          if (method.behaviour === 'instant') {
+            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: now, confirm_due_at: null, ...methodGrain } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'instant' } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid_confirmed', diff: { method: method.name, instant: true } });
+            instantConfirmedInvoiceId = inv.id; // receipt sends post-tx through the ONE send path
+          } else if (method.behaviour === 'manual') {
+            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: now, confirm_due_at: null, ...methodGrain } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'manual' } });
+          } else {
+            const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
+            const windowH = Math.min(168, Math.max(1, grp?.paid_confirm_window_hours ?? 24));
+            await tx.invoice.update({
+              where: { id: inv.id },
+              data: { status: 'paid_pending', paid_at: now, date_paid: now, confirm_due_at: new Date(Date.now() + windowH * 3600_000), ...methodGrain },
+            });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'windowed', pendingHours: windowH } });
+          }
         }
       }
     });
   } catch (e) {
     console.error('Status transition error:', e);
     return res.status(500).json({ message: 'Failed to update status.' });
+  }
+  // Instant clearance: the receipt goes out NOW through the ONE send path (garage BCC, audited,
+  // receipt_sent_at stamped). A failure leaves the visible "receipt not sent" state — resendable.
+  if (instantConfirmedInvoiceId) {
+    try { await sendInvoiceEmail(instantConfirmedInvoiceId, user.group_id as string, user.id as string); }
+    catch (e) { console.error('instant receipt send failed:', e); }
   }
   return res.status(200).json({ message: 'Status updated.', status: to });
 }

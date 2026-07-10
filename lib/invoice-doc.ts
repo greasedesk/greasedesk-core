@@ -32,6 +32,8 @@ export type InvoiceDoc = {
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
   datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)
+  paymentMethod: string | null; // how it was paid (snapshot name; internal grain)
+  manualPending: boolean;       // pending with NO auto-confirm (manual method) — needs explicit confirmation
   taxLabel: string;             // admin-set (VAT/GST/Sales Tax…) — never derived from country
   footerText: string | null;    // payment terms / footer block (multi-line)
   logoUrl: string | null;       // presigned GET for the tenant logo (15-min; render-time use)
@@ -58,6 +60,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
+      payment_method_snapshot: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
       job_card: { select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } } },
@@ -112,6 +115,8 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     confirmDueAt: inv.confirm_due_at ? new Date(inv.confirm_due_at) : null,
     receiptSentAt: inv.receipt_sent_at ? new Date(inv.receipt_sent_at) : null,
     datePaid: inv.date_paid ? new Date(inv.date_paid) : (inv.paid_at ? new Date(inv.paid_at) : null),
+    paymentMethod: inv.payment_method_snapshot ?? null,
+    manualPending: inv.status === 'paid_pending' && !inv.confirm_due_at,
     taxLabel: inv.group?.tax_label || 'VAT',
     footerText: inv.group?.invoice_footer_text || null,
     logoUrl: inv.group?.logo_r2_key ? await presignGet(inv.group.logo_r2_key) : null,

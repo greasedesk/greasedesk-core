@@ -11,7 +11,12 @@
     "unmarking": "Unmarking…",
     "unmarkConfirm": "Unmark this payment? Nothing has been sent to the customer — the invoice quietly returns to unpaid.",
     "unmarkError": "Could not unmark the payment.",
-    "receiptNotSent": "Payment confirmed, but the receipt could not be sent — use “Email invoice” to send it now."
+    "receiptNotSent": "Payment confirmed, but the receipt could not be sent — use “Email invoice” to send it now.",
+    "manualNote": "Marked paid by {{method}} — awaiting confirmation that the money arrived. This does NOT auto-confirm; confirm it below when the payment lands.",
+    "confirmReceived": "Confirm payment received",
+    "confirming": "Confirming…",
+    "confirmReceivedConfirm": "Confirm this payment arrived? The invoice becomes confirmed-paid and the receipt is sent to the customer.",
+    "confirmError": "Could not confirm the payment."
   },
   "vatNumber": "{{label}} no.",
   "companyNumber": "Company no.",

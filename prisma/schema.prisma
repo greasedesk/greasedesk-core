@@ -68,6 +68,15 @@ enum InvoiceSeries {
   warranty
 }
 
+// Payment-method clearance behaviour: instant = no window (cash in the till); windowed = the
+// tenant's clearance window then cron-confirm; manual = pending until explicitly confirmed
+// (warranty companies / EMAC — external timescales, never auto-confirmed).
+enum PaymentClearance {
+  instant
+  windowed
+  manual
+}
+
 // Cost-capture (per-site P&L foundation). Raw cost grains only — no aggregation in-schema.
 enum CostType {
   salary // amount_pennies = annual salary
@@ -187,6 +196,7 @@ model Group {
   parts      PartCatalogue[]
   tax_rates  TaxRate[]
   promos     Promo[]
+  payment_methods PaymentMethod[]
   audit_logs AuditLog[]
   bookings   Booking[]
   job_cards  JobCard[]
@@ -826,6 +836,8 @@ model Invoice {
   issued_at      DateTime      @default(now())
   paid_at        DateTime?
   date_paid      DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
+  payment_method_id       String? // how it was paid (grain for method reporting — banked tile)
+  payment_method_snapshot String? // method name at mark-paid; renames never rewrite history
   confirm_due_at  DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
   receipt_sent_at DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
 
@@ -846,6 +858,7 @@ model Invoice {
   site     Site          @relation(fields: [site_id], references: [id], onDelete: NoAction)
   job_card JobCard       @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
   lines    InvoiceLine[]
+  payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
 
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   @@index([group_id])
@@ -870,6 +883,21 @@ model InvoiceLine {
   invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
   @@index([invoice_id])
+}
+
+model PaymentMethod {
+  id         String           @id @default(uuid())
+  group_id   String
+  name       String
+  behaviour  PaymentClearance @default(windowed)
+  active     Boolean          @default(true)
+  position   Int              @default(0)
+  created_at DateTime         @default(now())
+
+  group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@index([group_id])
 }
 
 model InvoiceSequence {

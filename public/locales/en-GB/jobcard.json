@@ -252,7 +252,13 @@
     "pendingChip": "Payment pending confirmation",
     "paidChip": "Paid",
     "unmark": "Unmark paid",
-    "unmarkConfirm": "Unmark this payment? Nothing has been sent to the customer — the invoice quietly returns to unpaid."
+    "unmarkConfirm": "Unmark this payment? Nothing has been sent to the customer — the invoice quietly returns to unpaid.",
+    "payMethodTitle": "How was it paid?",
+    "clearance": {
+      "instant": "clears instantly",
+      "windowed": "clears after the window",
+      "manual": "confirm manually when it lands"
+    }
   },
   "startWork": {
     "hint": "Intake done — mark the work as started. In-job photos record it as it happens."

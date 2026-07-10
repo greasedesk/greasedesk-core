@@ -57,6 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     take: 500,
     select: {
       id: true, invoice_number: true, status: true, series: true, issued_at: true, paid_at: true, receipt_sent_at: true,
+      confirm_due_at: true, payment_method_snapshot: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
       job_card: { select: { vehicle_id: true, customer: { select: { email: true } }, items: { select: { qty: true, unit_price: true, vat_rate: true } } } },
@@ -91,6 +92,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       issuedAt: r.issued_at,
       paidAt: r.paid_at,
       receiptSent: !!r.receipt_sent_at,
+      manualPending: r.status === 'paid_pending' && !r.confirm_due_at,
+      method: r.payment_method_snapshot ?? null,
       grossPennies,
       currency: r.site?.currency_code ?? 'GBP',
       locale: r.site?.locale ?? 'en-GB',

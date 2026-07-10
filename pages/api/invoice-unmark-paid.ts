@@ -50,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // both unmark and confirm the same invoice.
       const r = await tx.invoice.updateMany({
         where: { id: invoice.id, status: 'paid_pending' },
-        data: { status: 'issued', paid_at: null, date_paid: null, confirm_due_at: null },
+        data: { status: 'issued', paid_at: null, date_paid: null, confirm_due_at: null, payment_method_id: null, payment_method_snapshot: null },
       });
       if (r.count !== 1) throw new Error('RACE_LOST');
       await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // drop the frozen snapshot

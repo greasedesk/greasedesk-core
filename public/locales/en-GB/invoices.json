@@ -25,7 +25,8 @@
     "unpaid": "Unpaid",
     "pending": "Pending clearance",
     "paid": "Paid",
-    "warranty": "Warranty £0"
+    "warranty": "Warranty £0",
+    "pendingManual": "Awaiting confirmation (manual)"
   },
   "action": {
     "view": "View",

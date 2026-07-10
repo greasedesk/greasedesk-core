@@ -67,6 +67,16 @@
     "logoSaved": "Logo saved — it now appears top-centre of the invoice PDF.",
     "logoError": "Could not upload the logo.",
     "logoHint": "PNG or JPEG. Rendered top-centre of the PDF, auto-sized.",
-    "save": "Save invoicing settings"
+    "save": "Save invoicing settings",
+    "pmHeading": "Payment methods",
+    "pmIntro": "How customers pay, and how each clears: instant (cash in the till), windowed (card — clears after the clearance window), or manual (warranty companies / EMAC — you confirm when the money lands).",
+    "pmInstant": "Instant",
+    "pmWindowed": "Windowed",
+    "pmManual": "Manual confirm",
+    "pmArchive": "Archive",
+    "pmRestore": "Restore",
+    "pmNamePh": "e.g. Warranty company",
+    "pmAdd": "Add method",
+    "pmError": "Could not save the payment method."
   }
 }

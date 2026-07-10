@@ -29,6 +29,8 @@ type PageProps = {
   status: 'issued' | 'paid_pending' | 'paid';
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
+  paymentMethod: string | null;
+  manualPending: boolean;
   taxLabel: string;
   footerText: string | null;
   datePaid: string | null;       // yyyy-mm-dd (document fact, manager-editable)
@@ -77,6 +79,18 @@ export default function InvoicePage(props: PageProps) {
     } catch { setMsg({ text: t('unlockError'), ok: false }); setBusy(null); }
   }
 
+  // Manual/early confirmation — "the money actually arrived" (manager/admin, audited, receipt sends).
+  async function confirmReceived() {
+    if (!window.confirm(t('pending.confirmReceivedConfirm'))) return;
+    setBusy('confirm'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-confirm-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('pending.confirmError'), ok: false }); setBusy(null); return; }
+      router.replace(router.asPath);
+    } catch { setMsg({ text: t('pending.confirmError'), ok: false }); setBusy(null); }
+  }
+
   // Silent unmark during the clearance window (paid_pending only) — nothing was sent, no confirm
   // dialog theatrics needed beyond a plain confirm; distinct from the ADMIN unlock above.
   async function unmarkPaid() {
@@ -121,7 +135,15 @@ export default function InvoicePage(props: PageProps) {
         {props.status === 'issued' && props.series === 'chargeable' && <p className="text-xs text-muted mb-3">{t('liveNote')}</p>}
         {props.status === 'paid_pending' && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">
-            {t('pending.note', { when: props.confirmDueAt ?? '—' })}
+            {props.manualPending
+              ? t('pending.manualNote', { method: props.paymentMethod ?? '—' })
+              : t('pending.note', { when: props.confirmDueAt ?? '—' })}
+            {props.canManage && (
+              <button onClick={confirmReceived} disabled={busy !== null}
+                className="block mt-2 text-sm font-semibold rounded-lg px-3 py-1.5 bg-ok-soft text-ok border border-line disabled:opacity-50">
+                {busy === 'confirm' ? t('pending.confirming') : t('pending.confirmReceived')}
+              </button>
+            )}
           </div>
         )}
         {props.status === 'paid' && props.receiptNotSent && (
@@ -280,6 +302,8 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       status: doc.status,
       series: doc.series,
       confirmDueAt: doc.confirmDueAt ? doc.confirmDueAt.toLocaleString(doc.locale, { timeZone: 'UTC' }) : null,
+      paymentMethod: doc.paymentMethod,
+      manualPending: doc.manualPending,
       taxLabel: doc.taxLabel,
       footerText: doc.footerText,
       datePaid: doc.datePaid ? doc.datePaid.toISOString().slice(0, 10) : null,

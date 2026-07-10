@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // drop the paid snapshot
-      await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'issued', paid_at: null, date_paid: null, receipt_sent_at: null } });
+      await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'issued', paid_at: null, date_paid: null, receipt_sent_at: null, payment_method_id: null, payment_method_snapshot: null } });
       // Card rejoins the spine at `invoiced` (from paid or done) so re-pay re-freezes normally.
       await tx.jobCard.update({ where: { id: invoice.job_card_id }, data: { status: 'invoiced' } });
       await writeAudit(tx, {
