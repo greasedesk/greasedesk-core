@@ -10,7 +10,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
-import { resolveRange } from '@/lib/dashboard-periods';
+import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -34,6 +34,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   );
   if (!range) return res.status(400).json({ message: 'Pick a period preset or a valid date range.' });
 
-  const tiles = await computeTiles({ groupId: user.group_id as string, siteIds: vis.siteIds, from: range.from, to: range.to });
-  return res.status(200).json({ tiles, from: range.from.toISOString(), to: range.to.toISOString() });
+  // The P&L strip's SEPARATE month-grained span (whole months only — defaults to this month).
+  const monthSpan = resolveMonthSpan(
+    { mpreset: req.query.mpreset ? String(req.query.mpreset) : (req.query.mfrom ? undefined : 'this_month'), mfrom: req.query.mfrom ? String(req.query.mfrom) : undefined, mto: req.query.mto ? String(req.query.mto) : undefined },
+    grp?.fy_start_month ?? 4,
+  );
+  if (!monthSpan) return res.status(400).json({ message: 'Pick a whole-month period for the profit tiles.' });
+
+  const base = { groupId: user.group_id as string, siteIds: vis.siteIds };
+  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
+  return res.status(200).json({ tiles, from: range.from.toISOString(), to: range.to.toISOString(), monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString() });
 }

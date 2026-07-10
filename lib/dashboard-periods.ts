@@ -47,3 +47,36 @@ export function resolveRange(q: { preset?: string; from?: string; to?: string },
   }
   return null;
 }
+
+// ---------- Month-grained spans (the P&L strip) ----------
+// Profit tiles are calendar-month-grained BY DESIGN: the wage bill is a monthly lump, so a
+// partial-month profit figure would be fiction. Only whole-month spans exist here.
+export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'this_fy'] as const;
+export type MonthPreset = typeof MONTH_PRESETS[number];
+
+export type MonthSpan = { from: Date; to: Date; months: number };
+
+const monthsBetween = (from: Date, to: Date) =>
+  (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+
+export function monthPresetSpan(preset: MonthPreset, fyStartMonth: number, now: Date = new Date()): MonthSpan {
+  // Reuses presetRange — these four presets are already whole-month ranges.
+  const r = presetRange(preset, fyStartMonth, now);
+  return { ...r, months: monthsBetween(r.from, r.to) };
+}
+
+/** Parse ?mfrom=yyyy-mm&mto=yyyy-mm (inclusive months) or a month preset. */
+export function resolveMonthSpan(q: { mpreset?: string; mfrom?: string; mto?: string }, fyStartMonth: number, now: Date = new Date()): MonthSpan | null {
+  if (q.mpreset && (MONTH_PRESETS as readonly string[]).includes(q.mpreset)) {
+    return monthPresetSpan(q.mpreset as MonthPreset, fyStartMonth, now);
+  }
+  const m = /^(\d{4})-(\d{2})$/;
+  const a = q.mfrom?.match(m); const b = q.mto?.match(m);
+  if (a && b) {
+    const from = new Date(Date.UTC(Number(a[1]), Number(a[2]) - 1, 1));
+    const to = new Date(Date.UTC(Number(b[1]), Number(b[2]), 1)); // exclusive: first day after the last month
+    if (to <= from) return null;
+    return { from, to, months: monthsBetween(from, to) };
+  }
+  return null;
+}

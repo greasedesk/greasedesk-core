@@ -26,5 +26,21 @@
     "warrantySub": "warranty invoices in the period",
     "pendingClearance": "Pending clearance",
     "pendingClearanceSub": "{{count}} payments in the clearance window (current)"
+  },
+  "pnl": {
+    "title": "Profit & loss",
+    "monthlyNote": "Monthly figures — whole calendar months only (labour costs are a monthly wage bill).",
+    "customMonths": "Custom months…",
+    "revenueNet": "Revenue (invoiced)",
+    "revenueNetSub": "{{count}} invoices, ex-VAT",
+    "partsProfit": "Profit on parts",
+    "partsProfitSub": "{{sale}} sold − {{cost}} cost",
+    "labourProfit": "Profit on labour",
+    "labourProfitSub": "{{charged}} charged − {{wages}} wages",
+    "grossProfit": "Gross profit",
+    "grossProfitSub": "parts + labour, {{months}} month(s)",
+    "netProfit": "Net profit",
+    "netProfitSub": "gross − {{overheads}} operating costs",
+    "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings — keep those current for accurate numbers."
   }
 }

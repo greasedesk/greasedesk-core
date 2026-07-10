@@ -18,7 +18,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { daysLeft } from '@/lib/trial';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { PERIOD_PRESETS, PeriodPreset } from '@/lib/dashboard-periods';
+import { PERIOD_PRESETS, PeriodPreset, MONTH_PRESETS, MonthPreset } from '@/lib/dashboard-periods';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
@@ -107,21 +107,29 @@ export default function AdminDashboard(props: PageProps) {
   const [preset, setPreset] = useState<PeriodPreset | 'custom'>('this_month');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  // The P&L strip's SEPARATE month-only period (whole months by design — see lib/dashboard-tiles).
+  const [mPreset, setMPreset] = useState<MonthPreset | 'custom'>('this_month');
+  const [mFrom, setMFrom] = useState('');
+  const [mTo, setMTo] = useState('');
   const [tiles, setTiles] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const qs = preset === 'custom'
+    const cash = preset === 'custom'
       ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
       : `preset=${preset}`;
-    if (!qs) return; // custom picked but incomplete — wait for both dates
+    const month = mPreset === 'custom'
+      ? (mFrom && mTo ? `mfrom=${mFrom}&mto=${mTo}` : null)
+      : `mpreset=${mPreset}`;
+    if (!cash || !month) return; // custom picked but incomplete — wait for both ends
+    const qs = `${cash}&${month}`;
     setLoading(true);
     try {
       const res = await fetch(`/api/dashboard-tiles?${qs}`, { cache: 'no-store' });
       if (res.ok) setTiles((await res.json()).tiles);
     } catch { /* tiles keep last values */ }
     setLoading(false);
-  }, [preset, customFrom, customTo]);
+  }, [preset, customFrom, customTo, mPreset, mFrom, mTo]);
   useEffect(() => { load(); }, [load]);
 
   const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t };
@@ -159,6 +167,51 @@ export default function AdminDashboard(props: PageProps) {
         ))}
       </div>
       <p className="text-xs text-muted mt-3">{t('footnote')}</p>
+
+      {/* ---- P&L strip: month-grained BY DESIGN (its own whole-month selector) ---- */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-8 mb-3">
+        <div>
+          <h2 className="text-lg font-bold text-ink">{t('pnl.title')}</h2>
+          <p className="text-xs text-muted">{t('pnl.monthlyNote')}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={mPreset} onChange={(e) => setMPreset(e.target.value as any)}
+            className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
+            {MONTH_PRESETS.map((p2) => <option key={p2} value={p2}>{t(`period.${p2}`)}</option>)}
+            <option value="custom">{t('pnl.customMonths')}</option>
+          </select>
+          {mPreset === 'custom' && (
+            <>
+              <input type="month" value={mFrom} onChange={(e) => setMFrom(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+              <span className="text-muted text-sm">→</span>
+              <input type="month" value={mTo} onChange={(e) => setMTo(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+            </>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {(['revenueNet', 'partsProfit', 'labourProfit', 'grossProfit', 'netProfit'] as const).map((k) => {
+          const d = tiles?.pnl as any;
+          const v = d?.[k];
+          const tone = v == null ? 'text-muted' : k === 'revenueNet' ? 'text-ink' : v >= 0 ? 'text-ok' : 'text-danger';
+          return (
+            <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+              <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
+              {v != null ? (
+                <>
+                  <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(v)}</p>
+                  <p className="text-xs text-muted mt-1">{t(`pnl.${k}Sub`, {
+                    charged: d ? fmt.money(d.labourCharged) : '', wages: d ? fmt.money(d.wageBill) : '',
+                    sale: d ? fmt.money(d.partsSale) : '', cost: d ? fmt.money(d.partsCost) : '',
+                    overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
+                  })}</p>
+                </>
+              ) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-muted mt-3">{t('pnl.honesty')}</p>
     </>
   );
 }

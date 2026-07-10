@@ -12,6 +12,7 @@ import { invoiceTotals, computeInvoiceLinePennies } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
+export type MonthTileContext = TileContext & { months: number };
 
 // Revenue recognition date for a confirmed invoice: the DOCUMENT fact (date_paid), falling back
 // to the attestation (paid_at) for invoices paid before date_paid existed.
@@ -97,9 +98,77 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   },
 };
 
-export async function computeTiles(ctx: TileContext): Promise<Record<string, unknown>> {
-  const entries = await Promise.all(
-    Object.entries(TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(ctx)] as const),
-  );
+// ---------- Month-grained P&L (the profit strip) ----------
+// ONE registered compute produces the five P&L figures from a single ledger pass — calendar-month
+// grained BY DESIGN (the wage bill is a monthly lump; partial-month labour profit is fiction).
+// Line grain: the card's items (item_type lives there; card lines LOCK at paid so they equal the
+// frozen snapshot; while issued they're the live truth — same one-object ledger). Ex-VAT
+// throughout: this is a profit statement, VAT is not revenue.
+//  revenue       = Σ invoiced net in the span (issued_at basis; warranty invoices = £0)
+//  partsProfit   = Σ(non-labour sale − cost); a comeback's parts COST still counts (the drag rule)
+//  labourProfit  = labour charged − wage bill (Headcount salaried ÷ 12 × site allocation × months)
+//                  — the ONLY labour-cost basis; never per-job (fixed wages make that fiction)
+//  grossProfit   = partsProfit + labourProfit
+//  netProfit     = grossProfit − monthly operating overheads × months (the Overheads register,
+//                  normalised monthly; wages are NOT deducted again — they live in labourProfit)
+export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
+  pnl: async ({ groupId, siteIds, from, to, months }) => {
+    const invoices = (await prisma.invoice.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, issued_at: { gte: from, lt: to } },
+      select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true } } } } },
+    })) as any[];
+
+    let revenueNet = 0, partsSale = 0, partsCost = 0, labourCharged = 0;
+    for (const inv of invoices) {
+      const warranty = inv.series === 'warranty';
+      for (const it of inv.job_card?.items ?? []) {
+        const qty = Number(it.qty);
+        const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
+        const cost = Math.round(qty * poundsToPennies(Number(it.unit_cost)));
+        if (!warranty) revenueNet += net;
+        if (it.item_type === 'labour') {
+          if (!warranty) labourCharged += net;
+        } else {
+          if (!warranty) partsSale += net;
+          partsCost += cost; // comeback drag: parts cost counts even at £0 revenue
+        }
+      }
+    }
+
+    // Wage bill: active SALARIED people only (hourly staff have no hours source until clocking
+    // lands — surfaced in the tile note), annual ÷ 12, scaled by their allocation to the visible
+    // sites. Costs are TODAY'S settings applied to each month in the span.
+    const people = (await prisma.costPerson.findMany({
+      where: { group_id: groupId, is_active: true, cost_type: 'salary' },
+      select: { amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+    })) as any[];
+    const wageBillMonthly = Math.round(people.reduce((a, p2) =>
+      a + (p2.amount_pennies / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+
+    // Operating overheads (the Overheads register — for TMBS today: Rent + Business Rates),
+    // normalised monthly, allocation-scaled. NO name-matching — the register IS the list.
+    const overheads = (await prisma.overhead.findMany({
+      where: { group_id: groupId, is_active: true },
+      select: { ex_vat_amount_pennies: true, period: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+    })) as any[];
+    const monthlyOf = (o: any) => o.period === 'annual' ? o.ex_vat_amount_pennies / 12 : o.period === 'weekly' ? (o.ex_vat_amount_pennies * 52) / 12 : o.ex_vat_amount_pennies;
+    const overheadsMonthly = Math.round(overheads.reduce((a, o) =>
+      a + monthlyOf(o) * o.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+
+    const partsProfit = partsSale - partsCost;
+    const wageBill = wageBillMonthly * months;
+    const labourProfit = labourCharged - wageBill;
+    const grossProfit = partsProfit + labourProfit;
+    const operatingCosts = overheadsMonthly * months;
+    const netProfit = grossProfit - operatingCosts; // wages NOT deducted again — they're in labourProfit
+    return { revenueNet, partsSale, partsCost, partsProfit, labourCharged, wageBill, labourProfit, grossProfit, operatingCosts, netProfit, months, invoiceCount: invoices.length };
+  },
+};
+
+export async function computeTiles(ctx: TileContext, monthCtx?: MonthTileContext): Promise<Record<string, unknown>> {
+  const entries = await Promise.all([
+    ...Object.entries(TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(ctx)] as const),
+    ...(monthCtx ? Object.entries(MONTH_TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(monthCtx)] as const) : []),
+  ]);
   return Object.fromEntries(entries);
 }
