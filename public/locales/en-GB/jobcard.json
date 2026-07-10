@@ -325,6 +325,9 @@
     "comeback": {
       "marked": "Marked as warranty / comeback",
       "cleared": "Comeback flag removed"
+    },
+    "card": {
+      "hours_backfilled": "Labour hours backfilled onto existing lines (one-off correction)"
     }
   },
   "stageSkip": {
