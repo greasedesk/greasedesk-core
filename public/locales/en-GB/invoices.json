@@ -31,7 +31,8 @@
     "view": "View",
     "pdf": "PDF",
     "resend": "Re-send",
-    "sending": "Sending…"
+    "sending": "Sending…",
+    "jobCard": "Job Card"
   },
   "resend": {
     "confirm": "Re-send invoice {{number}} to {{email}}?",

@@ -58,6 +58,15 @@ const TILE_RENDERERS: TileRenderer[] = [
     ),
   },
   {
+    key: 'pendingClearance',
+    render: (d, f) => (
+      <>
+        <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
+        <p className="text-xs text-muted mt-1">{f.t('tiles.pendingClearanceSub', { count: d.count })}</p>
+      </>
+    ),
+  },
+  {
     key: 'debtors',
     render: (d, f) => (
       <>

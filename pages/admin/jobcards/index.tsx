@@ -5,7 +5,7 @@
  * SSR read pattern mirrors pages/admin/settings.tsx: getServerSession → guard →
  * Prisma query scoped to the session's group_id. Never returns another tenant's cards.
  */
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { GetServerSideProps } from 'next';
@@ -28,7 +28,21 @@ type JobCardRow = {
   status: string;
   createdAt: string; // ISO
   stages: Stages;
+  invoiceNumber: string | null;
 };
+
+// Tab → card-status mapping (matches the Invoices view's pill pattern). Current = the car's still
+// in the shop (pre-invoice); Completed = work done regardless of payment (paid_pending is an
+// INVOICE state — the card sits at `paid` through the clearance window, so invoiced/paid/done
+// covers it); All = everything incl. draft/quoted/declined/cancelled.
+const TABS = ['current', 'completed', 'all'] as const;
+type Tab = typeof TABS[number];
+const TAB_STATUSES: Record<Tab, string[] | null> = {
+  current: ['accepted', 'in_progress'],
+  completed: ['invoiced', 'paid', 'done'],
+  all: null,
+};
+const TAB_LABELS: Record<Tab, string> = { current: 'Current', completed: 'Completed', all: 'All' };
 
 type PageProps = { cards: JobCardRow[]; noSites: boolean; scopeLabel: string };
 
@@ -60,6 +74,22 @@ function StageBadges({ stages }: { stages: Stages }) {
 }
 
 export default function JobCardsListPage({ cards, noSites, scopeLabel }: PageProps) {
+  // Default = Current (the shop's open-the-page view — All buries today's work under history).
+  const [tab, setTab] = useState<Tab>('current');
+  const [q, setQ] = useState('');
+  const shown = useMemo(() => {
+    const statuses = TAB_STATUSES[tab];
+    const needle = q.trim().toLowerCase().replace(/\s+/g, '');
+    return cards.filter((c) => {
+      if (statuses && !statuses.includes(c.status)) return false;
+      if (!needle) return true;
+      return (
+        c.registration.toLowerCase().replace(/\s+/g, '').includes(needle) ||
+        c.customerName.toLowerCase().includes(q.trim().toLowerCase()) ||
+        (c.invoiceNumber ?? '').toLowerCase().includes(needle)
+      );
+    });
+  }, [cards, tab, q]);
   return (
     <>
       <Head>
@@ -79,6 +109,19 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel }: PagePro
         </Link>
       </div>
 
+      <div className="flex flex-col sm:flex-row gap-2 mb-4">
+        <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]">
+          {TABS.map((f) => (
+            <button key={f} onClick={() => setTab(f)}
+              className={`shrink-0 text-sm rounded-lg px-3 py-2 border ${tab === f ? 'bg-accent text-white border-accent font-semibold' : 'bg-surface text-ink border-line hover:bg-surface-muted'}`}>
+              {TAB_LABELS[f]}
+            </button>
+          ))}
+        </div>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search reg, customer or invoice number…"
+          className="sm:ml-auto sm:w-72 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent" />
+      </div>
+
       <div className="bg-surface border border-line rounded-xl overflow-hidden">
         <table className="w-full text-left text-sm text-ink">
           <thead className="bg-surface-muted text-xs uppercase text-muted">
@@ -91,16 +134,18 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel }: PagePro
             </tr>
           </thead>
           <tbody>
-            {cards.length === 0 && (
+            {shown.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-muted">
                   {noSites
                     ? "You're not currently assigned to a location — contact your admin."
-                    : 'No job cards yet. Create the first one.'}
+                    : cards.length === 0
+                      ? 'No job cards yet. Create the first one.'
+                      : 'Nothing matches this tab or search.'}
                 </td>
               </tr>
             )}
-            {cards.map((c) => (
+            {shown.map((c) => (
               <tr key={c.id} className="border-t border-line hover:bg-surface-muted">
                 <td className="px-4 py-3 font-semibold">
                   <Link href={`/admin/jobcards/${c.id}?from=list`} className="text-accent hover:underline">
@@ -146,6 +191,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     stage_complete_done: boolean;
     customer: { name: string } | null;
     vehicle: { registration: string } | null;
+    invoice: { invoice_number: string | null } | null;
   };
 
   const vis = await getVisibility(user.id as string); // role/assignment site visibility
@@ -166,6 +212,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     include: {
       customer: { select: { name: true } },
       vehicle: { select: { registration: true } },
+      invoice: { select: { invoice_number: true } },
     },
   })) as JobCardListDbRow[];
 
@@ -181,6 +228,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     customerName: r.customer?.name ?? '—',
     status: r.status,
     createdAt: r.created_at.toISOString(),
+    invoiceNumber: r.invoice?.invoice_number ?? null,
     stages: {
       details: r.stage_details_done,
       intake: r.stage_intake_done,

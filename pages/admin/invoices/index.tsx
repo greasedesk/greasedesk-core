@@ -130,6 +130,7 @@ export default function InvoicesPage() {
                   <td className="p-3"><StatusChip row={r} t={t} /></td>
                   <td className="p-3 text-right whitespace-nowrap">
                     <Link href={`/admin/invoices/${r.id}`} className="text-accent hover:underline text-sm">{t('action.view')}</Link>
+                    <Link href={`/admin/jobcards/${r.jobCardId}`} className="text-accent hover:underline text-sm ml-3">{t('action.jobCard')}</Link>
                     <a href={`/api/invoice-pdf?id=${r.id}`} className="text-accent hover:underline text-sm ml-3">{t('action.pdf')}</a>
                     <button onClick={() => resend(r)} disabled={busy !== null} className="text-accent hover:underline text-sm ml-3 disabled:opacity-50">
                       {busy === r.id ? t('action.sending') : t('action.resend')}

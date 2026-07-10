@@ -67,6 +67,17 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     };
   },
 
+  // Pending clearance: money CURRENTLY in the paid_pending window (marked paid, not yet confirmed).
+  // Point-in-time like Debtors — a pending row lives ≤7 days, so a period filter would only hide
+  // live clearance money. Value from the frozen snapshot lines (pending IS frozen).
+  pendingClearance: async ({ groupId, siteIds }) => {
+    const rows = (await prisma.invoice.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid_pending', series: 'chargeable' },
+      select: { lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
+    })) as any[];
+    return { grossPennies: rows.reduce((a, r) => a + grossOfPaid(r), 0), count: rows.length };
+  },
+
   // Debtors: CURRENT outstanding (unpaid chargeable) — a point-in-time AR figure, period-independent.
   debtors: async ({ groupId, siteIds }) => {
     const rows = (await prisma.invoice.findMany({
