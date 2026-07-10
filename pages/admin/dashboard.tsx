@@ -189,8 +189,8 @@ export default function AdminDashboard(props: PageProps) {
           )}
         </div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'netProfit'] as const).map((k) => {
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit'] as const).map((k) => {
           const d = tiles?.pnl as any;
           if (k === 'hoursCharged') {
             const hrs = d?.hoursChargedCentihours;
@@ -210,7 +210,7 @@ export default function AdminDashboard(props: PageProps) {
             );
           }
           const v = d?.[k];
-          const tone = v == null ? 'text-muted' : k === 'netProfit' ? (v >= 0 ? 'text-ok' : 'text-danger') : 'text-ink';
+          const tone = v == null ? 'text-muted' : (k === 'netProfit' || k === 'labourContribution') ? (v >= 0 ? 'text-ok' : 'text-danger') : 'text-ink';
           return (
             <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
               <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
@@ -218,7 +218,7 @@ export default function AdminDashboard(props: PageProps) {
                 <>
                   <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(v)}</p>
                   <p className="text-xs text-muted mt-1">{t(`pnl.${k}Sub`, {
-                    parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '',
+                    parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '', income: d ? fmt.money(d.grossMargin) : '',
                     overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
                   })}</p>
                 </>

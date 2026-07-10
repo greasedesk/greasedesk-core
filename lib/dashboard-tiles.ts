@@ -160,8 +160,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const grossMargin = revenueNet - partsCost;
     const wageBill = wageBillMonthly * months;
     const operatingCosts = overheadsMonthly * months;
+    // Labour contribution: on the fixed-price model the margin IS the labour income (parts are
+    // the only other cost) — so contribution = grossMargin − wageBill. SAME fields the net line
+    // uses; by construction contribution − operatingCosts === netProfit.
+    const labourContribution = grossMargin - wageBill;
     const netProfit = grossMargin - wageBill - operatingCosts; // wages counted ONCE, here
-    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, operatingCosts, netProfit, months, invoiceCount: invoices.length };
+    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, labourContribution, operatingCosts, netProfit, months, invoiceCount: invoices.length };
   },
 };
 
