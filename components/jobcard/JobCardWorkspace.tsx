@@ -45,6 +45,7 @@ type Props = {
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
+  labourRate?: number | null;
   resources: Resource[]; booking: CardBooking;
   siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
   siteId: string;
@@ -331,7 +332,11 @@ export default function JobCardWorkspace(p: Props) {
       </div>
   );
 
-  function InvoicePane() {
+  // INLINE JSX via IIFE, not a nested component (remount rule — the DVSA lesson, second offender):
+  // the mint/pay prompt state is hoisted to the workspace, so typing re-renders the workspace; a
+  // nested component's identity changes each render and REMOUNTS the pane — losing input focus on
+  // every keystroke. An IIFE evaluates to plain JSX with stable child types: no remount, focus holds.
+  const invoicePane = (() => {
     // Which stages still block the all_stages_done gate (done OR skipped advances; Details is
     // done-only). Same inputs computeTabs reads — guidance can't drift from the server's refusal.
     const remaining = [
@@ -478,7 +483,7 @@ export default function JobCardWorkspace(p: Props) {
         )}
       </div>
     );
-  }
+  })();
 
   return (
     <>
@@ -497,7 +502,7 @@ export default function JobCardWorkspace(p: Props) {
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
-          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
               intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}
@@ -541,7 +546,7 @@ export default function JobCardWorkspace(p: Props) {
         </div>
       )}
 
-      {active === 'invoice' && <InvoicePane />}
+      {active === 'invoice' && invoicePane}
 
       <JobCardAudit events={eff.events} />
     </>

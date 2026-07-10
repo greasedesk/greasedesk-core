@@ -53,6 +53,7 @@ type Props = {
   currency: string;
   locale: string;
   initialVatRate: number;
+  labourRate?: number | null; // per-site default labour rate (Financial settings) — pre-fills new labour lines
   initialLines: EstimateLine[];
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
   catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
@@ -137,7 +138,7 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
 // "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
 export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [] }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [] }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [pickService, setPickService] = useState('');
@@ -244,7 +245,11 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   const update = (idx: number, patch: Partial<EstimateLine>) =>
     setLines((p) => p.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   const remove = (idx: number) => setLines((p) => p.filter((_, i) => i !== idx));
-  const add = (item_type: QuoteItemType) => setLines((p) => [...p, blank(item_type)]);
+  // New labour lines pre-fill the site's default rate (Financial settings) — editable per line.
+  const add = (item_type: QuoteItemType) => setLines((p) => [...p, {
+    ...blank(item_type),
+    ...(item_type === 'labour' && labourRate != null && labourRate > 0 ? { unit_price: String(labourRate) } : {}),
+  }]);
 
   // Persist the estimate lines. Returns a result; the parent's unified Save orchestrates messaging +
   // refresh (and pairs this with the booking commit). No router.replace here — the parent handles it.

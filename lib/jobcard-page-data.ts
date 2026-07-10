@@ -68,7 +68,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow }] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow }, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -82,6 +82,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         : (row.customer ?? null);
       return { edgeOwnerId: ownerId, ownerRow: or };
     })(),
+    // The site's default labour rate (Financial settings) — pre-fills new labour lines and is the
+    // rate the upcoming margin feature reads (labour retail = labour_hours × rate).
+    prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: row.site_id, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }) as Promise<{ default_labour_rate: unknown } | null>,
   ]);
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
@@ -182,6 +185,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     flags, isComeback: !!row.is_comeback,
     garageNotes: row.garage_notes ?? '',
     lines, catalogue, fixedServices, tiers, promos,
+    labourRate: labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
     hasEstimate: (row.items as any[]).length > 0,
     resources, booking, stages, skipped, tabsState, invoice, events,
     siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6], breaks: parseBreaks(site?.breaks) },
