@@ -33,14 +33,15 @@
     "customMonths": "Custom months…",
     "revenueNet": "Revenue (invoiced)",
     "revenueNetSub": "{{count}} invoices, ex-VAT",
-    "partsProfit": "Profit on parts",
-    "partsProfitSub": "{{sale}} sold − {{cost}} cost",
-    "labourProfit": "Profit on labour",
-    "labourProfitSub": "{{charged}} charged − {{wages}} wages",
-    "grossProfit": "Gross profit",
-    "grossProfitSub": "parts + labour, {{months}} month(s)",
+    "partsCost": "Parts cost",
+    "partsCostSub": "true cost of parts & components",
+    "grossMargin": "Gross margin",
+    "grossMarginSub": "revenue − parts cost (covers labour + overheads)",
+    "hoursCharged": "Labour hours charged",
+    "hoursChargedSub": "fixed-service hours + ad-hoc labour lines",
+    "hoursMissing": "{{count}} service line(s) missing hours",
     "netProfit": "Net profit",
-    "netProfitSub": "gross − {{overheads}} operating costs",
-    "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings — keep those current for accurate numbers."
+    "netProfitSub": "margin − {{wages}} wages − {{overheads}} rent & rates",
+    "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings, and hours-charged on the labour hours set on each fixed-price service — keep those current for accurate numbers."
   }
 }

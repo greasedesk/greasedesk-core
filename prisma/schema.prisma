@@ -712,6 +712,7 @@ model JobCardItem {
   unit_price  Decimal  @default(0) @db.Decimal(12, 2)
   vat_rate    Decimal  @default(20.00) @db.Decimal(5, 2)
   vat_amount  Decimal  @default(0) @db.Decimal(12, 2)
+  labour_hours Decimal? @db.Decimal(6, 2) // fixed lines: inherited labour content; ad-hoc labour lines carry hours in qty
   created_at  DateTime @default(now())
 
   // Origin hook: which catalogue item pre-filled this line (for the future per-item margin lens).
@@ -861,6 +862,7 @@ model InvoiceLine {
   line_vat          Decimal  @default(0) @db.Decimal(12, 2)
   line_total        Decimal  @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
   unit_cost         Decimal  @default(0) @db.Decimal(12, 2) // INTERNAL — margin only; NEVER rendered to the customer
+  labour_hours      Decimal? @db.Decimal(6, 2) // frozen labour-content grain (fixed-service lines)
   catalogue_item_id String? // forward hook; NO FK yet (no catalogue table) — added when catalogue lands
   position          Int      @default(0)
   created_at        DateTime @default(now())
@@ -902,6 +904,9 @@ model CatalogueItem {
   active     Boolean  @default(true) // archive (false) preferred over hard delete — preserves history
   // Fixed-price services only: the anchor/lowest-tier EX-VAT price (null for simple items).
   base_price_ex_vat Decimal? @db.Decimal(12, 2)
+  // Notional labour CONTENT of a fixed-price service (charged hours). NOT booking duration, NOT
+  // actual worked hours (clocking is banked). Inherited by each job line using the service.
+  labour_hours      Decimal? @db.Decimal(6, 2)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 

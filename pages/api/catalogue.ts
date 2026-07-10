@@ -36,6 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         select: {
           id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, active: true,
           base_price_ex_vat: true,
+          labour_hours: true,
           components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
           tier_prices: { select: { tier_id: true, price_ex_vat: true } },
         },
@@ -50,6 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         id: i.id, code: i.code, title: i.title, name: i.name, itemType: i.item_type,
         unitCost: Number(i.unit_cost), unitPrice: Number(i.unit_price), vatRate: Number(i.vat_rate), active: i.active,
         basePriceExVat: i.base_price_ex_vat == null ? null : Number(i.base_price_ex_vat),
+        labourHours: i.labour_hours == null ? null : Number(i.labour_hours),
         components: i.components.map((c: any) => ({ description: c.description, qty: Number(c.qty), unitCostExVat: Number(c.unit_cost_ex_vat) })),
         tierPrices: i.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
       })),
@@ -143,6 +145,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const ex = (await prisma.catalogueItem.findFirst({ where: { id, group_id: groupId }, select: { base_price_ex_vat: true } })) as { base_price_ex_vat: unknown } | null;
         effectiveBase = ex?.base_price_ex_vat != null ? Number(ex.base_price_ex_vat) : 0;
       }
+      // Labour hours: the notional labour content of the fixed price (charged hours) — distinct
+      // from booking duration and from actual worked hours. Optional; clearable with ''.
+      if (body.labourHours !== undefined) {
+        if (body.labourHours === null || body.labourHours === '') data.labour_hours = null;
+        else {
+          const lh = dec(body.labourHours);
+          if (lh === null || lh < 0 || lh > 1000) return res.status(400).json({ message: 'Labour hours must be a non-negative number.' });
+          data.labour_hours = new Prisma.Decimal(lh.toFixed(2));
+        }
+      }
       const mirror = fixedMirror(effectiveBase ?? 0, components);
       if (base !== null) data.base_price_ex_vat = new Prisma.Decimal(base.toFixed(2));
       data.unit_price = new Prisma.Decimal(mirror.unitPricePounds.toFixed(2));
@@ -160,6 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         data.unit_price = new Prisma.Decimal(pr.toFixed(2));
       }
       data.base_price_ex_vat = null;
+      data.labour_hours = null;
     }
 
     try {

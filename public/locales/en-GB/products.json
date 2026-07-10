@@ -67,5 +67,7 @@
     "archived": "Archived",
     "delete": "Delete",
     "confirmDelete": "Delete this tier? Its per-service prices are removed; services fall back to their base price."
-  }
+  },
+  "labourHours": "Labour hours (charged)",
+  "labourHoursHint": "The labour content of this fixed price (e.g. 7.5). Not the booking duration — this feeds the dashboard’s hours-charged figure."
 }

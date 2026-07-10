@@ -138,7 +138,7 @@ export async function snapshotPaidLines(
 
   const items = (await tx.jobCardItem.findMany({
     where: { job_card_id: invoice.job_card_id },
-    select: { description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true },
+    select: { description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true, labour_hours: true },
     orderBy: { created_at: 'asc' },
   })) as any[];
   if (!items.length) return;
@@ -157,6 +157,7 @@ export async function snapshotPaidLines(
         line_total: new Prisma.Decimal(net.toFixed(2)),
         unit_cost: it.unit_cost,
         catalogue_item_id: it.catalogue_item_id,
+        labour_hours: it.labour_hours, // freeze the charged-hours grain with everything else
         position: i,
       };
     }),

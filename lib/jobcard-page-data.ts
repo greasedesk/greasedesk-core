@@ -37,7 +37,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         where: { group_id: groupId, active: true },
         orderBy: { code: 'asc' },
         select: {
-          id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true,
+          id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true, labour_hours: true,
           components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
           tier_prices: { select: { tier_id: true, price_ex_vat: true } },
         },
@@ -110,6 +110,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const fixedServices: FixedServiceLite[] = catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({
     id: c.id, code: c.code, title: c.title, name: c.name,
     basePriceExVat: Number(c.base_price_ex_vat ?? c.unit_price), vatRate: Number(c.vat_rate),
+    labourHours: c.labour_hours == null ? null : Number(c.labour_hours),
     components: c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })),
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
   }));
@@ -125,6 +126,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     vatable: num(it.vat_rate) > 0,
     code: it.catalogue_item_id ? (codeById.get(it.catalogue_item_id) ?? '') : '',
     catalogue_item_id: it.catalogue_item_id ?? null,
+    labour_hours: it.labour_hours == null ? null : Number(it.labour_hours),
   }));
 
   const flags = [

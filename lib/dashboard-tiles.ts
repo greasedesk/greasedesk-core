@@ -104,33 +104,34 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 // Line grain: the card's items (item_type lives there; card lines LOCK at paid so they equal the
 // frozen snapshot; while issued they're the live truth — same one-object ledger). Ex-VAT
 // throughout: this is a profit statement, VAT is not revenue.
-//  revenue       = Σ invoiced net in the span (issued_at basis; warranty invoices = £0)
-//  partsProfit   = Σ(non-labour sale − cost); a comeback's parts COST still counts (the drag rule)
-//  labourProfit  = labour charged − wage bill (Headcount salaried ÷ 12 × site allocation × months)
-//                  — the ONLY labour-cost basis; never per-job (fixed wages make that fiction)
-//  grossProfit   = partsProfit + labourProfit
-//  netProfit     = grossProfit − monthly operating overheads × months (the Overheads register,
-//                  normalised monthly; wages are NOT deducted again — they live in labourProfit)
+//  Revenue (invoiced, ex-VAT) → − Parts cost → Gross margin → − wages − overheads → Net profit.
+//  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
   pnl: async ({ groupId, siteIds, from, to, months }) => {
     const invoices = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, issued_at: { gte: from, lt: to } },
-      select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true } } } } },
+      select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true } } } } },
     })) as any[];
 
-    let revenueNet = 0, partsSale = 0, partsCost = 0, labourCharged = 0;
+    // The HONEST chain (ruling 2026-07-10 — replaces the parts/labour margin split, which
+    // pretended a decomposition the fixed-price model doesn't make: fixed lines bake labour into
+    // the margin): Revenue − Parts cost = Gross margin; Net = margin − wages − overheads.
+    // Hours charged = the NEW grain: fixed lines' labour_hours (×qty) + ad-hoc labour lines' qty.
+    let revenueNet = 0, partsCost = 0, hoursChargedCentihours = 0, linesMissingHours = 0;
     for (const inv of invoices) {
       const warranty = inv.series === 'warranty';
       for (const it of inv.job_card?.items ?? []) {
         const qty = Number(it.qty);
         const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
-        const cost = Math.round(qty * poundsToPennies(Number(it.unit_cost)));
         if (!warranty) revenueNet += net;
         if (it.item_type === 'labour') {
-          if (!warranty) labourCharged += net;
+          hoursChargedCentihours += Math.round(qty * 100); // ad-hoc labour: qty IS hours
         } else {
-          if (!warranty) partsSale += net;
-          partsCost += cost; // comeback drag: parts cost counts even at £0 revenue
+          partsCost += Math.round(qty * poundsToPennies(Number(it.unit_cost))); // comeback drag: cost counts even at £0 revenue
+          if (it.item_type === 'fixed') {
+            if (it.labour_hours == null) linesMissingHours += 1; // backfill visibility
+            else hoursChargedCentihours += Math.round(qty * Number(it.labour_hours) * 100);
+          }
         }
       }
     }
@@ -145,8 +146,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const wageBillMonthly = Math.round(people.reduce((a, p2) =>
       a + (p2.amount_pennies / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
 
-    // Operating overheads (the Overheads register — for TMBS today: Rent + Business Rates),
-    // normalised monthly, allocation-scaled. NO name-matching — the register IS the list.
+    // Operating overheads (the Overheads register — rent/rates for TMBS), normalised monthly,
+    // allocation-scaled. NO name-matching — the register IS the list. Wages are NOT here (they
+    // live in Headcount), so the net line can never double-count them.
     const overheads = (await prisma.overhead.findMany({
       where: { group_id: groupId, is_active: true },
       select: { ex_vat_amount_pennies: true, period: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
@@ -155,13 +157,11 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const overheadsMonthly = Math.round(overheads.reduce((a, o) =>
       a + monthlyOf(o) * o.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
 
-    const partsProfit = partsSale - partsCost;
+    const grossMargin = revenueNet - partsCost;
     const wageBill = wageBillMonthly * months;
-    const labourProfit = labourCharged - wageBill;
-    const grossProfit = partsProfit + labourProfit;
     const operatingCosts = overheadsMonthly * months;
-    const netProfit = grossProfit - operatingCosts; // wages NOT deducted again — they're in labourProfit
-    return { revenueNet, partsSale, partsCost, partsProfit, labourCharged, wageBill, labourProfit, grossProfit, operatingCosts, netProfit, months, invoiceCount: invoices.length };
+    const netProfit = grossMargin - wageBill - operatingCosts; // wages counted ONCE, here
+    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, operatingCosts, netProfit, months, invoiceCount: invoices.length };
   },
 };
 

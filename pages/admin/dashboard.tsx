@@ -190,10 +190,27 @@ export default function AdminDashboard(props: PageProps) {
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {(['revenueNet', 'partsProfit', 'labourProfit', 'grossProfit', 'netProfit'] as const).map((k) => {
+        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'netProfit'] as const).map((k) => {
           const d = tiles?.pnl as any;
+          if (k === 'hoursCharged') {
+            const hrs = d?.hoursChargedCentihours;
+            return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.hoursCharged')}</h3>
+                {hrs != null ? (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{(hrs / 100).toLocaleString(props.locale, { maximumFractionDigits: 2 })}h</p>
+                    <p className="text-xs text-muted mt-1">
+                      {t('pnl.hoursChargedSub')}
+                      {d?.linesMissingHours > 0 && <span className="text-warn"> · {t('pnl.hoursMissing', { count: d.linesMissingHours })}</span>}
+                    </p>
+                  </>
+                ) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
+              </div>
+            );
+          }
           const v = d?.[k];
-          const tone = v == null ? 'text-muted' : k === 'revenueNet' ? 'text-ink' : v >= 0 ? 'text-ok' : 'text-danger';
+          const tone = v == null ? 'text-muted' : k === 'netProfit' ? (v >= 0 ? 'text-ok' : 'text-danger') : 'text-ink';
           return (
             <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
               <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
@@ -201,8 +218,7 @@ export default function AdminDashboard(props: PageProps) {
                 <>
                   <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(v)}</p>
                   <p className="text-xs text-muted mt-1">{t(`pnl.${k}Sub`, {
-                    charged: d ? fmt.money(d.labourCharged) : '', wages: d ? fmt.money(d.wageBill) : '',
-                    sale: d ? fmt.money(d.partsSale) : '', cost: d ? fmt.money(d.partsCost) : '',
+                    parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '',
                     overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
                   })}</p>
                 </>

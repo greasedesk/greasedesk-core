@@ -25,6 +25,7 @@ export type EstimateLine = {
   vatable: boolean;
   code?: string;                    // catalogue code typed on the line (match key; not persisted)
   catalogue_item_id?: string | null; // origin hook, persisted; remembers the catalogue item it came from
+  labour_hours?: number | null; // fixed lines: inherited from the service
 };
 
 // Catalogue item (active, tenant-scoped) loaded once for client-side code matching. SIMPLE items only.
@@ -34,6 +35,7 @@ export type CatalogueLite = { id: string; code: string; name: string; item_type:
 // and per-tier price rows so the explosion resolves the price + spec entirely client-side.
 export type FixedServiceLite = {
   id: string; code: string; title?: string | null; name: string; basePriceExVat: number; vatRate: number;
+  labourHours: number | null; // charged labour content (NOT booking duration)
   components: Array<{ description: string; qty: number; unitCost: number }>;
   tierPrices: Array<{ tierId: string; priceExVat: number | null }>;
 };
@@ -161,6 +163,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       unit_cost: costPounds.toFixed(2),
       vatable: svc.vatRate > 0,
       code: '', catalogue_item_id: svc.id,
+      labour_hours: svc.labourHours, // charged labour content flows onto the line → invoice grain
     }]);
     setPickService(''); setPickTier('');
   }
@@ -308,8 +311,13 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
           <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.fixed')}</h3>
           {fixed.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyFixed')}</p>}
           {fixed.map(({ l, idx }) => (
-            <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false}
-              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+            <div key={l._uid}>
+              <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false}
+                lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+              {l.labour_hours != null && (
+                <p className="text-xs text-muted -mt-1 mb-2">{t('estimate.fixedHours', { hours: l.labour_hours })}</p>
+              )}
+            </div>
           ))}
           {canEdit && (
             fixedServices.length > 0 ? (

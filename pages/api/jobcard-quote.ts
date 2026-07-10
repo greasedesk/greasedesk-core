@@ -25,6 +25,7 @@ type IncomingLine = {
   item_type?: string; description?: string; qty?: number | string;
   unit_price?: number | string; unit_cost?: number | string; vatable?: boolean;
   catalogue_item_id?: string | null; // origin hook (tenant-validated below)
+  labour_hours?: number | string | null; // fixed lines: charged labour content (from the service)
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -101,6 +102,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),
     vat_amount: new Prisma.Decimal(penniesToPounds(totals.lines[i].vat_pennies)),
     catalogue_item_id: (typeof items[i].catalogue_item_id === 'string' && validIds.has(items[i].catalogue_item_id as string)) ? (items[i].catalogue_item_id as string) : null,
+    // Fixed lines carry the service's charged labour content (validated non-negative number or null).
+    labour_hours: (() => { const v = items[i].labour_hours; if (v === undefined || v === null || v === '') return null; const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 1000 ? new Prisma.Decimal(n.toFixed(2)) : null; })(),
   }));
 
   try {
