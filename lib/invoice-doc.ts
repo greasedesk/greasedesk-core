@@ -60,6 +60,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
+      job_card: { select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } } },
     },
   })) as any;
   if (!inv) return null;
@@ -118,7 +119,17 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },
-    vehicle: { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
+    // Vehicle FACTS (reg/VIN/mileage): LIVE from the card while issued — a correction on the card
+    // flows straight through to the unpaid document; frozen (re-snapshotted in the mark-paid tx,
+    // see snapshotPaidLines) once pending/paid. desc (make/model) stays issue-snapshotted.
+    vehicle: inv.status === 'issued'
+      ? {
+          reg: inv.job_card?.vehicle?.registration ?? inv.vehicle_reg_snapshot,
+          desc: inv.vehicle_desc_snapshot,
+          vin: inv.job_card?.vehicle?.vin ?? null,
+          mileage: inv.job_card?.odometer_in ?? inv.job_card?.vehicle?.mileage_at_create ?? null,
+        }
+      : { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
     lines,
     totals,
     currency: inv.site?.currency_code ?? 'GBP',

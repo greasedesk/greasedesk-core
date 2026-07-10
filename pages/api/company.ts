@@ -115,6 +115,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data.paid_confirm_window_hours = h;
   }
 
+  // FORMAT LOCK (root-cause fix 2026-07-10 — stale-form corruption happened TWICE): once invoices
+  // exist in a series, that series' DISPLAY FORMAT is immutable through this API — changing
+  // prefix/pad/FY mid-sequence corrupts rendered numbers. Same-value resubmits from stale forms
+  // are silently dropped (harmless); CHANGED values are refused with a reload hint. Deliberate
+  // corrections remain possible only as admin-approved DB operations (the audited renumber pattern).
+  const CHARGEABLE_FORMAT = ['invoice_prefix', 'invoice_pad_width', 'invoice_fy_digits', 'fy_start_month'] as const;
+  const touchedFormat = CHARGEABLE_FORMAT.filter((k) => k in data);
+  const touchedWarrantyPrefix = 'invoice_warranty_prefix' in data;
+  if (touchedFormat.length || touchedWarrantyPrefix) {
+    const cur = (await prisma.group.findUnique({
+      where: { id: groupId },
+      select: { invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true },
+    })) as any;
+    const changed = touchedFormat.filter((k) => String(data[k]) !== String(cur?.[k]));
+    for (const k of touchedFormat) if (!changed.includes(k)) delete data[k]; // no-op resubmits pass through harmlessly
+    if (changed.length) {
+      const minted = await prisma.invoice.count({ where: { group_id: groupId, series: 'chargeable' } });
+      if (minted > 0) {
+        return res.status(409).json({ message: 'Invoices have been issued — the number format (prefix, padding, fiscal-year) is locked to protect the sequence. Reload the page to see the current settings.' });
+      }
+    }
+    if (touchedWarrantyPrefix) {
+      if (String(data.invoice_warranty_prefix) === String(cur?.invoice_warranty_prefix)) {
+        delete data.invoice_warranty_prefix;
+      } else {
+        const wMinted = await prisma.invoice.count({ where: { group_id: groupId, series: 'warranty' } });
+        if (wMinted > 0) return res.status(409).json({ message: 'Warranty invoices have been issued — the warranty prefix is locked to protect that sequence.' });
+      }
+    }
+  }
+
   // Starting-number seed — allowed ONLY while the chargeable sequence is unused (no chargeable
   // invoice exists). Once a number is minted the counter is immutable (the no-gaps guarantee).
   let seedTo: number | null = null;

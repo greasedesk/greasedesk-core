@@ -44,7 +44,8 @@
     "emailFooterHint": "A small footer line in invoice emails. Never printed on the invoice itself.",
     "paidWindow": "Payment clearance window (hours)",
     "paidWindowHint": "Marking an invoice paid holds it for this long before the customer's confirmation is sent — you can quietly unmark it in the window (e.g. a card payment that doesn't clear).",
-    "movedNote": "Invoice numbering and sending options have moved to Settings → Invoicing."
+    "movedNote": "Invoice numbering and sending options have moved to Settings → Invoicing.",
+    "formatLocked": "Invoices have been issued, so the number format (prefix, padding, fiscal-year) is locked to protect the sequence. The clearance window stays editable."
   },
   "invoicing": {
     "title": "Invoicing",

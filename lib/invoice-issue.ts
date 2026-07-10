@@ -100,6 +100,25 @@ export async function snapshotPaidLines(
 ): Promise<void> {
   await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // idempotent re-freeze (re-pay after unlock)
 
+  // VEHICLE-FACT RE-SNAPSHOT (ruling 2026-07-10): reg + VIN + mileage are LIVE-read from the card
+  // while issued (corrections flow through); THIS is their one freeze point — the same tx as the
+  // line freeze, so the pending/paid document is frozen at a single lifecycle moment. Company /
+  // customer identity stays issue-snapshotted (different concern).
+  const cardNow = (await tx.jobCard.findUnique({
+    where: { id: invoice.job_card_id },
+    select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } },
+  })) as any;
+  if (cardNow) {
+    await tx.invoice.update({
+      where: { id: invoice.id },
+      data: {
+        vehicle_reg_snapshot: cardNow.vehicle?.registration ?? null,
+        vehicle_vin_snapshot: cardNow.vehicle?.vin ?? null,
+        vehicle_mileage_snapshot: cardNow.odometer_in ?? cardNow.vehicle?.mileage_at_create ?? null,
+      },
+    });
+  }
+
   if (invoice.series === 'warranty') {
     await tx.invoiceLine.create({
       data: {

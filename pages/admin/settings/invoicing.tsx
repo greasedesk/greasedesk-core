@@ -22,7 +22,7 @@ type PageProps = {
   replyTo: string; senderName: string; bcc: string; footerText: string;
   emailFooter: boolean; logoUrl: string | null;
   invoicePrefix: string; invoicePadWidth: string; invoiceFyDigits: string; fyStartMonth: string;
-  warrantyPrefix: string; nextNumber: string; canSeed: boolean; paidWindowHours: string;
+  warrantyPrefix: string; nextNumber: string; canSeed: boolean; warrantyLocked: boolean; paidWindowHours: string;
   groupName: string; billingEmail: string;
 };
 
@@ -64,9 +64,12 @@ export default function InvoicingSettings(props: PageProps) {
         body: JSON.stringify({
           invoice_reply_to: replyTo, invoice_sender_name: senderName, invoice_bcc: bcc, invoice_footer_text: footerText,
           invoice_email_footer: footer,
-          invoice_prefix: invPrefix, invoice_pad_width: Number(invPad || 0),
-          invoice_fy_digits: Number(fyDigits || 0), fy_start_month: Number(fyMonth || 4),
-          invoice_warranty_prefix: wPrefix, paid_confirm_window_hours: Number(payWindow || 24),
+          ...(props.canSeed ? {
+            invoice_prefix: invPrefix, invoice_pad_width: Number(invPad || 0),
+            invoice_fy_digits: Number(fyDigits || 0), fy_start_month: Number(fyMonth || 4),
+          } : {}),
+          ...(!props.warrantyLocked ? { invoice_warranty_prefix: wPrefix } : {}),
+          paid_confirm_window_hours: Number(payWindow || 24),
           ...(props.canSeed && nextNo.trim() !== '' && nextNo !== props.nextNumber ? { invoice_next_number: Number(nextNo) } : {}),
         }),
       });
@@ -157,18 +160,19 @@ export default function InvoicingSettings(props: PageProps) {
           {/* --- Numbering (relocated from Company Details; the seed lock is preserved) --- */}
           <div className="pt-3 border-t border-line">
             <div className="text-sm font-medium text-ink mb-1">{t('invoice.heading')}</div>
+            {!props.canSeed && <p className="text-xs text-muted mb-2">{t('invoice.formatLocked')}</p>}
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className={labelClass}>{t('invoice.prefix')}</span>
-                <input value={invPrefix} onChange={(e) => setInvPrefix(e.target.value)} placeholder={t('invoice.prefixPlaceholder')} className={inputClass} />
+                <input value={invPrefix} disabled={!props.canSeed} onChange={(e) => setInvPrefix(e.target.value)} placeholder={t('invoice.prefixPlaceholder')} className={`${inputClass} disabled:opacity-50`} />
               </label>
               <label className="block">
                 <span className={labelClass}>{t('invoice.padWidth')}</span>
-                <input type="number" inputMode="numeric" min={0} max={10} value={invPad} onChange={(e) => setInvPad(e.target.value)} className={inputClass} />
+                <input type="number" inputMode="numeric" min={0} max={10} value={invPad} disabled={!props.canSeed} onChange={(e) => setInvPad(e.target.value)} className={`${inputClass} disabled:opacity-50`} />
               </label>
               <label className="block">
                 <span className={labelClass}>{t('invoice.fyDigits')}</span>
-                <select value={fyDigits} onChange={(e) => setFyDigits(e.target.value)} className={inputClass}>
+                <select value={fyDigits} disabled={!props.canSeed} onChange={(e) => setFyDigits(e.target.value)} className={`${inputClass} disabled:opacity-50`}>
                   <option value="0">{t('invoice.fyOff')}</option>
                   <option value="2">{t('invoice.fy2')}</option>
                   <option value="4">{t('invoice.fy4')}</option>
@@ -177,7 +181,7 @@ export default function InvoicingSettings(props: PageProps) {
               {fyDigits !== '0' && (
                 <label className="block">
                   <span className={labelClass}>{t('invoice.fyStartMonth')}</span>
-                  <select value={fyMonth} onChange={(e) => setFyMonth(e.target.value)} className={inputClass}>
+                  <select value={fyMonth} disabled={!props.canSeed} onChange={(e) => setFyMonth(e.target.value)} className={`${inputClass} disabled:opacity-50`}>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                       <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString(undefined, { month: 'long' })}</option>
                     ))}
@@ -192,7 +196,7 @@ export default function InvoicingSettings(props: PageProps) {
               </label>
               <label className="block">
                 <span className={labelClass}>{t('invoice.warrantyPrefix')}</span>
-                <input value={wPrefix} onChange={(e) => setWPrefix(e.target.value)} className={inputClass} />
+                <input value={wPrefix} disabled={props.warrantyLocked} onChange={(e) => setWPrefix(e.target.value)} className={`${inputClass} disabled:opacity-50`} />
                 <span className="text-xs text-muted mt-0.5 block">{t('invoice.warrantyPrefixHint')}</span>
               </label>
               <label className="block">
@@ -226,6 +230,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
     },
   })) as any;
   const chargeableUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, series: 'chargeable' } });
+  const warrantyUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, series: 'warranty' } });
   return {
     props: {
       groupName: g?.group_name ?? '',
@@ -243,6 +248,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       warrantyPrefix: g?.invoice_warranty_prefix ?? 'W',
       nextNumber: String((g?.invoice_sequence?.last_value ?? 0) + 1),
       canSeed: chargeableUsed === 0,
+      warrantyLocked: warrantyUsed > 0,
       paidWindowHours: String(g?.paid_confirm_window_hours ?? 24),
     },
   };
