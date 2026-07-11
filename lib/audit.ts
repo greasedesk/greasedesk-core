@@ -33,6 +33,7 @@ export type AuditAction =
   | 'invoice.date_paid_edited' // the document's paid-date corrected (manager/admin)
   | 'invoice.date_issued_edited' // the document's issue/billing date corrected (manager/admin)
   | 'invoice.date_issued_backfilled' // one-off: issue-date added after minting (approved correction)
+  | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent';         // emailed to the customer (PDF attached)
 
