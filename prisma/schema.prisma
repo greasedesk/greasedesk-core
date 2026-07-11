@@ -17,8 +17,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled (pgbouncer) — runtime
+  // Migrations MUST use the direct (unpooled) endpoint: pg_advisory_lock is SESSION-scoped,
+  // and through a pooler the lock sticks to an immortal pool connection (2026-07-12 incident:
+  // builds blocked ~24h on a lock orphaned this way). Prisma migrate/status read this.
+  directUrl = env("DIRECT_URL")
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
