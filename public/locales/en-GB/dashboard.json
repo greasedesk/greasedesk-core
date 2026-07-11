@@ -30,7 +30,6 @@
   "pnl": {
     "title": "Profit & loss",
     "monthlyNote": "Monthly figures — whole calendar months only (labour costs are a monthly wage bill).",
-    "customMonths": "Custom months…",
     "revenueNet": "Revenue (invoiced)",
     "revenueNetSub": "{{count}} invoices, ex-VAT",
     "partsCost": "Parts cost",
@@ -44,6 +43,7 @@
     "netProfitSub": "margin − {{wages}} wages − {{overheads}} rent & rates",
     "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings, and hours-charged on the labour hours set on each fixed-price service — keep those current for accurate numbers.",
     "labourContribution": "Labour income vs cost",
-    "labourContributionSub": "{{income}} income − {{wages}} wages"
+    "labourContributionSub": "{{income}} income − {{wages}} wages",
+    "degradedNote": "P&L is whole calendar months only — showing {{label}}."
   }
 }

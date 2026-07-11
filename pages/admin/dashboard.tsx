@@ -19,7 +19,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { daysLeft } from '@/lib/trial';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { PERIOD_PRESETS, PeriodPreset, MONTH_PRESETS, MonthPreset } from '@/lib/dashboard-periods';
+import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/dashboard-periods';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
@@ -99,6 +99,15 @@ const TILE_RENDERERS: TileRenderer[] = [
   },
 ];
 
+// "June 2026" for one month; "Apr 2026 – Mar 2027" for a span. monthTo is exclusive.
+function monthLabel(w: { from: string; to: string }, locale: string): string {
+  const from = new Date(w.from);
+  const lastIncl = new Date(new Date(w.to).getTime() - 86_400_000);
+  const one = from.getUTCFullYear() === lastIncl.getUTCFullYear() && from.getUTCMonth() === lastIncl.getUTCMonth();
+  const f = (d: Date, style: 'long' | 'short') => d.toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
+  return one ? f(from, 'long') : `${f(from, 'short')} – ${f(lastIncl, 'short')}`;
+}
+
 function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: string | null }) {
   let text: string;
   let tone = 'bg-surface border-line text-ink';
@@ -120,32 +129,37 @@ export default function AdminDashboard(props: PageProps) {
   const [preset, setPreset] = useState<PeriodPreset | 'custom'>('this_month');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  // The P&L strip's SEPARATE month-only period (whole months by design — see lib/dashboard-tiles).
-  const [mPreset, setMPreset] = useState<MonthPreset | 'custom'>('this_month');
-  const [mFrom, setMFrom] = useState('');
-  const [mTo, setMTo] = useState('');
   const [tiles, setTiles] = useState<Record<string, any> | null>(null);
+  // The month window the SERVER resolved for the P&L (echoed back) — drives the loud label.
+  const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  // ONE period control drives BOTH strips. The P&L stays whole-calendar-months only: it follows
+  // whole-month selections exactly; part-periods (to-dates / partial custom) fall back to the
+  // CONTAINING calendar month with a plain on-screen notice — never a silent mismatch, and
+  // never pro-rated wages to fake a part-period (see lib/dashboard-periods).
+  const monthSel = monthParamsForSelection(preset, customFrom, customTo);
 
   // The cash strip's period as a querystring — ONE builder shared by the tiles fetch and the
   // tile links, so a click lands on exactly the period the tile displayed.
   const cashQS = preset === 'custom'
     ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
     : `preset=${preset}`;
+  const monthQS = monthSel
+    ? (monthSel.mpreset ? `mpreset=${monthSel.mpreset}` : `mfrom=${monthSel.mfrom}&mto=${monthSel.mto}`)
+    : null;
   const load = useCallback(async () => {
-    const cash = cashQS;
-    const month = mPreset === 'custom'
-      ? (mFrom && mTo ? `mfrom=${mFrom}&mto=${mTo}` : null)
-      : `mpreset=${mPreset}`;
-    if (!cash || !month) return; // custom picked but incomplete — wait for both ends
-    const qs = `${cash}&${month}`;
+    if (!cashQS || !monthQS) return; // custom picked but incomplete — wait for both ends
     setLoading(true);
     try {
-      const res = await fetch(`/api/dashboard-tiles?${qs}`, { cache: 'no-store' });
-      if (res.ok) setTiles((await res.json()).tiles);
+      const res = await fetch(`/api/dashboard-tiles?${cashQS}&${monthQS}`, { cache: 'no-store' });
+      if (res.ok) {
+        const d = await res.json();
+        setTiles(d.tiles);
+        setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
+      }
     } catch { /* tiles keep last values */ }
     setLoading(false);
-  }, [cashQS, mPreset, mFrom, mTo]);
+  }, [cashQS, monthQS]);
   useEffect(() => { load(); }, [load]);
 
   const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS };
@@ -184,27 +198,26 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-xs text-muted mt-3">{t('footnote')}</p>
 
-      {/* ---- P&L strip: month-grained BY DESIGN (its own whole-month selector) ---- */}
+      {/* ---- P&L strip: month-grained BY DESIGN — follows the ONE period control above. The
+           resolved month window renders LOUD so the strip can never be misread against the cash
+           tiles; part-period selections show the containing-month notice instead of a silent
+           substitute. ---- */}
       <div className="flex flex-wrap items-center justify-between gap-3 mt-8 mb-3">
         <div>
           <h2 className="text-lg font-bold text-ink">{t('pnl.title')}</h2>
           <p className="text-xs text-muted">{t('pnl.monthlyNote')}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={mPreset} onChange={(e) => setMPreset(e.target.value as any)}
-            className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
-            {MONTH_PRESETS.map((p2) => <option key={p2} value={p2}>{t(`period.${p2}`)}</option>)}
-            <option value="custom">{t('pnl.customMonths')}</option>
-          </select>
-          {mPreset === 'custom' && (
-            <>
-              <input type="month" value={mFrom} onChange={(e) => setMFrom(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
-              <span className="text-muted text-sm">→</span>
-              <input type="month" value={mTo} onChange={(e) => setMTo(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
-            </>
-          )}
-        </div>
+        {monthWindow && (
+          <span className="text-base font-semibold text-ink bg-surface-muted border border-line rounded-lg px-3 py-1.5">
+            {monthLabel(monthWindow, props.locale)}
+          </span>
+        )}
       </div>
+      {monthSel?.degraded && monthWindow && (
+        <p className="text-sm text-warn bg-warn-soft border border-warn rounded-lg px-3 py-2 mb-3">
+          {t('pnl.degradedNote', { label: monthLabel(monthWindow, props.locale) })}
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit'] as const).map((k) => {
           const d = tiles?.pnl as any;

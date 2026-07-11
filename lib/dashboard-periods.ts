@@ -4,10 +4,12 @@
  * → a UTC [from, to] range. Financial-year presets respect the tenant's fy_start_month; relative
  * presets compute live. Shared by the API (server truth) and the picker UI (labels only).
  */
+// Order = the dropdown order: common whole-month picks first (the P&L follows those exactly),
+// then to-dates, then quarters/FYs. Membership checks are order-independent.
 export const PERIOD_PRESETS = [
-  'this_month', 'this_quarter', 'this_fy',
-  'last_month', 'last_quarter', 'last_fy',
-  'mtd', 'qtd', 'ytd',
+  'this_month', 'last_month', 'mtd',
+  'this_quarter', 'last_quarter', 'qtd',
+  'this_fy', 'last_fy', 'ytd',
 ] as const;
 export type PeriodPreset = typeof PERIOD_PRESETS[number];
 
@@ -51,7 +53,7 @@ export function resolveRange(q: { preset?: string; from?: string; to?: string },
 // ---------- Month-grained spans (the P&L strip) ----------
 // Profit tiles are calendar-month-grained BY DESIGN: the wage bill is a monthly lump, so a
 // partial-month profit figure would be fiction. Only whole-month spans exist here.
-export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'this_fy'] as const;
+export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy'] as const;
 export type MonthPreset = typeof MONTH_PRESETS[number];
 
 export type MonthSpan = { from: Date; to: Date; months: number };
@@ -79,4 +81,34 @@ export function resolveMonthSpan(q: { mpreset?: string; mfrom?: string; mto?: st
     return { from, to, months: monthsBetween(from, to) };
   }
   return null;
+}
+
+// ---- ONE period control drives both strips ----
+// The P&L is whole-calendar-months ONLY (fixed monthly wages don't honestly decompose into
+// part-periods — never pro-rate to make a picker option "work"). This maps the single (cash)
+// selection to the P&L's month window:
+//  - whole-month windows (this/last month, this/last quarter, this/last FY, and a custom range
+//    that is exactly whole months) → the P&L FOLLOWS EXACTLY (degraded: false);
+//  - part-periods (mtd/qtd/ytd → the current month; a partial custom range → the month containing
+//    its END date) → the P&L shows that CONTAINING CALENDAR MONTH and the UI says so plainly
+//    (degraded: true) — never a silently different period.
+export type MonthSelection = { mpreset?: MonthPreset; mfrom?: string; mto?: string; degraded: boolean };
+export function monthParamsForSelection(
+  preset: PeriodPreset | 'custom', customFrom: string, customTo: string,
+): MonthSelection | null {
+  if (preset !== 'custom') {
+    if ((MONTH_PRESETS as readonly string[]).includes(preset)) return { mpreset: preset as MonthPreset, degraded: false };
+    return { mpreset: 'this_month', degraded: true }; // mtd/qtd/ytd → containing calendar month = the current one
+  }
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const a = customFrom.match(day); const b = customTo.match(day);
+  if (!a || !b) return null; // incomplete custom range — wait for both ends
+  const from = new Date(`${customFrom}T00:00:00.000Z`);
+  const toInc = new Date(`${customTo}T00:00:00.000Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(toInc.getTime()) || toInc < from) return null;
+  const lastDayOfMonth = new Date(Date.UTC(toInc.getUTCFullYear(), toInc.getUTCMonth() + 1, 0)).getUTCDate();
+  const wholeMonths = from.getUTCDate() === 1 && toInc.getUTCDate() === lastDayOfMonth;
+  if (wholeMonths) return { mfrom: customFrom.slice(0, 7), mto: customTo.slice(0, 7), degraded: false };
+  const m = customTo.slice(0, 7);
+  return { mfrom: m, mto: m, degraded: true }; // containing month of the range END
 }
