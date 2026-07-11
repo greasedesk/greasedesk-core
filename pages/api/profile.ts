@@ -40,12 +40,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   for (const f of STRING_FIELDS) {
     if (f in body) data[f] = (body[f] == null ? '' : String(body[f]).trim()) || null;
   }
-  if ('start_date' in body) {
-    const v = body.start_date as string | null;
-    if (!v) data.start_date = null;
-    else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) data.start_date = new Date(`${v}T00:00:00.000Z`);
-    else return res.status(400).json({ message: 'Start date must be YYYY-MM-DD.' });
-  }
+  // start_date is NO LONGER accepted here (ruling: HR/CostPerson is the SOLE owner of
+  // employment dates — the user page displays it read-only from the linked HR record).
+  if ('start_date' in body) delete body.start_date;
   if (Object.keys(data).length === 0) return res.status(400).json({ message: 'Nothing to update.' });
 
   await prisma.user.update({ where: { id: targetId }, data });

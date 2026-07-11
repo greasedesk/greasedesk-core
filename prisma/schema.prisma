@@ -160,7 +160,7 @@ model Group {
   logo_r2_key               String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
   // Per-tenant leave-type colour overrides (type→hex; defaults = Okabe–Ito in lib/leave-types;
   // admin-remappable for colour-blind accessibility). Read via resolveLeaveColours only.
-  leave_type_colours Json?
+  leave_type_colours        Json?
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")
   billing_email             String   @unique
@@ -215,10 +215,11 @@ model Group {
   invoice_sequence InvoiceSequence?
 
   // Product catalogue (tenant-level; one shared catalogue across all sites)
-  catalogue_items CatalogueItem[]
-  service_tiers   ServiceTier[]
-  leaveRecords    LeaveRecord[]
-  publicHolidays  PublicHoliday[]
+  catalogue_items  CatalogueItem[]
+  service_tiers    ServiceTier[]
+  leaveRecords     LeaveRecord[]
+  publicHolidays   PublicHoliday[]
+  employmentEvents EmploymentEvent[]
 }
 
 model GroupBilling {
@@ -1070,23 +1071,24 @@ model CostPerson {
   // contracted_hours_per_day: NULL on a chargeable person = incomplete config (amber flag).
   // working_days: rostered weekdays (0=Sun..6=Sat); EMPTY = inherit the site's open_days
   // (TMBS default Mon–Sat) — an explicit value overrides.
-  is_chargeable            Boolean  @default(false)
-  contracted_hours_per_day Decimal? @db.Decimal(4, 2)
-  working_days             Int[]    @default([])
+  is_chargeable               Boolean   @default(false)
+  contracted_hours_per_day    Decimal?  @db.Decimal(4, 2)
+  working_days                Int[]     @default([])
   // Annual leave allowance in DAYS (per person, admin-editable). Leave-year = CALENDAR year in
   // v1: "taken" = this calendar year's leave rows, balance = allowance − taken. SEAM (banked):
   // configurable leave-year start + carry-over + part-time/six-day pro-rata would land here.
   // Allowance/balance are PER-PERSON figures — never apportioned or summed across sites.
-  annual_leave_allowance_days Decimal? @default(28.0) @db.Decimal(4, 1)
+  annual_leave_allowance_days Decimal?  @default(28.0) @db.Decimal(4, 1)
   // Employment dates — RECORDED ONLY in v1, wired to no calculation. The anchor for banked:
   // auto pro-rata of the allowance from start_date, leaver handling, mid-month capacity proration.
-  start_date DateTime?
-  end_date   DateTime?
+  start_date                  DateTime?
+  end_date                    DateTime?
 
-  group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  user        User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
-  allocations CostAllocation[]
-  leave       LeaveRecord[]
+  group            Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  user             User?             @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  allocations      CostAllocation[]
+  leave            LeaveRecord[]
+  employmentEvents EmploymentEvent[]
 
   @@index([group_id])
 }
@@ -1104,8 +1106,8 @@ enum LeaveType {
   sick
   other
   closure // company-mandated closure (e.g. Christmas shutdown) — REAL pre-booked leave rows that
-          // consume the allowance AND drop capacity (binding model: allowance = FULL grant;
-          // closures are never modelled as a reduced allowance). Visually distinct in the Roster.
+  // consume the allowance AND drop capacity (binding model: allowance = FULL grant;
+  // closures are never modelled as a reduced allowance). Visually distinct in the Roster.
   compassionate
   parental
   training
@@ -1143,6 +1145,42 @@ model LeaveRecord {
 // site_id NULL = applies to ALL the group's sites (both TMBS sites share England & Wales
 // bank holidays); set site_id for a region-specific site later. Subtracts a full rostered
 // day from every chargeable mechanic whose roster includes that weekday.
+// HR effective-dated employment history (RECORD-FIRST): the flat CostPerson columns stay the
+// HEAD of each series and every compute keeps reading them; events are the append-only log.
+// kind buckets one field-family each; value_json/previous_json carry {…} shaped per kind.
+enum EmploymentEventKind {
+  wage // { amount_pennies, cost_type }
+  hours // { contracted_hours_per_day }
+  pattern // { working_days } — 4e superseded: college windows = paired pattern events
+  chargeable // { is_chargeable }
+  allowance // { annual_leave_allowance_days }
+  started // { start_date }
+  ended // { end_date } — mark-as-left (is_active=false in the same tx)
+}
+
+model EmploymentEvent {
+  id             String              @id @default(uuid())
+  group_id       String
+  cost_person_id String
+  kind           EmploymentEventKind
+  // Admin-picked (defaults today; far-past/future needs an explicit confirm — never silent).
+  // ORDERING ASSUMPTION for the banked value-true-at-time read: "value at T" = the latest event
+  // of this kind with effective_date <= T (created_at breaks ties). Back-dating an event BEFORE
+  // an existing one therefore INSERTS history — it governs only the gap up to the next event's
+  // effective_date and never changes the head; the flat column remains current-state truth.
+  effective_date DateTime
+  value_json     Json
+  previous_json  Json?
+  changed_by     String? // user id (the audit who; created_at is the when)
+  created_at     DateTime            @default(now())
+
+  group       Group      @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  cost_person CostPerson @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
+
+  @@index([cost_person_id, kind, effective_date])
+  @@index([group_id, created_at])
+}
+
 model PublicHoliday {
   id         String   @id @default(uuid())
   group_id   String

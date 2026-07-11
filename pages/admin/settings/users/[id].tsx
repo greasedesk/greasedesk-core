@@ -83,7 +83,7 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
   async function save() {
     setBusy(true); setMsg(null);
     const payload: any = {
-      name: f.name, job_title: f.job_title, start_date: f.start_date || null, phone: f.phone, address: f.address,
+      name: f.name, job_title: f.job_title, phone: f.phone, address: f.address,
       driving_licence_categories: f.driving_licence_categories,
       next_of_kin_name: f.next_of_kin_name, next_of_kin_relationship: f.next_of_kin_relationship, next_of_kin_phone: f.next_of_kin_phone,
       certifications: f.certifications, working_hours: f.working_hours,
@@ -110,7 +110,8 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div><label className={labelClass}>Full name</label><input value={f.name} onChange={set('name')} className={inputClass} /></div>
           <div><label className={labelClass}>Job title</label><input value={f.job_title} onChange={set('job_title')} className={inputClass} /></div>
-          <div><label className={labelClass}>Start date</label><input type="date" value={f.start_date} onChange={set('start_date')} className={inputClass} /></div>
+          {/* HR (CostPerson) is the SOLE owner of employment dates — read-only echo here. */}
+          <div><label className={labelClass}>Start date (managed in HR)</label><input value={f.start_date || '—'} readOnly className={`${inputClass} opacity-60 cursor-not-allowed`} /></div>
           <div><label className={labelClass}>Phone</label><input value={f.phone} onChange={set('phone')} className={inputClass} /></div>
           <div><label className={labelClass}>Email (login — read-only)</label><input value={f.email} readOnly className={`${inputClass} opacity-60 cursor-not-allowed`} /></div>
           <div><label className={labelClass}>Driving licence categories</label><input value={f.driving_licence_categories} onChange={set('driving_licence_categories')} className={inputClass} /></div>
@@ -192,12 +193,16 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     },
   })) as any;
   if (!u) return { redirect: { destination: `/admin/settings/users/${sUser.id}`, permanent: false } };
+  // HR record (CostPerson.user_id link) is the employment-date owner; legacy User.start_date is
+  // only a display fallback for unlinked people.
+  const hrRow = (await prisma.costPerson.findFirst({ where: { user_id: u.id }, select: { start_date: true } })) as any;
+  const hrStart = hrRow?.start_date ? new Date(hrRow.start_date).toISOString().slice(0, 10) : null;
 
   const canSeeEmergency = isSelf || vis.isAdmin;
   const s = (v: any) => (v == null ? '' : String(v));
   const profile: Profile = {
     id: u.id, name: s(u.name), email: s(u.email), job_title: s(u.job_title),
-    start_date: u.start_date ? new Date(u.start_date).toISOString().slice(0, 10) : '',
+    start_date: hrStart ?? (u.start_date ? new Date(u.start_date).toISOString().slice(0, 10) : ''),
     phone: s(u.phone), address: s(u.address), driving_licence_categories: s(u.driving_licence_categories),
     next_of_kin_name: s(u.next_of_kin_name), next_of_kin_relationship: s(u.next_of_kin_relationship),
     next_of_kin_phone: s(u.next_of_kin_phone), certifications: s(u.certifications), working_hours: s(u.working_hours),

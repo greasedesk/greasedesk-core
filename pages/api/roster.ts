@@ -12,6 +12,8 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { buildRoster } from '@/lib/roster';
 import { LEAVE_TYPES, resolveLeaveColours } from '@/lib/leave-types';
+import { Prisma } from '@prisma/client';
+import { recordEmploymentEvents } from '@/lib/employment-events';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -44,9 +46,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!costPersonId || !Number.isFinite(days) || days < 0 || days > 366) {
       return res.status(400).json({ message: 'Enter a valid allowance in days.' });
     }
-    const person = await prisma.costPerson.findFirst({ where: { id: costPersonId, group_id: user.group_id }, select: { id: true } });
+    const person = (await prisma.costPerson.findFirst({ where: { id: costPersonId, group_id: user.group_id }, select: { id: true, annual_leave_allowance_days: true } })) as any;
     if (!person) return res.status(404).json({ message: 'Person not found.' });
-    await prisma.costPerson.update({ where: { id: costPersonId }, data: { annual_leave_allowance_days: days } });
+    const prev = person.annual_leave_allowance_days == null ? null : Number(person.annual_leave_allowance_days);
+    if (prev === days) return res.status(200).json({ message: 'Allowance saved.' });
+    // DUAL-WRITE (record-first): flat column + dated event in ONE tx (effective today — the
+    // Roster's quick edit; back-dated allowance changes go through HR when that lands).
+    const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.costPerson.update({ where: { id: costPersonId }, data: { annual_leave_allowance_days: days } });
+      await recordEmploymentEvents(tx, {
+        groupId: user.group_id as string, costPersonId, changedBy: user.id as string, effectiveDate: today,
+        changes: [{ kind: 'allowance', value: { annual_leave_allowance_days: days }, previous: { annual_leave_allowance_days: prev } }],
+      });
+    });
     return res.status(200).json({ message: 'Allowance saved.' });
   }
 

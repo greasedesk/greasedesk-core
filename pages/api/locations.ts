@@ -43,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // primarySiteId drives the nav's default-location highlight when no ?site is set.
     // canViewInvoices gates the Invoices nav item (the page + API re-check server-side).
     const perms = await getTenantPermissions(groupId);
-    return res.status(200).json({ currentSiteId, primarySiteId: vis.primarySiteId, locations: sites, canViewInvoices: canViewInvoices(vis, perms) });
+    return res.status(200).json({ currentSiteId, primarySiteId: vis.primarySiteId, locations: sites, canViewInvoices: canViewInvoices(vis, perms), isAdmin: vis.isAdmin });
   }
 
   if (req.method === 'POST') {

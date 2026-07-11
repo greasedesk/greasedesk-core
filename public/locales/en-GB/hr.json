@@ -1,0 +1,37 @@
+{
+  "title": "HR",
+  "intro": "Employees, pay and employment history. Changes append to a dated record — nothing is overwritten.",
+  "tab": {
+    "current": "Current employees",
+    "former": "Former employees",
+    "changes": "Changes"
+  },
+  "startDate": "Start date",
+  "effectiveDate": "Change effective from",
+  "effectiveHint": "When this change takes effect. Defaults to today; back-dating is allowed.",
+  "confirmDated": "Apply the change with this effective date?",
+  "markLeft": "Mark as left…",
+  "confirmLeft": "Confirm leaving date",
+  "leftDone": "Marked as left — their history is kept under Former employees.",
+  "noFormer": "No former employees.",
+  "historyHeading": "History",
+  "noHistory": "No recorded changes yet.",
+  "loading": "Loading…",
+  "started": "started",
+  "ended": "left",
+  "yes": "yes",
+  "no": "no",
+  "days": "days",
+  "inherited": "site days",
+  "kind": {
+    "wage": "Wage",
+    "hours": "Hours",
+    "pattern": "Working days",
+    "chargeable": "Chargeable",
+    "allowance": "Leave allowance",
+    "started": "Start date",
+    "ended": "Left"
+  },
+  "recordFirstNote": "Leave and bank holidays are managed on the Roster.",
+  "rosterLink": "Open Roster"
+}
