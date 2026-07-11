@@ -30,8 +30,16 @@
     "chargeable": "Chargeable",
     "allowance": "Leave allowance",
     "started": "Start date",
-    "ended": "Left"
+    "ended": "Left",
+    "name": "Name",
+    "role": "Role"
   },
   "recordFirstNote": "Leave and bank holidays are managed on the Roster.",
-  "rosterLink": "Open Roster"
+  "rosterLink": "Open Roster",
+  "effectiveRequired": "Required — pick the real date this change took effect (it may not be today).",
+  "fixDate": "Fix date",
+  "void": "Void",
+  "voidConfirm": "Void this entry? It stays visible in the history but no longer counts.",
+  "voided": "voided",
+  "corrected": "corrected (was {{from}})"
 }

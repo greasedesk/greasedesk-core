@@ -27,7 +27,7 @@ type Person = {
   startDate: string | null; endDate: string | null; allowanceDays: number | null;
   allocations: Alloc[];
 };
-type Ev = { id: string; personId: string; personName: string; kind: string; effectiveDate: string; value: any; previous: any; changedBy: string | null; at: string };
+type Ev = { id: string; personId: string; personName: string; kind: string; effectiveDate: string; value: any; previous: any; changedBy: string | null; at: string; corrections?: Array<{ at: string; by: string | null; from: string; to: string }>; voided?: boolean };
 
 type FormState = {
   id: string | null; name: string; role: string; costType: 'salary' | 'hourly'; amount: string; rows: AllocRow[];
@@ -87,12 +87,15 @@ export default function HrPage() {
       rows: p.allocations.map((a, i) => ({ key: `${a.siteId}-${i}`, siteId: a.siteId, percent: String(a.percent) })),
       isChargeable: p.isChargeable, contractedHours: p.contractedHoursPerDay != null ? String(p.contractedHoursPerDay) : '',
       workingDays: [...p.workingDays], startDate: p.startDate ?? '',
-      effectiveDate: new Date().toISOString().slice(0, 10), confirmDated: false,
+      // DELIBERATE pick: edits append dated history, so the effective date starts EMPTY and the
+      // save stays disabled until it's chosen — never a silent "today".
+      effectiveDate: '', confirmDated: false,
     });
   }
 
   const hoursOk = !form || form.contractedHours === '' || (Number.isFinite(Number(form.contractedHours)) && Number(form.contractedHours) >= 0 && Number(form.contractedHours) <= 24);
-  const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows) && hoursOk;
+  const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows) && hoursOk
+    && (!form.id || form.effectiveDate !== ''); // edits REQUIRE a chosen effective date
 
   async function save(confirmDated = false) {
     if (!form || !canSave) return;
@@ -154,18 +157,55 @@ export default function HrPage() {
       case 'pattern': return `${p.working_days?.length ? dayNames(p.working_days) : th('inherited')} → ${v.working_days?.length ? dayNames(v.working_days) : th('inherited')}`;
       case 'chargeable': return `${p.is_chargeable ? th('yes') : th('no')} → ${v.is_chargeable ? th('yes') : th('no')}`;
       case 'allowance': return `${p.annual_leave_allowance_days ?? '—'} → ${v.annual_leave_allowance_days ?? '—'} ${th('days')}`;
+      case 'name': return `${p?.name ?? '—'} → ${v.name ?? '—'}`;
+      case 'role': return `${p?.role ?? '—'} → ${v.role ?? '—'}`;
       case 'started': return `${p?.start_date ?? '—'} → ${v.start_date ?? '—'}`;
       case 'ended': return `${v.end_date ?? '—'}`;
       default: return JSON.stringify(v);
     }
   };
+  async function correctEvent(id: string, action: 'redate' | 'void', effectiveDate?: string) {
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch('/api/employment-events', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action, effectiveDate }) });
+      const d = await res.json().catch(() => ({}));
+      if (res.status === 409 && d?.needsDateConfirm) {
+        if (window.confirm(`${d.message}\n\n${th('confirmDated')}`)) {
+          const res2 = await fetch('/api/employment-events', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action, effectiveDate, confirmDated: true }) });
+          const d2 = await res2.json().catch(() => ({}));
+          setMsg({ text: d2?.message || t('error'), ok: res2.ok });
+        }
+      } else setMsg({ text: d?.message || t('error'), ok: res.ok });
+      setHistory({}); setChanges(null);
+    } catch { setMsg({ text: t('error'), ok: false }); }
+    setBusy(false);
+  }
+  const [fixing, setFixing] = useState<{ id: string; date: string } | null>(null);
   const EvRow = ({ e, withName }: { e: Ev; withName?: boolean }) => (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 border-b border-line/40 last:border-0 text-sm">
+    <div className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 border-b border-line/40 last:border-0 text-sm ${e.voided ? 'opacity-50' : ''}`}>
       <span className="text-muted tabular-nums w-24 shrink-0">{new Date(`${e.effectiveDate}T00:00:00Z`).toLocaleDateString('en-GB', { timeZone: 'UTC' })}</span>
       {withName && <span className="font-medium text-ink">{e.personName}</span>}
       <span className="text-xs font-medium rounded-full px-2 py-0.5 bg-surface-muted border border-line text-ink">{th(`kind.${e.kind}`)}</span>
-      <span className="text-ink">{evText(e)}</span>
+      <span className={`text-ink ${e.voided ? 'line-through' : ''}`}>{evText(e)}</span>
+      {e.voided && <span className="text-xs font-medium text-danger">{th('voided')}</span>}
+      {!e.voided && (e.corrections?.length ?? 0) > 0 && (
+        <span className="text-xs text-warn" title={e.corrections!.map((c) => `${c.from} → ${c.to} (${c.by ?? '—'}, ${new Date(c.at).toLocaleString('en-GB')})`).join('\n')}>
+          {th('corrected', { from: e.corrections![e.corrections!.length - 1].from })}
+        </span>
+      )}
       <span className="ml-auto text-xs text-muted">{e.changedBy ?? '—'} · {new Date(e.at).toLocaleString('en-GB')}</span>
+      {!e.voided && (fixing?.id === e.id ? (
+        <span className="flex items-center gap-1.5">
+          <input type="date" value={fixing.date} onChange={(ev2) => setFixing({ id: e.id, date: ev2.target.value })} className="p-1 bg-surface border border-line rounded text-ink text-xs" />
+          <button onClick={() => { correctEvent(e.id, 'redate', fixing.date); setFixing(null); }} disabled={busy || !fixing.date} className="text-xs text-accent underline disabled:opacity-40">{t('save')}</button>
+          <button onClick={() => setFixing(null)} className="text-xs text-muted">{t('cancel')}</button>
+        </span>
+      ) : (
+        <span className="flex items-center gap-2">
+          <button onClick={() => setFixing({ id: e.id, date: e.effectiveDate })} className="text-xs text-accent underline">{th('fixDate')}</button>
+          <button onClick={() => { if (window.confirm(th('voidConfirm'))) correctEvent(e.id, 'void'); }} disabled={busy} className="text-xs text-danger underline disabled:opacity-40">{th('void')}</button>
+        </span>
+      ))}
     </div>
   );
 
@@ -207,9 +247,13 @@ export default function HrPage() {
                 <input type="number" inputMode="decimal" min={0} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className={inputClass} /></label>
               <label className="block"><span className="text-sm font-medium text-ink">{th('startDate')}</span>
                 <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className={inputClass} /></label>
-              <label className="block"><span className="text-sm font-medium text-ink">{th('effectiveDate')}</span>
-                <input type="date" value={form.effectiveDate} onChange={(e) => setForm({ ...form, effectiveDate: e.target.value, confirmDated: false })} className={inputClass} />
-                <span className="block text-xs text-muted mt-1">{th('effectiveHint')}</span></label>
+              {form.id && (
+                <label className="block sm:col-span-2 rounded-lg border-2 border-accent bg-accent-soft/40 p-3">
+                  <span className="text-sm font-semibold text-accent">{th('effectiveDate')} *</span>
+                  <input type="date" value={form.effectiveDate} onChange={(e) => setForm({ ...form, effectiveDate: e.target.value, confirmDated: false })} className={inputClass} />
+                  <span className="block text-xs text-muted mt-1">{form.effectiveDate === '' ? th('effectiveRequired') : th('effectiveHint')}</span>
+                </label>
+              )}
             </div>
 
             <AllocationEditor sites={sites} rows={form.rows} onChange={(rows) => setForm({ ...form, rows })} t={t} />

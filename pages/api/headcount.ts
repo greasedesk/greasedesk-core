@@ -81,8 +81,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const id = typeof body.id === 'string' ? body.id : '';
     if (isPatch && !id) return res.status(400).json({ message: 'Missing id.' });
 
-    // Effective date for the dated history (defaults today). Far-past/future needs an explicit
-    // confirm — never accepted silently (the UI re-submits with confirmDated after asking).
+    // Effective date is the LOAD-BEARING field of the dated model: on PATCH it must be a
+    // DELIBERATE pick (required — no silent today-default; the form ships it empty). POST (new
+    // hire) anchors on the start date, so today is a fine fallback there. Far-past/future still
+    // needs an explicit confirm — never accepted silently.
+    if (isPatch && body.action !== 'markLeft' && !body.effectiveDate) {
+      return res.status(400).json({ message: 'Pick the date this change takes effect from.' });
+    }
     const effectiveDate = body.effectiveDate ? parseDay(body.effectiveDate) : todayUTC();
     if (!effectiveDate) return res.status(400).json({ message: 'Enter a valid effective date.' });
     if (datedConfirmNeeded(effectiveDate, todayUTC()) && !body.confirmDated) {
@@ -139,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isPatch) {
       const owned = (await prisma.costPerson.findFirst({
         where: { id, group_id: groupId },
-        select: { id: true, amount_pennies: true, cost_type: true, is_chargeable: true, contracted_hours_per_day: true, working_days: true, annual_leave_allowance_days: true, start_date: true },
+        select: { id: true, name: true, role: true, amount_pennies: true, cost_type: true, is_chargeable: true, contracted_hours_per_day: true, working_days: true, annual_leave_allowance_days: true, start_date: true },
       })) as any;
       if (!owned) return res.status(404).json({ message: 'Person not found.' });
       current = { ...owned, contracted_hours_per_day: owned.contracted_hours_per_day == null ? null : Number(owned.contracted_hours_per_day), annual_leave_allowance_days: owned.annual_leave_allowance_days == null ? null : Number(owned.annual_leave_allowance_days) };
@@ -168,6 +173,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       if (isPatch && current) {
         const next: EmploymentShape = {
+          name, role,
           amount_pennies: amountPennies, cost_type: costType, is_chargeable: isChargeable,
           contracted_hours_per_day: contracted, working_days: workingDays,
           annual_leave_allowance_days: current.annual_leave_allowance_days, // edited on the Roster, not here

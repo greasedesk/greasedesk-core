@@ -11,6 +11,8 @@
 import { Prisma } from '@prisma/client';
 
 export type EmploymentShape = {
+  name: string;
+  role: string | null;
   amount_pennies: number;
   cost_type: string;
   is_chargeable: boolean;
@@ -28,6 +30,12 @@ const sameArr = (a: number[], b: number[]) => JSON.stringify([...a].sort()) === 
 /** PURE diff of the tracked field-families (one event per changed kind). */
 export function diffEmploymentShape(current: EmploymentShape, next: EmploymentShape): EmploymentChange[] {
   const out: EmploymentChange[] = [];
+  if (current.name !== next.name) {
+    out.push({ kind: 'name', value: { name: next.name }, previous: { name: current.name } });
+  }
+  if ((current.role ?? null) !== (next.role ?? null)) {
+    out.push({ kind: 'role', value: { role: next.role }, previous: { role: current.role } });
+  }
   if (current.amount_pennies !== next.amount_pennies || current.cost_type !== next.cost_type) {
     out.push({ kind: 'wage', value: { amount_pennies: next.amount_pennies, cost_type: next.cost_type }, previous: { amount_pennies: current.amount_pennies, cost_type: current.cost_type } });
   }
@@ -69,4 +77,47 @@ export async function recordEmploymentEvents(
  *  today need an explicit confirm — never accepted silently. */
 export function datedConfirmNeeded(effective: Date, today: Date): boolean {
   return Math.abs(effective.getTime() - today.getTime()) > 366 * 86_400_000;
+}
+
+// ---- Corrections (admin-only; the correction is ITSELF recorded — the trail stays honest) ----
+/** Redate a mis-dated event IN PLACE: effective_date moves, and {at, by, from, to} appends to
+ *  correction_json (an array — repeat corrections stack). No duplicate event is created. */
+export async function redateEvent(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; eventId: string; newEffectiveDate: Date; by: string | null },
+): Promise<{ ok: boolean; error?: string }> {
+  const ev = (await tx.employmentEvent.findFirst({
+    where: { id: args.eventId, group_id: args.groupId },
+    select: { id: true, effective_date: true, correction_json: true, voided_at: true },
+  })) as any;
+  if (!ev) return { ok: false, error: 'notFound' };
+  if (ev.voided_at) return { ok: false, error: 'voided' };
+  const from = ev.effective_date.toISOString().slice(0, 10);
+  const to = args.newEffectiveDate.toISOString().slice(0, 10);
+  if (from === to) return { ok: false, error: 'unchanged' };
+  const log = Array.isArray(ev.correction_json) ? ev.correction_json : [];
+  await tx.employmentEvent.update({
+    where: { id: ev.id },
+    data: {
+      effective_date: args.newEffectiveDate,
+      correction_json: [...log, { at: new Date().toISOString(), by: args.by, from, to }] as any,
+    },
+  });
+  return { ok: true };
+}
+
+/** Void a mistaken event: stays visible (struck through) but EXCLUDED from any value-at-time
+ *  read (the ordering rule reads "latest NON-VOIDED event of kind K ≤ T"). Idempotence guarded. */
+export async function voidEvent(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; eventId: string; by: string | null },
+): Promise<{ ok: boolean; error?: string }> {
+  const ev = (await tx.employmentEvent.findFirst({
+    where: { id: args.eventId, group_id: args.groupId },
+    select: { id: true, voided_at: true },
+  })) as any;
+  if (!ev) return { ok: false, error: 'notFound' };
+  if (ev.voided_at) return { ok: false, error: 'voided' };
+  await tx.employmentEvent.update({ where: { id: ev.id }, data: { voided_at: new Date(), voided_by: args.by } });
+  return { ok: true };
 }

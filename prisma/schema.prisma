@@ -1156,23 +1156,32 @@ enum EmploymentEventKind {
   allowance // { annual_leave_allowance_days }
   started // { start_date }
   ended // { end_date } — mark-as-left (is_active=false in the same tx)
+  name // { name } — a surname change is HR history, not a silent overwrite
+  role // { role } — the 80/20 of role progression (full position-management stays its own build)
 }
 
 model EmploymentEvent {
-  id             String              @id @default(uuid())
-  group_id       String
-  cost_person_id String
-  kind           EmploymentEventKind
+  id              String              @id @default(uuid())
+  group_id        String
+  cost_person_id  String
+  kind            EmploymentEventKind
   // Admin-picked (defaults today; far-past/future needs an explicit confirm — never silent).
   // ORDERING ASSUMPTION for the banked value-true-at-time read: "value at T" = the latest event
   // of this kind with effective_date <= T (created_at breaks ties). Back-dating an event BEFORE
   // an existing one therefore INSERTS history — it governs only the gap up to the next event's
   // effective_date and never changes the head; the flat column remains current-state truth.
-  effective_date DateTime
-  value_json     Json
-  previous_json  Json?
-  changed_by     String? // user id (the audit who; created_at is the when)
-  created_at     DateTime            @default(now())
+  effective_date  DateTime
+  value_json      Json
+  previous_json   Json?
+  changed_by      String? // user id (the audit who; created_at is the when)
+  created_at      DateTime            @default(now())
+  // Corrections (admin-only, themselves recorded): a REDATE updates effective_date in place and
+  // appends {at, by, from, to} here (array — repeat corrections stack); a VOID keeps the row
+  // visible (struck through) but EXCLUDED from any value-at-time read — the ordering rule above
+  // therefore reads "latest NON-VOIDED event of kind K with effective_date ≤ T".
+  correction_json Json?
+  voided_at       DateTime?
+  voided_by       String?
 
   group       Group      @relation(fields: [group_id], references: [id], onDelete: Cascade)
   cost_person CostPerson @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
