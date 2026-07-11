@@ -123,7 +123,7 @@ enum ResourceType {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model Group {
-  id               String   @id @default(uuid())
+  id               String  @id @default(uuid())
   group_name       String
   trading_name     String?
   company_number   String?
@@ -131,44 +131,44 @@ model Group {
   // Master switch: VAT applies anywhere (quotes/invoices/overheads) only when true. Default true
   // preserves existing tenants' VAT-as-now behaviour; sub-threshold garages turn it off. Resolved
   // via lib/tenant-vat.ts and gated in computeQuoteTotals — never scattered.
-  vat_registered   Boolean  @default(true)
+  vat_registered   Boolean @default(true)
   // Company-wide default VAT rate (only meaningful when registered). THE single source that
   // cascades as an editable pre-fill to quotes + overheads. Read via lib/tenant-vat.ts.
-  default_vat_rate Decimal  @default(20) @db.Decimal(5, 2)
+  default_vat_rate Decimal @default(20) @db.Decimal(5, 2)
   address          String?
 
   // Invoice number DISPLAY format (per-tenant). Rendered via lib/invoice-number.ts::formatInvoiceNumber.
   // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").
-  invoice_prefix    String @default("")
-  invoice_pad_width Int    @default(4)
+  invoice_prefix            String   @default("")
+  invoice_pad_width         Int      @default(4)
   // Fiscal-year DISPLAY segment (e.g. INV-26-0042): 0 = off, 2 or 4 digits of the year the FY
   // started in. The counter underneath stays continuous — FY is formatting, never a reset.
-  invoice_fy_digits Int    @default(0)
-  fy_start_month    Int    @default(4) // 1-12; UK default April
+  invoice_fy_digits         Int      @default(0)
+  fy_start_month            Int      @default(4) // 1-12; UK default April
   // Warranty-series prefix (comeback £0 invoices) — the filter key for the future comebacks tile.
-  invoice_warranty_prefix String @default("W")
+  invoice_warranty_prefix   String   @default("W")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
-  invoice_email_footer    Boolean @default(true)
+  invoice_email_footer      Boolean  @default(true)
   // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
   // cron confirms and sends the receipt. Flat window; working-day-aware is a banked refinement.
-  paid_confirm_window_hours Int @default(24)
+  paid_confirm_window_hours Int      @default(24)
   // --- Invoicing tab settings (ADMIN; Settings → Invoicing) ---
-  invoice_reply_to    String? // business Reply-To on invoice emails (fallback: billing_email)
-  invoice_sender_name String? // display name on the GreaseDesk-owned From (fallback: group_name)
-  invoice_footer_text String? // payment terms / footer block — multi-line, rendered on the document
-  invoice_bcc         String? // garage-copy BCC (fallback: billing_email)
-  logo_r2_key         String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
+  invoice_reply_to          String? // business Reply-To on invoice emails (fallback: billing_email)
+  invoice_sender_name       String? // display name on the GreaseDesk-owned From (fallback: group_name)
+  invoice_footer_text       String? // payment terms / footer block — multi-line, rendered on the document
+  invoice_bcc               String? // garage-copy BCC (fallback: billing_email)
+  logo_r2_key               String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
-  tax_label           String  @default("VAT")
-  billing_email    String   @unique
-  is_franchise_grp Boolean  @default(false)
-  created_at       DateTime @default(now())
+  tax_label                 String   @default("VAT")
+  billing_email             String   @unique
+  is_franchise_grp          Boolean  @default(false)
+  created_at                DateTime @default(now())
 
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
   ref           String       @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
-  status        TenantStatus @default(trial)  // tenant lifecycle (console-managed later)
-  trial_ends_at DateTime?                     // set on signup to now + TRIAL_DAYS
+  status        TenantStatus @default(trial) // tenant lifecycle (console-managed later)
+  trial_ends_at DateTime? // set on signup to now + TRIAL_DAYS
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
@@ -176,31 +176,31 @@ model Group {
   perm_standard_diary_entries Boolean @default(false)
   // Diary financial visibility, per role (ADMIN/owner always sees both). see-values = per-block value +
   // "booked" total; see-margin = the margin total (exposes cost structure → tighter defaults).
-  perm_manager_see_values  Boolean @default(true)
-  perm_manager_see_margin  Boolean @default(true)
-  perm_standard_see_values Boolean @default(false)
-  perm_standard_see_margin Boolean @default(false)
+  perm_manager_see_values     Boolean @default(true)
+  perm_manager_see_margin     Boolean @default(true)
+  perm_standard_see_values    Boolean @default(false)
+  perm_standard_see_margin    Boolean @default(false)
   // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).
   // Managers/admins always; this extends it to STANDARD.
   perm_standard_view_invoices Boolean @default(false)
 
-  billing    GroupBilling?
-  features   GroupFeature[]
-  sites      Site[]
-  roles      Role[]
-  users      User[]
-  customers  Customer[]
-  vehicles   Vehicle[]
+  billing            GroupBilling?
+  features           GroupFeature[]
+  sites              Site[]
+  roles              Role[]
+  users              User[]
+  customers          Customer[]
+  vehicles           Vehicle[]
   vehicle_identities VehicleIdentity[]
-  services   ServiceCatalogue[] // Services at Group level (master list)
-  parts      PartCatalogue[]
-  tax_rates  TaxRate[]
-  promos     Promo[]
-  payment_methods PaymentMethod[]
-  audit_logs AuditLog[]
-  bookings   Booking[]
-  job_cards  JobCard[]
-  diary_notes DiaryNote[]
+  services           ServiceCatalogue[] // Services at Group level (master list)
+  parts              PartCatalogue[]
+  tax_rates          TaxRate[]
+  promos             Promo[]
+  payment_methods    PaymentMethod[]
+  audit_logs         AuditLog[]
+  bookings           Booking[]
+  job_cards          JobCard[]
+  diary_notes        DiaryNote[]
 
   // Cost-capture
   cost_people      CostPerson[]
@@ -212,8 +212,10 @@ model Group {
   invoice_sequence InvoiceSequence?
 
   // Product catalogue (tenant-level; one shared catalogue across all sites)
-  catalogue_items  CatalogueItem[]
-  service_tiers    ServiceTier[]
+  catalogue_items CatalogueItem[]
+  service_tiers   ServiceTier[]
+  leaveRecords    LeaveRecord[]
+  publicHolidays  PublicHoliday[]
 }
 
 model GroupBilling {
@@ -263,31 +265,33 @@ model Site {
   supported_countries  Json?
   supported_currencies Json?
   // --- DIARY DISPLAY (per-site) ---
-  open_days  Int[] @default([1, 2, 3, 4, 5, 6]) // weekdays open (0=Sun..6=Sat); default Mon–Sat
-  open_hour  Int   @default(8)                  // diary window start hour
-  close_hour Int   @default(18)                 // diary window end hour
-  week_start Int   @default(1)                  // first day of week (0=Sun, 1=Mon)
+  open_days            Int[]  @default([1, 2, 3, 4, 5, 6]) // weekdays open (0=Sun..6=Sat); default Mon–Sat
+  open_hour            Int    @default(8) // diary window start hour
+  close_hour           Int    @default(18) // diary window end hour
+  week_start           Int    @default(1) // first day of week (0=Sun, 1=Mon)
   // Booking-form duration granularity (minutes) for the Quote-tab slot picker. Sub-day durations step
   // by this; working-day length comes from open_hour/close_hour. Default 30. Diary reads start_at/end_at.
-  booking_slot_minutes Int @default(30)
+  booking_slot_minutes Int    @default(30)
   // Non-working bands (lunch etc.) as [{start,end}] minutes-from-midnight. NULL/[] = none = current
   // behaviour. The footprint skips these; the diary draws them. Read via lib/occupancy parseBreaks.
-  breaks Json?
+  breaks               Json?
   // --------------------------------
 
-  group          Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  features       SiteFeature[]
-  profit_centres ProfitCentre[]
-  resources      Resource[]
-  users          User[]
+  group            Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  features         SiteFeature[]
+  profit_centres   ProfitCentre[]
+  resources        Resource[]
+  users            User[]
   user_assignments UserSite[]
-  customers      Customer[]
-  bookings       Booking[]
-  job_cards      JobCard[]
-  services       ServiceCatalogue[]
-  diary_notes    DiaryNote[]
+  customers        Customer[]
+  bookings         Booking[]
+  job_cards        JobCard[]
+  services         ServiceCatalogue[]
+  diary_notes      DiaryNote[]
   cost_allocations CostAllocation[]
-  invoices       Invoice[]
+  invoices         Invoice[]
+  leaveRecords     LeaveRecord[]
+  publicHolidays   PublicHoliday[]
 
   @@index([group_id])
 }
@@ -307,12 +311,12 @@ model ProfitCentre {
   id         String                @id @default(uuid())
   site_id    String
   name       String
-  type       String?               // legacy free-text; superseded by `category` (kept for non-destructive add)
+  type       String? // legacy free-text; superseded by `category` (kept for non-destructive add)
   category   ProfitCentreCategory? // typed business unit (nullable so the add is non-destructive)
   is_active  Boolean               @default(true)
   created_at DateTime              @default(now())
 
-  site      Site       @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
   job_cards JobCard[]
   bookings  Booking[]
 
@@ -321,16 +325,16 @@ model ProfitCentre {
 
 model Resource {
   id            String       @id @default(uuid())
-  site_id       String       // belongs to a Site (Location); operational tree is Group → Site → Resource
-  name          String       // e.g. "Lift 2"
+  site_id       String // belongs to a Site (Location); operational tree is Group → Site → Resource
+  name          String // e.g. "Lift 2"
   type          ResourceType // lift / mot_bay / spray_booth
   display_order Int          @default(0) // diary column ordering
-  colour        String?      // curated palette hex (e.g. "#3B82F6"); null → default neutral
+  colour        String? // curated palette hex (e.g. "#3B82F6"); null → default neutral
   is_active     Boolean      @default(true)
   created_at    DateTime     @default(now())
 
-  site      Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
-  job_cards JobCard[]
+  site        Site        @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  job_cards   JobCard[]
   diary_notes DiaryNote[]
 
   @@index([site_id])
@@ -377,13 +381,13 @@ model User {
 
   // --- FIXED GREASEDESK FIELDS ---
   // Optional at creation time; enforced in app layer when linking staff.
-  group_id   String?
-  site_id    String?
+  group_id        String?
+  site_id         String?
   primary_site_id String? // admin-set landing/default site (must be one of the user's assigned sites)
-  role_id    String?
-  is_active  Boolean  @default(true)
-  is_owner   Boolean  @default(false) // immutable: marks the one primary-subscriber per group
-  created_at DateTime @default(now())
+  role_id         String?
+  is_active       Boolean  @default(true)
+  is_owner        Boolean  @default(false) // immutable: marks the one primary-subscriber per group
+  created_at      DateTime @default(now())
 
   // --- INVITE / SET-PASSWORD TOKEN (single-use; SHA-256 of a high-entropy random token) ---
   invite_token_hash    String?
@@ -399,7 +403,7 @@ model User {
   next_of_kin_name           String?
   next_of_kin_relationship   String?
   next_of_kin_phone          String?
-  emergency_note             String?   // voluntary safety note — visible to admin/owner + the user only
+  emergency_note             String? // voluntary safety note — visible to admin/owner + the user only
   certifications             String?
   working_hours              String?
 
@@ -408,14 +412,14 @@ model User {
   customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   // --- RELATIONS ---
-  group           Group?         @relation(fields: [group_id], references: [id], onDelete: SetNull)
-  site            Site?          @relation(fields: [site_id], references: [id], onDelete: SetNull)
-  staffRole       Role?          @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  group            Group?         @relation(fields: [group_id], references: [id], onDelete: SetNull)
+  site             Site?          @relation(fields: [site_id], references: [id], onDelete: SetNull)
+  staffRole        Role?          @relation(fields: [role_id], references: [id], onDelete: Restrict)
   site_assignments UserSite[]
-  job_cards       JobCard[]      @relation("JobCardMechanic")
-  audit_logs      AuditLog[]
-  job_card_photos JobCardPhoto[] @relation("JobCardPhotoUploader")
-  cost_person     CostPerson?    // optional future link — costs ≠ logins
+  job_cards        JobCard[]      @relation("JobCardMechanic")
+  audit_logs       AuditLog[]
+  job_card_photos  JobCardPhoto[] @relation("JobCardPhotoUploader")
+  cost_person      CostPerson? // optional future link — costs ≠ logins
 
   // --- NEXTAUTH ---
   accounts Account[]
@@ -433,7 +437,7 @@ model Customer {
   name       String
   phone      String?
   email      String?
-  address    String?  // billing address — source for Invoice.customer_address_snapshot
+  address    String? // billing address — source for Invoice.customer_address_snapshot
   notes      String?
   created_at DateTime @default(now())
 
@@ -453,39 +457,39 @@ model Customer {
 }
 
 model Vehicle {
-  id                String   @id @default(uuid())
-  group_id          String
-  customer_id       String?  // WELD retired (Stage C): nullable + SetNull + unwritten. Owner source is the ownership edge.
+  id                      String    @id @default(uuid())
+  group_id                String
+  customer_id             String? // WELD retired (Stage C): nullable + SetNull + unwritten. Owner source is the ownership edge.
   // Car-first re-root (Stage A, additive). identity_id links to the stable VIN-soft-anchored
   // VehicleIdentity (1:1 now, mergeable cross-tenant later). vin_normalized is the canonical
   // dedup key (upper/strip). Ownership moves to the VehicleOwnership edge — customer_id above
   // stays required through Stage A/B and is retired last.
-  identity_id       String?
-  vin_normalized    String?
-  registration      String
+  identity_id             String?
+  vin_normalized          String?
+  registration            String
   // Canonical match key (uppercase, non-alphanumeric stripped) so "BK69 YAV" / "bk69yav" resolve to
   // ONE vehicle — mirrors vin_normalized. find-or-create + reg lookup compare on this, never the raw.
   registration_normalized String?
-  vin               String?
-  make              String?
-  model             String? // NOT in free DVLA VES — captured manually
-  derivative        String?
-  colour            String? // DVLA VES
-  fuel_type         String? // DVLA VES (fuelType)
-  transmission      String?
-  engine_code       String?
-  engine_cc         Int? // DVLA VES engine capacity (cc) — also the seed for a future auto-tier hook
-  year              Int? // DVLA VES (yearOfManufacture)
+  vin                     String?
+  make                    String?
+  model                   String? // NOT in free DVLA VES — captured manually
+  derivative              String?
+  colour                  String? // DVLA VES
+  fuel_type               String? // DVLA VES (fuelType)
+  transmission            String?
+  engine_code             String?
+  engine_cc               Int? // DVLA VES engine capacity (cc) — also the seed for a future auto-tier hook
+  year                    Int? // DVLA VES (yearOfManufacture)
   // DVSA MOT History — captured for the banked service-reminder feature (mot_expiry) + mileage trend.
-  mot_expiry        DateTime? @db.Date
-  last_mot_mileage  Int?
-  last_mot_date     DateTime? @db.Date
-  mileage_at_create Int?
-  created_at        DateTime @default(now())
+  mot_expiry              DateTime? @db.Date
+  last_mot_mileage        Int?
+  last_mot_date           DateTime? @db.Date
+  mileage_at_create       Int?
+  created_at              DateTime  @default(now())
 
-  group      Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  customer   Customer?         @relation(fields: [customer_id], references: [id], onDelete: SetNull)
-  identity   VehicleIdentity?  @relation(fields: [identity_id], references: [id], onDelete: SetNull)
+  group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  customer   Customer?          @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+  identity   VehicleIdentity?   @relation(fields: [identity_id], references: [id], onDelete: SetNull)
   ownerships VehicleOwnership[]
   bookings   Booking[]
   job_cards  JobCard[]
@@ -591,7 +595,7 @@ model Booking {
   id               String    @id @default(uuid())
   group_id         String
   site_id          String
-  profit_centre_id String?   // reporting tag (optional); operational link is site_id (+ resource, later)
+  profit_centre_id String? // reporting tag (optional); operational link is site_id (+ resource, later)
   customer_id      String?
   vehicle_id       String
   booking_date     DateTime
@@ -614,26 +618,26 @@ model Booking {
 }
 
 model JobCard {
-  id                     String    @id @default(uuid())
+  id                     String        @id @default(uuid())
   group_id               String
   site_id                String
-  profit_centre_id       String?   // reporting tag (optional); operational link is site_id (+ resource, later)
+  profit_centre_id       String? // reporting tag (optional); operational link is site_id (+ resource, later)
   customer_id            String?
   vehicle_id             String
   status                 JobCardStatus @default(draft)
   mechanic_assigned_id   String?
   odometer_in            Int?
   odometer_out           Int?
-  labour_bill_numeric    Decimal?  @default(0) @db.Decimal(12, 2)
-  labour_cost_numeric    Decimal?  @default(0) @db.Decimal(12, 2)
-  parts_bill_numeric     Decimal?  @default(0) @db.Decimal(12, 2)
-  parts_cost_numeric     Decimal?  @default(0) @db.Decimal(12, 2)
-  vat_rate               Decimal   @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
+  labour_bill_numeric    Decimal?      @default(0) @db.Decimal(12, 2)
+  labour_cost_numeric    Decimal?      @default(0) @db.Decimal(12, 2)
+  parts_bill_numeric     Decimal?      @default(0) @db.Decimal(12, 2)
+  parts_cost_numeric     Decimal?      @default(0) @db.Decimal(12, 2)
+  vat_rate               Decimal       @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?
   archived_at            DateTime?
-  signed_off_by_customer Boolean   @default(false)
+  signed_off_by_customer Boolean       @default(false)
   signed_off_at          DateTime?
-  created_at             DateTime  @default(now())
+  created_at             DateTime      @default(now())
 
   // --- SLICE 1: flags (main tab) ---
   flag_urgent       Boolean @default(false) // Urgent / Priority
@@ -646,10 +650,10 @@ model JobCard {
   is_comeback       Boolean @default(false)
 
   // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
-  stage_details_done  Boolean @default(false) // 1. Job Card (details/estimate)
-  stage_intake_done   Boolean @default(false) // 2. Intake Photos
-  stage_injob_done    Boolean @default(false) // 3. In-Job
-  stage_complete_done Boolean @default(false) // 4. Complete Photos
+  stage_details_done     Boolean @default(false) // 1. Job Card (details/estimate)
+  stage_intake_done      Boolean @default(false) // 2. Intake Photos
+  stage_injob_done       Boolean @default(false) // 3. In-Job
+  stage_complete_done    Boolean @default(false) // 4. Complete Photos
   // Photo stages are SOFT gates: complete OR skipped advances the spine (capture can't be enforced).
   // A skip is a first-class audited event (actor + timestamp + optional reason in the audit diff).
   // Details has NO skip — it's a data gate, not a capture stage.
@@ -659,19 +663,19 @@ model JobCard {
 
   // --- DIARY scheduling ---
   // start_at / end_at are the SOURCE OF TRUTH for scheduling (continuous time).
-  held_on_lift   Boolean   @default(false) // job occupying a lift open-endedly (e.g. awaiting parts)
-  garage_notes   String?                    // internal staff notes on the job
-  resource_id    String?
-  start_at       DateTime? // scheduling start (source of truth)
+  held_on_lift             Boolean   @default(false) // job occupying a lift open-endedly (e.g. awaiting parts)
+  garage_notes             String? // internal staff notes on the job
+  resource_id              String?
+  start_at                 DateTime? // scheduling start (source of truth)
   // Booking WORKING duration (minutes) — the occupancy-footprint SOURCE OF TRUTH. The footprint,
   // its per-day segments, and end_at are derived from (start_at + this + site hours) via lib/occupancy.
   booking_duration_minutes Int?
-  end_at         DateTime? // DERIVED convenience = footprint true wrapped end. Diary week-fetch bound +
-                           // display only; never source of truth (duration wins). Guard ignores it.
+  end_at                   DateTime? // DERIVED convenience = footprint true wrapped end. Diary week-fetch bound +
+  // display only; never source of truth (duration wins). Guard ignores it.
   // Legacy slot model — retained until retired in a later slice; no longer read.
-  scheduled_date DateTime? @db.Date
-  start_slot     Int?
-  end_slot       Int?
+  scheduled_date           DateTime? @db.Date
+  start_slot               Int?
+  end_slot                 Int?
 
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
@@ -691,19 +695,19 @@ model JobCard {
 }
 
 model JobCardPhoto {
-  id          String   @id @default(uuid())
-  job_card_id String
-  group_id    String? // TENANT partition (also the R2 key prefix) — garages never see each other's photos
-  stage       String? // intake | injob | completion
-  slot        String? // angle key (front/rear/…) | 'freeform' | 'damage'
-  label       String? // free-text (damage note, e.g. "Scratch — nearside door")
-  media_type  String? // 'photo' | 'video' — NULL means photo (pre-video rows; never backfilled)
+  id               String   @id @default(uuid())
+  job_card_id      String
+  group_id         String? // TENANT partition (also the R2 key prefix) — garages never see each other's photos
+  stage            String? // intake | injob | completion
+  slot             String? // angle key (front/rear/…) | 'freeform' | 'damage'
+  label            String? // free-text (damage note, e.g. "Scratch — nearside door")
+  media_type       String? // 'photo' | 'video' — NULL means photo (pre-video rows; never backfilled)
   duration_seconds Int? // video length (client-probed metadata; display only)
-  r2_key      String? // private R2 object key; display via presigned GET (URL never stored)
-  photo_type  String?
-  file_url    String? // legacy (pre-R2); nullable now
-  uploaded_by String?
-  uploaded_at DateTime @default(now())
+  r2_key           String? // private R2 object key; display via presigned GET (URL never stored)
+  photo_type       String?
+  file_url         String? // legacy (pre-R2); nullable now
+  uploaded_by      String?
+  uploaded_at      DateTime @default(now())
 
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   user     User?   @relation("JobCardPhotoUploader", fields: [uploaded_by], references: [id], onDelete: SetNull)
@@ -713,17 +717,17 @@ model JobCardPhoto {
 }
 
 model JobCardItem {
-  id          String   @id @default(uuid())
-  job_card_id String
-  item_type   ItemType
-  description String
-  qty         Decimal  @default(1.00) @db.Decimal(12, 2)
-  unit_cost   Decimal  @default(0) @db.Decimal(12, 2)
-  unit_price  Decimal  @default(0) @db.Decimal(12, 2)
-  vat_rate    Decimal  @default(20.00) @db.Decimal(5, 2)
-  vat_amount  Decimal  @default(0) @db.Decimal(12, 2)
+  id           String   @id @default(uuid())
+  job_card_id  String
+  item_type    ItemType
+  description  String
+  qty          Decimal  @default(1.00) @db.Decimal(12, 2)
+  unit_cost    Decimal  @default(0) @db.Decimal(12, 2)
+  unit_price   Decimal  @default(0) @db.Decimal(12, 2)
+  vat_rate     Decimal  @default(20.00) @db.Decimal(5, 2)
+  vat_amount   Decimal  @default(0) @db.Decimal(12, 2)
   labour_hours Decimal? @db.Decimal(6, 2) // fixed lines: inherited labour content; ad-hoc labour lines carry hours in qty
-  created_at  DateTime @default(now())
+  created_at   DateTime @default(now())
 
   // Origin hook: which catalogue item pre-filled this line (for the future per-item margin lens).
   // SetNull so archiving/deleting the catalogue item never breaks a historic line.
@@ -740,7 +744,7 @@ model JobCardItem {
 // lift-specific (resource_id set — occupies a lift visually) or day-level (resource_id null —
 // a floating annotation like "Hugh at Drs"). Holidays/leave are a separate HR concern, not notes.
 model DiaryNote {
-  id          String    @id @default(uuid())
+  id          String   @id @default(uuid())
   group_id    String
   site_id     String
   resource_id String?
@@ -749,7 +753,7 @@ model DiaryNote {
   end_at      DateTime
   colour      String?
   created_by  String?
-  created_at  DateTime  @default(now())
+  created_at  DateTime @default(now())
 
   group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
   site     Site      @relation(fields: [site_id], references: [id], onDelete: Cascade)
@@ -825,22 +829,22 @@ model VerificationToken {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model Invoice {
-  id             String        @id @default(uuid())
-  group_id       String // tenantId
-  job_card_id    String        @unique // one invoice per card; sticky number on re-issue
-  site_id        String
-  status         InvoiceStatus @default(issued)
-  series         InvoiceSeries @default(chargeable) // which counter minted sequence_value
-  sequence_value Int // monotonic counter value underneath the rendered number
-  invoice_number String? // rendered string; set at issue, sticky thereafter
-  issued_at      DateTime      @default(now())
-  date_issued    DateTime? // the DOCUMENT issue/billing date (defaults from mint; manager-editable, audited) — issued_at stays the mint attestation
-  paid_at        DateTime?
-  date_paid      DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
+  id                      String        @id @default(uuid())
+  group_id                String // tenantId
+  job_card_id             String        @unique // one invoice per card; sticky number on re-issue
+  site_id                 String
+  status                  InvoiceStatus @default(issued)
+  series                  InvoiceSeries @default(chargeable) // which counter minted sequence_value
+  sequence_value          Int // monotonic counter value underneath the rendered number
+  invoice_number          String? // rendered string; set at issue, sticky thereafter
+  issued_at               DateTime      @default(now())
+  date_issued             DateTime? // the DOCUMENT issue/billing date (defaults from mint; manager-editable, audited) — issued_at stays the mint attestation
+  paid_at                 DateTime?
+  date_paid               DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
   payment_method_id       String? // how it was paid (grain for method reporting — banked tile)
   payment_method_snapshot String? // method name at mark-paid; renames never rewrite history
-  confirm_due_at  DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
-  receipt_sent_at DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
+  confirm_due_at          DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
+  receipt_sent_at         DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
 
   // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
   company_name_snapshot       String
@@ -855,10 +859,10 @@ model Invoice {
   vat_registered_at_issue     Boolean
   created_at                  DateTime @default(now())
 
-  group    Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  site     Site          @relation(fields: [site_id], references: [id], onDelete: NoAction)
-  job_card JobCard       @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
-  lines    InvoiceLine[]
+  group          Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site           Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
+  job_card       JobCard        @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
+  lines          InvoiceLine[]
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
 
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
@@ -917,29 +921,29 @@ model InvoiceSequence {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model CatalogueItem {
-  id         String   @id @default(uuid())
-  group_id   String // TENANT-level — one shared catalogue, one price, across all sites
-  code       String // required; unique per tenant; the match key
+  id                String   @id @default(uuid())
+  group_id          String // TENANT-level — one shared catalogue, one price, across all sites
+  code              String // required; unique per tenant; the match key
   // Human label shown in "choose a service" pickers (distinct from code=reference and the printed
   // spec). Backfilled = code for existing rows; consumers show `title || code` so it's never blank.
-  title      String?
-  name       String // fills the line's description on autocomplete
-  item_type  ItemType // labour | part | misc | fixed
+  title             String?
+  name              String // fills the line's description on autocomplete
+  item_type         ItemType // labour | part | misc | fixed
   // Simple items (part/labour/misc): flat cost + price. Fixed items: these are MIRRORED derived-on-
   // save from base_price_ex_vat + the component sum (see lib/catalogue.ts) — never set by callers.
-  unit_cost  Decimal  @db.Decimal(12, 2)
-  unit_price Decimal  @db.Decimal(12, 2)
-  vat_rate   Decimal  @default(20) @db.Decimal(5, 2) // defaulted from getTenantVat().defaultRate on create
-  active     Boolean  @default(true) // archive (false) preferred over hard delete — preserves history
+  unit_cost         Decimal  @db.Decimal(12, 2)
+  unit_price        Decimal  @db.Decimal(12, 2)
+  vat_rate          Decimal  @default(20) @db.Decimal(5, 2) // defaulted from getTenantVat().defaultRate on create
+  active            Boolean  @default(true) // archive (false) preferred over hard delete — preserves history
   // Fixed-price services only: the anchor/lowest-tier EX-VAT price (null for simple items).
   base_price_ex_vat Decimal? @db.Decimal(12, 2)
   // Notional labour CONTENT of a fixed-price service (charged hours). NOT booking duration, NOT
   // actual worked hours (clocking is banked). Inherited by each job line using the service.
   labour_hours      Decimal? @db.Decimal(6, 2)
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
 
-  group       Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  group         Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
   job_lines     JobCardItem[]
   components    CatalogueComponent[]
   tier_prices   CatalogueItemTierPrice[]
@@ -1000,7 +1004,7 @@ model CatalogueItemTierPrice {
 // negative EX-VAT part line via the existing discount mechanism (the VAT split falls out of the
 // aggregate recompute in lib/quote-totals). A promo is NOT sellable — its own section, not a product.
 enum PromoType {
-  fixed      // amount = £ off, INC-VAT
+  fixed // amount = £ off, INC-VAT
   percentage // amount = percent off the inc-VAT total at apply-time
 }
 
@@ -1050,18 +1054,84 @@ model CostPerson {
   id             String   @id @default(uuid())
   group_id       String
   name           String
-  role           String?  // free-text ("Master Tech", "Bottle washer")
+  role           String? // free-text ("Master Tech", "Bottle washer")
   cost_type      CostType
-  amount_pennies Int      // salary (annual) OR hourly rate, in pennies
+  amount_pennies Int // salary (annual) OR hourly rate, in pennies
   user_id        String?  @unique
   is_active      Boolean  @default(true)
   created_at     DateTime @default(now())
 
+  // --- CAPACITY MODEL (utilisation denominator) ---
+  // is_chargeable marks "turns spanners" — deliberately NOT User.role (a manager can be
+  // chargeable) and default FALSE so non-productive staff never inflate capacity.
+  // contracted_hours_per_day: NULL on a chargeable person = incomplete config (amber flag).
+  // working_days: rostered weekdays (0=Sun..6=Sat); EMPTY = inherit the site's open_days
+  // (TMBS default Mon–Sat) — an explicit value overrides.
+  is_chargeable            Boolean  @default(false)
+  contracted_hours_per_day Decimal? @db.Decimal(4, 2)
+  working_days             Int[]    @default([])
+
   group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
   user        User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
   allocations CostAllocation[]
+  leave       LeaveRecord[]
 
   @@index([group_id])
+}
+
+// --- Leave (capacity subtraction). PER-DAY rows by design: clean month attribution, no
+// range-splitting math. hours NULL = the person's full rostered day at read time (stays correct
+// if contracted hours later change); an explicit value = part-day (validated ≤ contracted).
+// Leave only subtracts when the date is a ROSTERED day — a Sunday entry subtracts nothing.
+// status defaults approved: the manager IS the write path in v1 (mechanic self-service
+// request→approve is banked — adding a `requested` enum value + transitions is additive).
+enum LeaveType {
+  annual
+  sick
+  other
+}
+
+enum LeaveStatus {
+  approved
+}
+
+model LeaveRecord {
+  id             String      @id @default(uuid())
+  group_id       String
+  cost_person_id String
+  site_id        String // attribution site (a split-allocation mechanic's leave is booked where taken)
+  date           DateTime // day-grained (UTC midnight)
+  hours          Decimal?    @db.Decimal(4, 2) // NULL = full rostered day
+  type           LeaveType   @default(annual)
+  status         LeaveStatus @default(approved)
+  created_by     String? // user id (audit convenience; writeAudit rows carry the trail)
+  created_at     DateTime    @default(now())
+
+  group       Group      @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  cost_person CostPerson @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
+  site        Site       @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@unique([cost_person_id, date]) // one row per person-day (no double-subtraction)
+  @@index([group_id, site_id, date])
+}
+
+// Manual public-holiday list (v1 — auto-derive from Site.locale banked). Group-scoped;
+// site_id NULL = applies to ALL the group's sites (both TMBS sites share England & Wales
+// bank holidays); set site_id for a region-specific site later. Subtracts a full rostered
+// day from every chargeable mechanic whose roster includes that weekday.
+model PublicHoliday {
+  id         String   @id @default(uuid())
+  group_id   String
+  site_id    String? // NULL = all sites
+  date       DateTime // day-grained (UTC midnight)
+  label      String
+  created_at DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site  Site? @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, site_id, date])
+  @@index([group_id, date])
 }
 
 // Open-ended, admin-extendable business costs (rent, rates, insurance, IT, phones…).
@@ -1069,7 +1139,7 @@ model Overhead {
   id                    String         @id @default(uuid())
   group_id              String
   name                  String
-  ex_vat_amount_pennies Int            // EX-VAT amount = the true cost, entered directly
+  ex_vat_amount_pennies Int // EX-VAT amount = the true cost, entered directly
   vat_rate              Decimal        @default(0) @db.Decimal(5, 2) // per-expense rate (free entry: 5, 0, 20…); pre-filled from Group.default_vat_rate
   period                OverheadPeriod
   is_active             Boolean        @default(true)
@@ -1086,7 +1156,7 @@ model Overhead {
 // percents sum to 100.00 (basis-point validation in lib/cost-allocation.ts).
 model CostAllocation {
   id             String   @id @default(uuid())
-  group_id       String   // denormalised tenant guard (indexed by-site pivot)
+  group_id       String // denormalised tenant guard (indexed by-site pivot)
   site_id        String
   percent        Decimal  @db.Decimal(5, 2) // 0.01–100.00
   cost_person_id String?
