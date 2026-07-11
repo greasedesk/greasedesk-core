@@ -37,7 +37,23 @@ export type AvailableHours = {
   phHours: number;                   // total subtracted for public holidays (allocation-scaled)
 };
 
-const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+
+// ---- THE rostered-day decision (one truth — capacity AND leave range-expansion read these;
+// never re-derive the inheritance or the weekday test anywhere else) ----
+/** A person's rostered weekday set: explicit working_days, else the site's open_days. */
+export const rosteredWeekdays = (workingDays: number[], siteOpenDays: number[] | null | undefined): number[] =>
+  workingDays.length ? workingDays : (siteOpenDays ?? []);
+/** Is calendar date d a rostered (working) day for that weekday set? */
+export const isRosteredOn = (rostered: number[], d: Date): boolean => rostered.includes(d.getUTCDay());
+/** The window's public-holiday day-keys for a site (group-wide rows + site-specific rows). */
+export async function phDaySet(groupId: string, siteId: string, window: CapacityWindow): Promise<Set<string>> {
+  const phs = (await prisma.publicHoliday.findMany({
+    where: { group_id: groupId, OR: [{ site_id: null }, { site_id: siteId }], date: { gte: window.from, lt: window.to } },
+    select: { date: true },
+  })) as any[];
+  return new Set<string>(phs.map((h) => dayKey(h.date)));
+}
 
 /** Enumerate the window's days once: [dayKey, weekday][] (calendar-date grain). */
 function windowDays(window: CapacityWindow): Array<[string, number]> {
@@ -64,17 +80,13 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
   const ids = configured.map((p: any) => p.id);
 
-  const [leave, phs] = await Promise.all([
+  const [leave, phDays] = await Promise.all([
     ids.length ? prisma.leaveRecord.findMany({
       where: { group_id: groupId, cost_person_id: { in: ids }, status: 'approved', date: { gte: window.from, lt: window.to } },
       select: { cost_person_id: true, date: true, hours: true },
     }) as any : [],
-    prisma.publicHoliday.findMany({
-      where: { group_id: groupId, OR: [{ site_id: null }, { site_id: siteId }], date: { gte: window.from, lt: window.to } },
-      select: { date: true },
-    }) as any,
+    phDaySet(groupId, siteId, window),
   ]);
-  const phDays = new Set<string>(phs.map((h: any) => dayKey(h.date)));
   const leaveByPerson = new Map<string, Map<string, number | null>>(); // person → day → hours (null = full day)
   for (const l of leave) {
     const m = leaveByPerson.get(l.cost_person_id) ?? new Map();
@@ -88,11 +100,11 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
     const contracted = Number(p.contracted_hours_per_day);
-    const rostered: number[] = p.working_days.length ? p.working_days : (site?.open_days ?? []);
+    const rostered: number[] = rosteredWeekdays(p.working_days, site?.open_days);
     const myLeave = leaveByPerson.get(p.id);
     let grossC = 0, subC = 0, leaveC = 0, phC = 0;
     for (const [key, weekday] of days) {
-      if (!rostered.includes(weekday)) continue; // rostered-day guard: non-rostered leave/PH subtract NOTHING
+      if (!rostered.includes(weekday)) continue; // rostered-day guard (weekday from windowDays = isRosteredOn's test)
       rosteredDays += 1;
       grossC += Math.round(contracted * 100);
       if (phDays.has(key)) {

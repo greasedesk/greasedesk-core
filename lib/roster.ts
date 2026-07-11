@@ -19,10 +19,38 @@
  */
 import { prisma } from '@/lib/db';
 import type { Visibility } from '@/lib/site-visibility';
+import { rosteredWeekdays, isRosteredOn, dayKey } from '@/lib/capacity';
 
 export type RosterLeaveRow = {
   id: string; date: string; hours: number | null; type: string; status: string; siteId: string;
+  batchId: string | null; // rows of one range booking share this; null = legacy/ad-hoc row
 };
+
+// ---- Range expansion planner (PURE — the API expands with it; the matrix drives it) ----
+// For each calendar day start→end inclusive: book a FULL-day row iff it's a working day for the
+// person (THE capacity rostered-day helpers — one truth, never re-derived) AND not a bank
+// holiday AND not already booked. Skips are REPORTED per-day with a reason, never silent:
+// the range's deducted count must always be explainable.
+export type SkipReason = 'notWorkingDay' | 'bankHoliday' | 'alreadyBooked';
+export type LeavePlan = { book: string[]; skipped: Array<{ date: string; reason: SkipReason }> };
+export function planLeaveRange(
+  start: Date, end: Date,
+  personWorkingDays: number[], siteOpenDays: number[] | null | undefined,
+  phDays: Set<string>, alreadyBookedDays: Set<string>,
+): LeavePlan {
+  const rostered = rosteredWeekdays(personWorkingDays, siteOpenDays);
+  const book: string[] = [];
+  const skipped: Array<{ date: string; reason: SkipReason }> = [];
+  for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
+    const d = new Date(t);
+    const key = dayKey(d);
+    if (!isRosteredOn(rostered, d)) skipped.push({ date: key, reason: 'notWorkingDay' });
+    else if (phDays.has(key)) skipped.push({ date: key, reason: 'bankHoliday' });
+    else if (alreadyBookedDays.has(key)) skipped.push({ date: key, reason: 'alreadyBooked' });
+    else book.push(key);
+  }
+  return { book, skipped };
+}
 export type RosterPerson = {
   id: string;
   name: string;
@@ -73,7 +101,7 @@ export async function buildRoster(groupId: string, vis: Visibility, year: number
       id: true, name: true, role: true, user_id: true, is_chargeable: true,
       contracted_hours_per_day: true, annual_leave_allowance_days: true,
       allocations: { select: { site_id: true, percent: true } },
-      leave: { where: { date: { gte: yearFrom, lt: yearTo } }, orderBy: { date: 'asc' }, select: { id: true, date: true, hours: true, type: true, status: true, site_id: true } },
+      leave: { where: { date: { gte: yearFrom, lt: yearTo } }, orderBy: { date: 'asc' }, select: { id: true, date: true, hours: true, type: true, status: true, site_id: true, leave_batch_id: true } },
     },
   })) as any[];
 
@@ -108,7 +136,7 @@ export async function buildRoster(groupId: string, vis: Visibility, year: number
       homeSiteId: home, alsoAtSiteIds: also,
       isSelf: self,
       editable: vis.isAdmin || (vis.role === 'SITE_MANAGER' && inManagedSite(p)),
-      leave: p.leave.map((l: any) => ({ id: l.id, date: dayISO(l.date), hours: l.hours == null ? null : Number(l.hours), type: l.type, status: l.status, siteId: l.site_id })),
+      leave: p.leave.map((l: any) => ({ id: l.id, date: dayISO(l.date), hours: l.hours == null ? null : Number(l.hours), type: l.type, status: l.status, siteId: l.site_id, batchId: l.leave_batch_id ?? null })),
     };
   });
 

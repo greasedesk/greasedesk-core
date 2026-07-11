@@ -37,7 +37,15 @@
     "save": "Save",
     "saving": "Saving…",
     "cancel": "Cancel",
-    "error": "Could not save the leave entry."
+    "error": "Could not save the leave entry.",
+    "start": "First day",
+    "end": "Last day",
+    "halfDay": "Half day",
+    "customHours": "Custom hours (optional):",
+    "endBeforeStart": "The end date can’t be before the start date.",
+    "daysN": "{{count}} days",
+    "bookedN": "Booked {{count}} day(s).",
+    "skippedIntro": "Skipped:"
   },
   "holidays": {
     "empty": "No bank holidays yet — seed the England & Wales list or add dates.",
@@ -45,5 +53,10 @@
     "add": "Add holiday",
     "seed": "Seed England & Wales 2026–27",
     "error": "Could not update the holiday list."
+  },
+  "skip": {
+    "notWorkingDay": "not a working day",
+    "bankHoliday": "bank holiday",
+    "alreadyBooked": "already booked"
   }
 }

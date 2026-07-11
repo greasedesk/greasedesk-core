@@ -1114,6 +1114,9 @@ model LeaveRecord {
   site_id        String // attribution site (a split-allocation mechanic's leave is booked where taken)
   date           DateTime // day-grained (UTC midnight)
   hours          Decimal?    @db.Decimal(4, 2) // NULL = full rostered day
+  // Rows created in ONE range booking share a batch id — displayed/edited/deleted as one unit.
+  // NULL = legacy/single ad-hoc row. Storage stays per-day (clean month/year attribution).
+  leave_batch_id String?
   type           LeaveType   @default(annual)
   status         LeaveStatus @default(approved)
   created_by     String? // user id (audit convenience; writeAudit rows carry the trail)
@@ -1124,6 +1127,7 @@ model LeaveRecord {
   site        Site       @relation(fields: [site_id], references: [id], onDelete: Cascade)
 
   @@unique([cost_person_id, date]) // one row per person-day (no double-subtraction)
+  @@index([leave_batch_id])
   @@index([group_id, site_id, date])
 }
 
