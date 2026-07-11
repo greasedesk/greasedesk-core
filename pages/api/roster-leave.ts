@@ -25,8 +25,9 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canEditPersonLeave, planLeaveRange } from '@/lib/roster';
 import { phDaySet, dayKey } from '@/lib/capacity';
+import { LEAVE_TYPES } from '@/lib/leave-types';
 
-const TYPES = ['annual', 'sick', 'other', 'closure'];
+const TYPES: readonly string[] = LEAVE_TYPES;
 const parseDay = (s: unknown): Date | null => {
   const ds = String(s || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) return null;

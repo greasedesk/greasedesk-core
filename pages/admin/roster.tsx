@@ -18,6 +18,7 @@ import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
+import { LEAVE_TYPES, DEFAULT_LEAVE_COLOURS, LeaveTypeKey } from '@/lib/leave-types';
 
 type LeaveRow = { id: string; date: string; hours: number | null; type: string; status: string; siteId: string; batchId: string | null };
 type Person = {
@@ -25,7 +26,7 @@ type Person = {
   allowanceDays: number | null; takenDays: number; balanceDays: number | null;
   homeSiteId: string | null; alsoAtSiteIds: string[]; isSelf: boolean; editable: boolean; leave: LeaveRow[];
 };
-type Roster = { people: Person[]; sites: Array<{ id: string; name: string }>; canWrite: boolean; canEditAllowance: boolean; year: number };
+type Roster = { people: Person[]; sites: Array<{ id: string; name: string }>; canWrite: boolean; canEditAllowance: boolean; year: number; colours?: Record<string, string> };
 type Holiday = { id: string; date: string; label: string; siteId: string | null };
 type SaveResult = { booked?: string[]; skipped?: Array<{ date: string; reason: string }> };
 
@@ -48,11 +49,16 @@ function groupBookings(rows: LeaveRow[]): Booking[] {
   return [...batches, ...singles].sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
 }
 
-// Leave-type chip — `closure` (company-mandated shutdown) is visually distinct so a mechanic
-// sees WHY those days are pre-booked.
-function TypeChip({ type, t }: { type: string; t: (k: string) => string }) {
-  const tone = type === 'closure' ? 'bg-accent-soft text-accent' : type === 'sick' ? 'bg-warn-soft text-warn' : 'bg-surface-muted text-ink border border-line';
-  return <span className={`text-xs font-medium rounded-full px-2 py-0.5 whitespace-nowrap ${tone}`}>{t(`type.${type}`)}</span>;
+// Leave-type chip — coloured from the tenant's (admin-remappable) map so every type is
+// distinguishable at a glance; defaults are the Okabe–Ito colour-blind-safe palette.
+function TypeChip({ type, colours, t }: { type: string; colours: Record<string, string>; t: (k: string) => string }) {
+  const c = colours[type] ?? DEFAULT_LEAVE_COLOURS.other;
+  return (
+    <span className="text-xs font-medium rounded-full px-2 py-0.5 whitespace-nowrap border"
+      style={{ color: c, borderColor: c, backgroundColor: `${c}1A` }}>
+      {t(`type.${type}`)}
+    </span>
+  );
 }
 
 // Range entry form (module-level — stable element type). End defaults to Start; Half-day only
@@ -96,7 +102,7 @@ function LeaveForm({ personId, batch, t, onDone, onCancel }: {
           <input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} placeholder={start} className={inputCls} /></label>
         <label className="block"><span className="block text-xs text-muted mb-1">{t('leave.type')}</span>
           <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
-            {['annual', 'sick', 'other', 'closure'].map((k) => <option key={k} value={k}>{t(`type.${k}`)}</option>)}
+            {LEAVE_TYPES.map((k) => <option key={k} value={k}>{t(`type.${k}`)}</option>)}
           </select></label>
         {!batch && single && (
           <label className="flex items-center gap-1.5 pb-2 text-sm text-ink">
@@ -141,7 +147,7 @@ function AllowanceEditor({ personId, initial, t, onSaved }: { personId: string; 
 
 export default function RosterPage() {
   const { t } = useTranslation('roster');
-  const [tab, setTab] = useState<'leave' | 'holidays'>('leave');
+  const [tab, setTab] = useState<'leave' | 'holidays' | 'colours'>('leave');
   const [year, setYear] = useState(new Date().getUTCFullYear());
   const [roster, setRoster] = useState<Roster | null>(null);
   const [holidays, setHolidays] = useState<Holiday[] | null>(null);
@@ -239,7 +245,7 @@ export default function RosterPage() {
           </div>
         </div>
         <div className="flex gap-1.5 mb-4">
-          {(['leave', 'holidays'] as const).map((k) => (
+          {([...(['leave', 'holidays'] as const), ...(roster?.canEditAllowance ? (['colours'] as const) : [])]).map((k) => (
             <button key={k} onClick={() => setTab(k)} className={`text-sm rounded-lg px-3 py-2 border ${tab === k ? 'bg-accent text-white border-accent font-semibold' : 'bg-surface text-ink border-line hover:bg-surface-muted'}`}>{t(`tab.${k}`)}</button>
           ))}
         </div>
@@ -275,7 +281,7 @@ export default function RosterPage() {
                       ) : (
                         <div key={key} className="flex flex-wrap items-center gap-2 py-1.5 border-b border-line/40 last:border-0">
                           <span className="text-sm text-ink tabular-nums">{bookingLabel(b, p.contractedHoursPerDay)}</span>
-                          <TypeChip type={b.type} t={t} />
+                          <TypeChip type={b.type} colours={roster?.colours ?? DEFAULT_LEAVE_COLOURS} t={t} />
                           <span className="text-xs font-medium rounded-full px-2 py-0.5 bg-ok-soft text-ok ml-auto">{t(`status.${b.status}`)}</span>
                           {p.editable && (
                             <>
@@ -295,6 +301,10 @@ export default function RosterPage() {
             </div>
           </div>
         ))}
+
+        {tab === 'colours' && roster?.canEditAllowance && (
+          <ColoursPanel colours={roster.colours ?? DEFAULT_LEAVE_COLOURS} t={t} onSaved={() => load()} />
+        )}
 
         {tab === 'holidays' && (
           <div className="bg-surface border border-line rounded-xl p-4">
@@ -318,6 +328,42 @@ export default function RosterPage() {
         )}
       </div>
     </>
+  );
+}
+
+// Admin colour remap (accessibility): per-type swatches over the Okabe–Ito defaults; stored on
+// the Group, resolved server-side — the diary banners and chips read the same map.
+function ColoursPanel({ colours, t, onSaved }: { colours: Record<string, string>; t: (k: string, o?: any) => string; onSaved: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>({ ...colours });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  async function save() {
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch('/api/roster', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leaveColours: vals }) });
+      const d = await res.json().catch(() => ({}));
+      setMsg(d?.message || null);
+      if (res.ok) onSaved();
+    } catch { setMsg(t('colours.error')); }
+    setBusy(false);
+  }
+  return (
+    <div className="bg-surface border border-line rounded-xl p-4">
+      <p className="text-sm text-muted mb-3">{t('colours.intro')}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+        {LEAVE_TYPES.map((k) => (
+          <label key={k} className="flex items-center gap-2 text-sm text-ink">
+            <input type="color" value={vals[k] ?? DEFAULT_LEAVE_COLOURS[k as LeaveTypeKey]} onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))} className="w-9 h-7 p-0 border border-line rounded" />
+            {t(`type.${k}`)}
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-3">
+        <button onClick={save} disabled={busy} className={btnCls}>{busy ? t('leave.saving') : t('colours.save')}</button>
+        <button onClick={() => setVals({ ...DEFAULT_LEAVE_COLOURS })} className="text-sm text-muted underline">{t('colours.reset')}</button>
+        {msg && <span className="text-sm text-muted">{msg}</span>}
+      </div>
+    </div>
   );
 }
 

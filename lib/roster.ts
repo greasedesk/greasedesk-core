@@ -20,6 +20,7 @@
 import { prisma } from '@/lib/db';
 import type { Visibility } from '@/lib/site-visibility';
 import { rosteredWeekdays, isRosteredOn, dayKey } from '@/lib/capacity';
+import { DEDUCTS_ALLOWANCE, LeaveTypeKey } from '@/lib/leave-types';
 
 export type RosterLeaveRow = {
   id: string; date: string; hours: number | null; type: string; status: string; siteId: string;
@@ -119,8 +120,12 @@ export async function buildRoster(groupId: string, vis: Visibility, year: number
     const allowance = p.annual_leave_allowance_days == null ? null : Number(p.annual_leave_allowance_days);
     // taken: full day = 1; hours-override pro-rated against contracted (writes reject an
     // override when contracted is unset, so the fallback below only guards legacy rows).
+    // ONLY allowance-deducting types move the balance (lib/leave-types DEDUCTS_ALLOWANCE —
+    // annual + closure). sick/compassionate/parental/training/other still show in the list AND
+    // still drop capacity (getAvailableHours is type-blind by design) but are allowance-neutral.
     let taken = 0;
     for (const l of p.leave) {
+      if (!DEDUCTS_ALLOWANCE[l.type as LeaveTypeKey]) continue;
       taken += l.hours == null ? 1 : (contracted ? Number(l.hours) / contracted : 1);
     }
     taken = Math.round(taken * 100) / 100;

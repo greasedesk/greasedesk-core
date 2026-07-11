@@ -28,6 +28,7 @@ import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
+import { resolveLeaveColours } from '@/lib/leave-types';
 import { paymentState, PaymentState } from '@/lib/jobcard-status';
 
 const PX_PER_MIN = 1;
@@ -61,6 +62,9 @@ type PageProps = {
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
   weekStart: number; today: string;
   finance: FinanceProps;
+  // All-day absence banners (Roster leave, every type) keyed by day + the tenant's type→colour map.
+  leaveBanners?: Record<string, Array<{ n: string; t: string; h: boolean }>>;
+  leaveColours?: Record<string, string>;
   noSites?: boolean;
 };
 type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; vatRegistered: boolean; bookedPennies: number; marginPennies: number; days: Record<string, { bookedPennies: number; marginPennies: number }> };
@@ -129,6 +133,8 @@ function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose 
 
 export default function DiaryPage(props: PageProps) {
   const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites } = props;
+  const leaveBanners = props.leaveBanners ?? {};
+  const leaveColours = props.leaveColours ?? {};
   const { t } = useTranslation('diary');
   // Runtime "Show values" toggle — hides already-permitted money ("turn the screen to the customer").
   // The permission gates what's SENT; this only hides what was sent. Persisted per browser.
@@ -143,7 +149,8 @@ export default function DiaryPage(props: PageProps) {
   const money = (pennies: number) => formatMoney(pennies, { currency, locale });
   // Week view shows per-day totals under each day header → taller header (axis spacer must match).
   const showDayTotals = view === 'week' && showMoney;
-  const headH = showDayTotals ? 'h-12' : 'h-7';
+  const hasWeekLeave = view === 'week' && days.some((d) => (leaveBanners[d.date] ?? []).length > 0);
+  const headH = showDayTotals ? (hasWeekLeave ? 'h-16' : 'h-12') : (hasWeekLeave ? 'h-11' : 'h-7');
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   // STAGE 1 — the grid now spans the FULL 24h day (00:00–24:00); it scrolls and lands on the working
@@ -512,6 +519,18 @@ export default function DiaryPage(props: PageProps) {
           <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('noResources')}</div>
         ) : (
           <>
+            {/* All-day ABSENCE banner (day view + mobile list) — every leave type, type-labelled. */}
+            {view === 'day' && (leaveBanners[anchor] ?? []).length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2 items-center">
+                <span className="text-xs uppercase text-muted self-center">{t('leaveAway')}:</span>
+                {(leaveBanners[anchor] ?? []).map((b, i) => (
+                  <span key={i} className="text-xs px-2 py-1 rounded-md border font-medium"
+                    style={{ borderColor: leaveColours[b.t] ?? '#999999', color: leaveColours[b.t] ?? '#999999', backgroundColor: `${leaveColours[b.t] ?? '#999999'}1A` }}>
+                    {b.n} · {t(`leaveType.${b.t}`)}{b.h ? ` (${t('leaveHalf')})` : ''}
+                  </span>
+                ))}
+              </div>
+            )}
             {/* Day-level notes banner (day view) */}
             {dayLevelNotes.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-2">
@@ -617,6 +636,19 @@ export default function DiaryPage(props: PageProps) {
                               {finance.canSeeMargin && <span className={`block ${d.marginPennies < 0 ? (isToday ? 'text-red-300' : 'text-danger') : (isToday ? 'text-white/80' : 'text-muted')}`}>{t('finance.marginShort')} {money(d.marginPennies)}</span>}
                             </span>
                           ); })()}
+                          {/* All-day absence pills — every leave type, type-coloured (tenant map). */}
+                          {view === 'week' && (leaveBanners[col.date] ?? []).length > 0 && (
+                            <span className="flex flex-wrap justify-center gap-0.5 leading-none mt-0.5">
+                              {(leaveBanners[col.date] ?? []).slice(0, 3).map((b, i) => (
+                                <span key={i} title={`${b.n} — ${t(`leaveType.${b.t}`)}${b.h ? ` (${t('leaveHalf')})` : ''}`}
+                                  className="text-[8px] px-1 rounded-full whitespace-nowrap max-w-full truncate"
+                                  style={{ backgroundColor: `${leaveColours[b.t] ?? '#999999'}${isToday ? '' : '26'}`, color: isToday ? '#fff' : (leaveColours[b.t] ?? '#999999'), border: `1px solid ${leaveColours[b.t] ?? '#999999'}` }}>
+                                  {b.n.split(' ')[0]}{b.h ? ' ½' : ''}
+                                </span>
+                              ))}
+                              {(leaveBanners[col.date] ?? []).length > 3 && <span className={`text-[8px] ${isToday ? 'text-white/80' : 'text-muted'}`}>+{(leaveBanners[col.date] ?? []).length - 3}</span>}
+                            </span>
+                          )}
                         </div>
                         ); })()}
                         <div
@@ -1268,7 +1300,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   }
 
   type ResRow = { id: string; name: string; type: string; colour: string | null };
-  const [resourceRows, cardRows, noteRows] = await Promise.all([
+  const [resourceRows, cardRows, noteRows, leaveRows, grpColours] = await Promise.all([
     prisma.resource.findMany({ where: { site_id: site.id, is_active: true }, orderBy: { display_order: 'asc' }, select: { id: true, name: true, type: true, colour: true } }) as Promise<ResRow[]>,
     (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.jobCard.findMany({
       where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
@@ -1282,7 +1314,25 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       where: { site_id: site.id, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
       select: { id: true, title: true, resource_id: true, colour: true, start_at: true, end_at: true },
     }) as Promise<any[]>,
+    // ALL-DAY LEAVE BANNERS: every leave type surfaces at the top of its day (the Roster is the
+    // write path; this is display only). A person shows on every site they're allocated to —
+    // an absent split-allocated tech affects both diaries.
+    (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.leaveRecord.findMany({
+      where: {
+        group_id: user.group_id, status: 'approved', date: { gte: rangeStart, lt: rangeEnd },
+        cost_person: { is_active: true, allocations: { some: { site_id: site.id } } },
+      },
+      orderBy: { date: 'asc' },
+      select: { date: true, type: true, hours: true, cost_person: { select: { name: true } } },
+    }) as Promise<any[]>,
+    prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true } }) as any,
   ]);
+  const leaveBanners: Record<string, Array<{ n: string; t: string; h: boolean }>> = {};
+  for (const l of leaveRows) {
+    const k = ymd(l.date as Date);
+    (leaveBanners[k] ??= []).push({ n: l.cost_person?.name ?? '—', t: l.type as string, h: l.hours != null });
+  }
+  const leaveColours = resolveLeaveColours(grpColours?.leave_type_colours);
 
   const resources: ResourceCol[] = resourceRows.map((r) => ({ id: r.id, name: r.name, type: r.type, colour: r.colour }));
   const num = (d: any) => (d == null ? 0 : Number(d));
@@ -1346,5 +1396,5 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), finance } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), finance, leaveBanners, leaveColours } };
 });

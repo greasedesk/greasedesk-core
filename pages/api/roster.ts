@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { buildRoster } from '@/lib/roster';
+import { LEAVE_TYPES, resolveLeaveColours } from '@/lib/leave-types';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -20,13 +21,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') {
     const y = Number(req.query.year) || new Date().getUTCFullYear();
-    const roster = await buildRoster(user.group_id as string, vis, y);
-    return res.status(200).json(roster);
+    const [roster, grp] = await Promise.all([
+      buildRoster(user.group_id as string, vis, y),
+      prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true } }) as any,
+    ]);
+    return res.status(200).json({ ...roster, colours: resolveLeaveColours(grp?.leave_type_colours) });
   }
 
   if (req.method === 'PATCH') {
-    if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can change allowances.' });
-    const { costPersonId, allowanceDays } = (req.body || {}) as { costPersonId?: string; allowanceDays?: number };
+    if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can change this.' });
+    const { costPersonId, allowanceDays, leaveColours } = (req.body || {}) as { costPersonId?: string; allowanceDays?: number; leaveColours?: Record<string, string> };
+    // Per-type colour remap (accessibility) — validated to known types + #rrggbb, stored whole.
+    if (leaveColours !== undefined) {
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(leaveColours || {})) {
+        if ((LEAVE_TYPES as readonly string[]).includes(k) && /^#[0-9a-fA-F]{6}$/.test(String(v))) clean[k] = String(v);
+      }
+      await prisma.group.update({ where: { id: user.group_id }, data: { leave_type_colours: clean } });
+      return res.status(200).json({ message: 'Colours saved.', colours: resolveLeaveColours(clean) });
+    }
     const days = Number(allowanceDays);
     if (!costPersonId || !Number.isFinite(days) || days < 0 || days > 366) {
       return res.status(400).json({ message: 'Enter a valid allowance in days.' });

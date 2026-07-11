@@ -3,7 +3,8 @@
   "loading": "Loading…",
   "tab": {
     "leave": "Leave",
-    "holidays": "Bank holidays"
+    "holidays": "Bank holidays",
+    "colours": "Colours"
   },
   "unassigned": "No location set",
   "alsoAt": "also at {{sites}}",
@@ -19,7 +20,10 @@
     "annual": "Annual leave",
     "sick": "Sick",
     "other": "Other",
-    "closure": "Company closure"
+    "closure": "Company closure",
+    "compassionate": "Compassionate",
+    "parental": "Parental",
+    "training": "Training"
   },
   "status": {
     "approved": "Approved"
@@ -58,5 +62,11 @@
     "notWorkingDay": "not a working day",
     "bankHoliday": "bank holiday",
     "alreadyBooked": "already booked"
+  },
+  "colours": {
+    "intro": "Pick the colour used for each leave type across the Roster and the diary banners. Defaults are a colour-blind-safe palette; remap them if any pair is hard to tell apart.",
+    "save": "Save colours",
+    "reset": "Reset to defaults",
+    "error": "Could not save the colours."
   }
 }

@@ -158,6 +158,9 @@ model Group {
   invoice_footer_text       String? // payment terms / footer block — multi-line, rendered on the document
   invoice_bcc               String? // garage-copy BCC (fallback: billing_email)
   logo_r2_key               String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
+  // Per-tenant leave-type colour overrides (type→hex; defaults = Okabe–Ito in lib/leave-types;
+  // admin-remappable for colour-blind accessibility). Read via resolveLeaveColours only.
+  leave_type_colours Json?
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")
   billing_email             String   @unique
@@ -1094,6 +1097,8 @@ model CostPerson {
 // Leave only subtracts when the date is a ROSTERED day — a Sunday entry subtracts nothing.
 // status defaults approved: the manager IS the write path in v1 (mechanic self-service
 // request→approve is banked — adding a `requested` enum value + transitions is additive).
+// Allowance rule lives in lib/leave-types DEDUCTS_ALLOWANCE (single source): only annual +
+// closure consume the grant; the rest are capacity-affecting but allowance-neutral.
 enum LeaveType {
   annual
   sick
@@ -1101,6 +1106,9 @@ enum LeaveType {
   closure // company-mandated closure (e.g. Christmas shutdown) — REAL pre-booked leave rows that
           // consume the allowance AND drop capacity (binding model: allowance = FULL grant;
           // closures are never modelled as a reduced allowance). Visually distinct in the Roster.
+  compassionate
+  parental
+  training
 }
 
 enum LeaveStatus {

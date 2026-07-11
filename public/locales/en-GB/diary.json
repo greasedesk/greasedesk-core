@@ -177,5 +177,16 @@
     "openFull": "Open full page",
     "close": "Close",
     "loading": "Loading job card…"
+  },
+  "leaveAway": "Away",
+  "leaveHalf": "half day",
+  "leaveType": {
+    "annual": "Annual leave",
+    "sick": "Sick",
+    "compassionate": "Compassionate",
+    "parental": "Parental",
+    "training": "Training",
+    "other": "Other",
+    "closure": "Company closure"
   }
 }
