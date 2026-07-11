@@ -345,7 +345,7 @@ export default function DiaryPage(props: PageProps) {
         onTouchEnd={cancelPress}
         onTouchMove={cancelPress}
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
-        className="diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none"
+        className={`diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
       >
         <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
@@ -356,14 +356,11 @@ export default function DiaryPage(props: PageProps) {
         {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
           <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
         ))}
-        {/* Money line: the £ value shows only if the SERVER sent it (permitted) AND the runtime
-            toggle is on; the payment-state pill follows the permission ONLY (toggle-proof). */}
-        {finance.canSeeValues && height > 28 && (
-          <span className="flex items-center gap-1 px-1">
-            {showMoney && <span className={`text-[10px] font-semibold tabular-nums truncate ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
-            <PayPill status={c.status} t={t} className="text-[9px]" />
-          </span>
-        )}
+        {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
+        {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
+        {/* Payment-state pill at the FOOT of the block (anchored, clear of the text lines above —
+            the pb reserves its lane). Follows the permission ONLY, never the toggle. */}
+        {finance.canSeeValues && height > 28 && <PayPill status={c.status} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
       </div>
     );
   }
@@ -560,10 +557,11 @@ export default function DiaryPage(props: PageProps) {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-semibold text-ink">{it.card.reg}</span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-muted whitespace-nowrap">{it.card.resourceName}</span>
-                            {finance.canSeeValues && <PayPill status={it.card.status} t={t} className="text-[10px] py-0.5" />}
                           </div>
                           <div className="text-sm text-ink">{it.card.customer}</div>
                           {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
+                          {/* Payment-state pill at the FOOT of the card — permission-only, toggle-proof. */}
+                          {finance.canSeeValues && <div className="mt-1"><PayPill status={it.card.status} t={t} className="text-[10px] py-0.5" /></div>}
                         </div>
                         {showMoney && finance.canSeeValues && (
                           <div className={`shrink-0 text-sm font-semibold tabular-nums ${it.card.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(it.card.valuePennies)}</div>
