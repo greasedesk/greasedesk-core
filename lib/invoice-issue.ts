@@ -63,6 +63,7 @@ async function createInvoiceRow(
       sequence_value: seq,
       invoice_number: number,
       issued_at: issuedAt,
+      date_issued: issuedAt, // the DOCUMENT date starts as the mint date; manager-editable thereafter
       company_name_snapshot: identity.name,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,

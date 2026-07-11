@@ -15,6 +15,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotPaidLines } from '@/lib/invoice-issue';
+import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
@@ -28,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, to, paymentMethodId } = (req.body || {}) as { jobCardId?: string; to?: JobStatus; paymentMethodId?: string };
+  const { jobCardId, to, paymentMethodId, datePaid } = (req.body || {}) as { jobCardId?: string; to?: JobStatus; paymentMethodId?: string; datePaid?: string };
   if (!jobCardId || !to) return res.status(400).json({ message: 'Missing jobCardId or target status.' });
 
   const card = (await prisma.jobCard.findFirst({
@@ -76,13 +77,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Marking PAID requires a payment method (the grain) — validated against THIS tenant's active
   // list before the tx. No silent default: misrecorded grain is worse than a second click.
   let method: { id: string; name: string; behaviour: string } | null = null;
+  let paidDate: Date | null = null; // the chosen DOCUMENT payment date (Xero-style; defaults to now)
   let instantConfirmedInvoiceId: string | null = null;
   if (to === 'paid') {
-    const hasUnpaidInvoice = await prisma.invoice.findFirst({ where: { job_card_id: jobCardId, status: 'issued' }, select: { id: true } });
+    const hasUnpaidInvoice = (await prisma.invoice.findFirst({
+      where: { job_card_id: jobCardId, status: 'issued' },
+      select: { id: true, date_issued: true, issued_at: true },
+    })) as any;
     if (hasUnpaidInvoice) {
       if (!paymentMethodId) return res.status(400).json({ message: 'Choose how this invoice was paid.' });
       method = (await prisma.paymentMethod.findFirst({ where: { id: paymentMethodId, group_id: user.group_id, active: true }, select: { id: true, name: true, behaviour: true } })) as any;
       if (!method) return res.status(400).json({ message: 'Choose how this invoice was paid.' });
+      // Optional chosen payment date — guarded against the invoice's EFFECTIVE issue date.
+      if (datePaid != null && String(datePaid).trim() !== '') {
+        const ds = String(datePaid).trim();
+        const d = /^\d{4}-\d{2}-\d{2}$/.test(ds) ? new Date(`${ds}T00:00:00.000Z`) : new Date(NaN);
+        if (Number.isNaN(d.getTime())) return res.status(400).json({ message: 'The paid date must be a valid date.' });
+        const bad = validatePaymentDate(d, effectiveIssueDate(hasUnpaidInvoice), new Date());
+        if (bad === 'future') return res.status(400).json({ message: 'The paid date can’t be in the future.' });
+        if (bad === 'beforeIssue') return res.status(400).json({ message: 'The paid date can’t be before the invoice’s issue date.' });
+        paidDate = d;
+      }
     }
   }
 
@@ -132,23 +147,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!method) throw new Error('METHOD_REQUIRED'); // validated pre-tx; belt-and-braces
           await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
           const now = new Date();
+          const docDate = paidDate ?? now; // date_paid = the chosen DOCUMENT date; paid_at stays the attestation
           const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };
           if (method.behaviour === 'instant') {
-            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: now, confirm_due_at: null, ...methodGrain } });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'instant' } });
+            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'instant' } });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid_confirmed', diff: { method: method.name, instant: true } });
             instantConfirmedInvoiceId = inv.id; // receipt sends post-tx through the ONE send path
           } else if (method.behaviour === 'manual') {
-            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: now, confirm_due_at: null, ...methodGrain } });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'manual' } });
+            await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'manual' } });
           } else {
             const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
             const windowH = Math.min(168, Math.max(1, grp?.paid_confirm_window_hours ?? 24));
             await tx.invoice.update({
               where: { id: inv.id },
-              data: { status: 'paid_pending', paid_at: now, date_paid: now, confirm_due_at: new Date(Date.now() + windowH * 3600_000), ...methodGrain },
+              data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: new Date(Date.now() + windowH * 3600_000), ...methodGrain },
             });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { method: method.name, clearance: 'windowed', pendingHours: windowH } });
+            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'windowed', pendingHours: windowH } });
           }
         }
       }

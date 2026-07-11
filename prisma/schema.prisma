@@ -834,6 +834,7 @@ model Invoice {
   sequence_value Int // monotonic counter value underneath the rendered number
   invoice_number String? // rendered string; set at issue, sticky thereafter
   issued_at      DateTime      @default(now())
+  date_issued    DateTime? // the DOCUMENT issue/billing date (defaults from mint; manager-editable, audited) — issued_at stays the mint attestation
   paid_at        DateTime?
   date_paid      DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
   payment_method_id       String? // how it was paid (grain for method reporting — banked tile)

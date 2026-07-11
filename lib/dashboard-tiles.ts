@@ -8,15 +8,15 @@
  * once paid, live card items while issued). No money logic is re-implemented here.
  */
 import { prisma } from '@/lib/db';
-import { invoiceTotals, computeInvoiceLinePennies } from '@/lib/invoice';
+import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
 export type MonthTileContext = TileContext & { months: number };
 
-// Revenue recognition date for a confirmed invoice: the DOCUMENT fact (date_paid), falling back
-// to the attestation (paid_at) for invoices paid before date_paid existed.
-const effectivePaidDate = (r: { date_paid: Date | null; paid_at: Date | null }) => r.date_paid ?? r.paid_at;
+// Date bases (ONE chokepoint each, lib/invoice): paid tiles bucket by effectivePaidDate
+// (date_paid ?? paid_at — cash basis); issued/warranty/P&L bucket by the effective ISSUE date
+// (date_issued ?? issued_at — billing basis) via effectiveIssueDateWhere.
 
 const PAID_SELECT = { site_id: true, date_paid: true, paid_at: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, site: { select: { site_name: true } } } as const;
 const grossOfPaid = (r: any) => invoiceTotals(r.lines).grossPennies;
@@ -53,7 +53,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   // Issued vs paid in the period — count + value each way.
   issuedVsPaid: async ({ groupId, siteIds, from, to }) => {
     const issued = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', issued_at: { gte: from, lt: to } },
+      where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', ...effectiveIssueDateWhere(from, to) },
       select: { status: true, vat_registered_at_issue: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, job_card: { select: { items: { select: { qty: true, unit_price: true, vat_rate: true } } } } },
     })) as any[];
     const issuedPennies = issued.reduce((a, r) => a + (r.status === 'issued' ? grossOfIssued(r) : grossOfPaid(r)), 0);
@@ -92,7 +92,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   // key the series was designed to be).
   warranty: async ({ groupId, siteIds, from, to }) => {
     const count = await prisma.invoice.count({
-      where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', issued_at: { gte: from, lt: to } },
+      where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...effectiveIssueDateWhere(from, to) },
     });
     return { count };
   },
@@ -109,7 +109,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
   pnl: async ({ groupId, siteIds, from, to, months }) => {
     const invoices = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, issued_at: { gte: from, lt: to } },
+      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
       select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true } } } } },
     })) as any[];
 

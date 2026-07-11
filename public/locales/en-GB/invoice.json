@@ -71,5 +71,11 @@
     "save": "Save date",
     "saving": "Saving…",
     "error": "Could not save the paid date."
+  },
+  "dateIssued": {
+    "label": "Date issued (on the document)",
+    "save": "Save date",
+    "saving": "Saving…",
+    "error": "Could not save the issue date."
   }
 }

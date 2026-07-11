@@ -212,7 +212,9 @@ export default function JobCardWorkspace(p: Props) {
   const [payOpen, setPayOpen] = useState(false);
   const [payMethods, setPayMethods] = useState<Array<{ id: string; name: string; behaviour: string }> | null>(null);
   const [payMethodId, setPayMethodId] = useState('');
+  const [payDate, setPayDate] = useState(''); // the DOCUMENT payment date (Xero-style pick)
   async function openPay() {
+    setPayDate(new Date().toISOString().slice(0, 10)); // defaults to today; editable
     setPayOpen(true);
     if (!payMethods) {
       try {
@@ -227,9 +229,9 @@ export default function JobCardWorkspace(p: Props) {
     }
   }
   const confirmPay = () => {
-    if (!payMethodId) return;
+    if (!payMethodId || !payDate) return;
     setPayOpen(false);
-    run('status:paid', postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to: 'paid', paymentMethodId: payMethodId }),
+    run('status:paid', postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to: 'paid', paymentMethodId: payMethodId, datePaid: payDate }),
       { status: 'paid', tabsState: clientTabs({ status: 'paid' }) });
   };
 
@@ -397,8 +399,13 @@ export default function JobCardWorkspace(p: Props) {
           className="w-full sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm">
           {(payMethods ?? []).map((m) => <option key={m.id} value={m.id}>{m.name} — {t(`invoiceTab.clearance.${m.behaviour}`)}</option>)}
         </select>
+        <label className="block">
+          <span className="block text-xs text-muted mb-1">{t('invoiceTab.payDateLabel')}</span>
+          <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)}
+            className="w-full sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+        </label>
         <div className="flex flex-col sm:flex-row gap-2">
-          <button disabled={busy !== null || !payMethodId} onClick={confirmPay}
+          <button disabled={busy !== null || !payMethodId || !payDate} onClick={confirmPay}
             className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
           <button onClick={() => setPayOpen(false)} className="text-sm text-muted hover:text-ink px-2 py-2.5">{t('delete.cancel')}</button>
         </div>

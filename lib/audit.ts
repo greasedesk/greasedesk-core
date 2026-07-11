@@ -31,6 +31,8 @@ export type AuditAction =
   | 'invoice.unlocked'      // ADMIN-only escape hatch: CONFIRMED paid → issued for corrections
   | 'invoice.renumbered'    // deliberate ledger correction of the rendered number (one-off, admin-approved)
   | 'invoice.date_paid_edited' // the document's paid-date corrected (manager/admin)
+  | 'invoice.date_issued_edited' // the document's issue/billing date corrected (manager/admin)
+  | 'invoice.date_issued_backfilled' // one-off: issue-date added after minting (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent';         // emailed to the customer (PDF attached)
 

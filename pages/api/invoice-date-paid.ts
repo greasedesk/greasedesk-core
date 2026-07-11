@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
+import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -32,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const invoice = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: user.group_id },
-    select: { id: true, status: true, site_id: true, job_card_id: true, invoice_number: true, date_paid: true },
+    select: { id: true, status: true, site_id: true, job_card_id: true, invoice_number: true, date_paid: true, date_issued: true, issued_at: true },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
   const vis = await getVisibility(user.id as string);
@@ -40,6 +41,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (invoice.status !== 'paid' && invoice.status !== 'paid_pending') {
     return res.status(409).json({ message: 'This invoice isn’t marked as paid yet.' });
   }
+  // Guardrails: a payment can't precede the invoice's (effective) issue date or sit in the future.
+  const badPaid = validatePaymentDate(d, effectiveIssueDate(invoice), new Date());
+  if (badPaid === 'future') return res.status(400).json({ message: 'The paid date can’t be in the future.' });
+  if (badPaid === 'beforeIssue') return res.status(400).json({ message: 'The paid date can’t be before the invoice’s issue date.' });
 
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

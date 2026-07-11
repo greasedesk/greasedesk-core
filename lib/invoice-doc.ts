@@ -9,7 +9,7 @@
  * leaves this module. Server-only.
  */
 import { prisma } from '@/lib/db';
-import { computeInvoiceLinePennies, invoiceTotals, InvoiceTotals } from '@/lib/invoice';
+import { computeInvoiceLinePennies, invoiceTotals, InvoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { tServer } from '@/lib/server-i18n';
 import { presignGet } from '@/lib/r2';
@@ -55,7 +55,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
@@ -110,7 +110,9 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     number: inv.invoice_number ?? '',
     status: inv.status,
     series: inv.series,
-    issuedAt: new Date(inv.issued_at),
+    // The PRINTED issue date = the effective DOCUMENT date (date_issued ?? issued_at) — the same
+    // date the P&L recognises revenue by. One truth: the document and the accounts agree.
+    issuedAt: new Date(effectiveIssueDate(inv)),
     paidAt: inv.paid_at ? new Date(inv.paid_at) : null,
     confirmDueAt: inv.confirm_due_at ? new Date(inv.confirm_due_at) : null,
     receiptSentAt: inv.receipt_sent_at ? new Date(inv.receipt_sent_at) : null,

@@ -34,6 +34,7 @@ type PageProps = {
   taxLabel: string;
   footerText: string | null;
   datePaid: string | null;       // yyyy-mm-dd (document fact, manager-editable)
+  dateIssued: string;            // yyyy-mm-dd (document fact, manager-editable; effective value)
   receiptNotSent: boolean;       // confirmed but the receipt never went — visible, resendable
   issuedAt: string;
   vatRegistered: boolean;
@@ -149,6 +150,9 @@ export default function InvoicePage(props: PageProps) {
         {props.status === 'paid' && props.receiptNotSent && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
         )}
+        {props.canManage && (
+          <DateIssuedEditor invoiceId={props.invoiceId} initial={props.dateIssued} t={t} onSaved={() => router.replace(router.asPath)} />
+        )}
         {(props.status === 'paid' || props.status === 'paid_pending') && props.canManage && (
           <DatePaidEditor invoiceId={props.invoiceId} initial={props.datePaid} t={t} onSaved={() => router.replace(router.asPath)} />
         )}
@@ -256,6 +260,35 @@ export default function InvoicePage(props: PageProps) {
   );
 }
 
+// Date-issued: the DOCUMENT issue/billing date — defaults from mint, manager/admin-editable,
+// audited + guarded server-side (not future, not before the job). The P&L recognises by this date.
+function DateIssuedEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string; t: (k: string, o?: any) => string; onSaved: () => void }) {
+  const [val, setVal] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch('/api/invoice-date-issued', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId, dateIssued: val }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(d?.message || t('dateIssued.error')); setBusy(false); return; }
+      onSaved();
+    } catch { setErr(t('dateIssued.error')); setBusy(false); }
+  }
+  return (
+    <div className="flex flex-wrap items-end gap-2 mb-3">
+      <label className="block">
+        <span className="block text-xs text-muted mb-1">{t('dateIssued.label')}</span>
+        <input type="date" value={val} onChange={(e) => setVal(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+      </label>
+      <button onClick={save} disabled={busy || !val || val === initial} className="text-sm rounded-lg px-3 py-2 bg-surface-muted border border-line text-ink disabled:opacity-50">
+        {busy ? t('dateIssued.saving') : t('dateIssued.save')}
+      </button>
+      {err && <span className="text-sm text-danger">{err}</span>}
+    </div>
+  );
+}
+
 // Date-paid: the DOCUMENT fact — defaults from mark-paid, manager/admin-editable, audited server-side.
 function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string | null; t: (k: string, o?: any) => string; onSaved: () => void }) {
   const [val, setVal] = useState(initial ?? '');
@@ -307,6 +340,7 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       taxLabel: doc.taxLabel,
       footerText: doc.footerText,
       datePaid: doc.datePaid ? doc.datePaid.toISOString().slice(0, 10) : null,
+      dateIssued: doc.issuedAt.toISOString().slice(0, 10), // effective document date (date_issued ?? issued_at)
       receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
       issuedAt: doc.issuedAt.toLocaleDateString(doc.locale),
       vatRegistered: doc.vatRegistered,

@@ -13,7 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
-import { invoiceTotals, computeInvoiceLinePennies } from '@/lib/invoice';
+import { invoiceTotals, computeInvoiceLinePennies, effectiveIssueDate } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 
@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     orderBy: { issued_at: 'desc' },
     take: 500,
     select: {
-      id: true, invoice_number: true, status: true, series: true, issued_at: true, paid_at: true, receipt_sent_at: true,
+      id: true, invoice_number: true, status: true, series: true, issued_at: true, date_issued: true, paid_at: true, receipt_sent_at: true,
       confirm_due_at: true, payment_method_snapshot: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
@@ -89,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       reg: r.vehicle_reg_snapshot,
       status: r.status,
       series: r.series,
-      issuedAt: r.issued_at,
+      issuedAt: effectiveIssueDate(r), // the DOCUMENT date — same truth as the P&L and the printed doc
       paidAt: r.paid_at,
       receiptSent: !!r.receipt_sent_at,
       manualPending: r.status === 'paid_pending' && !r.confirm_due_at,
@@ -102,5 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
   }));
 
+  // Order by the EFFECTIVE issue date (the mint order can differ once document dates are edited).
+  list.sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
   return res.status(200).json({ invoices: list });
 }

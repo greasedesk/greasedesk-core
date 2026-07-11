@@ -254,6 +254,7 @@
     "unmark": "Unmark paid",
     "unmarkConfirm": "Unmark this payment? Nothing has been sent to the customer — the invoice quietly returns to unpaid.",
     "payMethodTitle": "How was it paid?",
+    "payDateLabel": "Date paid",
     "clearance": {
       "instant": "clears instantly",
       "windowed": "clears after the window",

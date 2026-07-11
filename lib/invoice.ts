@@ -13,6 +13,40 @@ export function canEditInvoice(invoice: { status: string }): boolean {
   return invoice.status === 'issued';
 }
 
+// ---- Effective document dates (ONE truth for recognition + rendering) ----
+// Each date exists twice: the editable DOCUMENT fact (date_issued / date_paid) and the system
+// attestation (issued_at / paid_at). Every reader — P&L, tiles, AR list, invoice view, PDF —
+// resolves through these, so the printed document and the accounts always agree.
+export const effectiveIssueDate = (r: { date_issued: Date | null; issued_at: Date }): Date =>
+  r.date_issued ?? r.issued_at;
+export const effectivePaidDate = (r: { date_paid: Date | null; paid_at: Date | null }): Date | null =>
+  r.date_paid ?? r.paid_at;
+
+/** SQL-level bucket for "effective issue date in [from, to)" — the same fallback as
+ *  effectiveIssueDate, expressed as a where fragment so tiles can filter in the query. */
+export const effectiveIssueDateWhere = (from: Date, to: Date) => ({
+  OR: [
+    { date_issued: { gte: from, lt: to } },
+    { date_issued: null, issued_at: { gte: from, lt: to } },
+  ],
+});
+
+// ---- Date-edit guardrails (pure — matrix-tested; the APIs translate keys to friendly text) ----
+// All comparisons are DATE-grained UTC: a document date has no meaningful time-of-day.
+const utcDay = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+/** Issue date: not in the future, not before the job's booked date (when the card has one). */
+export function validateIssueDate(d: Date, jobDate: Date | null, today: Date): 'future' | 'beforeJob' | null {
+  if (utcDay(d) > utcDay(today)) return 'future';
+  if (jobDate && utcDay(d) < utcDay(jobDate)) return 'beforeJob';
+  return null;
+}
+/** Payment date: not in the future, not before the invoice's effective issue date. */
+export function validatePaymentDate(d: Date, issueDate: Date, today: Date): 'future' | 'beforeIssue' | null {
+  if (utcDay(d) > utcDay(today)) return 'future';
+  if (utcDay(d) < utcDay(issueDate)) return 'beforeIssue';
+  return null;
+}
+
 // ---- Company identity for the header (decision D: Site's own number/VAT wins WHEN SET, else Group) ----
 export type CompanyIdentity = { name: string; companyNumber: string | null; vatNumber: string | null; address: string | null };
 
