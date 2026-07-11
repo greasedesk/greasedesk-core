@@ -10,6 +10,7 @@
 import { prisma } from '@/lib/db';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
+import { fetchLedgerInvoices, chargedLabourCentihours } from '@/lib/charged-labour';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
 export type MonthTileContext = TileContext & { months: number };
@@ -108,33 +109,26 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 //  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
   pnl: async ({ groupId, siteIds, from, to, months }) => {
-    const invoices = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
-      select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true } } } } },
-    })) as any[];
+    const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // the ONE ledger read (shared with utilisation)
 
     // The HONEST chain (ruling 2026-07-10 — replaces the parts/labour margin split, which
     // pretended a decomposition the fixed-price model doesn't make: fixed lines bake labour into
     // the margin): Revenue − Parts cost = Gross margin; Net = margin − wages − overheads.
-    // Hours charged = the NEW grain: fixed lines' labour_hours (×qty) + ad-hoc labour lines' qty.
-    let revenueNet = 0, partsCost = 0, hoursChargedCentihours = 0, linesMissingHours = 0;
+    let revenueNet = 0, partsCost = 0;
     for (const inv of invoices) {
       const warranty = inv.series === 'warranty';
       for (const it of inv.job_card?.items ?? []) {
         const qty = Number(it.qty);
         const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
         if (!warranty) revenueNet += net;
-        if (it.item_type === 'labour') {
-          hoursChargedCentihours += Math.round(qty * 100); // ad-hoc labour: qty IS hours
-        } else {
+        if (it.item_type !== 'labour') {
           partsCost += Math.round(qty * poundsToPennies(Number(it.unit_cost))); // comeback drag: cost counts even at £0 revenue
-          if (it.item_type === 'fixed') {
-            if (it.labour_hours == null) linesMissingHours += 1; // backfill visibility
-            else hoursChargedCentihours += Math.round(qty * Number(it.labour_hours) * 100);
-          }
         }
       }
     }
+    // Hours charged — the EXTRACTED numerator (lib/charged-labour), reused verbatim by
+    // getUtilisation. Grain + comeback behaviour documented at the helper.
+    const { centihours: hoursChargedCentihours, linesMissingHours } = chargedLabourCentihours(invoices);
 
     // Wage bill: active SALARIED people only (hourly staff have no hours source until clocking
     // lands — surfaced in the tile note), annual ÷ 12, scaled by their allocation to the visible

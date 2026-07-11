@@ -23,6 +23,7 @@
  * require explicit working_days for multi-site people rather than invent a merge rule.
  */
 import { prisma } from '@/lib/db';
+import { fetchLedgerInvoices, chargedLabourCentihours } from '@/lib/charged-labour';
 
 export type CapacityWindow = { from: Date; to: Date };
 export type AvailableHours = {
@@ -116,5 +117,34 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     rosteredDays,
     leaveHours: centiLeave / 100,
     phHours: centiPh / 100,
+  };
+}
+
+// ---------- Utilisation = hours charged ÷ hours available (month × site) ----------
+// Numerator = the P&L's OWN charged-hours read (lib/charged-labour — extracted, not re-queried),
+// called single-site. Denominator = getAvailableHours. BOTH receive the SAME window object —
+// numerator and denominator share identical boundaries by construction (the one-truth rail).
+// Group aggregation is Σcharged ÷ Σavailable (never a mean of ratios) — callers sum the parts.
+export type Utilisation = AvailableHours & {
+  charged: number;          // decimal hours charged in the window (this site)
+  available: number;        // = hours (aliased for the tile's charged ÷ available framing)
+  ratio: number | null;     // charged/available; NULL when available === 0 (render "—", never NaN).
+                            // NOT capped at 100% — over-capacity months must show as >100%.
+};
+
+export async function getUtilisation(groupId: string, siteId: string, window: CapacityWindow): Promise<Utilisation> {
+  const [invoices, avail] = await Promise.all([
+    fetchLedgerInvoices({ groupId, siteIds: [siteId], from: window.from, to: window.to }),
+    getAvailableHours(groupId, siteId, window),
+  ]);
+  const charged = chargedLabourCentihours(invoices).centihours / 100;
+  return {
+    ...avail,
+    charged,
+    available: avail.hours,
+    // configComplete=false does NOT suppress the ratio: a chargeable tech with no contracted
+    // hours contributes 0 available, so the ratio is UPWARD-biased — show it flagged amber
+    // (popover names missingHoursMechanics), never hidden.
+    ratio: avail.hours === 0 ? null : charged / avail.hours,
   };
 }
