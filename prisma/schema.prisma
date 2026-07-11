@@ -1070,6 +1070,11 @@ model CostPerson {
   is_chargeable            Boolean  @default(false)
   contracted_hours_per_day Decimal? @db.Decimal(4, 2)
   working_days             Int[]    @default([])
+  // Annual leave allowance in DAYS (per person, admin-editable). Leave-year = CALENDAR year in
+  // v1: "taken" = this calendar year's leave rows, balance = allowance − taken. SEAM (banked):
+  // configurable leave-year start + carry-over + part-time/six-day pro-rata would land here.
+  // Allowance/balance are PER-PERSON figures — never apportioned or summed across sites.
+  annual_leave_allowance_days Decimal? @default(28.0) @db.Decimal(4, 1)
 
   group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
   user        User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
