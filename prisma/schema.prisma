@@ -1075,6 +1075,10 @@ model CostPerson {
   // configurable leave-year start + carry-over + part-time/six-day pro-rata would land here.
   // Allowance/balance are PER-PERSON figures — never apportioned or summed across sites.
   annual_leave_allowance_days Decimal? @default(28.0) @db.Decimal(4, 1)
+  // Employment dates — RECORDED ONLY in v1, wired to no calculation. The anchor for banked:
+  // auto pro-rata of the allowance from start_date, leaver handling, mid-month capacity proration.
+  start_date DateTime?
+  end_date   DateTime?
 
   group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
   user        User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
@@ -1094,6 +1098,9 @@ enum LeaveType {
   annual
   sick
   other
+  closure // company-mandated closure (e.g. Christmas shutdown) — REAL pre-booked leave rows that
+          // consume the allowance AND drop capacity (binding model: allowance = FULL grant;
+          // closures are never modelled as a reduced allowance). Visually distinct in the Roster.
 }
 
 enum LeaveStatus {

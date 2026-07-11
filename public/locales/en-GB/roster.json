@@ -1,0 +1,49 @@
+{
+  "title": "Roster",
+  "loading": "Loading…",
+  "tab": {
+    "leave": "Leave",
+    "holidays": "Bank holidays"
+  },
+  "unassigned": "No location set",
+  "alsoAt": "also at {{sites}}",
+  "summaryLine": "{{allowance}} days · {{taken}} taken · {{balance}} left",
+  "noPeople": "No active employees yet — add people in Settings → Headcount.",
+  "noRecord": "You’re not linked to an employee record yet — ask your admin to link your login in Settings → Headcount.",
+  "allowance": {
+    "label": "Annual allowance (days)",
+    "save": "Save",
+    "error": "Could not save the allowance."
+  },
+  "type": {
+    "annual": "Annual leave",
+    "sick": "Sick",
+    "other": "Other",
+    "closure": "Company closure"
+  },
+  "status": {
+    "approved": "Approved"
+  },
+  "leave": {
+    "date": "Date",
+    "type": "Type",
+    "hours": "Hours (part-day)",
+    "fullDay": "Full day",
+    "hoursN": "{{n}}h",
+    "none": "No leave booked in {{year}}.",
+    "add": "+ Add leave",
+    "edit": "Edit",
+    "delete": "Remove",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "error": "Could not save the leave entry."
+  },
+  "holidays": {
+    "empty": "No bank holidays yet — seed the England & Wales list or add dates.",
+    "name": "Name",
+    "add": "Add holiday",
+    "seed": "Seed England & Wales 2026–27",
+    "error": "Could not update the holiday list."
+  }
+}
