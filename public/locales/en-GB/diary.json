@@ -13,7 +13,12 @@
     "marginShort": "M",
     "exVat": "(Ex-VAT)",
     "showValues": "Show values",
-    "hidden": "Values hidden"
+    "hidden": "Values hidden",
+    "payState": {
+      "unpaid": "Unpaid",
+      "invoiced": "Invoiced",
+      "paid": "Paid"
+    }
   },
   "noSite": "You’re not currently assigned to a location — contact your admin.",
   "noResources": "This location has no resources. Add some in Settings → Locations & Resources.",

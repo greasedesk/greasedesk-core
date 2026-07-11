@@ -44,6 +44,18 @@ export function findTransition(from: JobStatus, to: JobStatus): Transition | nul
   return (TRANSITIONS[from] ?? []).find((tr) => tr.to === to) ?? null;
 }
 
+// ---- payment state (the at-a-glance Unpaid/Invoiced/Paid label) ----
+// DERIVED from the card's lifecycle status — the same single truth the tabs/gates read; never a
+// stored column. `paid` covers BOTH pending-clearance and confirmed (clearance is an INVOICE-level
+// distinction; the card sits at `paid` for either) plus `done`. Everything earlier — including
+// declined/cancelled — is simply "unpaid": nothing chargeable has been raised.
+export type PaymentState = 'unpaid' | 'invoiced' | 'paid';
+export function paymentState(status: JobStatus | string): PaymentState {
+  if (status === 'invoiced') return 'invoiced';
+  if (status === 'paid' || status === 'done') return 'paid';
+  return 'unpaid';
+}
+
 // ---- the four operational stage flags ----
 export const STAGE_KEYS = ['details', 'intake', 'injob', 'complete'] as const;
 export type StageKey = typeof STAGE_KEYS[number];

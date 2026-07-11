@@ -28,8 +28,26 @@ import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
+import { paymentState, PaymentState } from '@/lib/jobcard-status';
 
 const PX_PER_MIN = 1;
+
+// Payment-state pill (Unpaid/Invoiced/Paid), derived from card status via the lifecycle chokepoint.
+// Gated by the SAME see-values PERMISSION as the money (render behind finance.canSeeValues) but
+// deliberately NOT by the "Show values" toggle — paid/unpaid is operational state, not a figure.
+const PAY_TONES: Record<PaymentState, string> = {
+  unpaid: 'bg-surface-muted border-line text-muted',
+  invoiced: 'bg-warn-soft border-warn text-warn',
+  paid: 'bg-ok-soft border-ok text-ok',
+};
+function PayPill({ status, t, className }: { status: string; t: (k: string) => string; className?: string }) {
+  const state = paymentState(status);
+  return (
+    <span className={`inline-block shrink-0 rounded-full border px-1.5 font-medium whitespace-nowrap ${PAY_TONES[state]} ${className ?? ''}`}>
+      {t(`finance.payState.${state}`)}
+    </span>
+  );
+}
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
 type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
@@ -338,8 +356,14 @@ export default function DiaryPage(props: PageProps) {
         {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
           <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
         ))}
-        {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
-        {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
+        {/* Money line: the £ value shows only if the SERVER sent it (permitted) AND the runtime
+            toggle is on; the payment-state pill follows the permission ONLY (toggle-proof). */}
+        {finance.canSeeValues && height > 28 && (
+          <span className="flex items-center gap-1 px-1">
+            {showMoney && <span className={`text-[10px] font-semibold tabular-nums truncate ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
+            <PayPill status={c.status} t={t} className="text-[9px]" />
+          </span>
+        )}
       </div>
     );
   }
@@ -536,6 +560,7 @@ export default function DiaryPage(props: PageProps) {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-semibold text-ink">{it.card.reg}</span>
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-muted whitespace-nowrap">{it.card.resourceName}</span>
+                            {finance.canSeeValues && <PayPill status={it.card.status} t={t} className="text-[10px] py-0.5" />}
                           </div>
                           <div className="text-sm text-ink">{it.card.customer}</div>
                           {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
