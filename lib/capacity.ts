@@ -155,3 +155,45 @@ export async function getUtilisation(groupId: string, siteId: string, window: Ca
     ratio: avail.hours === 0 ? null : charged / avail.hours,
   };
 }
+
+/** GROUP utilisation over the caller's visible sites — Σcharged ÷ Σavailable, NEVER a mean of
+ *  ratios (a small site's 90% must not average against a big site's 40%). Per-site parts are
+ *  returned for the breakdown; missing-hours mechanics + mechanicCount are DISTINCT people
+ *  (a split-allocated mechanic counts once, though their rostered days appear under each site). */
+export type GroupUtilisation = {
+  charged: number; available: number; ratio: number | null;
+  configComplete: boolean; missingHoursMechanics: string[];
+  mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
+  perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
+};
+
+export async function getGroupUtilisation(groupId: string, siteIds: string[], window: CapacityWindow): Promise<GroupUtilisation> {
+  const [sites, parts, people] = await Promise.all([
+    prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } }) as any,
+    Promise.all(siteIds.map((sid) => getUtilisation(groupId, sid, window))),
+    // Distinct-people counts across the visible sites (per-site sums would double-count splits).
+    prisma.costPerson.findMany({
+      where: { group_id: groupId, is_active: true, is_chargeable: true, allocations: { some: { site_id: { in: siteIds } } } },
+      select: { name: true, contracted_hours_per_day: true },
+    }) as any,
+  ]);
+  const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
+  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0;
+  const perSite = siteIds.map((sid, i) => {
+    const u = parts[i];
+    charged += u.charged; available += u.available;
+    rosteredDays += u.rosteredDays; leaveHours += u.leaveHours; phHours += u.phHours;
+    return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
+  });
+  charged = Math.round(charged * 100) / 100; available = Math.round(available * 100) / 100;
+  const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
+  return {
+    charged, available,
+    ratio: available === 0 ? null : charged / available, // null → "—", never NaN/Infinity; NOT capped
+    configComplete: missingHoursMechanics.length === 0,
+    missingHoursMechanics,
+    mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
+    rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
+    perSite,
+  };
+}

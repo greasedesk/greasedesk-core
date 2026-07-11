@@ -11,6 +11,7 @@ import { prisma } from '@/lib/db';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { fetchLedgerInvoices, chargedLabourCentihours } from '@/lib/charged-labour';
+import { getGroupUtilisation } from '@/lib/capacity';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
 export type MonthTileContext = TileContext & { months: number };
@@ -108,6 +109,10 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 //  Revenue (invoiced, ex-VAT) → − Parts cost → Gross margin → − wages − overheads → Net profit.
 //  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
+  // Utilisation = charged ÷ available over the SAME month window as the pnl (one period state).
+  // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σavailable, never a mean of
+  // ratios) — the tile only renders. Same group-aggregate site scope as the other month tiles.
+  utilisation: async ({ groupId, siteIds, from, to }) => getGroupUtilisation(groupId, siteIds, { from, to }),
   pnl: async ({ groupId, siteIds, from, to, months }) => {
     const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // the ONE ledger read (shared with utilisation)
 

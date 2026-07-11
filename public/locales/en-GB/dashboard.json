@@ -45,6 +45,15 @@
     "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings, and hours-charged on the labour hours set on each fixed-price service — keep those current for accurate numbers.",
     "labourContribution": "Labour income vs cost",
     "labourContributionSub": "{{income}} income − {{wages}} wages",
-    "degradedNote": "P&L is whole calendar months only — showing {{label}}."
+    "degradedNote": "P&L is whole calendar months only — showing {{label}}.",
+    "utilisation": "Utilisation",
+    "utilSub": "{{charged}} charged ÷ {{available}} available",
+    "utilSetup": "Set up your workshop capacity —",
+    "utilSetupLink": "tick chargeable mechanics and set contracted hours in HR →",
+    "utilZeroAvail": "0 available hours this month",
+    "utilMissing": "{{count}} mechanic(s) missing contracted hours",
+    "utilMissingNames": "Missing contracted hours (set in HR): {{names}}",
+    "utilHow": "How this is worked out",
+    "utilCalc": "{{mechanics}} mechanic(s) over {{days}} rostered days − {{leave}} leave − {{ph}} bank holidays = {{available}} available; {{charged}} charged = {{pct}}"
   }
 }

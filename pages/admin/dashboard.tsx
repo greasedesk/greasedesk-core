@@ -226,8 +226,50 @@ export default function AdminDashboard(props: PageProps) {
         </p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit'] as const).map((k) => {
+        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'utilisation'] as const).map((k) => {
           const d = tiles?.pnl as any;
+          if (k === 'utilisation') {
+            const u = tiles?.utilisation as any;
+            const pct = (r: number | null) => (r == null ? '—' : `${(r * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`);
+            const h = (n: number) => `${n.toLocaleString(props.locale, { maximumFractionDigits: 2 })}h`;
+            return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.utilisation')}</h3>
+                {u == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>
+                  /* Display-state precedence: set-up → zero-available → number (amber when incomplete). */
+                  : (u.mechanicCount === 0 && u.missingHoursMechanics.length === 0) ? (
+                    <p className="text-sm text-muted">
+                      {t('pnl.utilSetup')}{' '}
+                      <Link href="/admin/hr" className="text-accent underline">{t('pnl.utilSetupLink')}</Link>
+                    </p>
+                  ) : u.available === 0 ? (
+                    <>
+                      <p className="text-2xl font-bold tabular-nums text-muted">—</p>
+                      <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail')}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
+                      <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
+                      {!u.configComplete && (
+                        <p className="text-xs text-warn mt-1">{t('pnl.utilMissing', { count: u.missingHoursMechanics.length })}</p>
+                      )}
+                      {/* The arithmetic, in place — a story told by arithmetic, incl. rostered days. */}
+                      <details className="mt-2">
+                        <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                        <div className="text-xs text-muted mt-1 space-y-1">
+                          <p>{t('pnl.utilCalc', { mechanics: u.mechanicCount, days: u.rosteredDays, leave: h(u.leaveHours), ph: h(u.phHours), available: h(u.available), charged: h(u.charged), pct: pct(u.ratio) })}</p>
+                          {u.perSite.length > 1 && u.perSite.map((s2: any) => (
+                            <p key={s2.siteId}>{s2.siteName}: {h(s2.charged)} ÷ {h(s2.available)} = {pct(s2.ratio)}</p>
+                          ))}
+                          {!u.configComplete && <p className="text-warn">{t('pnl.utilMissingNames', { names: u.missingHoursMechanics.join(', ') })}</p>}
+                        </div>
+                      </details>
+                    </>
+                  )}
+              </div>
+            );
+          }
           if (k === 'hoursCharged') {
             const hrs = d?.hoursChargedCentihours;
             return (
