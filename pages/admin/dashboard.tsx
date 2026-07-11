@@ -32,9 +32,13 @@ type PageProps = {
 // qs = the CURRENT cash-period querystring (preset=… or from=…&to=…) — period-scoped tiles append
 // it to their Invoices link so the list opens on the same calendar; point-in-time tiles ignore it.
 type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string; qs: string | null };
+// pointInTime marks tiles that DELIBERATELY ignore the period selector (locked rule: pending
+// clearance + debtors are current-state). The grid gives them an unmistakable "As of today"
+// badge + dashed card treatment and groups them AFTER the period tiles — the footnote is no
+// longer the only carrier of the distinction.
 // A clickable tile face: fills the tile (the wrapper has p-5), hover affordance reads as a link.
 const tileLink = 'block -m-3 p-3 rounded-lg hover:bg-surface-muted/60 cursor-pointer transition-colors';
-type TileRenderer = { key: string; render: (data: any, f: Fmt) => React.ReactNode };
+type TileRenderer = { key: string; pointInTime?: boolean; render: (data: any, f: Fmt) => React.ReactNode };
 
 const TILE_RENDERERS: TileRenderer[] = [
   {
@@ -69,8 +73,17 @@ const TILE_RENDERERS: TileRenderer[] = [
     ),
   },
   {
+    key: 'warranty',
+    render: (d, f) => (
+      <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
+        <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
+        <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
+      </Link>
+    ),
+  },
+  {
     key: 'pendingClearance',
-    // Point-in-time: status only, NO period (the tile is the current clearance window).
+    pointInTime: true, // current clearance window — ignores the period selector BY DESIGN
     render: (d, f) => (
       <Link href="/admin/invoices?status=pending" className={tileLink}>
         <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
@@ -80,20 +93,11 @@ const TILE_RENDERERS: TileRenderer[] = [
   },
   {
     key: 'debtors',
-    // Point-in-time: status only, NO period (current outstanding).
+    pointInTime: true, // current outstanding — ignores the period selector BY DESIGN
     render: (d, f) => (
       <Link href="/admin/invoices?status=unpaid" className={tileLink}>
         <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.debtorsSub', { count: d.count })}</p>
-      </Link>
-    ),
-  },
-  {
-    key: 'warranty',
-    render: (d, f) => (
-      <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
-        <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
-        <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
       </Link>
     ),
   },
@@ -189,9 +193,12 @@ export default function AdminDashboard(props: PageProps) {
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {TILE_RENDERERS.map(({ key, render }) => (
-          <div key={key} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
-            <h2 className="text-sm font-semibold text-muted mb-2">{t(`tiles.${key}`)}</h2>
+        {TILE_RENDERERS.map(({ key, render, pointInTime }) => (
+          <div key={key} className={`bg-surface p-5 rounded-xl border ${pointInTime ? 'border-dashed border-accent' : 'border-line'} ${loading ? 'opacity-60' : ''}`}>
+            <h2 className="text-sm font-semibold text-muted mb-2 flex items-center justify-between gap-2">
+              <span>{t(`tiles.${key}`)}</span>
+              {pointInTime && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent text-white">{t('tiles.rightNow')}</span>}
+            </h2>
             {tiles?.[key] != null ? render(tiles[key], fmt) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
           </div>
         ))}
