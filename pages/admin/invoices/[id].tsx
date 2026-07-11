@@ -262,7 +262,7 @@ export default function InvoicePage(props: PageProps) {
 
 // Date-issued: the DOCUMENT issue/billing date — defaults from mint, manager/admin-editable,
 // audited + guarded server-side (not future, not before the job). The P&L recognises by this date.
-function DateIssuedEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string; t: (k: string, o?: any) => string; onSaved: () => void }) {
+function DateIssuedEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string; t: (k: string, o?: any) => string; onSaved: () => void | Promise<unknown> }) {
   const [val, setVal] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -272,8 +272,9 @@ function DateIssuedEditor({ invoiceId, initial, t, onSaved }: { invoiceId: strin
       const res = await fetch('/api/invoice-date-issued', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId, dateIssued: val }) });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(d?.message || t('dateIssued.error')); setBusy(false); return; }
-      onSaved();
-    } catch { setErr(t('dateIssued.error')); setBusy(false); }
+      await Promise.resolve(onSaved()); // wait for the in-place refresh — the component does NOT remount
+    } catch { setErr(t('dateIssued.error')); }
+    setBusy(false); // always return to idle (the refreshed `initial` disables Save until edited again)
   }
   return (
     <div className="flex flex-wrap items-end gap-2 mb-3">
@@ -290,7 +291,7 @@ function DateIssuedEditor({ invoiceId, initial, t, onSaved }: { invoiceId: strin
 }
 
 // Date-paid: the DOCUMENT fact — defaults from mark-paid, manager/admin-editable, audited server-side.
-function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string | null; t: (k: string, o?: any) => string; onSaved: () => void }) {
+function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string; initial: string | null; t: (k: string, o?: any) => string; onSaved: () => void | Promise<unknown> }) {
   const [val, setVal] = useState(initial ?? '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -300,8 +301,9 @@ function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string;
       const res = await fetch('/api/invoice-date-paid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId, datePaid: val }) });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(d?.message || t('datePaid.error')); setBusy(false); return; }
-      onSaved();
-    } catch { setErr(t('datePaid.error')); setBusy(false); }
+      await Promise.resolve(onSaved()); // wait for the in-place refresh — the component does NOT remount
+    } catch { setErr(t('datePaid.error')); }
+    setBusy(false); // always return to idle (the refreshed `initial` disables Save until edited again)
   }
   return (
     <div className="flex flex-wrap items-end gap-2 mb-3">
