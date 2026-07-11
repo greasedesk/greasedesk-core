@@ -24,6 +24,7 @@ import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/das
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
   currency: string; locale: string;
+  sites: Array<{ id: string; name: string }>; // the caller's VISIBLE sites (server-resolved)
 };
 
 // ---------- Tile framework (client side) ----------
@@ -133,6 +134,10 @@ export default function AdminDashboard(props: PageProps) {
   const [preset, setPreset] = useState<PeriodPreset | 'custom'>('this_month');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  // Site scope — sibling of the period control, scopes the ENTIRE dashboard (both strips).
+  // 'all' = the group-aggregate default; options are the server-resolved visible sites only
+  // (the API re-checks canAccessSite — this dropdown is decoration, not the control).
+  const [siteId, setSiteId] = useState<'all' | string>('all');
   const [tiles, setTiles] = useState<Record<string, any> | null>(null);
   // The month window the SERVER resolved for the P&L (echoed back) — drives the loud label.
   const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
@@ -151,11 +156,12 @@ export default function AdminDashboard(props: PageProps) {
   const monthQS = monthSel
     ? (monthSel.mpreset ? `mpreset=${monthSel.mpreset}` : `mfrom=${monthSel.mfrom}&mto=${monthSel.mto}`)
     : null;
+  const siteQS = siteId === 'all' ? '' : `&site=${siteId}`;
   const load = useCallback(async () => {
     if (!cashQS || !monthQS) return; // custom picked but incomplete — wait for both ends
     setLoading(true);
     try {
-      const res = await fetch(`/api/dashboard-tiles?${cashQS}&${monthQS}`, { cache: 'no-store' });
+      const res = await fetch(`/api/dashboard-tiles?${cashQS}&${monthQS}${siteQS}`, { cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
         setTiles(d.tiles);
@@ -163,7 +169,7 @@ export default function AdminDashboard(props: PageProps) {
       }
     } catch { /* tiles keep last values */ }
     setLoading(false);
-  }, [cashQS, monthQS]);
+  }, [cashQS, monthQS, siteQS]);
   useEffect(() => { load(); }, [load]);
 
   const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS };
@@ -174,6 +180,13 @@ export default function AdminDashboard(props: PageProps) {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
         <h1 className="text-2xl font-bold text-ink">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
+          {props.sites.length > 1 && (
+            <select value={siteId} onChange={(e) => setSiteId(e.target.value as any)}
+              className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
+              <option value="all">{t('allSites')}</option>
+              {props.sites.map((s2) => <option key={s2.id} value={s2.id}>{s2.name}</option>)}
+            </select>
+          )}
           <select value={preset} onChange={(e) => setPreset(e.target.value as any)}
             className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
             {PERIOD_PRESETS.map((p) => <option key={p} value={p}>{t(`period.${p}`)}</option>)}
@@ -191,6 +204,11 @@ export default function AdminDashboard(props: PageProps) {
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} />
+      {siteId !== 'all' && tiles && (tiles.pnl as any)?.invoiceCount === 0 && (tiles.utilisation as any)?.mechanicCount === 0 && ((tiles.utilisation as any)?.missingHoursMechanics?.length ?? 0) === 0 && (
+        <div className="rounded-xl border border-line bg-surface-muted p-3 mb-4 text-sm text-muted">
+          {t('notTrading', { site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {TILE_RENDERERS.map(({ key, render, pointInTime }) => (
@@ -329,6 +347,9 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
   const site = vis.primarySiteId
     ? ((await prisma.site.findUnique({ where: { id: vis.primarySiteId }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null)
     : null;
+  const visibleSites = (await prisma.site.findMany({
+    where: { id: { in: vis.siteIds } }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true },
+  })) as Array<{ id: string; site_name: string }>;
 
   return {
     props: {
@@ -336,6 +357,7 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
       accountRef: group?.ref ?? '—',
       status: group?.status ?? 'trial',
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
+      sites: visibleSites.map((s2) => ({ id: s2.id, name: s2.site_name })),
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
     },

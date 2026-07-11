@@ -55,5 +55,7 @@
     "utilMissingNames": "Missing contracted hours (set in HR): {{names}}",
     "utilHow": "How this is worked out",
     "utilCalc": "{{mechanics}} mechanic(s) over {{days}} rostered days − {{leave}} leave − {{ph}} bank holidays = {{available}} available; {{charged}} charged = {{pct}}"
-  }
+  },
+  "allSites": "All sites",
+  "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."
 }

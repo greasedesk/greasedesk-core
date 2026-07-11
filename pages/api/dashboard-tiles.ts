@@ -10,6 +10,7 @@ import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
+import { canAccessSite } from '@/lib/admin-guard';
 import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
 
@@ -41,7 +42,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   );
   if (!monthSpan) return res.status(400).json({ message: 'Pick a whole-month period for the profit tiles.' });
 
-  const base = { groupId: user.group_id as string, siteIds: vis.siteIds };
+  // Optional single-site scope — SERVER-enforced: only a site the caller can access ever
+  // narrows the seam (the selector is decoration; this is the control). Default = all visible.
+  let siteIds = vis.siteIds;
+  if (req.query.site) {
+    const siteId = String(req.query.site);
+    if (!canAccessSite(vis, siteId)) return res.status(403).json({ message: 'You don’t have access to that site.' });
+    siteIds = [siteId];
+  }
+  const base = { groupId: user.group_id as string, siteIds };
   const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
   return res.status(200).json({ tiles, from: range.from.toISOString(), to: range.to.toISOString(), monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString() });
 }
