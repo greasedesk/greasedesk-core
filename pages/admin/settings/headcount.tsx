@@ -13,14 +13,24 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/AllocationEditor';
+import { rosteredWeekdays } from '@/lib/rostered-days';
 
-type SiteOpt = { id: string; name: string; isActive: boolean };
+type SiteOpt = { id: string; name: string; isActive: boolean; openDays?: number[] };
 type Alloc = { siteId: string; percent: number };
-type Person = { id: string; name: string; role: string | null; costType: 'salary' | 'hourly'; amountPennies: number; isActive: boolean; allocations: Alloc[] };
+type Person = {
+  id: string; name: string; role: string | null; costType: 'salary' | 'hourly'; amountPennies: number; isActive: boolean;
+  isChargeable: boolean; contractedHoursPerDay: number | null; workingDays: number[];
+  allocations: Alloc[];
+};
 
-type FormState = { id: string | null; name: string; role: string; costType: 'salary' | 'hourly'; amount: string; rows: AllocRow[] };
+type FormState = {
+  id: string | null; name: string; role: string; costType: 'salary' | 'hourly'; amount: string; rows: AllocRow[];
+  isChargeable: boolean; contractedHours: string; workingDays: number[];
+};
 
-const emptyForm = (): FormState => ({ id: null, name: '', role: '', costType: 'salary', amount: '', rows: [] });
+const emptyForm = (): FormState => ({ id: null, name: '', role: '', costType: 'salary', amount: '', rows: [], isChargeable: false, contractedHours: '', workingDays: [] });
+// Display order Mon..Sun; values are the storage convention 0=Sun..6=Sat.
+const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100);
 const penniesToInput = (p: number): string => (p / 100).toFixed(2);
 
@@ -47,11 +57,13 @@ export default function HeadcountSettings() {
     setForm({
       id: p.id, name: p.name, role: p.role || '', costType: p.costType, amount: penniesToInput(p.amountPennies),
       rows: p.allocations.map((a, i) => ({ key: `${a.siteId}-${i}`, siteId: a.siteId, percent: String(a.percent) })),
+      isChargeable: p.isChargeable, contractedHours: p.contractedHoursPerDay != null ? String(p.contractedHoursPerDay) : '', workingDays: [...p.workingDays],
     });
   }
   function close() { setForm(null); }
 
-  const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows);
+  const hoursOk = !form || form.contractedHours === '' || (Number.isFinite(Number(form.contractedHours)) && Number(form.contractedHours) >= 0 && Number(form.contractedHours) <= 24);
+  const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows) && hoursOk;
 
   async function save() {
     if (!form || !canSave) return;
@@ -61,6 +73,9 @@ export default function HeadcountSettings() {
       name: form.name.trim(), role: form.role.trim() || null,
       costType: form.costType, amountPennies: poundsToPennies(form.amount),
       allocations: form.rows.map((r) => ({ siteId: r.siteId, percent: Number(r.percent) })),
+      isChargeable: form.isChargeable,
+      contractedHoursPerDay: form.contractedHours === '' ? null : Number(form.contractedHours),
+      workingDays: form.workingDays,
     };
     try {
       const res = await fetch('/api/headcount', {
@@ -135,6 +150,57 @@ export default function HeadcountSettings() {
 
             <AllocationEditor sites={sites} rows={form.rows} onChange={(rows) => setForm({ ...form, rows })} t={t} />
 
+            {/* ---- Employment shape (utilisation denominator inputs — lib/capacity reads all three) ---- */}
+            <div className="mt-5 pt-4 border-t border-line space-y-3">
+              <div className="text-sm font-medium text-ink">{t('shape.heading')}</div>
+              <label className="flex items-start gap-2 text-sm text-ink">
+                <input type="checkbox" checked={form.isChargeable} onChange={(e) => setForm({ ...form, isChargeable: e.target.checked })} className="mt-0.5" />
+                <span>{t('shape.chargeable')}<span className="block text-xs text-muted">{t('shape.chargeableHint')}</span></span>
+              </label>
+              <label className="block max-w-xs">
+                <span className="text-sm font-medium text-ink">{t('shape.hours')}</span>
+                <input type="number" inputMode="decimal" min={0} max={24} step="0.25" value={form.contractedHours}
+                  onChange={(e) => setForm({ ...form, contractedHours: e.target.value })}
+                  className="mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink" />
+                {!hoursOk && <span className="block text-xs text-danger mt-1">{t('shape.hoursRange')}</span>}
+                {form.isChargeable && form.contractedHours === '' && (
+                  <span className="block text-xs text-warn mt-1">{t('shape.hoursNeeded')}</span>
+                )}
+              </label>
+              <div>
+                <span className="text-sm font-medium text-ink">{t('shape.workingDays')}</span>
+                <div className="flex gap-1 mt-1">
+                  {WEEKDAY_ORDER.map((d) => {
+                    const explicit = form.workingDays.includes(d);
+                    // Preview the INHERITED set (home = highest-% allocation) via THE capacity rule.
+                    const home = [...form.rows].sort((a, b) => Number(b.percent) - Number(a.percent))[0]?.siteId;
+                    const openDays = sites.find((s2) => s2.id === home)?.openDays;
+                    const inherited = form.workingDays.length === 0 && rosteredWeekdays([], openDays).includes(d);
+                    return (
+                      <button key={d} type="button"
+                        onClick={() => setForm({ ...form, workingDays: explicit ? form.workingDays.filter((x) => x !== d) : [...form.workingDays, d].sort() })}
+                        className={`w-9 py-1.5 rounded-lg border text-xs font-medium ${explicit ? 'bg-accent text-white border-accent' : inherited ? 'bg-accent-soft text-accent border-accent border-dashed' : 'bg-surface text-muted border-line'}`}>
+                        {t(`shape.dow.${d}`)}
+                      </button>
+                    );
+                  })}
+                </div>
+                {form.workingDays.length === 0 ? (
+                  <span className="block text-xs text-muted mt-1">
+                    {t('shape.inherits', {
+                      days: (() => {
+                        const home = [...form.rows].sort((a, b) => Number(b.percent) - Number(a.percent))[0]?.siteId;
+                        const open = rosteredWeekdays([], sites.find((s2) => s2.id === home)?.openDays);
+                        return WEEKDAY_ORDER.filter((d) => open.includes(d)).map((d) => t(`shape.dow.${d}`)).join(' ') || t('shape.noSite');
+                      })(),
+                    })}
+                  </span>
+                ) : (
+                  <button type="button" onClick={() => setForm({ ...form, workingDays: [] })} className="block text-xs text-accent underline mt-1">{t('shape.clearOverride')}</button>
+                )}
+              </div>
+            </div>
+
             <div className="mt-5 flex items-center gap-2">
               <button onClick={save} disabled={busy || !canSave}
                 className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
@@ -170,6 +236,17 @@ export default function HeadcountSettings() {
                               {p.role ? <span className="text-muted font-normal"> · {p.role}</span> : null}
                             </div>
                             <div className="text-xs text-muted">{payLabel(p)}</div>
+                            {p.isChargeable && (
+                              <div className="text-[11px] text-muted">
+                                {t('shape.summary', {
+                                  hours: p.contractedHoursPerDay != null ? `${p.contractedHoursPerDay}h` : t('shape.noHours'),
+                                  days: p.workingDays.length
+                                    ? WEEKDAY_ORDER.filter((d) => p.workingDays.includes(d)).map((d) => t(`shape.dow.${d}`)).join(' ')
+                                    : t('shape.inheritedShort'),
+                                })}
+                                {p.contractedHoursPerDay == null && <span className="text-warn"> · {t('shape.hoursNeeded')}</span>}
+                              </div>
+                            )}
                           </div>
                           <div className="text-right shrink-0">
                             <div className="text-ink font-semibold text-sm">{share.percent}%</div>

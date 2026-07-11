@@ -26,9 +26,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = vis.groupId;
 
   // Tenant site allow-list (definitive, from DB — not the session).
-  const sites: Array<{ id: string; site_name: string; is_active: boolean }> = await prisma.site.findMany({
+  const sites: Array<{ id: string; site_name: string; is_active: boolean; open_days: number[] }> = await prisma.site.findMany({
     where: { group_id: groupId },
-    select: { id: true, site_name: true, is_active: true },
+    select: { id: true, site_name: true, is_active: true, open_days: true },
     orderBy: { site_name: 'asc' },
   });
   const tenantSiteIds = sites.map((s) => s.id);
@@ -43,15 +43,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       orderBy: { created_at: 'asc' },
       select: {
         id: true, name: true, role: true, cost_type: true, amount_pennies: true, is_active: true,
+        is_chargeable: true, contracted_hours_per_day: true, working_days: true,
         allocations: { select: { site_id: true, percent: true } },
       },
-    });
+    }) as any;
     return res.status(200).json({
-      sites: sites.map((s) => ({ id: s.id, name: s.site_name, isActive: s.is_active })),
-      people: people.map((p) => ({
+      sites: sites.map((s) => ({ id: s.id, name: s.site_name, isActive: s.is_active, openDays: s.open_days })),
+      people: people.map((p: any) => ({
         id: p.id, name: p.name, role: p.role, costType: p.cost_type,
         amountPennies: p.amount_pennies, isActive: p.is_active,
-        allocations: p.allocations.map((a) => ({ siteId: a.site_id, percent: Number(a.percent) })),
+        // Employment shape (utilisation denominator inputs — see lib/capacity).
+        isChargeable: p.is_chargeable,
+        contractedHoursPerDay: p.contracted_hours_per_day == null ? null : Number(p.contracted_hours_per_day),
+        workingDays: p.working_days ?? [],
+        allocations: p.allocations.map((a: any) => ({ siteId: a.site_id, percent: Number(a.percent) })),
       })),
     });
   }
@@ -75,6 +80,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const check = validateAllocations(body.allocations, tenantSiteIds);
     if (!check.ok) return res.status(400).json({ message: check.error });
 
+    // Employment shape (capacity inputs). Hours: 0–24 or null; not hard-gated on chargeable —
+    // a chargeable person with NULL hours is exactly the utilisation tile's amber condition.
+    const isChargeable = !!body.isChargeable;
+    let contracted: number | null = null;
+    if (body.contractedHoursPerDay != null && body.contractedHoursPerDay !== '') {
+      const h = Number(body.contractedHoursPerDay);
+      if (!Number.isFinite(h) || h < 0 || h > 24) return res.status(400).json({ message: 'Contracted hours must be between 0 and 24.' });
+      contracted = h;
+    }
+    // working_days: 0=Sun..6=Sat, deduped+sorted; EMPTY = inherit the site's open_days (never "no days").
+    const wdRaw = Array.isArray(body.workingDays) ? body.workingDays : [];
+    const workingDays = ([...new Set(wdRaw.map((n: unknown) => Number(n)))] as number[]).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6).sort();
+
     // Guard tenant ownership on PATCH.
     if (isPatch) {
       const owned = await prisma.costPerson.findFirst({ where: { id, group_id: groupId }, select: { id: true } });
@@ -82,14 +100,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const shape = { is_chargeable: isChargeable, contracted_hours_per_day: contracted, working_days: workingDays };
       const person = isPatch
         ? await tx.costPerson.update({
             where: { id },
-            data: { name, role, cost_type: costType as any, amount_pennies: amountPennies },
+            data: { name, role, cost_type: costType as any, amount_pennies: amountPennies, ...shape },
             select: { id: true },
           })
         : await tx.costPerson.create({
-            data: { group_id: groupId, name, role, cost_type: costType as any, amount_pennies: amountPennies },
+            data: { group_id: groupId, name, role, cost_type: costType as any, amount_pennies: amountPennies, ...shape },
             select: { id: true },
           });
       await tx.costAllocation.deleteMany({ where: { cost_person_id: person.id } });

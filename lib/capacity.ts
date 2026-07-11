@@ -37,15 +37,10 @@ export type AvailableHours = {
   phHours: number;                   // total subtracted for public holidays (allocation-scaled)
 };
 
-export const dayKey = (d: Date) => d.toISOString().slice(0, 10);
-
-// ---- THE rostered-day decision (one truth — capacity AND leave range-expansion read these;
-// never re-derive the inheritance or the weekday test anywhere else) ----
-/** A person's rostered weekday set: explicit working_days, else the site's open_days. */
-export const rosteredWeekdays = (workingDays: number[], siteOpenDays: number[] | null | undefined): number[] =>
-  workingDays.length ? workingDays : (siteOpenDays ?? []);
-/** Is calendar date d a rostered (working) day for that weekday set? */
-export const isRosteredOn = (rostered: number[], d: Date): boolean => rostered.includes(d.getUTCDay());
+// THE rostered-day decision moved to lib/rostered-days (ISOMORPHIC — the Headcount form shows
+// the inherited default with the same rule). Re-exported here so server importers are unchanged.
+export { dayKey, rosteredWeekdays, isRosteredOn } from '@/lib/rostered-days';
+import { dayKey, rosteredWeekdays } from '@/lib/rostered-days';
 /** The window's public-holiday day-keys for a site (group-wide rows + site-specific rows). */
 export async function phDaySet(groupId: string, siteId: string, window: CapacityWindow): Promise<Set<string>> {
   const phs = (await prisma.publicHoliday.findMany({

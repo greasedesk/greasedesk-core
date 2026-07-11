@@ -28,5 +28,29 @@
   "confirmDelete": "Remove this person?",
   "saved": "Saved.",
   "error": "Could not save.",
-  "shared": "Shared"
+  "shared": "Shared",
+  "shape": {
+    "heading": "Employment shape (capacity)",
+    "chargeable": "Chargeable (sellable) mechanic",
+    "chargeableHint": "Counts toward workshop utilisation — hours available. Nothing to do with permissions.",
+    "hours": "Contracted hours per day",
+    "hoursRange": "Enter between 0 and 24 hours.",
+    "hoursNeeded": "needed for utilisation",
+    "workingDays": "Working days",
+    "inherits": "Inherits the site’s opening days ({{days}}). Pick days to set an explicit pattern.",
+    "clearOverride": "Clear override — inherit site opening days",
+    "noSite": "set an allocation first",
+    "summary": "Chargeable · {{hours}} · {{days}}",
+    "noHours": "no hours set",
+    "inheritedShort": "site days",
+    "dow": {
+      "0": "Sun",
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat"
+    }
+  }
 }
