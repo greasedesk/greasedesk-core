@@ -16,14 +16,8 @@ import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
 import { invoiceTotals, computeInvoiceLinePennies, effectiveIssueDate } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-
-const STATUS_FILTERS: Record<string, object> = {
-  all: {},
-  unpaid: { status: 'issued', series: 'chargeable' }, // the debtors view
-  pending: { status: 'paid_pending' },
-  paid: { status: 'paid' },
-  warranty: { series: 'warranty' },
-};
+import { isListStatusKey, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
+import { resolveRange } from '@/lib/dashboard-periods';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -38,9 +32,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const perms = await getTenantPermissions(user.group_id as string);
   if (!canViewInvoices(vis, perms)) return res.status(403).json({ message: 'You do not have permission to view invoices.' });
 
-  const statusKey = String(req.query.status || 'all');
-  const statusWhere = STATUS_FILTERS[statusKey] ?? {};
+  const rawKey = String(req.query.status || 'all');
+  const statusKey: ListStatusKey = isListStatusKey(rawKey) ? rawKey : 'all';
   const q = String(req.query.q || '').trim();
+
+  // Optional period — the DASHBOARD's period model (preset or from/to), resolved through the same
+  // chokepoint as the tiles API so a tile and the list it navigates to share one calendar.
+  let range: { from: Date; to: Date } | null = null;
+  if (req.query.preset || (req.query.from && req.query.to)) {
+    const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { fy_start_month: true } })) as any;
+    range = resolveRange(
+      { preset: req.query.preset ? String(req.query.preset) : undefined, from: req.query.from ? String(req.query.from) : undefined, to: req.query.to ? String(req.query.to) : undefined },
+      grp?.fy_start_month ?? 4,
+    );
+  }
+  const { where: statusWhere, paidRange } = listWhere(statusKey, range);
 
   const rows = (await prisma.invoice.findMany({
     where: {
@@ -56,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     orderBy: { issued_at: 'desc' },
     take: 500,
     select: {
-      id: true, invoice_number: true, status: true, series: true, issued_at: true, date_issued: true, paid_at: true, receipt_sent_at: true,
+      id: true, invoice_number: true, status: true, series: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, receipt_sent_at: true,
       confirm_due_at: true, payment_method_snapshot: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
@@ -65,7 +71,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   })) as any[];
 
-  const list = await Promise.all(rows.map(async (r) => {
+  // Paid-basis period (revenue tile's bucketing) — row-level, mirrors effectivePaidDate fallback.
+  const periodRows = paidRange ? rows.filter((r) => paidPeriodFilter(r, paidRange)) : rows;
+
+  const list = await Promise.all(periodRows.map(async (r) => {
     // Amount = gross (what's owed — the AR number). Frozen lines once pending/paid; live items while issued.
     let grossPennies = 0;
     if (r.status !== 'issued') {
@@ -104,5 +113,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Order by the EFFECTIVE issue date (the mint order can differ once document dates are edited).
   list.sort((a, b) => new Date(b.issuedAt).getTime() - new Date(a.issuedAt).getTime());
-  return res.status(200).json({ invoices: list });
+  return res.status(200).json({
+    invoices: list,
+    // Echo the applied period so the page can show (and clear) the active filter honestly.
+    period: range ? { from: range.from.toISOString(), to: range.to.toISOString() } : null,
+  });
 }

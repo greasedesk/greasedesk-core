@@ -10,6 +10,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -28,14 +29,18 @@ type PageProps = {
 // ---------- Tile framework (client side) ----------
 // A renderer receives its tile's server data + shared formatting context. Adding a tile = one
 // entry here + one compute in lib/dashboard-tiles.ts. Order here is display order.
-type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string };
+// qs = the CURRENT cash-period querystring (preset=… or from=…&to=…) — period-scoped tiles append
+// it to their Invoices link so the list opens on the same calendar; point-in-time tiles ignore it.
+type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string; qs: string | null };
+// A clickable tile face: fills the tile (the wrapper has p-5), hover affordance reads as a link.
+const tileLink = 'block -m-3 p-3 rounded-lg hover:bg-surface-muted/60 cursor-pointer transition-colors';
 type TileRenderer = { key: string; render: (data: any, f: Fmt) => React.ReactNode };
 
 const TILE_RENDERERS: TileRenderer[] = [
   {
     key: 'revenue',
     render: (d, f) => (
-      <>
+      <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
         <p className="text-3xl font-bold text-ink tabular-nums">{f.money(d.grossPennies)}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.revenueSub', { count: d.count })}</p>
         {d.perSite?.length > 0 && (
@@ -45,43 +50,51 @@ const TILE_RENDERERS: TileRenderer[] = [
             ))}
           </div>
         )}
-      </>
+      </Link>
     ),
   },
   {
     key: 'issuedVsPaid',
+    // SPLIT-clickable: each half is its own link (Issued → the arrival-only 'issued' filter:
+    // chargeable issued-in-period, any status; Paid → the same list the Revenue tile opens).
     render: (d, f) => (
       <div className="space-y-1.5">
-        <div className="flex justify-between items-baseline"><span className="text-xs text-muted">{f.t('tiles.issued')}</span><span className="text-lg font-semibold text-ink tabular-nums">{d.issuedCount} · {f.money(d.issuedPennies)}</span></div>
-        <div className="flex justify-between items-baseline"><span className="text-xs text-muted">{f.t('tiles.paid')}</span><span className="text-lg font-semibold text-ok tabular-nums">{d.paidCount} · {f.money(d.paidPennies)}</span></div>
+        <Link href={`/admin/invoices?status=issued${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
+          <span className="text-xs text-muted">{f.t('tiles.issued')}</span><span className="text-lg font-semibold text-ink tabular-nums">{d.issuedCount} · {f.money(d.issuedPennies)}</span>
+        </Link>
+        <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
+          <span className="text-xs text-muted">{f.t('tiles.paid')}</span><span className="text-lg font-semibold text-ok tabular-nums">{d.paidCount} · {f.money(d.paidPennies)}</span>
+        </Link>
       </div>
     ),
   },
   {
     key: 'pendingClearance',
+    // Point-in-time: status only, NO period (the tile is the current clearance window).
     render: (d, f) => (
-      <>
+      <Link href="/admin/invoices?status=pending" className={tileLink}>
         <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.pendingClearanceSub', { count: d.count })}</p>
-      </>
+      </Link>
     ),
   },
   {
     key: 'debtors',
+    // Point-in-time: status only, NO period (current outstanding).
     render: (d, f) => (
-      <>
+      <Link href="/admin/invoices?status=unpaid" className={tileLink}>
         <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.debtorsSub', { count: d.count })}</p>
-      </>
+      </Link>
     ),
   },
   {
     key: 'warranty',
     render: (d, f) => (
-      <>
+      <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
         <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
-      </>
+      </Link>
     ),
   },
 ];
@@ -114,10 +127,13 @@ export default function AdminDashboard(props: PageProps) {
   const [tiles, setTiles] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // The cash strip's period as a querystring — ONE builder shared by the tiles fetch and the
+  // tile links, so a click lands on exactly the period the tile displayed.
+  const cashQS = preset === 'custom'
+    ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
+    : `preset=${preset}`;
   const load = useCallback(async () => {
-    const cash = preset === 'custom'
-      ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
-      : `preset=${preset}`;
+    const cash = cashQS;
     const month = mPreset === 'custom'
       ? (mFrom && mTo ? `mfrom=${mFrom}&mto=${mTo}` : null)
       : `mpreset=${mPreset}`;
@@ -129,10 +145,10 @@ export default function AdminDashboard(props: PageProps) {
       if (res.ok) setTiles((await res.json()).tiles);
     } catch { /* tiles keep last values */ }
     setLoading(false);
-  }, [preset, customFrom, customTo, mPreset, mFrom, mTo]);
+  }, [cashQS, mPreset, mFrom, mTo]);
   useEffect(() => { load(); }, [load]);
 
-  const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t };
+  const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS };
 
   return (
     <>

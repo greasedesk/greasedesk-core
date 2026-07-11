@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -28,7 +29,11 @@ type Row = {
   jobCardId: string; recipientEmail: string | null;
 };
 const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty'] as const;
-type Filter = typeof FILTERS[number];
+// 'issued' is an ARRIVAL-ONLY filter (dashboard "Issued vs paid" tile): chargeable issued-in-period,
+// any status. It has no tab — the period banner names it; picking any tab replaces it.
+type Filter = typeof FILTERS[number] | 'issued';
+type PeriodQS = { preset?: string; from?: string; to?: string } | null;
+const periodToQS = (pd: PeriodQS) => (pd ? (pd.preset ? `&preset=${pd.preset}` : `&from=${pd.from}&to=${pd.to}`) : '');
 
 function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   if (row.series === 'warranty') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{t('chip.warranty')}</span>;
@@ -39,28 +44,47 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
 
 export default function InvoicesPage() {
   const { t } = useTranslation('invoices');
+  const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
+  const [period, setPeriod] = useState<PeriodQS>(null);            // active period (from a tile)
+  const [applied, setApplied] = useState<{ from: string; to: string } | null>(null); // server-resolved echo
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  async function load(f: Filter, query: string) {
+  async function load(f: Filter, query: string, pd: PeriodQS) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices?status=${f}&q=${encodeURIComponent(query)}`, { cache: 'no-store' });
-      if (res.ok) setRows((await res.json()).invoices || []);
+      const res = await fetch(`/api/invoices?status=${f}&q=${encodeURIComponent(query)}${periodToQS(pd)}`, { cache: 'no-store' });
+      if (res.ok) { const d = await res.json(); setRows(d.invoices || []); setApplied(d.period ?? null); }
     } catch { /* list stays; friendly enough */ }
     setLoading(false);
   }
-  useEffect(() => { load('all', ''); }, []);
-  const setFilterAndLoad = (f: Filter) => { setFilter(f); load(f, q); };
+  // Initial load honours tile-passed URL params (status + preset|from/to); bare arrival = as before.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const qs = router.query;
+    const st = String(qs.status || 'all');
+    const f: Filter = (FILTERS as readonly string[]).includes(st) || st === 'issued' ? (st as Filter) : 'all';
+    const pd: PeriodQS = qs.preset ? { preset: String(qs.preset) } : (qs.from && qs.to ? { from: String(qs.from), to: String(qs.to) } : null);
+    setFilter(f); setPeriod(pd);
+    load(f, '', pd);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady]);
+  const setFilterAndLoad = (f: Filter) => { setFilter(f); load(f, q, period); };
+  const clearPeriod = () => {
+    const f: Filter = filter === 'issued' ? 'all' : filter; // 'issued' only means anything WITH a period
+    setPeriod(null); setApplied(null); setFilter(f);
+    router.replace('/admin/invoices', undefined, { shallow: true });
+    load(f, q, null);
+  };
   const onSearch = (v: string) => {
     setQ(v);
     if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => load(filter, v), 350);
+    debounce.current = setTimeout(() => load(filter, v, period), 350);
   };
 
   async function resend(r: Row) {
@@ -100,6 +124,18 @@ export default function InvoicesPage() {
             className="sm:ml-auto sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent" />
         </div>
 
+        {applied && (
+          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg mb-3 text-sm bg-accent-soft text-accent">
+            <span>
+              {t('periodBanner', {
+                label: t(`filter.${filter}`),
+                from: new Date(applied.from).toLocaleDateString(cur?.locale ?? 'en-GB'),
+                to: new Date(new Date(applied.to).getTime() - 86400000).toLocaleDateString(cur?.locale ?? 'en-GB'),
+              })}
+            </span>
+            <button onClick={clearPeriod} className="underline font-semibold">{t('periodClear')}</button>
+          </div>
+        )}
         {msg && <div className={`p-2 rounded-lg mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         <div className="bg-surface border border-line rounded-xl overflow-x-auto">

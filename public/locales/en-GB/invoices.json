@@ -10,7 +10,8 @@
     "unpaid": "Unpaid",
     "pending": "Pending",
     "paid": "Paid",
-    "warranty": "Warranty"
+    "warranty": "Warranty",
+    "issued": "Issued in period"
   },
   "col": {
     "number": "Invoice",
@@ -40,5 +41,7 @@
     "sent": "Invoice {{number}} re-sent (copy to your inbox).",
     "error": "Could not send the invoice.",
     "noEmail": "This customer has no email address on file — add one on the job card's Customer Details tab first."
-  }
+  },
+  "periodBanner": "Showing {{label}} · {{from}} – {{to}}",
+  "periodClear": "Clear filter"
 }
