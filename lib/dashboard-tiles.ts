@@ -10,7 +10,7 @@
 import { prisma } from '@/lib/db';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
-import { fetchLedgerInvoices, chargedLabourCentihours } from '@/lib/charged-labour';
+import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies } from '@/lib/charged-labour';
 import { getGroupUtilisation } from '@/lib/capacity';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
@@ -90,13 +90,40 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     return { grossPennies: rows.reduce((a, r) => a + grossOfIssued(r), 0), count: rows.length };
   },
 
-  // Warranty/comeback jobs in the period — warranty-series invoices minted in range (the filter
-  // key the series was designed to be).
+  // Warranty/comeback jobs in the period — the TRUE cost of rework, not just a count: parts £
+  // (real money spent redoing work for free) + labour hours consumed, valued at the site labour
+  // rate. READ-ONLY over the same ledger grain as the P&L: parts via partsCostPennies, hours via
+  // chargedLabourCentihours (both lib/charged-labour — never re-derived). £0 revenue on the
+  // warranty series is untouched — this tile only SURFACES cost, it never changes invoicing.
   warranty: async ({ groupId, siteIds, from, to }) => {
-    const count = await prisma.invoice.count({
-      where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...effectiveIssueDateWhere(from, to) },
+    const [rows, rates] = await Promise.all([
+      prisma.invoice.findMany({
+        where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...effectiveIssueDateWhere(from, to) },
+        select: {
+          id: true, invoice_number: true, series: true, site_id: true, site: { select: { site_name: true } },
+          job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } } } },
+        },
+      }) as any,
+      // Same rate read as the cost-base/unsold tiles: the site's LABOUR_HR default rate.
+      prisma.serviceCatalogue.findMany({
+        where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
+        select: { site_id: true, default_labour_rate: true },
+      }) as any,
+    ]);
+    const rateOf = new Map<string, number>(rates.filter((r: any) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r: any) => [r.site_id, Number(r.default_labour_rate)]));
+    let partsCost = 0, centihours = 0, labourValuePennies = 0, linesMissingHours = 0;
+    const ratesMissing = new Set<string>();
+    const jobs = rows.map((r: any) => {
+      const parts = partsCostPennies([r]);
+      const hours = chargedLabourCentihours([r]);
+      partsCost += parts; centihours += hours.centihours; linesMissingHours += hours.linesMissingHours;
+      const rate = rateOf.get(r.site_id) ?? null;
+      if (rate == null && hours.centihours > 0) ratesMissing.add(r.site?.site_name ?? '—');
+      const value = rate != null ? Math.round((hours.centihours / 100) * rate * 100) : 0;
+      labourValuePennies += value;
+      return { invoiceId: r.id, number: r.invoice_number ?? '', partsCostPennies: parts, centihours: hours.centihours, labourValuePennies: value };
     });
-    return { count };
+    return { count: rows.length, partsCostPennies: partsCost, centihours, labourValuePennies, linesMissingHours, ratesMissing: [...ratesMissing], jobs };
   },
 };
 
@@ -198,18 +225,18 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // The HONEST chain (ruling 2026-07-10 — replaces the parts/labour margin split, which
     // pretended a decomposition the fixed-price model doesn't make: fixed lines bake labour into
     // the margin): Revenue − Parts cost = Gross margin; Net = margin − wages − overheads.
-    let revenueNet = 0, partsCost = 0;
+    let revenueNet = 0;
     for (const inv of invoices) {
       const warranty = inv.series === 'warranty';
       for (const it of inv.job_card?.items ?? []) {
         const qty = Number(it.qty);
         const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
         if (!warranty) revenueNet += net;
-        if (it.item_type !== 'labour') {
-          partsCost += Math.round(qty * poundsToPennies(Number(it.unit_cost))); // comeback drag: cost counts even at £0 revenue
-        }
       }
     }
+    // Parts cost via THE extracted read (lib/charged-labour.partsCostPennies — also the warranty
+    // tile's read; comeback drag preserved by construction).
+    const partsCost = partsCostPennies(invoices);
     // Hours charged — the EXTRACTED numerator (lib/charged-labour), reused verbatim by
     // getUtilisation. Grain + comeback behaviour documented at the helper.
     const { centihours: hoursChargedCentihours, linesMissingHours } = chargedLabourCentihours(invoices);

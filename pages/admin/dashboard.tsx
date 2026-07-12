@@ -75,12 +75,42 @@ const TILE_RENDERERS: TileRenderer[] = [
   },
   {
     key: 'warranty',
-    render: (d, f) => (
-      <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
-        <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
-        <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
-      </Link>
-    ),
+    // The TRUE cost of rework: count + parts £ + labour hours valued at the labour rate. Cost
+    // only — the £0-revenue invoicing of the warranty series is never touched here.
+    render: (d, f) => {
+      const h = (c: number) => `${(c / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}h`;
+      return (
+        <div>
+          <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
+            <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
+            <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
+          </Link>
+          {d.count > 0 && (
+            <>
+              <p className="text-xs text-ink mt-2">
+                {d.labourValuePennies > 0
+                  ? f.t('tiles.warrantyCost', { parts: f.money(d.partsCostPennies), hours: h(d.centihours), value: f.money(d.labourValuePennies) })
+                  : f.t('tiles.warrantyCostNoValue', { parts: f.money(d.partsCostPennies), hours: h(d.centihours) })}
+              </p>
+              {d.ratesMissing?.length > 0 && <p className="text-xs text-warn mt-1">{f.t('pnl.breakEvenNoRate', { sites: d.ratesMissing.join(', ') })}</p>}
+              <details className="mt-2">
+                <summary className="text-xs text-accent cursor-pointer">{f.t('pnl.utilHow')}</summary>
+                <div className="text-xs text-muted mt-1 space-y-0.5">
+                  {d.jobs.map((j: any) => (
+                    <p key={j.invoiceId}>
+                      <Link href={`/admin/invoices/${j.invoiceId}`} className="text-accent underline">{j.number}</Link>
+                      <span> — {f.t('tiles.warrantyJobLine', { hours: h(j.centihours), parts: f.money(j.partsCostPennies) })}</span>
+                    </p>
+                  ))}
+                  {d.linesMissingHours > 0 && <p className="text-warn">{f.t('tiles.warrantyMissing', { count: d.linesMissingHours })}</p>}
+                  <p className="italic mt-1">{f.t('tiles.warrantyHonesty')}</p>
+                </div>
+              </details>
+            </>
+          )}
+        </div>
+      );
+    },
   },
   {
     key: 'pendingClearance',

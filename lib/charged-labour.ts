@@ -12,6 +12,7 @@
  */
 import { prisma } from '@/lib/db';
 import { effectiveIssueDateWhere } from '@/lib/invoice';
+import { poundsToPennies } from '@/lib/quote-totals';
 
 export type LedgerInvoice = {
   series: string;
@@ -28,6 +29,19 @@ export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; f
 }
 
 export type ChargedLabour = { centihours: number; linesMissingHours: number };
+
+/** Parts-cost drag of a set of ledger invoices — THE P&L's parts-cost read (extracted verbatim
+ *  from MONTH_TILE_COMPUTES.pnl; goldens prove the extraction changed nothing): every non-labour
+ *  line's qty × unit_cost. Comeback drag by construction: cost counts even at £0 revenue. */
+export function partsCostPennies(invoices: LedgerInvoice[]): number {
+  let partsCost = 0;
+  for (const inv of invoices) {
+    for (const it of inv.job_card?.items ?? []) {
+      if (it.item_type !== 'labour') partsCost += Math.round(Number(it.qty) * poundsToPennies(Number(it.unit_cost)));
+    }
+  }
+  return partsCost;
+}
 
 /** Charged labour CONTENT of a set of ledger invoices (see module header for the grain). */
 export function chargedLabourCentihours(invoices: LedgerInvoice[]): ChargedLabour {
