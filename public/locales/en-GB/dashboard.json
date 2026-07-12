@@ -43,7 +43,7 @@
     "grossMargin": "Gross margin",
     "grossMarginSub": "revenue − parts cost (covers labour + overheads)",
     "hoursCharged": "Labour hours charged",
-    "hoursChargedSub": "own mechanics’ hours — fixed-service hours + ad-hoc labour (outsourced work excluded)",
+    "hoursChargedSub": "own mechanics’ billable hours — fixed-service hours + ad-hoc labour (outsourced and warranty rework excluded)",
     "hoursMissing": "{{count}} own-labour service line(s) missing hours",
     "netProfit": "Net profit",
     "netProfitSub": "margin − {{wages}} wages − {{overheads}} rent & rates",
@@ -93,13 +93,16 @@
     "unsoldSubNoMoney": "realistically sellable mechanic time that produced no invoice",
     "unsoldOvertime": "Fully sold + overtime",
     "unsoldOvertimeSub": "{{charged}} charged against {{available}} available",
-    "unsoldCalc": "{{available}} sellable − {{charged}} charged = {{unsold}} unsold · × labour rate ≈ {{money}}",
+    "unsoldCalc": "{{available}} sellable − {{charged}} sold − {{rework}} rework = {{unsold}} unsold · × labour rate ≈ {{money}}",
     "unsoldHonesty": "Sellable hours are factor-adjusted — an 8-hour day at a 50% factor counts as 4 sellable hours, so this is capacity someone could realistically have billed, not raw clock time. GreaseDesk can’t yet say WHY it went unsold: work invoiced outside GreaseDesk, warranty rework (£0 by design, time still counted), unconverted diagnostics, or genuine idle time. Read it as a question to investigate, not a verdict — time tracking (planned) is what would answer it.",
     "utilHundred": "100% = selling every realistically sellable hour",
     "utilFactorHeading": "Sellable = each person’s raw hours × their utilisation factor:",
     "wfRaw": "raw capacity (clock time after absence)",
     "wfFactor": "× utilisation factors = {{sellable}} sellable",
-    "breakEvenOfSellable": "= {{pct}} of this month’s sellable hours"
+    "breakEvenOfSellable": "= {{pct}} of this month’s sellable hours",
+    "wfRework": "warranty rework (hours spent redoing work for free)",
+    "hoursWentRework": "+ {{hours}} warranty rework",
+    "utilReworkNote": "{{hours}} warranty rework excluded from sold (spent capacity, not sold output)"
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."

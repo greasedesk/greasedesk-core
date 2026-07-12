@@ -77,5 +77,6 @@
     "save": "Save date",
     "saving": "Saving…",
     "error": "Could not save the issue date."
-  }
+  },
+  "warrantyGoodwill": "Less: warranty — goodwill, no charge"
 }

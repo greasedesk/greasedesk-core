@@ -91,13 +91,16 @@ export function issueWarrantyInvoiceForCard(tx: Prisma.TransactionClient, jobCar
 /**
  * Freeze the invoice's lines at PAID. Chargeable → snapshot the card's items (VAT gated by the
  * tenant's registration AT ISSUE, keeping the snapshot consistent with vat_registered_at_issue).
- * Warranty → one "no charge" £0 line (ruling: never itemised). `warrantyLineText` is resolved by
- * the caller (site-locale i18n) — this chokepoint doesn't reach into translation files.
+ * Warranty (ruling 2026-07-12, supersedes "never itemised") → the real lines at NET retail plus
+ * ONE goodwill line zeroing the total (lines sum to £0 — any consumer summing warranty lines
+ * still gets zero; NO VAT on any warranty line). Empty card → the legacy single £0 line.
+ * `warrantyTexts` are resolved by the caller (site-locale i18n) — this chokepoint doesn't reach
+ * into translation files.
  */
 export async function snapshotPaidLines(
   tx: Prisma.TransactionClient,
   invoice: { id: string; job_card_id: string; series: 'chargeable' | 'warranty' | string; vat_registered_at_issue: boolean },
-  warrantyLineText: string,
+  warrantyTexts: { goodwill: string; noCharge: string },
 ): Promise<void> {
   await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // idempotent re-freeze (re-pay after unlock)
 
@@ -121,18 +124,52 @@ export async function snapshotPaidLines(
   }
 
   if (invoice.series === 'warranty') {
-    await tx.invoiceLine.create({
-      data: {
-        invoice_id: invoice.id,
-        description: warrantyLineText,
-        qty: new Prisma.Decimal(1),
-        unit_price: new Prisma.Decimal(0),
-        vat_rate: new Prisma.Decimal(0),
-        line_vat: new Prisma.Decimal(0),
-        line_total: new Prisma.Decimal(0),
-        unit_cost: new Prisma.Decimal(0),
-        position: 0,
-      },
+    const wItems = (await tx.jobCardItem.findMany({
+      where: { job_card_id: invoice.job_card_id },
+      select: { description: true, qty: true, unit_price: true, unit_cost: true, catalogue_item_id: true, labour_hours: true },
+      orderBy: { created_at: 'asc' },
+    })) as any[];
+    const valuePennies = wItems.reduce((a, it) => a + Math.round(Number(it.qty) * Number(it.unit_price) * 100), 0);
+    if (!wItems.length || valuePennies <= 0) {
+      // Nothing valued on the card — the legacy single no-charge line.
+      await tx.invoiceLine.create({
+        data: {
+          invoice_id: invoice.id, description: warrantyTexts.noCharge,
+          qty: new Prisma.Decimal(1), unit_price: new Prisma.Decimal(0), vat_rate: new Prisma.Decimal(0),
+          line_vat: new Prisma.Decimal(0), line_total: new Prisma.Decimal(0), unit_cost: new Prisma.Decimal(0), position: 0,
+        },
+      });
+      return;
+    }
+    // Real lines at NET retail (vat 0 on every line), then the goodwill line for −the full value:
+    // the frozen lines sum to £0 by construction.
+    await tx.invoiceLine.createMany({
+      data: [
+        ...wItems.map((it, i) => ({
+          invoice_id: invoice.id,
+          description: it.description,
+          qty: it.qty,
+          unit_price: it.unit_price,
+          vat_rate: new Prisma.Decimal(0),
+          line_vat: new Prisma.Decimal(0),
+          line_total: new Prisma.Decimal((Number(it.qty) * Number(it.unit_price)).toFixed(2)),
+          unit_cost: it.unit_cost,
+          catalogue_item_id: it.catalogue_item_id,
+          labour_hours: it.labour_hours, // the rework-hours grain freezes with everything else
+          position: i,
+        })),
+        {
+          invoice_id: invoice.id,
+          description: warrantyTexts.goodwill,
+          qty: new Prisma.Decimal(1),
+          unit_price: new Prisma.Decimal((-valuePennies / 100).toFixed(2)),
+          vat_rate: new Prisma.Decimal(0),
+          line_vat: new Prisma.Decimal(0),
+          line_total: new Prisma.Decimal((-valuePennies / 100).toFixed(2)),
+          unit_cost: new Prisma.Decimal(0),
+          position: wItems.length,
+        },
+      ],
     });
     return;
   }

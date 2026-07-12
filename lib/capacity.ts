@@ -202,7 +202,8 @@ async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, 
 // denominator, so there is no separate target). Group aggregation is Σcharged ÷ Σsellable
 // (never a mean of ratios) — callers sum the parts.
 export type Utilisation = AvailableHours & {
-  charged: number;          // decimal hours charged in the window (this site)
+  charged: number;          // decimal hours SOLD in the window (billable only — this site)
+  rework: number;           // warranty-rework hours consumed (spent, not sold; NOT in the ratio)
   available: number;        // = hours (SELLABLE — aliased for the tile's charged ÷ sellable framing)
   ratio: number | null;     // charged/sellable; NULL when sellable === 0 (render "—", never NaN).
                             // NOT capped at 100% — beating expectation must show as >100%.
@@ -213,10 +214,12 @@ export async function getUtilisation(groupId: string, siteId: string, window: Ca
     fetchLedgerInvoices({ groupId, siteIds: [siteId], from: window.from, to: window.to }),
     getAvailableHours(groupId, siteId, window),
   ]);
-  const charged = chargedLabourCentihours(invoices).centihours / 100;
+  const cl = chargedLabourCentihours(invoices);
+  const charged = cl.centihours / 100;
   return {
     ...avail,
     charged,
+    rework: cl.reworkCentihours / 100,
     available: avail.hours,
     // configComplete=false does NOT suppress the ratio: a chargeable tech with no contracted
     // hours contributes 0 available, so the ratio is UPWARD-biased — show it flagged amber
@@ -230,12 +233,12 @@ export async function getUtilisation(groupId: string, siteId: string, window: Ca
  *  returned for the breakdown; missing-hours mechanics + mechanicCount are DISTINCT people
  *  (a split-allocated mechanic counts once, though their rostered days appear under each site). */
 export type GroupUtilisation = {
-  charged: number; available: number; rawHours: number; ratio: number | null; // available = SELLABLE
+  charged: number; rework: number; available: number; rawHours: number; ratio: number | null; // available = SELLABLE
   configComplete: boolean; missingHoursMechanics: string[];
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
   factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
-  perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; rawHours: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
+  perSite: Array<{ siteId: string; siteName: string; charged: number; rework: number; available: number; rawHours: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
 };
 
 export async function getGroupUtilisation(groupId: string, siteIds: string[], window: CapacityWindow): Promise<GroupUtilisation> {
@@ -249,22 +252,22 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     }) as any,
   ]);
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
-  let charged = 0, available = 0, rawHours = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
+  let charged = 0, rework = 0, available = 0, rawHours = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
   const leaveByType: Record<string, number> = {};
   const factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }> = [];
   const perSite = siteIds.map((sid, i) => {
     const u = parts[i];
-    charged += u.charged; available += u.available; rawHours += u.rawHours;
+    charged += u.charged; rework += u.rework; available += u.available; rawHours += u.rawHours;
     rosteredDays += u.rosteredDays; leaveHours += u.leaveHours; phHours += u.phHours;
     grossHours += u.grossHours;
     factorParts.push(...u.factorParts);
     for (const [ty, h] of Object.entries(u.leaveByType)) leaveByType[ty] = Math.round(((leaveByType[ty] ?? 0) + h) * 100) / 100;
-    return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, rawHours: u.rawHours, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
+    return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, rework: u.rework, available: u.available, rawHours: u.rawHours, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
-  charged = Math.round(charged * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
+  charged = Math.round(charged * 100) / 100; rework = Math.round(rework * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
   return {
-    charged, available, rawHours,
+    charged, rework, available, rawHours,
     ratio: available === 0 ? null : charged / available, // null → "—", never NaN/Infinity; NOT capped
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,

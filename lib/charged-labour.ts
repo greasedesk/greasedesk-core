@@ -5,10 +5,12 @@
  * P&L strip (all visible sites) and getUtilisation (single-site: siteIds = [siteId]).
  *
  * Hours charged = fixed lines' labour_hours × qty + ad-hoc labour lines' qty (qty IS hours).
- * COMEBACK/WARRANTY BEHAVIOUR — INTENDED, not a bug: warranty invoices' lines still contribute
- * their labour hours (the rework consumed real capacity/content) and their parts cost drags the
- * P&L, while contributing £0 revenue. Utilisation therefore counts comeback hours as charged
- * content — do not "fix" this to skip warranty invoices.
+ * COMEBACK/WARRANTY BEHAVIOUR (ruling 2026-07-12 — SUPERSEDES the earlier "count warranty hours
+ * as charged" ruling): rework is SPENT capacity, not sold output. Warranty invoices' labour
+ * hours are EXCLUDED from `centihours` (the utilisation numerator / "hours charged" tile count
+ * billable work only — 8h honestly recorded on a comeback must not raise utilisation) and
+ * returned separately as `reworkCentihours`, so every clock hour stays accounted for:
+ * sold / rework / absent / unsold. Parts cost still drags the P&L; revenue stays £0.
  */
 import { prisma } from '@/lib/db';
 import { effectiveIssueDateWhere } from '@/lib/invoice';
@@ -28,7 +30,7 @@ export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; f
   }) as unknown as Promise<LedgerInvoice[]>;
 }
 
-export type ChargedLabour = { centihours: number; linesMissingHours: number };
+export type ChargedLabour = { centihours: number; reworkCentihours: number; linesMissingHours: number };
 
 /** Parts-cost drag of a set of ledger invoices — THE P&L's parts-cost read (extracted verbatim
  *  from MONTH_TILE_COMPUTES.pnl; goldens prove the extraction changed nothing): every non-labour
@@ -43,23 +45,27 @@ export function partsCostPennies(invoices: LedgerInvoice[]): number {
   return partsCost;
 }
 
-/** Charged labour CONTENT of a set of ledger invoices (see module header for the grain). */
+/** Charged labour CONTENT of a set of ledger invoices (see module header for the grain):
+ *  billable hours in `centihours`, warranty-rework hours in `reworkCentihours` — same grain,
+ *  split by the invoice's series. Missing-hours lines flag on BOTH (either undercounts). */
 export function chargedLabourCentihours(invoices: LedgerInvoice[]): ChargedLabour {
-  let centihours = 0, linesMissingHours = 0;
+  let centihours = 0, reworkCentihours = 0, linesMissingHours = 0;
   for (const inv of invoices) {
+    const rework = inv.series === 'warranty'; // spent capacity, never sold output
+    const add = (c: number) => { if (rework) reworkCentihours += c; else centihours += c; };
     for (const it of inv.job_card?.items ?? []) {
       const qty = Number(it.qty);
       if (it.item_type === 'labour') {
-        centihours += Math.round(qty * 100); // ad-hoc labour: qty IS hours
+        add(Math.round(qty * 100)); // ad-hoc labour: qty IS hours
       } else if (it.item_type === 'fixed') {
         // OUTSOURCED lines are INVISIBLE here (settled model): bought-in labour is cost of sale —
         // its labour_hours means CUSTOMER-BILLED hours (prices the job) and must never claim own
         // payroll capacity (numerator) nor nag the amber (zero own-hours is CORRECT for an MOT).
         if (it.labour_outsourced) continue;
         if (it.labour_hours == null) linesMissingHours += 1; // a PAYROLL-time product with no hours set
-        else centihours += Math.round(qty * Number(it.labour_hours) * 100);
+        else add(Math.round(qty * Number(it.labour_hours) * 100));
       }
     }
   }
-  return { centihours, linesMissingHours };
+  return { centihours, reworkCentihours, linesMissingHours };
 }

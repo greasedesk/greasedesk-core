@@ -41,6 +41,10 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
   const fmt = (p: number) => formatMoney(p, { currency: doc.currency, locale: doc.locale });
   const reg = doc.vatRegistered;
   const isPaidState = doc.status === 'paid' || doc.status === 'paid_pending';
+  const warranty = doc.series === 'warranty';
+  // NO VAT anywhere on a warranty document (lines at net retail, goodwill line zeroes the total
+  // before VAT would arise); totals collapse to the loud AMOUNT DUE £0.00.
+  const showVat = reg && !warranty;
   return (
     <Document title={`${t('title')} ${doc.number}`}>
       <Page size="A4" style={S.page}>
@@ -89,22 +93,26 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
           <Text style={[S.th, S.cDesc]}>{t('cols.description')}</Text>
           <Text style={[S.th, S.cQty]}>{t('cols.qty')}</Text>
           <Text style={[S.th, S.cPrice]}>{t('cols.unitPrice')}</Text>
-          {reg ? <Text style={[S.th, S.cRate]}>{t('cols.vatRate', { label: doc.taxLabel })}</Text> : null}
-          <Text style={[S.th, S.cNet]}>{reg ? t('cols.net') : t('cols.amount')}</Text>
+          {showVat ? <Text style={[S.th, S.cRate]}>{t('cols.vatRate', { label: doc.taxLabel })}</Text> : null}
+          <Text style={[S.th, S.cNet]}>{showVat ? t('cols.net') : t('cols.amount')}</Text>
         </View>
         {doc.lines.map((l, i) => (
           <View key={i} style={S.row} wrap={false}>
             <Text style={S.cDesc}>{l.description}</Text>
             <Text style={S.cQty}>{l.qty}</Text>
             <Text style={S.cPrice}>{fmt(l.unitPricePennies)}</Text>
-            {reg ? <Text style={S.cRate}>{l.vatRate}%</Text> : null}
+            {showVat ? <Text style={S.cRate}>{l.vatRate}%</Text> : null}
             <Text style={S.cNet}>{fmt(l.netPennies)}</Text>
           </View>
         ))}
 
         <View style={S.totalsWrap}>
           <View style={S.totals}>
-            {reg ? (
+            {warranty ? (
+              /* The LOUDEST figure on the document — a customer must never read the goods value
+                 above as money owed. */
+              <View style={[S.totalRow, S.grand, { fontSize: 16 }]}><Text>{t('amountDue').toUpperCase()}</Text><Text>{fmt(0)}</Text></View>
+            ) : reg ? (
               <>
                 <View style={S.totalRow}><Text style={S.muted}>{t('subtotal', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>
                 {doc.totals.breakdown.map((b) => (
@@ -117,8 +125,9 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
               <View style={[S.totalRow, S.grand]}><Text>{t('total')}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>
             )}
             {/* Status-aware footer (Xero-style): marked/confirmed paid → Less Amount Paid + date +
-                AMOUNT DUE 0. Unpaid renders nothing here — the terms block below covers it. */}
-            {isPaidState ? (
+                AMOUNT DUE 0. Unpaid renders nothing here — the terms block below covers it.
+                Warranty already renders AMOUNT DUE 0 above — never twice. */}
+            {isPaidState && !warranty ? (
               <>
                 <View style={S.totalRow}>
                   <Text style={S.muted}>{t('lessAmountPaid')}{doc.datePaid ? ` (${doc.datePaid.toLocaleDateString(doc.locale, { timeZone: 'UTC' })})` : ''}</Text>
@@ -135,7 +144,7 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
           <Text style={[S.muted, { marginTop: 18, fontSize: 8, lineHeight: 1.5 }]}>{doc.footerText}</Text>
         ) : null}
 
-        {!reg ? <Text style={[S.muted, { marginTop: 12 }]}>{t('notRegistered', { label: doc.taxLabel })}</Text> : null}
+        {!reg && !warranty ? <Text style={[S.muted, { marginTop: 12 }]}>{t('notRegistered', { label: doc.taxLabel })}</Text> : null}
         <Text style={S.footer} fixed>{doc.company.name} — {t('title')} {doc.number}</Text>
       </Page>
     </Document>

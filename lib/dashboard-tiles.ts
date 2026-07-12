@@ -115,13 +115,15 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     const ratesMissing = new Set<string>();
     const jobs = rows.map((r: any) => {
       const parts = partsCostPennies([r]);
-      const hours = chargedLabourCentihours([r]);
-      partsCost += parts; centihours += hours.centihours; linesMissingHours += hours.linesMissingHours;
+      // Warranty hours land in reworkCentihours (they are SPENT capacity, excluded from charged).
+      const cl = chargedLabourCentihours([r]);
+      const hours = cl.reworkCentihours;
+      partsCost += parts; centihours += hours; linesMissingHours += cl.linesMissingHours;
       const rate = rateOf.get(r.site_id) ?? null;
-      if (rate == null && hours.centihours > 0) ratesMissing.add(r.site?.site_name ?? '—');
-      const value = rate != null ? Math.round((hours.centihours / 100) * rate * 100) : 0;
+      if (rate == null && hours > 0) ratesMissing.add(r.site?.site_name ?? '—');
+      const value = rate != null ? Math.round((hours / 100) * rate * 100) : 0;
       labourValuePennies += value;
-      return { invoiceId: r.id, number: r.invoice_number ?? '', partsCostPennies: parts, centihours: hours.centihours, labourValuePennies: value };
+      return { invoiceId: r.id, number: r.invoice_number ?? '', partsCostPennies: parts, centihours: hours, labourValuePennies: value };
     });
     return { count: rows.length, partsCostPennies: partsCost, centihours, labourValuePennies, linesMissingHours, ratesMissing: [...ratesMissing], jobs };
   },

@@ -145,7 +145,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })) as any;
         if (inv && inv.status === 'issued') {
           if (!method) throw new Error('METHOD_REQUIRED'); // validated pre-tx; belt-and-braces
-          await snapshotPaidLines(tx, inv, tServer(inv.site?.locale, 'invoice', 'warrantyLine'));
+          await snapshotPaidLines(tx, inv, {
+            goodwill: tServer(inv.site?.locale, 'invoice', 'warrantyGoodwill'),
+            noCharge: tServer(inv.site?.locale, 'invoice', 'warrantyLine'),
+          });
           const now = new Date();
           const docDate = paidDate ?? now; // date_paid = the chosen DOCUMENT date; paid_at stays the attestation
           const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };

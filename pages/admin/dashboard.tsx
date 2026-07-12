@@ -286,15 +286,17 @@ export default function AdminDashboard(props: PageProps) {
                 <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>
               </div>
             );
-            // Unsold = SELLABLE − charged: realistically sellable capacity that went unsold, not
-            // raw clock time (leave/PH shrink raw hours; the factor then discounts raw to sellable).
-            const unsold = Math.max(0, u3.available - u3.charged);
-            const overtime = u3.charged > u3.available;
+            // Unsold = SELLABLE − sold − rework: rework hours were SPENT, not idle — they must
+            // never inflate the unsold-opportunity figure (rework comes out of sold's side of the
+            // ledger, never out of sellable; absence already came off raw before the factor).
+            const rw = u3.rework ?? 0;
+            const unsold = Math.max(0, u3.available - u3.charged - rw);
+            const overtime = u3.charged + rw > u3.available;
             // Unsold in money: per-site unsold × that site's rate (from the costBase compute —
             // same rate read as break-even; rate-less sites with unsold hours are FLAGGED).
             let unsoldPennies = 0; const noRate: string[] = [];
             if (cb3) for (const s3 of u3.perSite) {
-              const su = Math.max(0, s3.available - s3.charged);
+              const su = Math.max(0, s3.available - s3.charged - (s3.rework ?? 0));
               if (su <= 0) continue;
               const rate = cb3.perSite.find((r3: any) => r3.siteId === s3.siteId)?.ratePounds ?? null;
               if (rate == null) noRate.push(s3.siteName);
@@ -310,6 +312,8 @@ export default function AdminDashboard(props: PageProps) {
                       a clean 0h, never a dash. */}
                   <p className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</p>
                   <p className="text-xs text-muted mt-1">{t('pnl.hoursWentSub')}</p>
+                  {/* Rework sits ALONGSIDE absence: hours spent redoing work for free. */}
+                  {rw > 0 && <p className="text-xs text-warn mt-1">{t('pnl.hoursWentRework', { hours: h3(rw) })}</p>}
                   <details className="mt-2" open={false}>
                     <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                     <div className="text-xs text-muted mt-1 space-y-0.5">
@@ -321,6 +325,7 @@ export default function AdminDashboard(props: PageProps) {
                       <p className="text-ink">= {h3(u3.rawHours)} {t('pnl.wfRaw')}</p>
                       <p>{t('pnl.wfFactor', { sellable: h3(u3.available) })}</p>
                       <p>− {h3(u3.charged)} {t('pnl.wfCharged')}</p>
+                      {rw > 0 && <p>− {h3(rw)} {t('pnl.wfRework')}</p>}
                       <p className="text-ink font-medium">= {h3(unsold)} {t('pnl.wfUnsold')}</p>
                       <p className="italic mt-1">{t('pnl.wfFraming')}</p>
                     </div>
@@ -346,7 +351,7 @@ export default function AdminDashboard(props: PageProps) {
                 <details className="mt-2">
                   <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                   <div className="text-xs text-muted mt-1 space-y-1">
-                    <p>{t('pnl.unsoldCalc', { available: h3(u3.available), charged: h3(u3.charged), unsold: h3(unsold), money: unsoldPennies > 0 ? fmt.money(unsoldPennies) : '—' })}</p>
+                    <p>{t('pnl.unsoldCalc', { available: h3(u3.available), charged: h3(u3.charged), rework: h3(rw), unsold: h3(unsold), money: unsoldPennies > 0 ? fmt.money(unsoldPennies) : '—' })}</p>
                     <p className="italic">{t('pnl.unsoldHonesty')}</p>
                   </div>
                 </details>
@@ -449,6 +454,7 @@ export default function AdminDashboard(props: PageProps) {
                         <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                         <div className="text-xs text-muted mt-1 space-y-1">
                           <p>{t('pnl.utilCalc', { mechanics: u.mechanicCount, days: u.rosteredDays, leave: h(u.leaveHours), ph: h(u.phHours), raw: h(u.rawHours), available: h(u.available), charged: h(u.charged), pct: pct(u.ratio) })}</p>
+                          {(u.rework ?? 0) > 0 && <p>{t('pnl.utilReworkNote', { hours: h(u.rework) })}</p>}
                           {(u.factorParts?.length ?? 0) > 0 && (
                             <>
                               <p className="text-ink mt-1">{t('pnl.utilFactorHeading')}</p>

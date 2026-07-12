@@ -136,8 +136,8 @@
   "cancelledBanner": "This job is cancelled — everything is read-only.",
   "comeback": {
     "label": "Warranty / comeback (no charge)",
-    "hint": "Work redone free — the estimate lines below stay intact as the real cost. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job). It invoices at £0 on the warranty series — never a chargeable invoice number.",
-    "banner": "Warranty / comeback — £0 revenue; margin drag = parts cost only. Invoices at £0 (warranty series), never a chargeable number.",
+    "hint": "Work redone free — record the lines at FULL RETAIL, exactly like a chargeable job: the invoice shows the customer what the work was worth, then zeroes it as goodwill. On reports the job counts as £0 revenue, dragging margin by its PARTS cost only (labour is fixed salary overhead, never charged per-job); its hours count as rework, never as sold. It invoices at £0 on the warranty series — never a chargeable invoice number.",
+    "banner": "Warranty / comeback — £0 revenue; record lines at full retail (the invoice shows the value, then zeroes it). Margin drag = parts cost only; hours count as rework. Invoices at £0 (warranty series), never a chargeable number.",
     "invoiceNote": "Warranty comeback — it invoices at £0 on the warranty number series. A chargeable invoice number is never used.",
     "markInvoiced": "Mark invoiced (£0 warranty)"
   },

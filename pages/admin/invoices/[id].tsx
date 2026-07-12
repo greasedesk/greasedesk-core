@@ -58,6 +58,10 @@ export default function InvoicePage(props: PageProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const reg = props.vatRegistered;
+  // A warranty document shows NO VAT anywhere (not a supply for consideration — the lines render
+  // at net retail and the goodwill line zeroes the total before VAT would arise). Also gates the
+  // totals block to the loud AMOUNT DUE £0.00.
+  const showVat = reg && props.series !== 'warranty';
 
   async function emailInvoice() {
     setBusy('email'); setMsg(null);
@@ -210,8 +214,8 @@ export default function InvoicePage(props: PageProps) {
                   <th className="text-left font-medium py-2">{t('cols.description')}</th>
                   <th className="text-right font-medium py-2 px-2">{t('cols.qty')}</th>
                   <th className="text-right font-medium py-2 px-2">{t('cols.unitPrice')}</th>
-                  {reg && <th className="text-right font-medium py-2 px-2">{t('cols.vatRate', { label: props.taxLabel })}</th>}
-                  <th className="text-right font-medium py-2">{reg ? t('cols.net') : t('cols.amount')}</th>
+                  {showVat && <th className="text-right font-medium py-2 px-2">{t('cols.vatRate', { label: props.taxLabel })}</th>}
+                  <th className="text-right font-medium py-2">{showVat ? t('cols.net') : t('cols.amount')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -220,7 +224,7 @@ export default function InvoicePage(props: PageProps) {
                     <td className="py-2 text-ink whitespace-pre-line">{l.description}</td>
                     <td className="py-2 px-2 text-right text-ink tabular-nums">{l.qty}</td>
                     <td className="py-2 px-2 text-right text-ink tabular-nums">{fmt(l.unitPricePennies)}</td>
-                    {reg && <td className="py-2 px-2 text-right text-muted tabular-nums">{l.vatRate}%</td>}
+                    {showVat && <td className="py-2 px-2 text-right text-muted tabular-nums">{l.vatRate}%</td>}
                     <td className="py-2 text-right text-ink tabular-nums">{fmt(l.netPennies)}</td>
                   </tr>
                 ))}
@@ -231,7 +235,14 @@ export default function InvoicePage(props: PageProps) {
           {/* Totals */}
           <div className="pt-4 border-t border-line flex justify-end">
             <div className="w-full sm:w-72 text-sm space-y-1">
-              {reg ? (
+              {props.series === 'warranty' ? (
+                /* The LOUDEST figure on the document — a customer must never think they owe the
+                   goods value shown above. No VAT lines at all on a warranty document. */
+                <div className="flex justify-between items-baseline text-2xl font-extrabold border-t-2 border-ink pt-2">
+                  <span className="text-ink uppercase tracking-wide">{t('amountDue')}</span>
+                  <span className="text-ink tabular-nums">{fmt(0)}</span>
+                </div>
+              ) : reg ? (
                 <>
                   <div className="flex justify-between"><span className="text-muted">{t('subtotal', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
                   {props.totals.breakdown.map((b) => (
@@ -243,7 +254,7 @@ export default function InvoicePage(props: PageProps) {
               ) : (
                 <div className="flex justify-between text-base font-semibold"><span className="text-ink">{t('total')}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
               )}
-              {(props.status === 'paid' || props.status === 'paid_pending') && (
+              {props.series !== 'warranty' && (props.status === 'paid' || props.status === 'paid_pending') && (
                 <>
                   <div className="flex justify-between"><span className="text-muted">{t('lessAmountPaid', { label: props.taxLabel })}{props.datePaid ? ` (${props.datePaid})` : ''}</span><span className="text-ink tabular-nums">-{fmt(reg ? props.totals.grossPennies : props.totals.netPennies)}</span></div>
                   <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('amountDue')}</span><span className="text-ink tabular-nums">{fmt(0)}</span></div>
@@ -253,7 +264,7 @@ export default function InvoicePage(props: PageProps) {
           </div>
           {props.footerText && <p className="text-xs text-muted mt-6 whitespace-pre-line border-t border-line pt-4">{props.footerText}</p>}
 
-          {!reg && <p className="text-xs text-muted mt-4">{t('notRegistered', { label: props.taxLabel })}</p>}
+          {!reg && props.series !== 'warranty' && <p className="text-xs text-muted mt-4">{t('notRegistered', { label: props.taxLabel })}</p>}
         </div>
       </div>
     </>
