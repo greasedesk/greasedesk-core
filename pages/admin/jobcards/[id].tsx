@@ -146,10 +146,13 @@ function DeleteCardButton({ jobCardId, hasInvoice }: { jobCardId: string; hasInv
 
   async function del() {
     setBusy(true); setErr(null);
-    const res = await fetch(`/api/jobcard?id=${jobCardId}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setBusy(false); setErr(data?.message || t('delete.failed')); return; }
-    router.replace('/admin/jobcards');
+    try {
+      const res = await fetch(`/api/jobcard?id=${jobCardId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('delete.failed')); return; }
+      await router.replace('/admin/jobcards'); // await the navigation so busy holds until this dialog is gone
+    } catch { setErr(t('delete.failed')); }
+    finally { setBusy(false); } // a network throw must never strand the dialog (backdrop-close checks !busy)
   }
 
   return (

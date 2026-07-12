@@ -63,10 +63,11 @@ export default function HrPage() {
 
   async function load() {
     const res = await fetch('/api/headcount');
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const data = await res.json();
     setSites(data.sites || []);
     setPeople(data.people || []);
+    return (data.people || []) as Person[];
   }
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -75,8 +76,8 @@ export default function HrPage() {
     }
   }, [tab, changes]);
 
-  async function loadHistory(personId: string) {
-    if (history[personId]) return;
+  async function loadHistory(personId: string, force = false) {
+    if (!force && history[personId]) return; // force: the caller just invalidated the cache (stale closure would still see it)
     const r = await fetch(`/api/employment-events?personId=${personId}`);
     if (!r.ok) return;
     const evs = (await r.json()).events ?? [];
@@ -125,18 +126,27 @@ export default function HrPage() {
       if (res.status === 409 && data?.needsDateConfirm) {
         // Far-past/future effective date: explicit confirm, never silent.
         if (window.confirm(`${data.message}\n\n${th('confirmDated')}`)) { setForm({ ...form, confirmDated: true }); await saveWith(body); }
-        setBusy(false); return;
+        return;
       }
-      if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); setBusy(false); return; }
-      await load(); setForm(null); setHistory({}); setChanges(null); setMsg({ text: t('saved'), ok: true });
+      if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); return; }
+      await afterSaved(form.id);
     } catch { setMsg({ text: t('error'), ok: false }); }
-    setBusy(false);
+    finally { setBusy(false); } // ALWAYS back to idle — the refresh doesn't remount this page
   }
   async function saveWith(body: any) {
     const res = await fetch('/api/headcount', { method: body.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, confirmDated: true }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); return; }
-    await load(); setForm(null); setHistory({}); setChanges(null); setMsg({ text: t('saved'), ok: true });
+    await afterSaved(body.id ?? null);
+  }
+  // Post-save: await the refresh, then re-open the form on the SAVED values — Save sits disabled
+  // (no effective date yet) until something is edited again. A new person just joins the list.
+  async function afterSaved(id: string | null) {
+    const fresh = await load();
+    setHistory({}); setChanges(null);
+    const updated = id ? fresh?.find((p) => p.id === id) : null;
+    if (updated) openEdit(updated); else setForm(null);
+    setMsg({ text: t('saved'), ok: true }); // after openEdit — it clears msg
   }
 
   async function markLeft() {
@@ -148,7 +158,7 @@ export default function HrPage() {
       if (!res.ok) setMsg({ text: data?.message || t('error'), ok: false });
       else { setLeaving(null); setForm(null); setHistory({}); setChanges(null); await load(); setMsg({ text: th('leftDone'), ok: true }); }
     } catch { setMsg({ text: t('error'), ok: false }); }
-    setBusy(false);
+    finally { setBusy(false); }
   }
 
   const payLabel = (p: Person) => `${formatMoney(p.amountPennies)} ${p.costType === 'salary' ? t('perYear') : t('perHour')}`;
@@ -170,7 +180,7 @@ export default function HrPage() {
       default: return JSON.stringify(v);
     }
   };
-  async function correctEvent(id: string, action: 'redate' | 'void', effectiveDate?: string) {
+  async function correctEvent(personId: string, id: string, action: 'redate' | 'void', effectiveDate?: string) {
     setBusy(true); setMsg(null);
     try {
       const res = await fetch('/api/employment-events', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, action, effectiveDate }) });
@@ -183,8 +193,9 @@ export default function HrPage() {
         }
       } else setMsg({ text: d?.message || t('error'), ok: res.ok });
       setHistory({}); setChanges(null);
+      await loadHistory(personId, true); // the open pane can't re-trigger onToggle — refresh it here, never leave it on "Loading…"
     } catch { setMsg({ text: t('error'), ok: false }); }
-    setBusy(false);
+    finally { setBusy(false); }
   }
   const [fixing, setFixing] = useState<{ id: string; date: string } | null>(null);
   const EvRow = ({ e, withName }: { e: Ev; withName?: boolean }) => (
@@ -203,13 +214,13 @@ export default function HrPage() {
       {!e.voided && (fixing?.id === e.id ? (
         <span className="flex items-center gap-1.5">
           <input type="date" value={fixing.date} onChange={(ev2) => setFixing({ id: e.id, date: ev2.target.value })} className="p-1 bg-surface border border-line rounded text-ink text-xs" />
-          <button onClick={() => { correctEvent(e.id, 'redate', fixing.date); setFixing(null); }} disabled={busy || !fixing.date} className="text-xs text-accent underline disabled:opacity-40">{t('save')}</button>
+          <button onClick={() => { correctEvent(e.personId, e.id, 'redate', fixing.date); setFixing(null); }} disabled={busy || !fixing.date} className="text-xs text-accent underline disabled:opacity-40">{t('save')}</button>
           <button onClick={() => setFixing(null)} className="text-xs text-muted">{t('cancel')}</button>
         </span>
       ) : (
         <span className="flex items-center gap-2">
           <button onClick={() => setFixing({ id: e.id, date: e.effectiveDate })} className="text-xs text-accent underline">{th('fixDate')}</button>
-          <button onClick={() => { if (window.confirm(th('voidConfirm'))) correctEvent(e.id, 'void'); }} disabled={busy} className="text-xs text-danger underline disabled:opacity-40">{th('void')}</button>
+          <button onClick={() => { if (window.confirm(th('voidConfirm'))) correctEvent(e.personId, e.id, 'void'); }} disabled={busy} className="text-xs text-danger underline disabled:opacity-40">{th('void')}</button>
         </span>
       ))}
     </div>

@@ -89,9 +89,10 @@ function LeaveForm({ personId, batch, t, onDone, onCancel }: {
     try {
       const res = await fetch('/api/roster-leave', { method: batch ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(d?.message || t('leave.error')); setBusy(false); return; }
+      if (!res.ok) { setErr(d?.message || t('leave.error')); return; }
       onDone(d, d?.message || '');
-    } catch { setErr(t('leave.error')); setBusy(false); }
+    } catch { setErr(t('leave.error')); }
+    finally { setBusy(false); } // never rely on onDone unmounting this form to clear busy
   }
   return (
     <div className="py-2 space-y-2">

@@ -894,33 +894,37 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
     if (!liftId || !(Number(hours) > 0) || !startAt) { setErr(t('create.err.booking')); return; }
     if (mileErr) { setErr(t(mileErr === 'overflow' ? 'create.warn.mileageOverflow' : 'create.warn.mileageNan')); return; }
     setBusy(true); setErr(null);
-    const res = await fetch('/api/jobcard', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        registration: regCanon, customerName: cust.trim(), mileage: mileage.trim() || undefined,
-        vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
-        make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
-        fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
-        motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined,
-        siteId, resourceId: liftId, startAt, endAt,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('create.err.generic')); return; }
-    onDone();
+    try {
+      const res = await fetch('/api/jobcard', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          registration: regCanon, customerName: cust.trim(), mileage: mileage.trim() || undefined,
+          vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
+          make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
+          fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
+          motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined,
+          siteId, resourceId: liftId, startAt, endAt,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('create.err.generic')); return; }
+      onDone();
+    } catch { setErr(t('create.err.generic')); }
+    finally { setBusy(false); } // network throw must never strand the busy flag
   }
   async function addNote() {
     if (!title.trim()) { setErr(t('create.noteFailed')); return; }
     setBusy(true); setErr(null);
-    const res = await fetch('/api/diary-notes', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteId, title, startAt, endAt, resourceId: noteLift || null, colour: colour || null }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('create.noteFailed')); return; }
-    onDone();
+    try {
+      const res = await fetch('/api/diary-notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteId, title, startAt, endAt, resourceId: noteLift || null, colour: colour || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('create.noteFailed')); return; }
+      onDone();
+    } catch { setErr(t('create.noteFailed')); }
+    finally { setBusy(false); }
   }
 
   const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent'; // ≥16px on mobile — under 16px iOS Safari zooms on focus
@@ -1089,14 +1093,16 @@ function MoveDialog({ card, resources, onClose, onDone }: {
   async function save() {
     if (!liftId || !date || !time || !(Number(hours) > 0)) { setErr(t('move.failed')); return; }
     setBusy(true); setErr(null);
-    const res = await fetch('/api/diary', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobCardId: card.id, resourceId: liftId, startAt, workingMinutes: Math.round(Number(hours) * 60) }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('move.failed')); return; }
-    onDone();
+    try {
+      const res = await fetch('/api/diary', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId: card.id, resourceId: liftId, startAt, workingMinutes: Math.round(Number(hours) * 60) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('move.failed')); return; }
+      onDone();
+    } catch { setErr(t('move.failed')); }
+    finally { setBusy(false); }
   }
 
   const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent'; // ≥16px on mobile — under 16px iOS Safari zooms on focus
@@ -1158,22 +1164,26 @@ function EditNoteDialog({ note, resources, onClose, onDone }: {
   async function save() {
     if (!title.trim()) { setErr(t('editNote.saveError')); return; }
     setBusy(true); setErr(null);
-    const res = await fetch('/api/diary-notes', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: note.id, title, startAt: `${startDate}T${startTime}:00.000Z`, endAt: `${endDate}T${endTime}:00.000Z`, resourceId: noteLift || null, colour: colour || null }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('editNote.saveError')); return; }
-    onDone();
+    try {
+      const res = await fetch('/api/diary-notes', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: note.id, title, startAt: `${startDate}T${startTime}:00.000Z`, endAt: `${endDate}T${endTime}:00.000Z`, resourceId: noteLift || null, colour: colour || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('editNote.saveError')); return; }
+      onDone();
+    } catch { setErr(t('editNote.saveError')); }
+    finally { setBusy(false); }
   }
   async function del() {
     setBusy(true); setErr(null);
-    const res = await fetch(`/api/diary-notes?id=${note.id}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setErr(data?.message || t('editNote.deleteError')); return; }
-    onDone();
+    try {
+      const res = await fetch(`/api/diary-notes?id=${note.id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('editNote.deleteError')); return; }
+      onDone();
+    } catch { setErr(t('editNote.deleteError')); }
+    finally { setBusy(false); }
   }
 
   return (

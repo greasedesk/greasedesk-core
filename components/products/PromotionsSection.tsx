@@ -45,14 +45,16 @@ export default function PromotionsSection({ products, defaultVatRate, vatRegiste
     if (!form || !canSave) return;
     setBusy(true); setMsg(null);
     const body = { id: form.id || undefined, code: form.code.trim(), label: form.label.trim(), type: form.type, amount: amountNum, active: form.active, targetProductIds: form.type === 'percentage' ? form.targetIds : [] };
-    const res = await fetch('/api/promos', { method: form.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (!res.ok) { setMsg({ text: data?.message || t('saveError'), ok: false }); return; }
-    setForm(null); setMsg({ text: t('saved'), ok: true }); await load();
+    try {
+      const res = await fetch('/api/promos', { method: form.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('saveError'), ok: false }); return; }
+      setForm(null); setMsg({ text: t('saved'), ok: true }); await load();
+    } catch { setMsg({ text: t('saveError'), ok: false }); }
+    finally { setBusy(false); } // network throw must never strand the busy flag
   }
-  async function toggleActive(p: Promo) { setBusy(true); await fetch('/api/promos', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id, active: !p.active }) }); setBusy(false); await load(); }
-  async function hardDelete(p: Promo) { if (!confirm(t('confirmDelete', { code: p.code }))) return; setBusy(true); await fetch(`/api/promos?id=${p.id}`, { method: 'DELETE' }); setBusy(false); if (form?.id === p.id) setForm(null); await load(); }
+  async function toggleActive(p: Promo) { setBusy(true); try { await fetch('/api/promos', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id, active: !p.active }) }); await load(); } catch { setMsg({ text: t('saveError'), ok: false }); } finally { setBusy(false); } }
+  async function hardDelete(p: Promo) { if (!confirm(t('confirmDelete', { code: p.code }))) return; setBusy(true); try { await fetch(`/api/promos?id=${p.id}`, { method: 'DELETE' }); if (form?.id === p.id) setForm(null); await load(); } catch { setMsg({ text: t('saveError'), ok: false }); } finally { setBusy(false); } }
 
   const toggleTarget = (id: string) => setForm((f) => f && ({ ...f, targetIds: f.targetIds.includes(id) ? f.targetIds.filter((x) => x !== id) : [...f.targetIds, id] }));
   const amountLabel = (p: Promo) => p.type === 'percentage'

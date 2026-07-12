@@ -97,9 +97,12 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
     // Unrecoverable once gone — always confirm, with media-specific wording.
     if (!window.confirm(t(mediaType === 'video' ? 'photos.confirmDeleteVideo' : 'photos.confirmDelete'))) return;
     setBusy(true); setErr(null);
-    const res = await fetch(`/api/photos/${id}`, { method: 'DELETE' });
-    if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d?.message || t('photos.deleteError')); }
-    await load(); setBusy(false);
+    try {
+      const res = await fetch(`/api/photos/${id}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d?.message || t('photos.deleteError')); }
+      await load();
+    } catch { setErr(t('photos.deleteError')); }
+    finally { setBusy(false); }
   }
 
   return (
