@@ -113,6 +113,33 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σavailable, never a mean of
   // ratios) — the tile only renders. Same group-aggregate site scope as the other month tiles.
   utilisation: async ({ groupId, siteIds, from, to }) => getGroupUtilisation(groupId, siteIds, { from, to }),
+  // The missing-hours DRILL (presentation read — the metric itself is untouched): which PRODUCTS
+  // are behind linesMissingHours (fixed lines whose labour_hours is null — the definition lives
+  // in lib/charged-labour). Product-backed lines collapse to distinct products (fix once in the
+  // product editor); ad-hoc fixed lines (no catalogue_item_id) are listed separately per invoice
+  // — different defect, different fix, never conflated.
+  missingHours: async ({ groupId, siteIds, from, to }) => {
+    const invs = (await prisma.invoice.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
+      select: { id: true, invoice_number: true, job_card: { select: { items: { select: { item_type: true, labour_hours: true, catalogue_item_id: true, description: true } } } } },
+    })) as any[];
+    const byProduct = new Map<string, number>();
+    const adhoc: Array<{ invoiceId: string; number: string; description: string }> = [];
+    for (const inv of invs) {
+      for (const it of inv.job_card?.items ?? []) {
+        if (it.item_type !== 'fixed' || it.labour_hours != null) continue;
+        if (it.catalogue_item_id) byProduct.set(it.catalogue_item_id, (byProduct.get(it.catalogue_item_id) ?? 0) + 1);
+        else adhoc.push({ invoiceId: inv.id, number: inv.invoice_number ?? '', description: String(it.description ?? '').split('\n')[0] });
+      }
+    }
+    const prods = byProduct.size
+      ? ((await prisma.catalogueItem.findMany({ where: { id: { in: [...byProduct.keys()] } }, select: { id: true, name: true } })) as any[])
+      : [];
+    return {
+      products: prods.map((pr) => ({ id: pr.id, name: pr.name, lines: byProduct.get(pr.id) ?? 0 })).sort((a, b) => b.lines - a.lines),
+      adhoc,
+    };
+  },
   pnl: async ({ groupId, siteIds, from, to, months }) => {
     const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // the ONE ledger read (shared with utilisation)
 

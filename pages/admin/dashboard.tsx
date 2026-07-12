@@ -296,10 +296,30 @@ export default function AdminDashboard(props: PageProps) {
                 {hrs != null ? (
                   <>
                     <p className="text-2xl font-bold tabular-nums text-ink">{(hrs / 100).toLocaleString(props.locale, { maximumFractionDigits: 2 })}h</p>
-                    <p className="text-xs text-muted mt-1">
-                      {t('pnl.hoursChargedSub')}
-                      {d?.linesMissingHours > 0 && <span className="text-warn"> · {t('pnl.hoursMissing', { count: d.linesMissingHours })}</span>}
-                    </p>
+                    <p className="text-xs text-muted mt-1">{t('pnl.hoursChargedSub')}</p>
+                    {/* The amber is now a DRILL (same expander pattern as the utilisation tile):
+                        distinct products → the product editor (labour_hours set once fixes every
+                        line); ad-hoc lines → their invoice. Wording stays distinct from the
+                        utilisation tile's mechanics amber (different defect: product editor vs HR). */}
+                    {d?.linesMissingHours > 0 && (
+                      <details className="mt-1">
+                        <summary className="text-xs text-warn cursor-pointer">{t('pnl.hoursMissing', { count: d.linesMissingHours })} →</summary>
+                        <div className="text-xs mt-1 space-y-0.5">
+                          {((tiles?.missingHours as any)?.products ?? []).map((pr: any) => (
+                            <p key={pr.id}>
+                              <Link href={`/admin/products?edit=${pr.id}`} className="text-accent underline">{pr.name}</Link>
+                              <span className="text-muted"> — {t('pnl.hoursMissingLines', { count: pr.lines })}</span>
+                            </p>
+                          ))}
+                          {((tiles?.missingHours as any)?.adhoc ?? []).map((a: any, i: number) => (
+                            <p key={i}>
+                              <Link href={`/admin/invoices/${a.invoiceId}`} className="text-accent underline">{a.number}</Link>
+                              <span className="text-muted"> — {a.description} ({t('pnl.hoursMissingAdhoc')})</span>
+                            </p>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </>
                 ) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
               </div>

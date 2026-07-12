@@ -6,7 +6,8 @@
  * inc-VAT figure shown live beneath. A "Service tiers" section manages the tenant's optional tiers.
  * i18n-native, formatMoney, mobile-first.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { useTranslation } from 'next-i18next';
 import { requireAdminPage } from '@/lib/admin-guard';
@@ -72,6 +73,20 @@ export default function ProductsPage() {
 
   // ---- item form ----
   const blankTierCells = (): Record<string, TierCell> => Object.fromEntries(activeTiers.map((tt) => [tt.id, { price: '', manual: false }]));
+  // Deep-link: /admin/products?edit=<id> opens that product's editor once items load
+  // (the dashboard's missing-hours drill lands here).
+  const router = useRouter();
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (deepLinked.current || !router.isReady || !items.length) return;
+    const editId = router.query.edit ? String(router.query.edit) : null;
+    if (!editId) { deepLinked.current = true; return; }
+    const it = items.find((i2) => i2.id === editId);
+    if (it) openEdit(it);
+    deepLinked.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady, items]);
+
   function openAdd() { setMsg(null); setForm({ id: null, code: '', title: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', labourHours: '', components: [], tierCells: blankTierCells() }); }
   function openEdit(i: Item) {
     setMsg(null);
