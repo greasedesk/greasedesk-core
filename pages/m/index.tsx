@@ -16,6 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
+import InstallBar from '@/components/pwa/InstallBar';
 
 type DayJob = { id: string; startAt: string | null; endAt: string | null; reg: string; customer: string; resourceName: string | null; service: string; status: string; isComeback: boolean; heldOnLift?: boolean };
 type DayNote = { id: string; title: string; colour: string | null; startAt: string; endAt: string; resourceId: string | null };
@@ -179,6 +180,7 @@ export default function MobileDiaryDay() {
           </div>
         </header>
         <OutboxStatus />
+        <InstallBar />
 
         <main className="p-3 space-y-3">
           {/* Reg search — always present, so no state is ever a dead end. */}

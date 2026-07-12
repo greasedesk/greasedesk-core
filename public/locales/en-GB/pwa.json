@@ -57,5 +57,10 @@
   "today": "Today",
   "prevDay": "Previous day",
   "nextDay": "Next day",
-  "bookedOn": "Booked — {{date}}"
+  "bookedOn": "Booked — {{date}}",
+  "installTitle": "Add this app to your home screen",
+  "installButton": "Install",
+  "installIos1": "To install: tap",
+  "installIos2": "then “Add to Home Screen”.",
+  "installDismiss": "Dismiss install prompt"
 }

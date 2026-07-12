@@ -160,6 +160,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         </header>
 
         {/* Page content */}
+        <WorkshopNudge t={t} />
         <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
       </main>
 
@@ -187,6 +188,26 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// A NUDGE, never a redirect: managers/admins on a narrow viewport get a dismissible pointer to
+// the workshop view. md:hidden = CSS-narrow, not UA-sniffed; dismissal remembered per browser.
+function WorkshopNudge({ t }: { t: (k: string) => string }) {
+  const [show, setShow] = React.useState(false);
+  React.useEffect(() => {
+    try { setShow(localStorage.getItem('gd-m-nudge') !== 'dismissed'); } catch { setShow(true); }
+  }, []);
+  if (!show) return null;
+  return (
+    <div className="md:hidden flex items-center gap-2 px-4 py-2 text-sm bg-accent-soft text-accent border-b border-line">
+      <a href="/m" className="flex-1 font-medium underline min-h-[44px] flex items-center">{t('workshopNudge')}</a>
+      <button
+        onClick={() => { setShow(false); try { localStorage.setItem('gd-m-nudge', 'dismissed'); } catch { /* pref only */ } }}
+        aria-label={t('dismiss')}
+        className="min-h-[44px] min-w-[44px] text-accent"
+      >✕</button>
     </div>
   );
 }

@@ -19,5 +19,7 @@
     "liveJobCards": "Live Job Cards",
     "todaysBookings": "Today's Bookings",
     "revenueToday": "Revenue (Today)"
-  }
+  },
+  "workshopNudge": "Using a phone? Open the workshop view →",
+  "dismiss": "Dismiss"
 }

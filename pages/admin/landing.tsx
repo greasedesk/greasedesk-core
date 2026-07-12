@@ -1,9 +1,10 @@
 /**
  * File: pages/admin/landing.tsx
  * Role-based landing router (no UI — gssp redirect only): ADMIN → the dashboard;
- * SITE_MANAGER / STANDARD → the diary scoped to their primary site (getVisibility already falls
- * back to the first assigned site when no primary is set). A start page, never a restriction —
- * everyone keeps full nav access.
+ * SITE_MANAGER → the diary scoped to their primary site; STANDARD → /m, the workshop view —
+ * BY ROLE, never by device (UA strings lie; "this person is a mechanic" is already in the
+ * session). callbackUrl wins over all of this at the login page, as ever. A start page, never
+ * a restriction — everyone keeps full nav access.
  */
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -18,6 +19,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   if (!user?.id) return { redirect: { destination: '/admin/login', permanent: false } };
   const vis = await getVisibility(user.id as string);
   if (vis.isAdmin) return { redirect: { destination: '/admin/dashboard', permanent: false } };
+  if (vis.role === 'STANDARD') return { redirect: { destination: '/m', permanent: false } }; // mechanics land on the workshop view — every device, every time
   const site = vis.primarySiteId ?? vis.siteIds[0] ?? null;
   return { redirect: { destination: site ? `/admin/diary?site=${encodeURIComponent(site)}` : '/admin/diary', permanent: false } };
 };
