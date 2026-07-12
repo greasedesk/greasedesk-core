@@ -66,8 +66,18 @@ function broadcast(items) {
 }
 async function broadcastNow(db) { broadcast(await getAll(db)); }
 
-/** One item through the pipe: presign (same client id → same R2 key) → PUT → idempotent commit. */
+/** One item through the pipe, by kind. photo: presign (same client id → same R2 key) → PUT →
+ *  idempotent commit. vehicle: the existing vehicle-facts path (partial update, changed-fields
+ *  audited; naturally idempotent — the same value twice is a no-op the second time). */
 async function sendItem(item) {
+  if (item.kind === 'vehicle') {
+    const res = await fetch('/api/jobcard-details', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ jobCardId: item.jobCardId, vehicle: item.payload || {} }),
+    });
+    if (!res.ok) throw Object.assign(new Error('vehicle:' + res.status), { status: res.status });
+    return;
+  }
   if (item.kind !== 'photo') throw Object.assign(new Error('unknown-kind'), { terminal: true }); // future kinds add a sender here
   const pres = await fetch('/api/photos/presign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',

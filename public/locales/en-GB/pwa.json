@@ -24,7 +24,6 @@
   "workSold": "Work on this job",
   "notes": "Notes",
   "vin": "VIN",
-  "noVin": "No VIN recorded.",
   "copyVin": "Tap to copy",
   "copied": "Copied",
   "mileage": "Mileage in",
@@ -61,5 +60,15 @@
   "installButton": "Install",
   "installIos1": "To install: tap",
   "installIos2": "then “Add to Home Screen”.",
-  "installDismiss": "Dismiss install prompt"
+  "installDismiss": "Dismiss install prompt",
+  "edit": "Edit",
+  "save": "Save",
+  "saveAnyway": "Save anyway",
+  "cancel": "Cancel",
+  "addVin": "Add the VIN — read it off the scuttle or door pillar",
+  "editVin": "Edit VIN",
+  "vinPlaceholder": "17 characters",
+  "vinInvalid": "A VIN is exactly 17 characters and never contains I, O or Q — check and re-enter.",
+  "addMileage": "Add mileage",
+  "mileageLowWarn": "That’s LOWER than the recorded {{last}} — is it right? Tap Save anyway to confirm."
 }

@@ -33,7 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     id: p.jobCardId,
     status: p.status,
     isComeback: p.isComeback,
-    priceVisible: p.priceVisible,
     customer: { name: p.owner.name, phone: p.owner.phone },
     vehicle: {
       registration: p.vehicle.registration,
@@ -41,14 +40,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       vin: p.vehicle.vin,
       mileageIn: p.vehicle.mileageIn,
     },
-    // Work sold — the shaper already stripped unit_price for price-blind users ('' → omitted).
-    // unit_cost is NOT projected, deliberately, for anyone.
+    // Work sold — NO money fields, for anyone: no unitPrice, no unit_cost. Descriptions and
+    // quantities are the job; the sell price has no use in a bay.
     lines: p.lines.map((l) => ({
       type: l.item_type,
       description: l.description,
       qty: l.qty,
       hours: l.labour_hours ?? null,
-      ...(p.priceVisible && l.unit_price !== '' ? { unitPrice: l.unit_price } : {}),
     })),
     notes: p.garageNotes || '',
     invoice: p.invoice ? { number: p.invoice.number, status: p.invoice.status } : null,

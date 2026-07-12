@@ -12,8 +12,10 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo'; jobCardId: string; stage: string; slot: string;
-  blob: Blob; contentType: string; createdAt: number;
+  id: string; kind: 'photo' | 'vehicle'; jobCardId: string;
+  stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo'
+  payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
+  createdAt: number;
   attempts: number; lastError: string | null; state: OutboxState; nextAttemptAt: number | null; claimedAt: number | null;
 };
 
@@ -73,6 +75,22 @@ export async function enqueuePhoto(args: { jobCardId: string; stage: string; blo
     attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item)); // durably parked BEFORE any upload attempt
+  triggerDrain();
+  return item.id;
+}
+
+/** VIN / mileage from the bay — the SECOND kind on the same envelope (rides the same queue,
+ *  same idempotency key, same drain). Writes through the EXISTING vehicle-facts path
+ *  (/api/jobcard-details, partial + changed-fields-audited) — never a new endpoint. */
+export async function enqueueVehicle(args: { jobCardId: string; vin?: string; mileageIn?: number }): Promise<string> {
+  const payload: { vin?: string; mileageIn?: number } = {};
+  if (args.vin !== undefined) payload.vin = args.vin;
+  if (args.mileageIn !== undefined) payload.mileageIn = args.mileageIn;
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'vehicle', jobCardId: args.jobCardId, payload,
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item)); // durably parked BEFORE any network
   triggerDrain();
   return item.id;
 }
