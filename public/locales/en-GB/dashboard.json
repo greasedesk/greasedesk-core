@@ -66,7 +66,31 @@
     "breakEvenRevenue": "As revenue (÷ this month’s margin rate): {{value}}",
     "breakEvenResidual": "Refined (parts & outsourced margin already covers some of it): {{hours}}h of labour",
     "breakEvenHonesty": "Charged hours only count what’s invoiced through GreaseDesk — provisional until all billing moves here; the arithmetic isn’t.",
-    "utilTarget": "break-even needs {{pct}}"
+    "utilTarget": "break-even needs {{pct}}",
+    "hoursWent": "Where the hours went",
+    "hoursWentSub": "contracted capacity this month, and what became of it",
+    "wfGross": "{{gross}} contracted (rostered days × daily hours)",
+    "wfPh": "bank holidays",
+    "wfAvailable": "available",
+    "wfCharged": "charged (invoiced work)",
+    "wfUnsold": "unsold",
+    "wfFraming": "Leave and bank holidays reduce capacity — they aren’t lost sales. The lost part is the unsold line.",
+    "leaveType": {
+      "annual": "annual leave",
+      "sick": "sickness",
+      "compassionate": "compassionate leave",
+      "parental": "parental leave",
+      "training": "training",
+      "other": "other absence",
+      "closure": "company closure"
+    },
+    "unsold": "Unsold hours",
+    "unsoldSub": "≈ {{money}} of unbilled capacity at your labour rate",
+    "unsoldSubNoMoney": "paid mechanic time that produced no invoice",
+    "unsoldOvertime": "Fully sold + overtime",
+    "unsoldOvertimeSub": "{{charged}} charged against {{available}} available",
+    "unsoldCalc": "{{available}} available − {{charged}} charged = {{unsold}} unsold · × labour rate ≈ {{money}}",
+    "unsoldHonesty": "GreaseDesk can’t yet say WHY hours went unsold: work invoiced outside GreaseDesk, warranty rework (£0 by design, time still counted), unconverted diagnostics, or genuine idle time. Read it as a question to investigate, not a verdict — time tracking (planned) is what would answer it."
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."

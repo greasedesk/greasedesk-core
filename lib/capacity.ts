@@ -35,6 +35,12 @@ export type AvailableHours = {
   rosteredDays: number;              // Σ per-person rostered days in the window (config'd people)
   leaveHours: number;                // total subtracted for leave (allocation-scaled)
   phHours: number;                   // total subtracted for public holidays (allocation-scaled)
+  // Waterfall grain (ADDITIVE): gross = contracted × rostered days × allocation BEFORE any
+  // deduction (non-rostered days never enter it), and the leave subtraction split by type.
+  // FRAMING (binding): leave/PH are reductions to CAPACITY, never "lost hours" — they shrink
+  // the denominator; what's lost is available − charged.
+  grossHours: number;
+  leaveByType: Record<string, number>;
 };
 
 // THE rostered-day decision moved to lib/rostered-days (ISOMORPHIC — the Headcount form shows
@@ -78,19 +84,20 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   const [leave, phDays] = await Promise.all([
     ids.length ? prisma.leaveRecord.findMany({
       where: { group_id: groupId, cost_person_id: { in: ids }, status: 'approved', date: { gte: window.from, lt: window.to } },
-      select: { cost_person_id: true, date: true, hours: true },
+      select: { cost_person_id: true, date: true, hours: true, type: true },
     }) as any : [],
     phDaySet(groupId, siteId, window),
   ]);
-  const leaveByPerson = new Map<string, Map<string, number | null>>(); // person → day → hours (null = full day)
+  const leaveByPerson = new Map<string, Map<string, { hours: number | null; type: string }>>(); // person → day → entry
   for (const l of leave) {
     const m = leaveByPerson.get(l.cost_person_id) ?? new Map();
-    m.set(dayKey(l.date), l.hours == null ? null : Number(l.hours));
+    m.set(dayKey(l.date), { hours: l.hours == null ? null : Number(l.hours), type: l.type as string });
     leaveByPerson.set(l.cost_person_id, m);
   }
 
   const days = windowDays(window);
-  let centiTotal = 0, centiLeave = 0, centiPh = 0, rosteredDays = 0;
+  let centiTotal = 0, centiLeave = 0, centiPh = 0, centiGross = 0, rosteredDays = 0;
+  const centiByType: Record<string, number> = {};
   for (const p of configured) {
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
@@ -98,6 +105,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     const rostered: number[] = rosteredWeekdays(p.working_days, site?.open_days);
     const myLeave = leaveByPerson.get(p.id);
     let grossC = 0, subC = 0, leaveC = 0, phC = 0;
+    const typeC: Record<string, number> = {};
     for (const [key, weekday] of days) {
       if (!rostered.includes(weekday)) continue; // rostered-day guard (weekday from windowDays = isRosteredOn's test)
       rosteredDays += 1;
@@ -105,8 +113,12 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
       if (phDays.has(key)) {
         phC += Math.round(contracted * 100); // PH wins over leave on the same date — a day subtracts once
       } else {
-        const lh = myLeave?.get(key);
-        if (lh !== undefined) leaveC += Math.round(Math.min(lh ?? contracted, contracted) * 100); // null = full day; clamp ≤ contracted
+        const entry = myLeave?.get(key);
+        if (entry !== undefined) {
+          const c = Math.round(Math.min(entry.hours ?? contracted, contracted) * 100); // null = full day; clamp ≤ contracted
+          leaveC += c;
+          typeC[entry.type] = (typeC[entry.type] ?? 0) + c;
+        }
       }
     }
     subC = leaveC + phC;
@@ -114,6 +126,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     centiTotal += Math.round(netC * alloc);
     centiLeave += Math.round(leaveC * alloc);
     centiPh += Math.round(phC * alloc);
+    centiGross += Math.round(grossC * alloc);
+    for (const [ty, c] of Object.entries(typeC)) centiByType[ty] = (centiByType[ty] ?? 0) + Math.round(c * alloc);
   }
 
   return {
@@ -124,6 +138,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     rosteredDays,
     leaveHours: centiLeave / 100,
     phHours: centiPh / 100,
+    grossHours: centiGross / 100,
+    leaveByType: Object.fromEntries(Object.entries(centiByType).map(([ty, c]) => [ty, c / 100])),
   };
 }
 
@@ -164,6 +180,7 @@ export type GroupUtilisation = {
   charged: number; available: number; ratio: number | null;
   configComplete: boolean; missingHoursMechanics: string[];
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
+  grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
   perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
 };
 
@@ -178,11 +195,14 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     }) as any,
   ]);
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
-  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0;
+  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
+  const leaveByType: Record<string, number> = {};
   const perSite = siteIds.map((sid, i) => {
     const u = parts[i];
     charged += u.charged; available += u.available;
     rosteredDays += u.rosteredDays; leaveHours += u.leaveHours; phHours += u.phHours;
+    grossHours += u.grossHours;
+    for (const [ty, h] of Object.entries(u.leaveByType)) leaveByType[ty] = Math.round(((leaveByType[ty] ?? 0) + h) * 100) / 100;
     return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
   charged = Math.round(charged * 100) / 100; available = Math.round(available * 100) / 100;
@@ -194,6 +214,7 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     missingHoursMechanics,
     mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
+    grossHours: Math.round(grossHours * 100) / 100, leaveByType,
     perSite,
   };
 }

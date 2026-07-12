@@ -244,8 +244,79 @@ export default function AdminDashboard(props: PageProps) {
         </p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation'] as const).map((k) => {
+        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation', 'hoursWent', 'unsold'] as const).map((k) => {
           const d = tiles?.pnl as any;
+          if (k === 'hoursWent' || k === 'unsold') {
+            const u3 = tiles?.utilisation as any;
+            const cb3 = tiles?.costBase as any;
+            const h3 = (n: number) => `${n.toLocaleString(props.locale, { maximumFractionDigits: 2 })}h`;
+            if (u3 == null) return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
+                <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>
+              </div>
+            );
+            // Unsold = available − charged (the only genuinely LOST hours; leave/PH are capacity
+            // reductions BY DESIGN — they shrink the denominator and never suppress the ratio).
+            const unsold = Math.max(0, u3.available - u3.charged);
+            const overtime = u3.charged > u3.available;
+            // Unsold in money: per-site unsold × that site's rate (from the costBase compute —
+            // same rate read as break-even; rate-less sites with unsold hours are FLAGGED).
+            let unsoldPennies = 0; const noRate: string[] = [];
+            if (cb3) for (const s3 of u3.perSite) {
+              const su = Math.max(0, s3.available - s3.charged);
+              if (su <= 0) continue;
+              const rate = cb3.perSite.find((r3: any) => r3.siteId === s3.siteId)?.ratePounds ?? null;
+              if (rate == null) noRate.push(s3.siteName);
+              else unsoldPennies += Math.round(su * rate * 100);
+            }
+            if (k === 'hoursWent') {
+              const types = Object.entries((u3.leaveByType ?? {}) as Record<string, number>).sort((a, b) => b[1] - a[1]);
+              return (
+                <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                  <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.hoursWent')}</h3>
+                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(u3.grossHours)}</p>
+                  <p className="text-xs text-muted mt-1">{t('pnl.hoursWentSub')}</p>
+                  <details className="mt-2" open={false}>
+                    <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                    <div className="text-xs text-muted mt-1 space-y-0.5">
+                      <p>{t('pnl.wfGross', { gross: h3(u3.grossHours) })}</p>
+                      {u3.phHours > 0 && <p>− {h3(u3.phHours)} {t('pnl.wfPh')}</p>}
+                      {types.map(([ty, hh]) => <p key={ty}>− {h3(hh)} {t(`pnl.leaveType.${ty}`)}</p>)}
+                      <p className="text-ink">= {h3(u3.available)} {t('pnl.wfAvailable')}</p>
+                      <p>− {h3(u3.charged)} {t('pnl.wfCharged')}</p>
+                      <p className="text-ink font-medium">= {h3(unsold)} {t('pnl.wfUnsold')}</p>
+                      <p className="italic mt-1">{t('pnl.wfFraming')}</p>
+                    </div>
+                  </details>
+                </div>
+              );
+            }
+            return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.unsold')}</h3>
+                {overtime ? (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums text-ok">{t('pnl.unsoldOvertime')}</p>
+                    <p className="text-xs text-muted mt-1">{t('pnl.unsoldOvertimeSub', { charged: h3(u3.charged), available: h3(u3.available) })}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{h3(unsold)}</p>
+                    <p className="text-xs text-muted mt-1">{unsoldPennies > 0 ? t('pnl.unsoldSub', { money: fmt.money(unsoldPennies) }) : t('pnl.unsoldSubNoMoney')}</p>
+                    {noRate.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: noRate.join(', ') })}</p>}
+                  </>
+                )}
+                <details className="mt-2">
+                  <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                  <div className="text-xs text-muted mt-1 space-y-1">
+                    <p>{t('pnl.unsoldCalc', { available: h3(u3.available), charged: h3(u3.charged), unsold: h3(unsold), money: unsoldPennies > 0 ? fmt.money(unsoldPennies) : '—' })}</p>
+                    <p className="italic">{t('pnl.unsoldHonesty')}</p>
+                  </div>
+                </details>
+              </div>
+            );
+          }
           if (k === 'costBase' || k === 'breakEven') {
             const cb = tiles?.costBase as any;
             const u2 = tiles?.utilisation as any;
