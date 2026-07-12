@@ -1,9 +1,10 @@
 /**
  * File: pages/m/index.tsx
- * The DIARY DAY, phone-shaped (not a second diary — /api/pwa/day reads the same lib/diary-day
- * chokepoint as the desktop gssp). Down the screen: day nav (← date → / Today) · day notes ·
- * "On the lift now" · the day's bookings in time order (colour bar by status, reg large,
- * customer, lift, service, chip) · reg search as the standing escape hatch. CACHE-FIRST per
+ * The DIARY DAY, phone-shaped, and ONLY the diary day (not a second diary — /api/pwa/day reads
+ * the same lib/diary-day chokepoint as the desktop gssp). Down the screen: day nav (← date → /
+ * Today) · day notes · the day's bookings in time order (colour bar by status, reg large,
+ * customer, lift, service, chip) · reg search — the ONE route to a job that isn't booked today,
+ * by design. CACHE-FIRST per
  * date; quiet offline line; outbox strip; 56px touch targets. NO MONEY on this surface — the
  * server projects it out before it leaves the building.
  */
@@ -20,7 +21,7 @@ import InstallBar from '@/components/pwa/InstallBar';
 
 type DayJob = { id: string; startAt: string | null; endAt: string | null; reg: string; customer: string; resourceName: string | null; service: string; status: string; isComeback: boolean; heldOnLift?: boolean };
 type DayNote = { id: string; title: string; colour: string | null; startAt: string; endAt: string; resourceId: string | null };
-type DayData = { siteId: string | null; siteName?: string; sites: Array<{ id: string; name: string }>; date: string | null; isToday?: boolean; notes?: DayNote[]; onLift?: DayJob[]; booked?: DayJob[] };
+type DayData = { siteId: string | null; siteName?: string; sites: Array<{ id: string; name: string }>; date: string | null; isToday?: boolean; notes?: DayNote[]; booked?: DayJob[] };
 type SearchHit = { id: string; reg: string; service: string; status: string; createdAt: string; siteName: string };
 
 const STATUS_TONES: Record<string, string> = {
@@ -239,15 +240,6 @@ export default function MobileDiaryDay() {
                 </section>
               )}
 
-              {(data.onLift?.length ?? 0) > 0 && (
-                <section>
-                  <h2 className="text-xs font-semibold text-muted uppercase tracking-wide px-1 mb-1.5">{t('onLiftNow')}</h2>
-                  <ul className="space-y-2">
-                    {data.onLift!.map((j) => <JobRow key={j.id} j={j} showTime={false} />)}
-                  </ul>
-                </section>
-              )}
-
               {(data.booked?.length ?? 0) > 0 ? (
                 <section>
                   <h2 className="text-xs font-semibold text-muted uppercase tracking-wide px-1 mb-1.5">{data.isToday === false ? t('bookedOn', { date: dayLabel }) : t('bookedToday')}</h2>
@@ -255,7 +247,7 @@ export default function MobileDiaryDay() {
                     {data.booked!.map((j) => <JobRow key={j.id} j={j} showTime />)}
                   </ul>
                 </section>
-              ) : (data.onLift?.length ?? 0) === 0 ? (
+              ) : (
                 /* Named, dated, never a dead end (the search sits above). Site name from DATA. */
                 <p className="text-sm text-muted p-2">
                   {t('emptyDay', {
@@ -263,7 +255,7 @@ export default function MobileDiaryDay() {
                     date: data.date ? new Date(`${data.date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) : '',
                   })}
                 </p>
-              ) : null}
+              )}
             </>
           )}
         </main>

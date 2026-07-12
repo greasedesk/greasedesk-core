@@ -1,7 +1,7 @@
 /**
  * File: pages/api/pwa/day.ts
- * GET [?site=][&date=yyyy-mm-dd] → the DIARY DAY, phone-shaped: day notes + "on the lift now" +
- * the day's bookings in time order. Bookings and notes come from THE shared diary-day chokepoint
+ * GET [?site=][&date=yyyy-mm-dd] → the DIARY DAY, phone-shaped — and ONLY the diary day: day
+ * notes + the day's bookings in time order. Bookings and notes come from THE shared diary-day chokepoint
  * (lib/diary-day — the SAME functions the desktop diary gssp calls), so the office and the floor
  * can never see different days. Identity and site resolve from the SESSION; ?site only selects
  * among the caller's own sites; ?date is a calendar day (default: today, London).
@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
   const vis = await getVisibility(user.id as string);
-  if (!vis.siteIds.length) return res.status(200).json({ siteId: null, siteName: '', sites: [], date: null, isToday: true, notes: [], onLift: [], booked: [] });
+  if (!vis.siteIds.length) return res.status(200).json({ siteId: null, siteName: '', sites: [], date: null, isToday: true, notes: [], booked: [] });
 
   // ?site is a SELECTION among the caller's own sites — anything else falls back to primary.
   const requested = typeof req.query.site === 'string' ? req.query.site : null;
@@ -38,28 +38,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (Number.isNaN(dayStart.getTime())) return res.status(400).json({ message: 'Invalid date.' });
   const dayEnd = new Date(dayStart.getTime() + 86_400_000);
 
-  const [thisSite, sites, bookings, notes, inWorkshop] = await Promise.all([
+  const [thisSite, sites, bookings, notes] = await Promise.all([
     prisma.site.findUnique({ where: { id: siteId }, select: { site_name: true, group_id: true } }) as Promise<any>,
     vis.siteIds.length > 1
       ? (prisma.site.findMany({ where: { id: { in: vis.siteIds } }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } }) as Promise<any[]>)
       : Promise.resolve([]),
     fetchDayBookings(siteId, dayStart, dayEnd),   // THE diary's booking read
     fetchDayNotes(siteId, dayStart, dayEnd),      // THE diary's note read — verbatim block
-    // THE BAY BOARD strip: physically in the workshop NOW (in progress / holding a lift awaiting
-    // parts), regardless of booking date — the diary is booking-shaped, the workshop isn't.
-    prisma.jobCard.findMany({
-      where: {
-        group_id: user.group_id, site_id: siteId,
-        status: { notIn: ['done', 'paid', 'cancelled', 'declined'] },
-        OR: [{ status: 'in_progress' }, { held_on_lift: true }],
-      },
-      orderBy: { start_at: 'asc' },
-      select: {
-        id: true, start_at: true, end_at: true, status: true, is_comeback: true, held_on_lift: true,
-        resource: { select: { name: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
-        items: { select: { item_type: true, description: true } },
-      },
-    }) as Promise<any[]>,
   ]);
   if (thisSite?.group_id !== user.group_id) return res.status(404).json({ message: 'Site not found.' }); // belt-and-braces tenant check
 
@@ -81,8 +66,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   const booked = [...bookings].sort((a, b) => (a.start_at as Date).getTime() - (b.start_at as Date).getTime()).map(shape);
-  const bookedIds = new Set(booked.map((j) => j.id));
-  const onLift = inWorkshop.map(shape).filter((j) => !bookedIds.has(j.id)); // the day's own bookings stay in the day list
 
   return res.status(200).json({
     siteId,
@@ -91,7 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     date: reqDate,
     isToday: reqDate === todayStr,
     notes: notes.map((n) => ({ id: n.id, title: n.title, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString(), resourceId: n.resource_id ?? null })),
-    onLift,
     booked,
   });
 }

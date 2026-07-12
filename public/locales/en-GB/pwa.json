@@ -47,7 +47,6 @@
   "outboxFailed": "{{count}} failed — open the job to retry or discard",
   "storageNote": "Photos are stored on this phone until sent.",
   "discard": "Discard photo",
-  "onLiftNow": "On the lift now",
   "bookedToday": "Booked today",
   "heldOnLift": "Awaiting parts",
   "emptyDay": "Nothing on the lift and nothing booked at {{site}} — {{date}}.",
