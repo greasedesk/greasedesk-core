@@ -5,7 +5,6 @@
   "updating": "Updating…",
   "updated": "Updated just now",
   "offline": "Offline — showing last known",
-  "noJobs": "Nothing booked at this site today.",
   "siteLabel": "Site",
   "status": {
     "draft": "Draft",
@@ -47,5 +46,11 @@
   "outboxWaiting": "{{count}} waiting to send",
   "outboxFailed": "{{count}} failed — open the job to retry or discard",
   "storageNote": "Photos are stored on this phone until sent.",
-  "discard": "Discard photo"
+  "discard": "Discard photo",
+  "onLiftNow": "On the lift now",
+  "bookedToday": "Booked today",
+  "heldOnLift": "Awaiting parts",
+  "emptyDay": "Nothing on the lift and nothing booked at {{site}} — {{date}}.",
+  "searchPlaceholder": "Search by reg",
+  "searchNoResults": "No jobs match “{{q}}” at your site(s)."
 }

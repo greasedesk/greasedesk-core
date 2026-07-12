@@ -34,7 +34,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const dayStart = new Date(`${y}-${m}-${d}T00:00:00Z`);
   const dayEnd = new Date(dayStart.getTime() + 86_400_000);
 
-  const [sites, cards] = await Promise.all([
+  const CARD_SELECT = {
+    id: true, start_at: true, end_at: true, status: true, is_comeback: true, held_on_lift: true,
+    vehicle: { select: { registration: true } },
+    items: { select: { item_type: true, description: true } }, // descriptions ONLY — no money fields leave this endpoint
+  } as const;
+
+  const [thisSite, sites, booked, inWorkshop] = await Promise.all([
+    prisma.site.findUnique({ where: { id: siteId }, select: { site_name: true } }) as Promise<any>,
     vis.siteIds.length > 1
       ? (prisma.site.findMany({ where: { id: { in: vis.siteIds } }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } }) as Promise<any[]>)
       : Promise.resolve([]),
@@ -42,34 +49,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     prisma.jobCard.findMany({
       where: { group_id: user.group_id, site_id: siteId, resource_id: { not: null }, start_at: { lt: dayEnd }, end_at: { gt: dayStart } },
       orderBy: { start_at: 'asc' },
-      select: {
-        id: true, start_at: true, end_at: true, status: true, is_comeback: true,
-        vehicle: { select: { registration: true } },
-        items: { select: { item_type: true, description: true } }, // descriptions ONLY — no money fields leave this endpoint
+      select: CARD_SELECT,
+    }) as Promise<any[]>,
+    // THE BAY BOARD (this is what the phone is FOR): every job physically in the workshop NOW —
+    // in progress, or holding a lift open-endedly (awaiting parts) — regardless of when it was
+    // booked. A three-day engine build booked Thursday must be reachable on Monday.
+    prisma.jobCard.findMany({
+      where: {
+        group_id: user.group_id, site_id: siteId,
+        status: { notIn: ['done', 'paid', 'cancelled', 'declined'] },
+        OR: [{ status: 'in_progress' }, { held_on_lift: true }],
       },
+      orderBy: { start_at: 'asc' },
+      select: CARD_SELECT,
     }) as Promise<any[]>,
   ]);
 
   // Service label = the diary's derivation: fixed-line TITLES first, "First +N" beyond one.
   const firstLine = (s: string) => (s || '').split('\n')[0].trim();
-  const jobs = cards.map((c) => {
+  const shape = (c: any) => {
     const fixedNames = c.items.filter((it: any) => it.item_type === 'fixed').map((it: any) => firstLine(it.description)).filter(Boolean);
     const labels = fixedNames.length ? fixedNames : c.items.map((it: any) => firstLine(it.description)).filter(Boolean);
     return {
       id: c.id,
-      startAt: (c.start_at as Date).toISOString(),
-      endAt: (c.end_at as Date).toISOString(),
+      startAt: c.start_at ? (c.start_at as Date).toISOString() : null,
+      endAt: c.end_at ? (c.end_at as Date).toISOString() : null,
       reg: c.vehicle?.registration ?? '—',
       service: labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : '',
       status: c.status as string,
       isComeback: !!c.is_comeback,
+      heldOnLift: !!c.held_on_lift,
     };
-  });
+  };
+
+  // Grouping: On the lift now / Booked today — a job in both lands on the lift, never twice.
+  const onLift = inWorkshop.map(shape);
+  const onLiftIds = new Set(onLift.map((j) => j.id));
+  const bookedToday = booked.filter((c) => !onLiftIds.has(c.id)).map(shape);
 
   return res.status(200).json({
     siteId,
+    siteName: thisSite?.site_name ?? '',
     sites: sites.map((s) => ({ id: s.id, name: s.site_name })),
     date: dayStart.toISOString().slice(0, 10),
-    jobs,
+    onLift,
+    booked: bookedToday,
   });
 }

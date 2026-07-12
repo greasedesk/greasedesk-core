@@ -17,8 +17,9 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 
-type DayJob = { id: string; startAt: string; endAt: string; reg: string; service: string; status: string; isComeback: boolean };
-type DayData = { siteId: string | null; sites: Array<{ id: string; name: string }>; date: string | null; jobs: DayJob[] };
+type DayJob = { id: string; startAt: string | null; endAt: string | null; reg: string; service: string; status: string; isComeback: boolean; heldOnLift?: boolean };
+type DayData = { siteId: string | null; siteName?: string; sites: Array<{ id: string; name: string }>; date: string | null; onLift?: DayJob[]; booked?: DayJob[] };
+type SearchHit = { id: string; reg: string; service: string; status: string; createdAt: string; siteName: string };
 
 const STATUS_TONES: Record<string, string> = {
   in_progress: 'bg-warn-soft text-warn border-warn',
@@ -34,6 +35,8 @@ export default function MyDay() {
   const [data, setData] = useState<DayData | null>(null);
   const [net, setNet] = useState<'loading' | 'fresh' | 'offline'>('loading');
   const [site, setSite] = useState<string | null>(null);
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<SearchHit[] | null>(null); // null = not searching
 
   const load = useCallback(async (siteOverride?: string | null) => {
     const chosen = siteOverride !== undefined ? siteOverride : site;
@@ -67,7 +70,20 @@ export default function MyDay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+  // Reg search — the escape hatch for everything the day list doesn't show. Debounced; quiet offline.
+  useEffect(() => {
+    const term = q.replace(/\s+/g, '');
+    if (term.length < 2) { setHits(null); return; }
+    const h = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/pwa/search?q=${encodeURIComponent(term)}`, { cache: 'no-store' });
+        if (res.ok) setHits(((await res.json()).results ?? []) as SearchHit[]);
+      } catch { setHits([]); }
+    }, 250);
+    return () => clearTimeout(h);
+  }, [q]);
+
+  const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : '—';
   const chipTone = (s: string) => STATUS_TONES[s] ?? 'bg-surface-muted text-muted border-line';
 
   return (
@@ -106,28 +122,98 @@ export default function MyDay() {
         </header>
         <OutboxStatus />
 
-        <main className="p-3">
-          {data == null ? (
+        <main className="p-3 space-y-3">
+          {/* Reg search — always present, so no state is ever a dead end. */}
+          <input
+            type="search"
+            inputMode="text"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t('searchPlaceholder')}
+            aria-label={t('searchPlaceholder')}
+            className="w-full min-h-[48px] bg-surface border border-line rounded-xl px-4 text-base text-ink"
+          />
+
+          {hits != null ? (
+            hits.length === 0 ? (
+              <p className="text-sm text-muted p-2">{t('searchNoResults', { q })}</p>
+            ) : (
+              <ul className="space-y-2">
+                {hits.map((j) => (
+                  <li key={j.id}>
+                    <Link href={`/m/job/${j.id}`} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3 active:bg-surface-muted">
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-bold text-ink">{j.reg}</span>
+                        <span className="block text-xs text-muted truncate">{j.service || j.createdAt}{j.siteName ? ` · ${j.siteName}` : ''}</span>
+                      </span>
+                      <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
+                        {t(`status.${j.status}`)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : data == null ? (
             <p className="text-sm text-muted p-2">{t('updating')}</p>
-          ) : data.jobs.length === 0 ? (
-            <p className="text-sm text-muted p-2">{t('noJobs')}</p>
+          ) : ((data.onLift?.length ?? 0) === 0 && (data.booked?.length ?? 0) === 0) ? (
+            /* Named, dated, never a dead end (the search sits above). Site name comes from DATA. */
+            <p className="text-sm text-muted p-2">
+              {t('emptyDay', {
+                site: data.siteName || '—',
+                date: data.date ? new Date(`${data.date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) : '',
+              })}
+            </p>
           ) : (
-            <ul className="space-y-2">
-              {data.jobs.map((j) => (
-                <li key={j.id}>
-                  <Link href={`/m/job/${j.id}`} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3 active:bg-surface-muted">
-                  <span className="text-sm font-semibold text-ink tabular-nums w-12 shrink-0">{hhmm(j.startAt)}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-bold text-ink">{j.reg}</span>
-                    {j.service && <span className="block text-xs text-muted truncate">{j.service}</span>}
-                  </span>
-                  <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
-                    {t(`status.${j.status}`)}
-                  </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <>
+              {(data.onLift?.length ?? 0) > 0 && (
+                <section>
+                  <h2 className="text-xs font-semibold text-muted uppercase tracking-wide px-1 mb-1.5">{t('onLiftNow')}</h2>
+                  <ul className="space-y-2">
+                    {data.onLift!.map((j) => (
+                      <li key={j.id}>
+                        <Link href={`/m/job/${j.id}`} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3 active:bg-surface-muted">
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-bold text-ink">{j.reg}</span>
+                            {j.service && <span className="block text-xs text-muted truncate">{j.service}</span>}
+                          </span>
+                          {j.heldOnLift && j.status !== 'in_progress' && (
+                            <span className="shrink-0 text-[11px] font-semibold rounded-full border border-warn bg-warn-soft text-warn px-2 py-1">{t('heldOnLift')}</span>
+                          )}
+                          <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
+                            {t(`status.${j.status}`)}
+                          </span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {(data.booked?.length ?? 0) > 0 && (
+                <section>
+                  <h2 className="text-xs font-semibold text-muted uppercase tracking-wide px-1 mb-1.5">{t('bookedToday')}</h2>
+                  <ul className="space-y-2">
+                    {data.booked!.map((j) => (
+                      <li key={j.id}>
+                        <Link href={`/m/job/${j.id}`} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3 active:bg-surface-muted">
+                          <span className="text-sm font-semibold text-ink tabular-nums w-12 shrink-0">{hhmm(j.startAt)}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-bold text-ink">{j.reg}</span>
+                            {j.service && <span className="block text-xs text-muted truncate">{j.service}</span>}
+                          </span>
+                          <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
+                            {t(`status.${j.status}`)}
+                          </span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </>
           )}
         </main>
       </div>
