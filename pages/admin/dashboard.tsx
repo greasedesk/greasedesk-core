@@ -244,8 +244,57 @@ export default function AdminDashboard(props: PageProps) {
         </p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'utilisation'] as const).map((k) => {
+        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation'] as const).map((k) => {
           const d = tiles?.pnl as any;
+          if (k === 'costBase' || k === 'breakEven') {
+            const cb = tiles?.costBase as any;
+            const u2 = tiles?.utilisation as any;
+            const hrs = (c: number | null) => (c == null ? '—' : `${(c / 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}h`);
+            return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
+                {cb == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : k === 'costBase' ? (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{fmt.money(cb.costBasePennies)}</p>
+                    <p className="text-xs text-muted mt-1">{t('pnl.costBaseSub')}</p>
+                    <details className="mt-2">
+                      <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                      <p className="text-xs text-muted mt-1">{t('pnl.costBaseCalc', { wages: fmt.money(cb.wageBillPennies), overheads: fmt.money(cb.overheadsPennies), total: fmt.money(cb.costBasePennies) })}</p>
+                    </details>
+                  </>
+                ) : (
+                  (() => {
+                    // Break-even (pure-labour headline). Residual refinement + BE revenue are
+                    // DISPLAY divisions of chokepoint numbers — guarded, never NaN/Infinity.
+                    const d2 = tiles?.pnl as any;
+                    const marginRate = d2 && d2.revenueNet > 0 ? d2.grossMargin / d2.revenueNet : null;
+                    const beRevenue = marginRate && marginRate > 0 ? Math.round(cb.costBasePennies / marginRate) : null;
+                    const rate = cb.perSite.find((s2: any) => s2.ratePounds != null)?.ratePounds ?? null;
+                    const residual = d2 && rate ? Math.max(0, cb.costBasePennies - Math.max(0, d2.grossMargin - Math.round((d2.hoursChargedCentihours / 100) * rate * 100))) : null;
+                    const residualHours = residual != null && rate ? residual / (rate * 100) : null;
+                    return (
+                      <>
+                        <p className="text-2xl font-bold tabular-nums text-ink">{cb.breakEvenCentihours > 0 ? hrs(cb.breakEvenCentihours) : '—'}</p>
+                        <p className="text-xs text-muted mt-1">{t('pnl.breakEvenSub')}</p>
+                        {cb.ratesMissing.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: cb.ratesMissing.join(', ') })}</p>}
+                        <details className="mt-2">
+                          <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                          <div className="text-xs text-muted mt-1 space-y-1">
+                            {cb.perSite.filter((s2: any) => s2.costBasePennies > 0).map((s2: any) => (
+                              <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `£${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
+                            ))}
+                            <p>{t('pnl.breakEvenRevenue', { value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
+                            {residualHours != null && <p>{t('pnl.breakEvenResidual', { hours: residualHours.toLocaleString(props.locale, { maximumFractionDigits: 1 }) })}</p>}
+                            <p className="italic">{t('pnl.breakEvenHonesty')}</p>
+                          </div>
+                        </details>
+                      </>
+                    );
+                  })()
+                )}
+              </div>
+            );
+          }
           if (k === 'utilisation') {
             const u = tiles?.utilisation as any;
             const pct = (r: number | null) => (r == null ? '—' : `${(r * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`);
@@ -269,6 +318,13 @@ export default function AdminDashboard(props: PageProps) {
                     <>
                       <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
                       <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
+                      {(() => {
+                        // The defensible reference: required utilisation = break-even hours ÷ available.
+                        const cb2 = tiles?.costBase as any;
+                        if (!cb2 || !(u.available > 0) || !(cb2.breakEvenCentihours > 0)) return null;
+                        const req = (cb2.breakEvenCentihours / 100) / u.available;
+                        return <p className="text-xs text-ink mt-1">{t('pnl.utilTarget', { pct: `${(req * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>;
+                      })()}
                       {!u.configComplete && (
                         <p className="text-xs text-warn mt-1">{t('pnl.utilMissing', { count: u.missingHoursMechanics.length })}</p>
                       )}

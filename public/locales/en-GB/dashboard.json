@@ -56,7 +56,17 @@
     "utilHow": "How this is worked out",
     "utilCalc": "{{mechanics}} mechanic(s) over {{days}} rostered days − {{leave}} leave − {{ph}} bank holidays = {{available}} available; {{charged}} charged = {{pct}}",
     "hoursMissingLines": "{{count}} line(s)",
-    "hoursMissingAdhoc": "fix on the invoice"
+    "hoursMissingAdhoc": "fix on the invoice",
+    "costBase": "Cost of doing business",
+    "costBaseSub": "wages + overheads — the fixed monthly base to cover before profit",
+    "costBaseCalc": "wages {{wages}} + overheads {{overheads}} = {{total}}",
+    "breakEven": "Break-even hours",
+    "breakEvenSub": "hours to sell this month just to stand still",
+    "breakEvenNoRate": "no labour rate set for {{sites}} — that share isn’t counted",
+    "breakEvenRevenue": "As revenue (÷ this month’s margin rate): {{value}}",
+    "breakEvenResidual": "Refined (parts & outsourced margin already covers some of it): {{hours}}h of labour",
+    "breakEvenHonesty": "Charged hours only count what’s invoiced through GreaseDesk — provisional until all billing moves here; the arithmetic isn’t.",
+    "utilTarget": "break-even needs {{pct}}"
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."

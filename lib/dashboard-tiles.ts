@@ -108,7 +108,59 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 // throughout: this is a profit statement, VAT is not revenue.
 //  Revenue (invoiced, ex-VAT) → − Parts cost → Gross margin → − wages − overheads → Net profit.
 //  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
+// ---- THE monthly cost-base reads (extracted from pnl VERBATIM — pnl + costBase both call
+// these; goldens prove the extraction changed nothing) ----
+/** Active SALARIED people only (hourly staff have no hours source until clocking), annual ÷ 12,
+ *  scaled by allocation to the visible sites. TODAY'S settings. */
+export async function monthlyWageBill(groupId: string, siteIds: string[]): Promise<number> {
+  const people = (await prisma.costPerson.findMany({
+    where: { group_id: groupId, is_active: true, cost_type: 'salary' },
+    select: { amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+  })) as any[];
+  return Math.round(people.reduce((a, p2) =>
+    a + (p2.amount_pennies / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+}
+/** The Overheads register normalised monthly (annual ÷ 12, weekly × 52 ÷ 12), allocation-scaled.
+ *  NO name-matching — the register IS the list; wages live in Headcount, never here. */
+export async function monthlyOverheads(groupId: string, siteIds: string[]): Promise<number> {
+  const overheads = (await prisma.overhead.findMany({
+    where: { group_id: groupId, is_active: true },
+    select: { ex_vat_amount_pennies: true, period: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+  })) as any[];
+  const monthlyOf = (o: any) => o.period === 'annual' ? o.ex_vat_amount_pennies / 12 : o.period === 'weekly' ? (o.ex_vat_amount_pennies * 52) / 12 : o.ex_vat_amount_pennies;
+  return Math.round(overheads.reduce((a, o) =>
+    a + monthlyOf(o) * o.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+}
+
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
+  // Cost of doing business + break-even hours (pure-labour headline — stable, conservative,
+  // stateable in advance; the residual refinement is DISPLAY arithmetic in the popover from
+  // pnl numbers). Per-site: site cost base ÷ that site's LABOUR_HR rate, summed — a site with
+  // allocated cost but NO rate is FLAGGED, never guessed.
+  costBase: async ({ groupId, siteIds, months }) => {
+    const sites = (await prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } })) as any[];
+    const rates = (await prisma.serviceCatalogue.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
+      select: { site_id: true, default_labour_rate: true },
+    })) as any[];
+    const rateOf = new Map<string, number>(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => [r.site_id, Number(r.default_labour_rate)]));
+    let wage = 0, over = 0, breakEvenCentihours = 0;
+    const perSite: any[] = []; const ratesMissing: string[] = [];
+    for (const s2 of sites) {
+      const [w, o] = await Promise.all([monthlyWageBill(groupId, [s2.id]), monthlyOverheads(groupId, [s2.id])]);
+      const cost = (w + o) * months;
+      wage += w * months; over += o * months;
+      const rate = rateOf.get(s2.id) ?? null;
+      const hoursC = rate ? Math.round((cost / (rate * 100)) * 100) : null; // pennies ÷ (rate£×100 pennies/hr) → hours ×100
+      if (cost > 0 && !rate) ratesMissing.push(s2.site_name);
+      if (hoursC != null) breakEvenCentihours += hoursC;
+      perSite.push({ siteId: s2.id, siteName: s2.site_name, costBasePennies: cost, ratePounds: rate, breakEvenCentihours: hoursC });
+    }
+    return {
+      wageBillPennies: wage, overheadsPennies: over, costBasePennies: wage + over,
+      breakEvenCentihours, ratesMissing, perSite, months,
+    };
+  },
   // Utilisation = charged ÷ available over the SAME month window as the pnl (one period state).
   // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σavailable, never a mean of
   // ratios) — the tile only renders. Same group-aggregate site scope as the other month tiles.
@@ -162,26 +214,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // getUtilisation. Grain + comeback behaviour documented at the helper.
     const { centihours: hoursChargedCentihours, linesMissingHours } = chargedLabourCentihours(invoices);
 
-    // Wage bill: active SALARIED people only (hourly staff have no hours source until clocking
-    // lands — surfaced in the tile note), annual ÷ 12, scaled by their allocation to the visible
-    // sites. Costs are TODAY'S settings applied to each month in the span.
-    const people = (await prisma.costPerson.findMany({
-      where: { group_id: groupId, is_active: true, cost_type: 'salary' },
-      select: { amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
-    })) as any[];
-    const wageBillMonthly = Math.round(people.reduce((a, p2) =>
-      a + (p2.amount_pennies / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
-
-    // Operating overheads (the Overheads register — rent/rates for TMBS), normalised monthly,
-    // allocation-scaled. NO name-matching — the register IS the list. Wages are NOT here (they
-    // live in Headcount), so the net line can never double-count them.
-    const overheads = (await prisma.overhead.findMany({
-      where: { group_id: groupId, is_active: true },
-      select: { ex_vat_amount_pennies: true, period: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
-    })) as any[];
-    const monthlyOf = (o: any) => o.period === 'annual' ? o.ex_vat_amount_pennies / 12 : o.period === 'weekly' ? (o.ex_vat_amount_pennies * 52) / 12 : o.ex_vat_amount_pennies;
-    const overheadsMonthly = Math.round(overheads.reduce((a, o) =>
-      a + monthlyOf(o) * o.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+    // Wage bill + overheads via THE extracted helpers below (also the cost-base tile's reads —
+    // one truth, never re-derived).
+    const wageBillMonthly = await monthlyWageBill(groupId, siteIds);
+    const overheadsMonthly = await monthlyOverheads(groupId, siteIds);
 
     const grossMargin = revenueNet - partsCost;
     const wageBill = wageBillMonthly * months;
