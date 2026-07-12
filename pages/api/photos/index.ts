@@ -12,6 +12,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { presignGet } from '@/lib/r2';
+import { runVinShadow } from '@/lib/vin-shadow';
 import { writeAudit } from '@/lib/audit';
 
 const STAGES = ['intake', 'injob', 'completion'];
@@ -89,6 +90,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         select: { id: true },
       });
     });
+    // OCR SHADOW RUN (fortnight trial): vin-slot photos get a server-side read AFTER the commit —
+    // log-only, env-gated, never fails or delays the commit response beyond the awaited pass
+    // (the caller is the outbox drain, not a waiting human). Offers nothing anywhere.
+    if (slot === 'vin' && media === 'photo') {
+      await runVinShadow({ groupId: ctx.user.group_id as string, photoId, jobCardId, r2Key: key }).catch(() => {});
+    }
     return res.status(200).json({ id: row.id, ...(autoStart ? { status: 'in_progress' } : {}) });
   }
 

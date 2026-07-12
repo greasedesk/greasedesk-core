@@ -905,6 +905,26 @@ model InvoiceLine {
   @@index([invoice_id])
 }
 
+// OCR SHADOW RUN (2026-07-13, fortnight floor trial): one row per engine attempt on every
+// slot='vin' photo, logged AFTER the outbox drains it. OFFERS NOTHING — no UI reads this table.
+// The trial's one number: proportion of vin photos whose checksum-valid candidate MATCHED the
+// VIN a human subsequently typed (join candidates → Vehicle.vin at analysis time).
+model VinReadShadow {
+  id                String   @id @default(uuid())
+  group_id          String
+  photo_id          String
+  job_card_id       String
+  engine            String // 'ocr' | 'haiku' | 'skipped' | 'error:<engine>'
+  candidates        Json? // [{ c, valid, source: 'raw'|'normalised' }]
+  checksum_valid    Boolean  @default(false) // any candidate passed lib/vin
+  latency_ms        Int      @default(0)
+  cost_microdollars Int? // engine cost estimate in µ$ (Vision flat ~1500; Haiku from usage)
+  created_at        DateTime @default(now())
+
+  @@index([photo_id])
+  @@index([group_id, created_at])
+}
+
 model PaymentMethod {
   id         String           @id @default(uuid())
   group_id   String
