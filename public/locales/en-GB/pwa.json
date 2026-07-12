@@ -52,5 +52,10 @@
   "heldOnLift": "Awaiting parts",
   "emptyDay": "Nothing on the lift and nothing booked at {{site}} — {{date}}.",
   "searchPlaceholder": "Search by reg",
-  "searchNoResults": "No jobs match “{{q}}” at your site(s)."
+  "searchNoResults": "No jobs match “{{q}}” at your site(s).",
+  "dayNotes": "Day notes",
+  "today": "Today",
+  "prevDay": "Previous day",
+  "nextDay": "Next day",
+  "bookedOn": "Booked — {{date}}"
 }

@@ -28,6 +28,7 @@ import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
+import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
 import { resolveLeaveColours } from '@/lib/leave-types';
 import { paymentState, PaymentState } from '@/lib/jobcard-status';
 
@@ -1314,18 +1315,10 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   type ResRow = { id: string; name: string; type: string; colour: string | null };
   const [resourceRows, cardRows, noteRows, leaveRows, grpColours] = await Promise.all([
     prisma.resource.findMany({ where: { site_id: site.id, is_active: true }, orderBy: { display_order: 'asc' }, select: { id: true, name: true, type: true, colour: true } }) as Promise<ResRow[]>,
-    (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.jobCard.findMany({
-      where: { site_id: site.id, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
-      select: {
-        id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true,
-        resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
-        items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
-      },
-    }) as Promise<any[]>,
-    (view === 'month' || view === 'year') ? Promise.resolve([]) : prisma.diaryNote.findMany({
-      where: { site_id: site.id, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
-      select: { id: true, title: true, resource_id: true, colour: true, start_at: true, end_at: true },
-    }) as Promise<any[]>,
+    // Bookings + notes via THE shared diary-day chokepoint (lib/diary-day) — the phone's
+    // /api/pwa/day reads the SAME functions, so the office and the floor can never drift.
+    (view === 'month' || view === 'year') ? Promise.resolve([]) : fetchDayBookings(site.id, rangeStart, rangeEnd),
+    (view === 'month' || view === 'year') ? Promise.resolve([]) : fetchDayNotes(site.id, rangeStart, rangeEnd),
     // ALL-DAY LEAVE BANNERS: every leave type surfaces at the top of its day (the Roster is the
     // write path; this is display only). A person shows on every site they're allocated to —
     // an absent split-allocated tech affects both diaries.
@@ -1365,11 +1358,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
     const fp = computeFootprint(startAt, mins, openHour, closeHour, openDays, breaks);
     // Day-view block label: the clean service TITLE (first line of a fixed line = the Title per the
     // title model). Prefer fixed services; else fall back to the labour/parts line names. "First +N".
-    const firstLine = (s: string) => (s || '').split('\n')[0].trim();
-    const items = c.items as any[];
-    const fixedNames = items.filter((it) => it.item_type === 'fixed').map((it) => firstLine(it.description)).filter(Boolean);
-    const labels = fixedNames.length ? fixedNames : items.map((it) => firstLine(it.description)).filter(Boolean);
-    const serviceSummary = labels.length ? (labels.length > 1 ? `${labels[0]} +${labels.length - 1}` : labels[0]) : ''; // week: compact
+    const { labels, summary: serviceSummary } = serviceLabels(c.items as any[]); // shared derivation (lib/diary-day)
     const services = labels; // day: full list, one per line
     // ALL figures EX-VAT — this is a P&L view, and VAT nets out of margin (output VAT on sales →
     // HMRC, input VAT on purchases reclaimed). Booked = ex-VAT revenue (labour + parts sold); Margin =
