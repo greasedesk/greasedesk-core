@@ -71,6 +71,14 @@ Going forward: secrets live in `.env` (gitignored) and the Vercel dashboard only
 
 ## Engineering Disciplines (standing rules — enforce on every slice)
 
+### Copy is multi-tenant (no tenant leakage in shipped strings)
+No tenant-specific names, brands, sites, staff, suppliers or figures in hard-coded UI
+strings — hints, placeholders, empty states, examples, tooltips, errors, i18n files.
+GreaseDesk is multi-tenant SaaS: every string must read correctly for a stranger in any
+garage. ("Roy’s MOT", "Great Bridge", "BMW50" have all leaked from dogfooding — swept
+2026-07-12.) Genuine per-tenant data rendered at runtime is fine; hard-coded strings are
+not. Invent neutral examples (an MOT station, High Street Workshop, SPRING25).
+
 ### i18n (mandatory for ALL new UI)
 - All visible text via `t('key')` from `public/locales/<locale>/<ns>.json`. ZERO inline
   English in components — finished code has no user-facing English outside locale files.

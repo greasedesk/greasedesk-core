@@ -264,7 +264,7 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
     <form onSubmit={submit} className="bg-surface border border-line rounded-xl p-4 mb-6 flex flex-wrap items-end gap-3">
       <div className="flex-1 min-w-[160px]">
         <label className="block text-xs text-muted mb-1">New location name</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Great Bridge" className={`${inputClass} w-full`} />
+        <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. High Street Workshop" className={`${inputClass} w-full`} />
       </div>
       <div className="flex-1 min-w-[160px]">
         <label className="block text-xs text-muted mb-1">Address (optional)</label>
