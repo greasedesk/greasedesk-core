@@ -17,5 +17,28 @@
     "paid": "Paid",
     "done": "Done",
     "cancelled": "Cancelled"
+  },
+  "back": "Back to My Day",
+  "offlineNoCache": "Offline — open this job once online to keep it available here.",
+  "vehicle": "Vehicle",
+  "customer": "Customer",
+  "workSold": "Work on this job",
+  "notes": "Notes",
+  "vin": "VIN",
+  "noVin": "No VIN recorded.",
+  "copyVin": "Tap to copy",
+  "copied": "Copied",
+  "mileage": "Mileage in",
+  "warrantyJob": "Warranty / comeback — no charge",
+  "noLines": "No lines on this job yet.",
+  "lineQty": "Qty {{qty}}",
+  "lineHours": "{{hours}}h",
+  "invoiceLabel": "Invoice {{number}}",
+  "noPhotos": "No photos yet.",
+  "photosOffline": "Photos need a connection.",
+  "photoStage": {
+    "intake": "Intake photos",
+    "injob": "In-job photos",
+    "completion": "Completion photos"
   }
 }

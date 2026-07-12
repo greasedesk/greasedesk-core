@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -111,8 +112,8 @@ export default function MyDay() {
           ) : (
             <ul className="space-y-2">
               {data.jobs.map((j) => (
-                /* Row becomes the card link in build step 4 — list-only for now. */
-                <li key={j.id} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3">
+                <li key={j.id}>
+                  <Link href={`/m/job/${j.id}`} className="bg-surface border border-line rounded-xl px-3 py-3 min-h-[56px] flex items-center gap-3 active:bg-surface-muted">
                   <span className="text-sm font-semibold text-ink tabular-nums w-12 shrink-0">{hhmm(j.startAt)}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-bold text-ink">{j.reg}</span>
@@ -121,6 +122,7 @@ export default function MyDay() {
                   <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
                     {t(`status.${j.status}`)}
                   </span>
+                  </Link>
                 </li>
               ))}
             </ul>
