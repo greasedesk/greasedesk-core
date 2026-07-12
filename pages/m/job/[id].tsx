@@ -22,6 +22,7 @@ import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import { resizeImage } from '@/lib/image-resize';
 import { enqueuePhoto, enqueueVehicle, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
+import InstallBar from '@/components/pwa/InstallBar';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null };
 type JobData = {
@@ -188,6 +189,7 @@ export default function MobileJobCard() {
           </div>
         </header>
         <OutboxStatus />
+        <InstallBar />
 
         <main className="p-3 space-y-3 pb-8">
           {job == null ? (
