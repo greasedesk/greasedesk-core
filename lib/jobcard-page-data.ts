@@ -12,7 +12,7 @@
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
-import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
+import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { computeTabs } from '@/lib/jobcard-tabs';
@@ -89,6 +89,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
   const canEditPricing = canEditEstimate(vis, row.site_id, perms);
+  // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
+  // a user who may not see money never RECEIVES money. Absent, not hidden.
+  //   priceVisible = seeValues OR canEditPricing (edit implies see, for PRICES only)
+  //   costVisible  = seeMargin (ADMIN always) — unit_cost / components / BoM are the margin grain
+  const fin = financeVisibility(vis, perms);
+  const priceVisible = fin.seeValues || canEditPricing;
+  const costVisible = fin.seeMargin;
   const owner = { name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null };
 
   const booking: CardBooking = (row.resource_id && row.start_at && row.end_at)
@@ -105,27 +112,30 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '', status: invoiceRow.status as 'issued' | 'paid_pending' | 'paid' } : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
-  const catalogue: CatalogueLite[] = catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
+  // Catalogue for the builder's autocomplete: only editors need it at all; costs are cost-visible
+  // only (this payload previously re-shipped requireAdminApi-grade grain to every card visitor).
+  const catalogue: CatalogueLite[] = !canEditPricing ? [] : catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
-    unit_cost: Number(c.unit_cost), unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
+    unit_cost: costVisible ? Number(c.unit_cost) : 0, unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
   }));
-  const codeById = new Map(catalogue.map((c) => [c.id, c.code]));
-  const fixedServices: FixedServiceLite[] = catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({
+  const codeById = new Map(catalogueRows.map((c) => [c.id, c.code]));
+  const fixedServices: FixedServiceLite[] = !canEditPricing ? [] : catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({
     id: c.id, code: c.code, title: c.title, name: c.name,
     basePriceExVat: Number(c.base_price_ex_vat ?? c.unit_price), vatRate: Number(c.vat_rate),
     labourHours: c.labour_hours == null ? null : Number(c.labour_hours),
-    components: c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })),
+    // Components are the bill of materials WITH supplier costs — the strictest grain on the page.
+    components: costVisible ? c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })) : [],
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
   }));
   const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
-  const promos: PromoLite[] = promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) }));
+  const promos: PromoLite[] = !priceVisible ? [] : promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
     item_type: it.item_type,
     description: it.description ?? '',
     qty: String(num(it.qty)),
-    unit_price: String(num(it.unit_price)),
-    unit_cost: num(it.unit_cost) ? String(num(it.unit_cost)) : '',
+    unit_price: priceVisible ? String(num(it.unit_price)) : '',      // absent, not hidden
+    unit_cost: costVisible && num(it.unit_cost) ? String(num(it.unit_cost)) : '', // the margin grain
     vatable: num(it.vat_rate) > 0,
     code: it.catalogue_item_id ? (codeById.get(it.catalogue_item_id) ?? '') : '',
     catalogue_item_id: it.catalogue_item_id ?? null,
@@ -185,7 +195,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     flags, isComeback: !!row.is_comeback,
     garageNotes: row.garage_notes ?? '',
     lines, catalogue, fixedServices, tiers, promos,
-    labourRate: labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
+    priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them
+    labourRate: priceVisible && labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
     hasEstimate: (row.items as any[]).length > 0,
     resources, booking, stages, skipped, tabsState, invoice, events,
     siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18, slotMinutes: site?.booking_slot_minutes ?? 30, openDays: site?.open_days && site.open_days.length ? site.open_days : [1, 2, 3, 4, 5, 6], breaks: parseBreaks(site?.breaks) },

@@ -60,6 +60,8 @@ type Props = {
   fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
   tiers?: TierLite[]; // active tenant tiers
   promos?: PromoLite[]; // active promotions for the apply-promo picker
+  priceVisible?: boolean; // finance-shaped: prices absent from props when false (defaults true)
+  costVisible?: boolean;  // margin grain: read-only display only; unit_cost is never client-writable
 };
 
 const CODES_DATALIST = 'gd-catalogue-codes';
@@ -77,6 +79,8 @@ type RowProps = {
   canEdit: boolean;
   showVat: boolean;
   hasCatalogue: boolean;
+  priceVisible: boolean; // finance-shaped server-side — when false the props carry no prices at all
+  costVisible: boolean;  // the margin grain; display-only (unit_cost is never client-writable)
   lineTotal: string;
   t: (k: string) => string;
   onChange: (idx: number, patch: Partial<EstimateLine>) => void;
@@ -84,7 +88,7 @@ type RowProps = {
   onRemove: (idx: number) => void;
 };
 
-function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
+function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible, costVisible, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
   return (
     <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
       {hasCatalogue && (
@@ -100,21 +104,26 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
         <textarea className={`${inputCls} resize-y`} rows={2} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
           disabled={!canEdit} onChange={(e) => onChange(idx, { description: e.target.value })} />
       </div>
-      <div className="sm:w-24">
-        <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
-        <input className={inputCls} type="number" inputMode="decimal" step="0.01" value={row.unit_price}
-          disabled={!canEdit} onChange={(e) => onChange(idx, { unit_price: e.target.value })} />
-      </div>
+      {priceVisible && (
+        <div className="sm:w-24">
+          <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
+          <input className={inputCls} type="number" inputMode="decimal" step="0.01" value={row.unit_price}
+            disabled={!canEdit} onChange={(e) => onChange(idx, { unit_price: e.target.value })} />
+        </div>
+      )}
       <div className="sm:w-20">
         <label className={labelCls}>{kind === 'labour' ? t('estimate.hours') : t('estimate.qty')}</label>
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
           disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
       </div>
-      <div className="sm:w-24">
-        <label className={labelCls}>{t('estimate.cost')}</label>
-        <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.unit_cost}
-          disabled={!canEdit} onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
-      </div>
+      {/* unit_cost is SERVER-DERIVED at save (catalogue inheritance / preserved) — never a client
+          input for any role. Cost-visible users see it read-only. */}
+      {costVisible && row.unit_cost !== '' && (
+        <div className="sm:w-24">
+          <label className={labelCls}>{t('estimate.cost')}</label>
+          <div className="text-muted text-sm tabular-nums py-2">{row.unit_cost}</div>
+        </div>
+      )}
       {showVat && (
         <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
           <input type="checkbox" className="w-5 h-5" checked={row.vatable} disabled={!canEdit}
@@ -122,10 +131,12 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
           {t('estimate.vat')}
         </label>
       )}
-      <div className="sm:w-24 text-right">
-        <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
-        <div className="text-ink font-medium tabular-nums py-2">{lineTotal}</div>
-      </div>
+      {priceVisible && (
+        <div className="sm:w-24 text-right">
+          <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
+          <div className="text-ink font-medium tabular-nums py-2">{lineTotal}</div>
+        </div>
+      )}
       {canEdit && (
         <button onClick={() => onRemove(idx)} aria-label={t('estimate.remove')}
           className="text-danger hover:text-danger text-sm px-2 py-2 self-end">✕</button>
@@ -138,7 +149,7 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, lineTotal, t,
 // "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
 export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [] }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [pickService, setPickService] = useState('');
@@ -206,7 +217,6 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         item_type: l.item_type,
         qty: Number(l.qty || 0),
         unit_price_pennies: poundsToPennies(Number(l.unit_price || 0)),
-        unit_cost_pennies: poundsToPennies(Number(l.unit_cost || 0)),
         vatable: l.vatable,
       })),
       Number(vatRate || 0),
@@ -290,7 +300,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
       {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
       {labour.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
@@ -299,7 +309,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
       {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
       {parts.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue}
+        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && (
@@ -317,7 +327,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
           {fixed.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyFixed')}</p>}
           {fixed.map(({ l, idx }) => (
             <div key={l._uid}>
-              <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false}
+              <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false} priceVisible={priceVisible} costVisible={costVisible}
                 lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
               {l.labour_hours != null && (
                 <p className="text-xs text-muted -mt-1 mb-2">{t('estimate.fixedHours', { hours: l.labour_hours })}</p>
@@ -372,14 +382,16 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         ) : (
           <div className="hidden sm:block" />
         )}
-        <div className="text-sm space-y-1 sm:w-64">
-          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryLabour')}</span><span className="text-ink tabular-nums">{fmt(totals.labour_pennies)}</span></div>
-          <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryParts')}</span><span className="text-ink tabular-nums">{fmt(totals.parts_pennies)}</span></div>
-          {vatRegistered && (
-            <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryVat')}</span><span className="text-ink tabular-nums">{fmt(totals.vat_pennies)}</span></div>
-          )}
-          <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('estimate.summaryTotal')}</span><span className="text-ink tabular-nums">{fmt(totals.total_pennies)}</span></div>
-        </div>
+        {priceVisible && (
+          <div className="text-sm space-y-1 sm:w-64">
+            <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryLabour')}</span><span className="text-ink tabular-nums">{fmt(totals.labour_pennies)}</span></div>
+            <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryParts')}</span><span className="text-ink tabular-nums">{fmt(totals.parts_pennies)}</span></div>
+            {vatRegistered && (
+              <div className="flex justify-between"><span className="text-muted">{t('estimate.summaryVat')}</span><span className="text-ink tabular-nums">{fmt(totals.vat_pennies)}</span></div>
+            )}
+            <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('estimate.summaryTotal')}</span><span className="text-ink tabular-nums">{fmt(totals.total_pennies)}</span></div>
+          </div>
+        )}
       </div>
 
     </div>

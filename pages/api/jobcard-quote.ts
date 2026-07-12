@@ -14,7 +14,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, ItemType } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
-import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
+import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { canEditInvoice } from '@/lib/invoice';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
@@ -61,75 +61,126 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Master switch + company default rate (the fallback when the client omits a rate).
   const vat = await getTenantVat(user.group_id as string);
-  // Validate + normalise lines.
   const rate = clampVatRate(typeof vatRate === 'string' ? parseFloat(vatRate) : (vatRate ?? vat.defaultRate));
+
+  let saved;
+  try {
+    saved = await performEstimateSave({ groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered });
+  } catch (e: any) {
+    if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
+    console.error('quote save error:', e);
+    return res.status(500).json({ message: 'Failed to save estimate.' });
+  }
+
+  // Cost figures are the MARGIN grain — stripped from the response unless the saver is
+  // cost-visible (same rule as the shaped page props: absent, not hidden).
+  const fin = financeVisibility(vis, perms);
+  const totals: any = { ...saved.totals };
+  if (!fin.seeMargin) { delete totals.labour_cost_pennies; delete totals.parts_cost_pennies; }
+  return res.status(200).json({ message: 'Estimate saved.', totals });
+}
+
+/**
+ * THE estimate save core (exported for the proof matrix — the matrix drives the REAL write path).
+ * unit_cost IS NEVER CLIENT-WRITABLE (ruling 2026-07-12, for EVERY role): the browser has no
+ * business asserting what the garage paid a supplier. Resolution, server-side:
+ *   product-linked line → the catalogue product's unit_cost (same server-derived pattern as
+ *                         labour_outsourced; frozen per line at save)
+ *   ad-hoc line         → the existing line's cost, matched by exact (item_type, description),
+ *                         consumed once — a rename resets the match (cost drops to 0, visible to
+ *                         cost-visible users)
+ *   genuinely new ad-hoc → 0 (a user cannot invent a cost; the catalogue is the cost home)
+ */
+export async function performEstimateSave(args: { groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean }) {
+  const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
+
+  // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to
+  // null (SetNull-safe) — and read the SERVER truths inherited per line: outsourced flag + cost.
+  const sentIds = Array.from(new Set(items.map((it) => (typeof it.catalogue_item_id === 'string' ? it.catalogue_item_id : '')).filter(Boolean)));
+  const validIds = new Set<string>();
+  const outsourcedIds = new Set<string>();
+  const costById = new Map<string, number>();
+  if (sentIds.length) {
+    const found = (await prisma.catalogueItem.findMany({ where: { id: { in: sentIds }, group_id: groupId }, select: { id: true, labour_outsourced: true, unit_cost: true } })) as any[];
+    found.forEach((f) => { validIds.add(f.id); if (f.labour_outsourced) outsourcedIds.add(f.id); costById.set(f.id, Number(f.unit_cost ?? 0)); });
+  }
+  // Existing lines: the preservation pool for ad-hoc costs (exact type+description, consumed once).
+  const existing = (await prisma.jobCardItem.findMany({
+    where: { job_card_id: jobCardId },
+    select: { item_type: true, description: true, unit_cost: true },
+    orderBy: { created_at: 'asc' },
+  })) as any[];
+  const pool = existing.map((e) => ({ key: `${e.item_type}||${String(e.description ?? '').trim()}`, cost: Number(e.unit_cost ?? 0) }));
+  const takeExisting = (itemType: string, description: string): number => {
+    const k = `${itemType}||${description}`;
+    const i = pool.findIndex((p) => p.key === k);
+    if (i < 0) return 0;
+    return pool.splice(i, 1)[0].cost;
+  };
+
+  // Validate + normalise lines, resolving unit_cost SERVER-SIDE (client cost ignored entirely).
   const inputs: QuoteLineInput[] = [];
+  const resolved: Array<{ description: string; catalogueItemId: string | null; outsourced: boolean; labourHours: Prisma.Decimal | null }> = [];
   for (const raw of items) {
     const t = String(raw.item_type) as ItemType;
-    if (!TYPES.includes(t)) return res.status(400).json({ message: `Invalid item_type: ${raw.item_type}` });
+    if (!TYPES.includes(t)) throw new Error(`VALIDATION:Invalid item_type: ${raw.item_type}`);
     const num = (v: any) => (v === '' || v == null ? 0 : Number(v));
-    if (![raw.qty, raw.unit_price, raw.unit_cost].every((v) => v === undefined || v === '' || v == null || Number.isFinite(Number(v)))) {
-      return res.status(400).json({ message: 'qty / unit_price / unit_cost must be numbers.' });
+    if (![raw.qty, raw.unit_price].every((v) => v === undefined || v === '' || v == null || Number.isFinite(Number(v)))) {
+      throw new Error('VALIDATION:qty / unit_price must be numbers.');
     }
+    const description = String(raw.description ?? '').trim();
+    const catalogueItemId = (typeof raw.catalogue_item_id === 'string' && validIds.has(raw.catalogue_item_id)) ? (raw.catalogue_item_id as string) : null;
+    const costPounds = catalogueItemId != null ? (costById.get(catalogueItemId) ?? 0) : takeExisting(t, description);
     inputs.push({
       item_type: t,
       qty: num(raw.qty),
       unit_price_pennies: poundsToPennies(num(raw.unit_price)),
-      unit_cost_pennies: poundsToPennies(num(raw.unit_cost)),
+      unit_cost_pennies: poundsToPennies(Math.max(0, costPounds)), // server-resolved — feeds the numerics too
       vatable: !!raw.vatable,
+    });
+    resolved.push({
+      description,
+      catalogueItemId,
+      outsourced: catalogueItemId != null && outsourcedIds.has(catalogueItemId),
+      labourHours: (() => { const v = raw.labour_hours; if (v === undefined || v === null || v === '') return null; const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 1000 ? new Prisma.Decimal(n.toFixed(2)) : null; })(),
     });
   }
 
   // Master switch: a non-registered tenant gets no VAT anywhere, regardless of per-line flags.
-  const totals = computeQuoteTotals(inputs, rate, { vatRegistered: vat.registered });
-
-  // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to null
-  // (SetNull-safe; a line never claims an origin it can't own).
-  const sentIds = Array.from(new Set(items.map((it) => (typeof it.catalogue_item_id === 'string' ? it.catalogue_item_id : '')).filter(Boolean)));
-  const validIds = new Set<string>();
-  const outsourcedIds = new Set<string>();
-  if (sentIds.length) {
-    const found = (await prisma.catalogueItem.findMany({ where: { id: { in: sentIds }, group_id: user.group_id }, select: { id: true, labour_outsourced: true } })) as Array<{ id: string; labour_outsourced: boolean }>;
-    found.forEach((f) => { validIds.add(f.id); if (f.labour_outsourced) outsourcedIds.add(f.id); });
-  }
+  const totals = computeQuoteTotals(inputs, vatRate, { vatRegistered });
 
   // Effective per-line values to store (mirror the compute flooring).
   const rows = inputs.map((it, i) => ({
     job_card_id: jobCardId,
     item_type: it.item_type,
-    description: String(items[i].description ?? '').trim(),
+    description: resolved[i].description,
     qty: new Prisma.Decimal(Math.max(0, it.qty)),
     unit_price: new Prisma.Decimal(penniesToPounds(it.item_type === 'labour' ? Math.max(0, it.unit_price_pennies) : it.unit_price_pennies)),
-    unit_cost: new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies ?? 0))),
+    unit_cost: new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies ?? 0))), // server-resolved above
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),
     vat_amount: new Prisma.Decimal(penniesToPounds(totals.lines[i].vat_pennies)),
-    catalogue_item_id: (typeof items[i].catalogue_item_id === 'string' && validIds.has(items[i].catalogue_item_id as string)) ? (items[i].catalogue_item_id as string) : null,
+    catalogue_item_id: resolved[i].catalogueItemId,
     // Inherited from the product AT SAVE (server-derived, never client-sent): frozen per line, so
     // re-flagging a product later never rewrites history.
-    labour_outsourced: typeof items[i].catalogue_item_id === 'string' && outsourcedIds.has(items[i].catalogue_item_id as string),
+    labour_outsourced: resolved[i].outsourced,
     // Fixed lines carry the service's charged labour content (validated non-negative number or null).
-    labour_hours: (() => { const v = items[i].labour_hours; if (v === undefined || v === null || v === '') return null; const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 1000 ? new Prisma.Decimal(n.toFixed(2)) : null; })(),
+    labour_hours: resolved[i].labourHours,
   }));
 
-  try {
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.jobCardItem.deleteMany({ where: { job_card_id: jobCardId } });
-      if (rows.length) await tx.jobCardItem.createMany({ data: rows });
-      await tx.jobCard.update({
-        where: { id: jobCardId },
-        data: {
-          vat_rate: new Prisma.Decimal(totals.vat_rate),
-          labour_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_pennies)),
-          parts_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_pennies)),
-          labour_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_cost_pennies)),
-          parts_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_cost_pennies)),
-        },
-      });
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.jobCardItem.deleteMany({ where: { job_card_id: jobCardId } });
+    if (rows.length) await tx.jobCardItem.createMany({ data: rows });
+    await tx.jobCard.update({
+      where: { id: jobCardId },
+      data: {
+        vat_rate: new Prisma.Decimal(totals.vat_rate),
+        labour_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_pennies)),
+        parts_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_pennies)),
+        labour_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_cost_pennies)),
+        parts_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_cost_pennies)),
+      },
     });
-  } catch (e) {
-    console.error('quote save error:', e);
-    return res.status(500).json({ message: 'Failed to save estimate.' });
-  }
+  });
 
-  return res.status(200).json({ message: 'Estimate saved.', totals });
+  return { totals };
 }
