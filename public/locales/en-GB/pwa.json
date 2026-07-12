@@ -43,5 +43,9 @@
   },
   "addPhoto": "Add photo",
   "pendingSend": "Sending…",
-  "sendFailedRetry": "Failed — tap to retry"
+  "sendFailedRetry": "Failed — tap to retry",
+  "outboxWaiting": "{{count}} waiting to send",
+  "outboxFailed": "{{count}} failed — open the job to retry or discard",
+  "storageNote": "Photos are stored on this phone until sent.",
+  "discard": "Discard photo"
 }

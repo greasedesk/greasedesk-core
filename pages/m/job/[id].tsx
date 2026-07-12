@@ -17,7 +17,8 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import { resizeImage } from '@/lib/image-resize';
-import { uploadPhoto } from '@/lib/pwa-upload';
+import { enqueuePhoto, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
+import OutboxStatus from '@/components/pwa/OutboxStatus';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null; unitPrice?: string };
 type JobData = {
@@ -28,9 +29,10 @@ type JobData = {
   currency: string; locale: string;
 };
 type StagePhoto = { id: string; stage: string; mediaType: 'photo' | 'video'; url: string | null; label: string | null };
-// A capture living on THIS phone: shutter → downscale → thumbnail immediately (pending) → the pipe
-// runs behind it. Failure is a STATE on the thumbnail (tap retries), never an error dialogue.
-type LocalShot = { photoId: string; url: string; state: 'pending' | 'failed'; blob: Blob };
+// A capture living on THIS phone = an OUTBOX row (IndexedDB-first: an OS-killed app loses
+// nothing). Thumbnails render from the queued blobs; failure is a STATE on the thumbnail
+// (tap retries, explicit discard), never an error dialogue.
+type LocalShot = { photoId: string; url: string; state: 'pending' | 'failed'; lastError: string | null };
 
 const STAGES = ['intake', 'injob', 'completion'] as const;
 
@@ -79,35 +81,41 @@ export default function MobileJobCard() {
     } catch { /* quiet */ }
   }, [id]);
 
-  const send = useCallback(async (stage: string, shot: LocalShot) => {
-    try {
-      await uploadPhoto({ jobCardId: id, stage: stage as any, photoId: shot.photoId, blob: shot.blob });
-      // Sent: drop the local copy and let the server list take over (refetch is best-effort).
-      setShots((m) => ({ ...m, [stage]: (m[stage] ?? []).filter((x) => x.photoId !== shot.photoId) }));
-      URL.revokeObjectURL(shot.url);
-      refreshPhotos();
-    } catch {
-      setShots((m) => ({ ...m, [stage]: (m[stage] ?? []).map((x) => x.photoId === shot.photoId ? { ...x, state: 'failed' as const } : x) }));
-    }
-  }, [id, refreshPhotos]);
+  // Pending thumbnails = THIS card's outbox rows (IndexedDB) — they survive app kills and render
+  // on reopen; when the drain sends one, its row vanishes and the server list takes over.
+  const loadShots = useCallback(async () => {
+    const items = (await outboxAll()).filter((i: OutboxItem) => i.jobCardId === id);
+    setShots((prev) => {
+      for (const arr of Object.values(prev)) for (const sh of arr) URL.revokeObjectURL(sh.url);
+      const next: Record<string, LocalShot[]> = {};
+      for (const it of items) {
+        (next[it.stage] ??= []).push({ photoId: it.id, url: URL.createObjectURL(it.blob), state: it.state === 'failed' ? 'failed' : 'pending', lastError: it.lastError });
+      }
+      return next;
+    });
+  }, [id]);
 
-  // Shutter → downscale FIRST (full-size bytes never held) → pending thumbnail → walk away.
+  useEffect(() => {
+    if (!id) return;
+    loadShots();
+    const un = subscribeOutbox(() => { loadShots(); refreshPhotos(); }); // a drained item = a fresh server thumbnail
+    return un;
+  }, [id, loadShots, refreshPhotos]);
+
+  // Shutter → downscale FIRST (full-size bytes never held) → IDB BEFORE any network → walk away.
   async function onCapture(stage: string, files: FileList | null) {
     if (!files || !files.length) return;
     for (const file of Array.from(files)) {
       if (!file.type.startsWith('image/')) continue;
-      const blob = await resizeImage(file); // 1600px/q0.8 — the ONLY size that exists from here on
-      const shot: LocalShot = { photoId: crypto.randomUUID(), url: URL.createObjectURL(blob), state: 'pending', blob };
-      setShots((m) => ({ ...m, [stage]: [...(m[stage] ?? []), shot] }));
-      send(stage, shot); // direct upload today; step 6 parks the SAME shape in the outbox instead
+      const blob = await resizeImage(file); // 1600px/q0.8 — the ONLY size that ever exists from here on
+      await enqueuePhoto({ jobCardId: id, stage, blob }); // durably parked, then the drain is invited
     }
+    await loadShots();
     const el = fileRefs.current[stage]; if (el) el.value = '';
   }
 
-  function retry(stage: string, shot: LocalShot) {
-    setShots((m) => ({ ...m, [stage]: (m[stage] ?? []).map((x) => x.photoId === shot.photoId ? { ...x, state: 'pending' as const } : x) }));
-    send(stage, shot);
-  }
+  function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
+  function discard(shot: LocalShot) { discardItem(shot.photoId).then(loadShots); }
 
   async function copyVin(vin: string) {
     try {
@@ -142,6 +150,7 @@ export default function MobileJobCard() {
             )}
           </div>
         </header>
+        <OutboxStatus />
 
         <main className="p-3 space-y-3 pb-8">
           {job == null ? (
@@ -229,12 +238,18 @@ export default function MobileJobCard() {
                     ) : (
                       <div className="grid grid-cols-3 gap-2">
                         {mine.map((sh) => (
-                          <button key={sh.photoId} onClick={() => sh.state === 'failed' && retry(stage, sh)} className="relative" aria-label={sh.state === 'failed' ? t('sendFailedRetry') : t('pendingSend')}>
-                            <img src={sh.url} alt="" className={`w-full aspect-square object-cover rounded-lg border ${sh.state === 'failed' ? 'border-danger' : 'border-line'} ${sh.state === 'pending' ? 'opacity-70' : ''}`} />
-                            <span className={`absolute bottom-1 left-1 right-1 text-center text-[10px] font-semibold rounded px-1 py-0.5 ${sh.state === 'failed' ? 'bg-danger-soft text-danger' : 'bg-surface/90 text-muted'}`}>
-                              {sh.state === 'failed' ? t('sendFailedRetry') : t('pendingSend')}
-                            </span>
-                          </button>
+                          <span key={sh.photoId} className="relative block">
+                            <button onClick={() => sh.state === 'failed' && retry(stage, sh)} className="block w-full" aria-label={sh.state === 'failed' ? t('sendFailedRetry') : t('pendingSend')}>
+                              <img src={sh.url} alt="" className={`w-full aspect-square object-cover rounded-lg border ${sh.state === 'failed' ? 'border-danger' : 'border-line'} ${sh.state === 'pending' ? 'opacity-70' : ''}`} />
+                              <span className={`absolute bottom-1 left-1 right-1 text-center text-[10px] font-semibold rounded px-1 py-0.5 ${sh.state === 'failed' ? 'bg-danger-soft text-danger' : 'bg-surface/90 text-muted'}`}>
+                                {sh.state === 'failed' ? t('sendFailedRetry') : t('pendingSend')}
+                              </span>
+                            </button>
+                            {sh.state === 'failed' && (
+                              /* Explicit discard — a permanently failed photo never vanishes on its own. */
+                              <button onClick={() => discard(sh)} aria-label={t('discard')} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-danger text-white text-xs font-bold">✕</button>
+                            )}
+                          </span>
                         ))}
                         {st.map((p) => p.url && (
                           p.mediaType === 'video'

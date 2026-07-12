@@ -15,6 +15,7 @@ import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
+import OutboxStatus from '@/components/pwa/OutboxStatus';
 
 type DayJob = { id: string; startAt: string; endAt: string; reg: string; service: string; status: string; isComeback: boolean };
 type DayData = { siteId: string | null; sites: Array<{ id: string; name: string }>; date: string | null; jobs: DayJob[] };
@@ -103,6 +104,7 @@ export default function MyDay() {
             )}
           </div>
         </header>
+        <OutboxStatus />
 
         <main className="p-3">
           {data == null ? (
