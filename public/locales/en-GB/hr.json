@@ -46,5 +46,6 @@
   "factor": {
     "label": "Utilisation factor",
     "hint": "Realistically, what share of this person’s available hours can be billed? A green apprentice can’t bill every hour; a competent full-time tech bills most. This sets the realistic expectation for the workshop — it never scores the individual."
-  }
+  },
+  "saveNeedsDate": "Set an effective date to save"
 }

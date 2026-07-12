@@ -253,13 +253,6 @@ export default function HrPage() {
                 <input type="number" inputMode="decimal" min={0} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className={inputClass} /></label>
               <label className="block"><span className="text-sm font-medium text-ink">{th('startDate')}</span>
                 <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className={inputClass} /></label>
-              {form.id && (
-                <label className="block sm:col-span-2 rounded-lg border-2 border-accent bg-accent-soft/40 p-3">
-                  <span className="text-sm font-semibold text-accent">{th('effectiveDate')} *</span>
-                  <input type="date" value={form.effectiveDate} onChange={(e) => setForm({ ...form, effectiveDate: e.target.value, confirmDated: false })} className={inputClass} />
-                  <span className="block text-xs text-muted mt-1">{form.effectiveDate === '' ? th('effectiveRequired') : th('effectiveHint')}</span>
-                </label>
-              )}
             </div>
 
             <AllocationEditor sites={sites} rows={form.rows} onChange={(rows) => setForm({ ...form, rows })} t={t} />
@@ -318,8 +311,23 @@ export default function HrPage() {
               </div>
             </div>
 
-            <div className="mt-5 flex flex-wrap items-center gap-2">
+            {/* Commit block: the effective date lives WITH Save (one action) — flow reads
+                edit the fields → state when the change took effect → Save. */}
+            {form.id && (
+              <div className="mt-5 rounded-lg border-2 border-accent bg-accent-soft/40 p-3">
+                <label className="block max-w-xs">
+                  <span className="text-sm font-semibold text-accent">{th('effectiveDate')} *</span>
+                  <input type="date" value={form.effectiveDate} onChange={(e) => setForm({ ...form, effectiveDate: e.target.value, confirmDated: false })} className={inputClass} />
+                </label>
+                <span className="block text-xs text-muted mt-1">{form.effectiveDate === '' ? th('effectiveRequired') : th('effectiveHint')}</span>
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button onClick={() => save()} disabled={busy || !canSave} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? t('saving') : t('save')}</button>
+              {/* The disabled reason, stated inline — never a silently-greyed button. */}
+              {!busy && !canSave && form.id && form.effectiveDate === '' && (
+                <span className="text-xs text-warn">{th('saveNeedsDate')}</span>
+              )}
               <button onClick={() => setForm(null)} className="text-muted hover:text-ink rounded-lg px-4 py-2 text-sm">{t('cancel')}</button>
               {form.id && (leaving?.id === form.id ? (
                 <span className="ml-auto flex items-center gap-2 text-sm">
