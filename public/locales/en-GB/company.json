@@ -21,7 +21,10 @@
     "save": "Save company details",
     "saving": "Saving…",
     "saved": "Company details saved.",
-    "error": "Could not save."
+    "error": "Could not save.",
+    "vinHint": "Where to find the VIN",
+    "vinHintPlaceholder": "Shown to mechanics on the phone app when adding a VIN",
+    "vinHintHelp": "Free text, in your own words for your vehicles. Leave empty to show no hint."
   },
   "invoice": {
     "heading": "Invoice numbering",

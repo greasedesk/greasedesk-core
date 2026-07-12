@@ -186,6 +186,7 @@ model Group {
   // "booked" total; see-margin = the margin total (exposes cost structure → tighter defaults).
   perm_manager_see_values     Boolean @default(true)
   perm_manager_see_margin     Boolean @default(false) // margin is a DELIBERATE grant, never inherited (ruling 2026-07-12)
+  vin_hint_text               String? // tenant-worded "where to find the VIN" for the phone card; empty = no hint (never a marque default)
   perm_standard_see_values    Boolean @default(false)
   perm_standard_see_margin    Boolean @default(false)
   // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).

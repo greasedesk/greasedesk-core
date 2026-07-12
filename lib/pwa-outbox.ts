@@ -68,9 +68,9 @@ export async function triggerDrain(): Promise<void> {
 }
 
 /** Capture → IDB FIRST → then the network is invited. Returns the idempotency id. */
-export async function enqueuePhoto(args: { jobCardId: string; stage: string; blob: Blob }): Promise<string> {
+export async function enqueuePhoto(args: { jobCardId: string; stage: string; blob: Blob; slot?: string }): Promise<string> {
   const item: OutboxItem = {
-    id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, stage: args.stage, slot: 'freeform',
+    id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, stage: args.stage, slot: args.slot ?? 'freeform',
     blob: args.blob, contentType: 'image/jpeg', createdAt: Date.now(),
     attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };

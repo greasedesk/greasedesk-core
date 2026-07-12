@@ -65,10 +65,12 @@
   "save": "Save",
   "saveAnyway": "Save anyway",
   "cancel": "Cancel",
-  "addVin": "Add the VIN — read it off the scuttle or door pillar",
+  "addVin": "Add the VIN",
   "editVin": "Edit VIN",
   "vinPlaceholder": "17 characters",
-  "vinInvalid": "A VIN is exactly 17 characters and never contains I, O or Q — check and re-enter.",
+  "vinInvalid": "That doesn’t check out as a VIN — 17 characters, no I, O or Q, and the 9th character must match. Re-read it and try again.",
   "addMileage": "Add mileage",
-  "mileageLowWarn": "That’s LOWER than the recorded {{last}} — is it right? Tap Save anyway to confirm."
+  "mileageLowWarn": "That’s LOWER than the recorded {{last}} — is it right? Tap Save anyway to confirm.",
+  "vinPhotoAdd": "Photograph the VIN",
+  "vinPhotoEnlarge": "Enlarge VIN photo"
 }

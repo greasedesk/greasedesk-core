@@ -14,6 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { buildJobCardPageProps } from '@/lib/jobcard-page-data';
+import { prisma } from '@/lib/db';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store'); // offline freshness is the client cache's job
@@ -28,6 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // THE shared builder = the visibility + finance chokepoint (site scope inside; null = not yours).
   const p = await buildJobCardPageProps(user.id as string, user.group_id as string, id);
   if (!p) return res.status(404).json({ message: 'Job card not found.' });
+  const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { vin_hint_text: true } })) as any;
 
   return res.status(200).json({
     id: p.jobCardId,
@@ -40,6 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       vin: p.vehicle.vin,
       mileageIn: p.vehicle.mileageIn,
     },
+    vinHint: grp?.vin_hint_text ?? null, // tenant-worded; null = no hint rendered
     // Work sold — NO money fields, for anyone: no unitPrice, no unit_cost. Descriptions and
     // quantities are the job; the sell price has no use in a bay.
     lines: p.lines.map((l) => ({

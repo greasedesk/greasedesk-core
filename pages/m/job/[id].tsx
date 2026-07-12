@@ -21,6 +21,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import { resizeImage } from '@/lib/image-resize';
 import { enqueuePhoto, enqueueVehicle, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
+import { isValidVin, normaliseVinInput } from '@/lib/vin';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 import InstallBar from '@/components/pwa/InstallBar';
 
@@ -29,10 +30,11 @@ type JobData = {
   id: string; status: string; isComeback: boolean;
   customer: { name: string; phone: string | null };
   vehicle: { registration: string; make: string | null; model: string | null; colour: string | null; vin: string | null; mileageIn: number | null };
+  vinHint?: string | null;
   lines: JobLine[]; notes: string; invoice: { number: string; status: string } | null;
   currency: string; locale: string;
 };
-type StagePhoto = { id: string; stage: string; mediaType: 'photo' | 'video'; url: string | null; label: string | null };
+type StagePhoto = { id: string; stage: string; slot?: string | null; mediaType: 'photo' | 'video'; url: string | null; label: string | null };
 // A capture living on THIS phone = an OUTBOX row (IndexedDB-first: an OS-killed app loses
 // nothing). Thumbnails render from the queued blobs; failure is a STATE on the thumbnail
 // (tap retries, explicit discard), never an error dialogue.
@@ -54,6 +56,9 @@ export default function MobileJobCard() {
   const [vinErr, setVinErr] = useState(false);
   const [milesEdit, setMilesEdit] = useState<string | null>(null);
   const [milesWarnLow, setMilesWarnLow] = useState(false); // lower-than-recorded needs a second, explicit tap
+  const [vinPhotoLarge, setVinPhotoLarge] = useState<string | null>(null); // tapped-to-enlarge URL
+  const [vinLocalUrl, setVinLocalUrl] = useState<string | null>(null); // the shot JUST taken — visible offline, before the drain
+  const vinFileRef = useRef<HTMLInputElement | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const load = useCallback(async () => {
@@ -126,8 +131,9 @@ export default function MobileJobCard() {
   function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
   function discard(shot: LocalShot) { discardItem(shot.photoId).then(loadShots); }
 
-  // VIN: 17 chars, no I/O/Q (they don't exist in VINs — a read error, not a variant).
-  const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
+  // VIN gate: 17 chars, no I/O/Q, AND the ISO position-9 check digit (lib/vin — one chokepoint,
+  // confirmed against real vehicles and a 50/53 pass rate on the existing book). A VIN that fails
+  // is a read error or a typo — never saved.
   const applyLocal = (patch: Partial<JobData['vehicle']>) => {
     setJob((j) => {
       if (!j) return j;
@@ -138,8 +144,8 @@ export default function MobileJobCard() {
   };
 
   async function saveVin() {
-    const vin = (vinEdit ?? '').replace(/\s+/g, '').toUpperCase();
-    if (!VIN_RE.test(vin)) { setVinErr(true); return; }
+    const vin = normaliseVinInput(vinEdit ?? '');
+    if (!isValidVin(vin)) { setVinErr(true); return; }
     setVinErr(false); setVinEdit(null);
     applyLocal({ vin });
     await enqueueVehicle({ jobCardId: id, vin }); // rides the outbox — a bay has no signal
@@ -153,6 +159,21 @@ export default function MobileJobCard() {
     setMilesWarnLow(false); setMilesEdit(null);
     applyLocal({ mileageIn: n });
     await enqueueVehicle({ jobCardId: id, mileageIn: n });
+  }
+
+  // Photograph the VIN plate → type it from the photo (what the floor does today with a camera
+  // roll — it just lands on the right card). Rides the outbox: kind:'photo', stage intake,
+  // slot 'vin' — the existing pipe, no new plumbing.
+  async function onVinPhoto(files: FileList | null) {
+    if (!files || !files.length) return;
+    const file = files[0];
+    if (!file.type.startsWith('image/')) return;
+    const blob = await resizeImage(file);
+    setVinLocalUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob); }); // beside the input immediately — a bay has no signal
+    await enqueuePhoto({ jobCardId: id, stage: 'intake', blob, slot: 'vin' });
+    await loadShots();
+    if (vinFileRef.current) vinFileRef.current.value = '';
+    if (vinEdit == null) setVinEdit(job?.vehicle.vin ?? ''); // open the input — the typing happens against the photo
   }
 
   async function copyVin(vin: string) {
@@ -228,21 +249,40 @@ export default function MobileJobCard() {
 
                 {/* VIN — the scuttle is in front of the mechanic. Uppercase keyboard, no autocorrect;
                     strict 17 chars, no I/O/Q. */}
-                {vinEdit != null ? (
+                {(() => {
+                  // The VIN reference photo: local queue first (dead-signal bay), else the newest
+                  // server copy. Tap to enlarge — the mechanic types while looking at it.
+                  const serverVin = (photos ?? []).filter((p2) => p2.slot === 'vin').slice(-1);
+                  const vinShotUrl = vinLocalUrl ?? serverVin[0]?.url ?? null; // just-taken beats server (offline-first)
+                  return (
+                    <>
+                      {vinEdit != null ? (
                   <div className="mt-3">
-                    <input
-                      type="text" autoCapitalize="characters" autoCorrect="off" spellCheck={false} autoComplete="off" maxLength={17}
-                      value={vinEdit}
-                      onChange={(e) => { setVinEdit(e.target.value.toUpperCase()); setVinErr(false); }}
-                      placeholder={t('vinPlaceholder')}
-                      aria-label={t('vin')}
-                      className="w-full min-h-[48px] bg-surface border border-line rounded-lg px-3 text-base font-bold tracking-wider text-ink"
-                    />
-                    {vinErr && <p className="text-xs text-danger mt-1">{t('vinInvalid')}</p>}
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex items-start gap-2">
+                      {vinShotUrl && (
+                        <button onClick={() => setVinPhotoLarge(vinShotUrl)} className="shrink-0" aria-label={t('vinPhotoEnlarge')}>
+                          <img src={vinShotUrl} alt="" className="w-20 h-20 object-cover rounded-lg border border-line" />
+                        </button>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <input
+                          type="text" autoCapitalize="characters" autoCorrect="off" spellCheck={false} autoComplete="off" maxLength={17}
+                          value={vinEdit}
+                          onChange={(e) => { setVinEdit(e.target.value.toUpperCase()); setVinErr(false); }}
+                          placeholder={t('vinPlaceholder')}
+                          aria-label={t('vin')}
+                          className="w-full min-h-[48px] bg-surface border border-line rounded-lg px-3 text-base font-bold tracking-wider text-ink"
+                        />
+                        {vinErr && <p className="text-xs text-danger mt-1">{t('vinInvalid')}</p>}
+                        {job.vinHint && <p className="text-xs text-muted mt-1">{job.vinHint}</p>}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2">
                       <button onClick={saveVin} className="min-h-[44px] rounded-lg px-4 text-sm font-semibold bg-accent text-white">{t('save')}</button>
+                      <button onClick={() => vinFileRef.current?.click()} className="min-h-[44px] rounded-lg px-4 text-sm font-semibold border border-accent text-accent">{t('vinPhotoAdd')}</button>
                       <button onClick={() => { setVinEdit(null); setVinErr(false); }} className="min-h-[44px] rounded-lg px-4 text-sm text-muted">{t('cancel')}</button>
                     </div>
+                    <input ref={vinFileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => onVinPhoto(e.target.files)} />
                   </div>
                 ) : job.vehicle.vin ? (
                   <div className="mt-3">
@@ -261,9 +301,20 @@ export default function MobileJobCard() {
                   <button onClick={() => setVinEdit('')} className="mt-3 w-full text-left bg-surface-muted border border-line rounded-lg p-3 min-h-[56px]">
                     <span className="block text-[10px] font-semibold text-muted uppercase tracking-wide">{t('vin')}</span>
                     <span className="block text-sm text-accent underline">{t('addVin')}</span>
+                    {job.vinHint && <span className="block text-xs text-muted mt-0.5">{job.vinHint}</span>}
                   </button>
                 )}
+                    </>
+                  );
+                })()}
               </section>
+
+              {/* Tap-to-enlarge VIN photo overlay — tap anywhere to close. */}
+              {vinPhotoLarge && (
+                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-2" onClick={() => setVinPhotoLarge(null)}>
+                  <img src={vinPhotoLarge} alt="" className="max-w-full max-h-full rounded-lg" />
+                </div>
+              )}
 
               {/* Customer */}
               <section className="bg-surface border border-line rounded-xl p-4">

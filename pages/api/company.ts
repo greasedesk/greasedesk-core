@@ -51,6 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
   if (address !== undefined) data.address = address.trim() || null;
+  if ((req.body || {}).vin_hint_text !== undefined) data.vin_hint_text = String((req.body || {}).vin_hint_text).trim().slice(0, 200) || null; // phone-card VIN hint (tenant-worded; empty = none)
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
   if (vat_registered !== undefined) data.vat_registered = !!vat_registered;
   if (default_vat_rate !== undefined) {
