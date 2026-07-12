@@ -64,6 +64,12 @@ export const authOptions: NextAuthOptions = {
   // --- Session Configuration ---
   session: {
     strategy: 'jwt', // Use JSON Web Tokens for sessions
+    // 90 days, ROLLING (JWT-strategy cookies re-issue on every session touch): a mechanic who
+    // opens the phone app once a month never re-authenticates. DELIBERATE TRADE-OFF (ruling
+    // 2026-07-12): one auth chokepoint, one cookie — this widens the DESKTOP session to 90 days
+    // too. Scoping a longer lifetime to /m alone would need a second cookie or a parallel auth
+    // surface, which is exactly what the one-chokepoint rule forbids.
+    maxAge: 90 * 24 * 60 * 60,
   },
 
   // --- Callbacks ---

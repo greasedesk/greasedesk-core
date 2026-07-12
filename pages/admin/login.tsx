@@ -19,8 +19,11 @@ export async function getServerSideProps(context: any) {
       // Read the error or email query parameters if they exist
       error: context.query.error || null,
       email: context.query.email || null,
-      status: context.query.status || null, 
-      callbackUrl: context.query.callbackUrl || '/admin/landing',
+      status: context.query.status || null,
+      // RELATIVE paths only — a crafted ?callbackUrl=https://evil.example must never win.
+      callbackUrl: (typeof context.query.callbackUrl === 'string' && context.query.callbackUrl.startsWith('/') && !context.query.callbackUrl.startsWith('//'))
+        ? context.query.callbackUrl
+        : '/admin/landing',
     },
   };
 }
@@ -28,6 +31,7 @@ export async function getServerSideProps(context: any) {
 export default function AdminLoginPage({ csrfToken, error, email, status, callbackUrl }: { csrfToken: string, error: string | null, email: string | null, status: string | null, callbackUrl: string }) {
   const [loginEmail, setLoginEmail] = useState(email || '');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false); // oily-thumb reveal — typos are the norm in a workshop
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -46,7 +50,8 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
     setLoading(false);
 
     if (result && result.error) {
-      router.push(`/admin/login?error=InvalidCredentials`);
+      // Keep the callbackUrl through the retry — a failed first try at /m must still return to /m.
+      router.push(`/admin/login?error=InvalidCredentials&callbackUrl=${encodeURIComponent(callbackUrl)}`);
     } else if (result && result.url) {
       router.push(result.url);
     }
@@ -88,32 +93,52 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
           <form onSubmit={handleSubmit} className="space-y-4">
             <input name="csrfToken" type="hidden" defaultValue={csrfToken} /> 
             
+            {/* Phone-first fields: email keyboard + password-manager hints, no autocapitalise,
+                reveal toggle, ≥48px touch targets — this form gets used with gloves on. */}
             <div>
-              <label className="block text-sm font-medium text-gdSubtext mb-1">Email Address</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-gdSubtext mb-1">Email Address</label>
               <input
+                id="login-email"
                 type="email"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
                 required
-                className="w-full bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+                className="w-full min-h-[48px] bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-base text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gdSubtext mb-1">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="w-full bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
-              />
+              <label htmlFor="login-password" className="block text-sm font-medium text-gdSubtext mb-1">Password</label>
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full min-h-[48px] bg-slate-800 border border-gdBorder rounded-lg pl-3 pr-16 py-2 text-base text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 min-w-[56px] px-3 text-sm text-gdSubtext hover:text-gdText"
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-gdAccent text-slate-900 font-medium rounded-xl px-4 py-2 disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full min-h-[48px] bg-gdAccent text-slate-900 font-medium rounded-xl px-4 py-3 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading && <LoadingSpinner />}
               {loading ? 'Signing In...' : 'Sign In'}

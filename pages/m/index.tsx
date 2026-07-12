@@ -42,6 +42,6 @@ export default function MobileShell() {
 export const getServerSideProps = withI18n(['pwa'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
+  if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login?callbackUrl=%2Fm', permanent: false } }; // return HERE after auth, never the admin landing
   return { props: {} };
 });
