@@ -1,5 +1,21 @@
 {
   "title": "My Day",
   "subtitle": "Workshop companion",
-  "shellPlaceholder": "Your day view is on its way — job list, job cards and photos will appear here."
+  "shellPlaceholder": "Your day view is on its way — job list, job cards and photos will appear here.",
+  "updating": "Updating…",
+  "updated": "Updated just now",
+  "offline": "Offline — showing last known",
+  "noJobs": "Nothing booked at this site today.",
+  "siteLabel": "Site",
+  "status": {
+    "draft": "Draft",
+    "quoted": "Quoted",
+    "accepted": "Accepted",
+    "declined": "Declined",
+    "in_progress": "In progress",
+    "invoiced": "Invoiced",
+    "paid": "Paid",
+    "done": "Done",
+    "cancelled": "Cancelled"
+  }
 }
