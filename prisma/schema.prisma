@@ -1088,6 +1088,12 @@ model CostPerson {
   // configurable leave-year start + carry-over + part-time/six-day pro-rata would land here.
   // Allowance/balance are PER-PERSON figures — never apportioned or summed across sites.
   annual_leave_allowance_days Decimal?  @default(28.0) @db.Decimal(4, 1)
+  // Utilisation factor (%): the REALISTIC share of this person's available hours that can
+  // be billed — sets the workshop's derived target; NEVER an individual performance score.
+  // NOT NULL (default 70 — a competent full-time mechanic) so the target can't break.
+  // Effective-dated via EmploymentEvent kind `factor`; the TARGET resolves value-at-window-end
+  // from the series (the first value-true-at-time read — historic months keep their factor).
+  utilisation_factor          Int       @default(70)
   // Employment dates — RECORDED ONLY in v1, wired to no calculation. The anchor for banked:
   // auto pro-rata of the allowance from start_date, leaver handling, mid-month capacity proration.
   start_date                  DateTime?
@@ -1166,6 +1172,7 @@ enum EmploymentEventKind {
   started // { start_date }
   ended // { end_date } — mark-as-left (is_active=false in the same tx)
   name // { name } — a surname change is HR history, not a silent overwrite
+  factor // { utilisation_factor } — workshop expectation %, effective-dated (target reads value-at-time)
   role // { role } — the 80/20 of role progression (full position-management stays its own build)
 }
 

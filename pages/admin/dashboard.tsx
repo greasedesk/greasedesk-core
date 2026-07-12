@@ -390,7 +390,13 @@ export default function AdminDashboard(props: PageProps) {
                     </>
                   ) : (
                     <>
-                      <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
+                      <p className="text-2xl font-bold tabular-nums text-ink">
+                        {pct(u.ratio)}
+                        {u.targetRatio != null && <span className="text-sm font-medium text-muted"> · {t('pnl.utilTargetInline', { pct: pct(u.targetRatio) })}</span>}
+                      </p>
+                      {u.targetRatio != null && u.targetRatio > 0 && u.ratio != null && (
+                        <p className="text-xs text-ink mt-0.5">{t('pnl.utilOfTarget', { pct: pct(u.ratio / u.targetRatio) })}</p>
+                      )}
                       <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
                       {(() => {
                         // The defensible reference: required utilisation = break-even hours ÷ available.
@@ -411,6 +417,15 @@ export default function AdminDashboard(props: PageProps) {
                             <p key={s2.siteId}>{s2.siteName}: {h(s2.charged)} ÷ {h(s2.available)} = {pct(s2.ratio)}</p>
                           ))}
                           {!u.configComplete && <p className="text-warn">{t('pnl.utilMissingNames', { names: u.missingHoursMechanics.join(', ') })}</p>}
+                          {u.targetRatio != null && (u.targetParts?.length ?? 0) > 0 && (
+                            <>
+                              <p className="text-ink mt-1">{t('pnl.utilTargetHeading')}</p>
+                              {u.targetParts.map((tp: any, i2: number) => (
+                                <p key={i2}>{tp.name}: {h(tp.availableHours)} × {tp.factorPct}%</p>
+                              ))}
+                              <p>{t('pnl.utilTargetCalc', { pct: pct(u.targetRatio) })}</p>
+                            </>
+                          )}
                         </div>
                       </details>
                     </>

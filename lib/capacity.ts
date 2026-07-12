@@ -41,6 +41,13 @@ export type AvailableHours = {
   // the denominator; what's lost is available − charged.
   grossHours: number;
   leaveByType: Record<string, number>;
+  // DERIVED TARGET (computed, never typed): Σ(person available × their utilisation factor) ÷
+  // Σ(available). The factor is resolved AS OF THE WINDOW END from the EmploymentEvent series
+  // (the system's FIRST value-true-at-time read — historic months keep the factor that applied
+  // then; changing it today never moves last month's target). The factor is a workshop
+  // expectation, NEVER an individual score — no per-person actuals exist or may be added.
+  targetRatio: number | null;               // null when available = 0
+  targetParts: Array<{ name: string; availableHours: number; factorPct: number }>;
 };
 
 // THE rostered-day decision moved to lib/rostered-days (ISOMORPHIC — the Headcount form shows
@@ -72,7 +79,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     prisma.costPerson.findMany({
       where: { group_id: groupId, is_active: true, is_chargeable: true },
       select: {
-        id: true, name: true, contracted_hours_per_day: true, working_days: true,
+        id: true, name: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true,
         allocations: { where: { site_id: siteId }, select: { percent: true } },
       },
     }) as any,
@@ -80,6 +87,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
   const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
   const ids = configured.map((p: any) => p.id);
+  const factorAt = await factorsAtWindowEnd(ids, window.to);
 
   const [leave, phDays] = await Promise.all([
     ids.length ? prisma.leaveRecord.findMany({
@@ -96,8 +104,9 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   }
 
   const days = windowDays(window);
-  let centiTotal = 0, centiLeave = 0, centiPh = 0, centiGross = 0, rosteredDays = 0;
+  let centiTotal = 0, centiLeave = 0, centiPh = 0, centiGross = 0, centiWeighted = 0, rosteredDays = 0;
   const centiByType: Record<string, number> = {};
+  const targetParts: Array<{ name: string; availableHours: number; factorPct: number }> = [];
   for (const p of configured) {
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
@@ -123,11 +132,15 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     }
     subC = leaveC + phC;
     const netC = Math.max(0, grossC - subC); // clamp: full-month leave = 0 available, never negative
-    centiTotal += Math.round(netC * alloc);
+    const personAvailC = Math.round(netC * alloc);
+    centiTotal += personAvailC;
     centiLeave += Math.round(leaveC * alloc);
     centiPh += Math.round(phC * alloc);
     centiGross += Math.round(grossC * alloc);
     for (const [ty, c] of Object.entries(typeC)) centiByType[ty] = (centiByType[ty] ?? 0) + Math.round(c * alloc);
+    const factorPct = factorAt.get(p.id) ?? Number(p.utilisation_factor ?? 70);
+    centiWeighted += Math.round(personAvailC * (factorPct / 100));
+    if (personAvailC > 0) targetParts.push({ name: p.name, availableHours: personAvailC / 100, factorPct });
   }
 
   return {
@@ -140,7 +153,36 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     phHours: centiPh / 100,
     grossHours: centiGross / 100,
     leaveByType: Object.fromEntries(Object.entries(centiByType).map(([ty, c]) => [ty, c / 100])),
+    targetRatio: centiTotal > 0 ? centiWeighted / centiTotal : null,
+    targetParts,
   };
+}
+
+/** The factor value AS OF window end, per person — the system's first value-true-at-time read.
+ *  Resolution: latest non-voided `factor` event with effective_date < T → its value; else, if a
+ *  LATER event exists, the EARLIEST later event's previous_json (the value that applied before
+ *  the first change — true at T); else the flat column (caller's fallback, never changed). */
+async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!ids.length) return out;
+  const evs = (await prisma.employmentEvent.findMany({
+    where: { cost_person_id: { in: ids }, kind: 'factor' as any, voided_at: null },
+    orderBy: [{ effective_date: 'asc' }, { created_at: 'asc' }],
+    select: { cost_person_id: true, effective_date: true, value_json: true, previous_json: true },
+  })) as any[];
+  const byPerson = new Map<string, any[]>();
+  for (const e of evs) byPerson.set(e.cost_person_id, [...(byPerson.get(e.cost_person_id) ?? []), e]);
+  for (const [pid, list] of byPerson) {
+    const atOrBefore = list.filter((e) => e.effective_date.getTime() < to.getTime());
+    if (atOrBefore.length) {
+      const v = atOrBefore[atOrBefore.length - 1].value_json?.utilisation_factor;
+      if (Number.isFinite(Number(v))) out.set(pid, Number(v));
+    } else {
+      const prev = list[0].previous_json?.utilisation_factor; // value BEFORE the first (later) change
+      if (Number.isFinite(Number(prev))) out.set(pid, Number(prev));
+    }
+  }
+  return out;
 }
 
 // ---------- Utilisation = hours charged ÷ hours available (month × site) ----------
@@ -181,6 +223,7 @@ export type GroupUtilisation = {
   configComplete: boolean; missingHoursMechanics: string[];
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
+  targetRatio: number | null; targetParts: Array<{ name: string; availableHours: number; factorPct: number }>;
   perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
 };
 
@@ -195,13 +238,16 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     }) as any,
   ]);
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
-  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
+  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0, weightedTarget = 0;
   const leaveByType: Record<string, number> = {};
+  const targetParts: Array<{ name: string; availableHours: number; factorPct: number }> = [];
   const perSite = siteIds.map((sid, i) => {
     const u = parts[i];
     charged += u.charged; available += u.available;
     rosteredDays += u.rosteredDays; leaveHours += u.leaveHours; phHours += u.phHours;
     grossHours += u.grossHours;
+    if (u.targetRatio != null) weightedTarget += u.targetRatio * u.available;
+    targetParts.push(...u.targetParts);
     for (const [ty, h] of Object.entries(u.leaveByType)) leaveByType[ty] = Math.round(((leaveByType[ty] ?? 0) + h) * 100) / 100;
     return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
@@ -215,6 +261,8 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,
+    targetRatio: available > 0 ? weightedTarget / available : null,
+    targetParts,
     perSite,
   };
 }

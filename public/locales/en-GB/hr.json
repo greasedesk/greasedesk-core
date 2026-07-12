@@ -32,7 +32,8 @@
     "started": "Start date",
     "ended": "Left",
     "name": "Name",
-    "role": "Role"
+    "role": "Role",
+    "factor": "Utilisation factor"
   },
   "recordFirstNote": "Leave and bank holidays are managed on the Roster.",
   "rosterLink": "Open Roster",
@@ -41,5 +42,9 @@
   "void": "Void",
   "voidConfirm": "Void this entry? It stays visible in the history but no longer counts.",
   "voided": "voided",
-  "corrected": "corrected (was {{from}})"
+  "corrected": "corrected (was {{from}})",
+  "factor": {
+    "label": "Utilisation factor",
+    "hint": "Realistically, what share of this person’s available hours can be billed? A green apprentice can’t bill every hour; a competent full-time tech bills most. This sets the realistic expectation for the workshop — it never scores the individual."
+  }
 }

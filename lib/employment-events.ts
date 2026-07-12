@@ -20,6 +20,7 @@ export type EmploymentShape = {
   working_days: number[];
   annual_leave_allowance_days: number | null;
   start_date: Date | null;
+  utilisation_factor: number;
 };
 
 export type EmploymentChange = { kind: string; value: unknown; previous: unknown };
@@ -53,6 +54,9 @@ export function diffEmploymentShape(current: EmploymentShape, next: EmploymentSh
   }
   if (day(current.start_date) !== day(next.start_date)) {
     out.push({ kind: 'started', value: { start_date: day(next.start_date) }, previous: { start_date: day(current.start_date) } });
+  }
+  if (current.utilisation_factor !== next.utilisation_factor) {
+    out.push({ kind: 'factor', value: { utilisation_factor: next.utilisation_factor }, previous: { utilisation_factor: current.utilisation_factor } });
   }
   return out;
 }

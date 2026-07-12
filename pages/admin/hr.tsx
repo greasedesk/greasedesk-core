@@ -25,6 +25,7 @@ type Person = {
   id: string; name: string; role: string | null; costType: 'salary' | 'hourly'; amountPennies: number; isActive: boolean;
   isChargeable: boolean; contractedHoursPerDay: number | null; workingDays: number[];
   startDate: string | null; endDate: string | null; allowanceDays: number | null;
+  utilisationFactor: number;
   allocations: Alloc[];
 };
 type Ev = { id: string; personId: string; personName: string; kind: string; effectiveDate: string; value: any; previous: any; changedBy: string | null; at: string; corrections?: Array<{ at: string; by: string | null; from: string; to: string }>; voided?: boolean };
@@ -32,12 +33,14 @@ type Ev = { id: string; personId: string; personName: string; kind: string; effe
 type FormState = {
   id: string | null; name: string; role: string; costType: 'salary' | 'hourly'; amount: string; rows: AllocRow[];
   isChargeable: boolean; contractedHours: string; workingDays: number[]; startDate: string;
+  utilisationFactor: string;
   effectiveDate: string; confirmDated: boolean;
 };
 
 const emptyForm = (): FormState => ({
   id: null, name: '', role: '', costType: 'salary', amount: '', rows: [],
   isChargeable: false, contractedHours: '', workingDays: [], startDate: '',
+  utilisationFactor: '70',
   effectiveDate: new Date().toISOString().slice(0, 10), confirmDated: false,
 });
 const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100);
@@ -87,6 +90,7 @@ export default function HrPage() {
       rows: p.allocations.map((a, i) => ({ key: `${a.siteId}-${i}`, siteId: a.siteId, percent: String(a.percent) })),
       isChargeable: p.isChargeable, contractedHours: p.contractedHoursPerDay != null ? String(p.contractedHoursPerDay) : '',
       workingDays: [...p.workingDays], startDate: p.startDate ?? '',
+      utilisationFactor: String(p.utilisationFactor ?? 70),
       // DELIBERATE pick: edits append dated history, so the effective date starts EMPTY and the
       // save stays disabled until it's chosen — never a silent "today".
       effectiveDate: '', confirmDated: false,
@@ -108,6 +112,7 @@ export default function HrPage() {
       isChargeable: form.isChargeable,
       contractedHoursPerDay: form.contractedHours === '' ? null : Number(form.contractedHours),
       workingDays: form.workingDays,
+      utilisationFactor: form.utilisationFactor === '' ? 70 : Number(form.utilisationFactor),
       startDate: form.startDate || null,
       effectiveDate: form.effectiveDate,
       confirmDated: confirmDated || form.confirmDated,
@@ -157,6 +162,7 @@ export default function HrPage() {
       case 'pattern': return `${p.working_days?.length ? dayNames(p.working_days) : th('inherited')} → ${v.working_days?.length ? dayNames(v.working_days) : th('inherited')}`;
       case 'chargeable': return `${p.is_chargeable ? th('yes') : th('no')} → ${v.is_chargeable ? th('yes') : th('no')}`;
       case 'allowance': return `${p.annual_leave_allowance_days ?? '—'} → ${v.annual_leave_allowance_days ?? '—'} ${th('days')}`;
+      case 'factor': return `${p?.utilisation_factor ?? '—'}% → ${v.utilisation_factor ?? '—'}%`;
       case 'name': return `${p?.name ?? '—'} → ${v.name ?? '—'}`;
       case 'role': return `${p?.role ?? '—'} → ${v.role ?? '—'}`;
       case 'started': return `${p?.start_date ?? '—'} → ${v.start_date ?? '—'}`;
@@ -264,6 +270,16 @@ export default function HrPage() {
                 <input type="checkbox" checked={form.isChargeable} onChange={(e) => setForm({ ...form, isChargeable: e.target.checked })} className="mt-0.5" />
                 <span>{t('shape.chargeable')}<span className="block text-xs text-muted">{t('shape.chargeableHint')}</span></span>
               </label>
+              {form.isChargeable && (
+                <label className="block max-w-xs"><span className="text-sm font-medium text-ink">{th('factor.label')}</span>
+                  <div className="flex items-center gap-1.5">
+                    <input type="number" inputMode="numeric" min={0} max={100} step={1} value={form.utilisationFactor}
+                      onChange={(e) => setForm({ ...form, utilisationFactor: e.target.value })} className={inputClass + ' w-24'} />
+                    <span className="text-sm text-muted mt-1">%</span>
+                  </div>
+                  <span className="block text-xs text-muted mt-1">{th('factor.hint')}</span>
+                </label>
+              )}
               <label className="block max-w-xs"><span className="text-sm font-medium text-ink">{t('shape.hours')}</span>
                 <input type="number" inputMode="decimal" min={0} max={24} step="0.25" value={form.contractedHours} onChange={(e) => setForm({ ...form, contractedHours: e.target.value })} className={inputClass} />
                 {!hoursOk && <span className="block text-xs text-danger mt-1">{t('shape.hoursRange')}</span>}

@@ -90,7 +90,11 @@
     "unsoldOvertime": "Fully sold + overtime",
     "unsoldOvertimeSub": "{{charged}} charged against {{available}} available",
     "unsoldCalc": "{{available}} available − {{charged}} charged = {{unsold}} unsold · × labour rate ≈ {{money}}",
-    "unsoldHonesty": "GreaseDesk can’t yet say WHY hours went unsold: work invoiced outside GreaseDesk, warranty rework (£0 by design, time still counted), unconverted diagnostics, or genuine idle time. Read it as a question to investigate, not a verdict — time tracking (planned) is what would answer it."
+    "unsoldHonesty": "GreaseDesk can’t yet say WHY hours went unsold: work invoiced outside GreaseDesk, warranty rework (£0 by design, time still counted), unconverted diagnostics, or genuine idle time. Read it as a question to investigate, not a verdict — time tracking (planned) is what would answer it.",
+    "utilTargetInline": "target {{pct}}",
+    "utilOfTarget": "{{pct}} of target",
+    "utilTargetHeading": "Target = each person’s available hours × their utilisation factor:",
+    "utilTargetCalc": "summed ÷ total available = {{pct}} target"
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."

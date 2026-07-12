@@ -53,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       select: {
         id: true, name: true, role: true, cost_type: true, amount_pennies: true, is_active: true,
         is_chargeable: true, contracted_hours_per_day: true, working_days: true,
-        annual_leave_allowance_days: true, start_date: true, end_date: true,
+        annual_leave_allowance_days: true, start_date: true, end_date: true, utilisation_factor: true,
         allocations: { select: { site_id: true, percent: true } },
       },
     }) as any;
@@ -69,6 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         startDate: p.start_date ? p.start_date.toISOString().slice(0, 10) : null,
         endDate: p.end_date ? p.end_date.toISOString().slice(0, 10) : null,
         allowanceDays: p.annual_leave_allowance_days == null ? null : Number(p.annual_leave_allowance_days),
+        utilisationFactor: p.utilisation_factor,
         allocations: p.allocations.map((a: any) => ({ siteId: a.site_id, percent: Number(a.percent) })),
       })),
     });
@@ -132,6 +133,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!Number.isFinite(h) || h < 0 || h > 24) return res.status(400).json({ message: 'Contracted hours must be between 0 and 24.' });
       contracted = h;
     }
+    // Utilisation factor: 0–100 integer, NEVER null (default 70) — the workshop expectation,
+    // never an individual score. Only APPLIES to chargeable people (others contribute 0 hours).
+    let factor = 70;
+    if (body.utilisationFactor != null && body.utilisationFactor !== '') {
+      const f = Number(body.utilisationFactor);
+      if (!Number.isInteger(f) || f < 0 || f > 100) return res.status(400).json({ message: 'Utilisation factor must be a whole number between 0 and 100.' });
+      factor = f;
+    } else if (isPatch) {
+      factor = -1; // sentinel: keep current on PATCH when not sent
+    }
     // working_days: 0=Sun..6=Sat, deduped+sorted; EMPTY = inherit the site's open_days (never "no days").
     const wdRaw = Array.isArray(body.workingDays) ? body.workingDays : [];
     const workingDays = ([...new Set(wdRaw.map((n: unknown) => Number(n)))] as number[]).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6).sort();
@@ -144,16 +155,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isPatch) {
       const owned = (await prisma.costPerson.findFirst({
         where: { id, group_id: groupId },
-        select: { id: true, name: true, role: true, amount_pennies: true, cost_type: true, is_chargeable: true, contracted_hours_per_day: true, working_days: true, annual_leave_allowance_days: true, start_date: true },
+        select: { id: true, name: true, role: true, amount_pennies: true, cost_type: true, is_chargeable: true, contracted_hours_per_day: true, working_days: true, annual_leave_allowance_days: true, start_date: true, utilisation_factor: true },
       })) as any;
       if (!owned) return res.status(404).json({ message: 'Person not found.' });
-      current = { ...owned, contracted_hours_per_day: owned.contracted_hours_per_day == null ? null : Number(owned.contracted_hours_per_day), annual_leave_allowance_days: owned.annual_leave_allowance_days == null ? null : Number(owned.annual_leave_allowance_days) };
+      current = { ...owned, contracted_hours_per_day: owned.contracted_hours_per_day == null ? null : Number(owned.contracted_hours_per_day), annual_leave_allowance_days: owned.annual_leave_allowance_days == null ? null : Number(owned.annual_leave_allowance_days), utilisation_factor: owned.utilisation_factor };
     }
 
     // DUAL-WRITE (record-first invariant): the flat columns update AND the dated events append
     // in ONE transaction — both commit or neither. The flat column stays the head of the series.
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const shape: any = { is_chargeable: isChargeable, contracted_hours_per_day: contracted, working_days: workingDays };
+      if (factor !== -1) shape.utilisation_factor = factor;
       if (startDate !== undefined) shape.start_date = startDate;
       const person = isPatch
         ? await tx.costPerson.update({
@@ -178,6 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           contracted_hours_per_day: contracted, working_days: workingDays,
           annual_leave_allowance_days: current.annual_leave_allowance_days, // edited on the Roster, not here
           start_date: startDate === undefined ? current.start_date : startDate,
+          utilisation_factor: factor === -1 ? (current as any).utilisation_factor : factor,
         };
         await recordEmploymentEvents(tx, { groupId, costPersonId: person.id, changedBy: vis.userId ?? null, effectiveDate, changes: diffEmploymentShape(current, next) });
       } else if (!isPatch) {
