@@ -9,6 +9,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
+import { resizeImage } from '@/lib/image-resize';
 
 type Photo = { id: string; slot: string | null; label: string | null; mediaType: 'photo' | 'video'; durationSeconds: number | null; url: string | null; uploadedAt: string; uploadedBy: string | null };
 type Props = { jobCardId: string; stage: 'intake' | 'injob' | 'completion'; canEdit: boolean; locked: boolean; locale: string };
@@ -26,15 +27,7 @@ function probeDuration(file: File): Promise<number | null> {
 }
 const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-// Shrink a (huge) phone photo to a web-sane jpeg before upload. Respects EXIF orientation where supported.
-async function resizeImage(file: File, max = 1600, quality = 0.8): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' } as any).catch(() => createImageBitmap(file));
-  let { width, height } = bitmap;
-  if (width > max || height > max) { const s = max / Math.max(width, height); width = Math.round(width * s); height = Math.round(height * s); }
-  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, width, height);
-  return await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', quality));
-}
+// Downscale moved to the SHARED lib/image-resize (desktop + phone, one implementation).
 
 export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props) {
   const { t } = useTranslation('jobcard');

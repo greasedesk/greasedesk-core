@@ -40,5 +40,8 @@
     "intake": "Intake photos",
     "injob": "In-job photos",
     "completion": "Completion photos"
-  }
+  },
+  "addPhoto": "Add photo",
+  "pendingSend": "Sending…",
+  "sendFailedRetry": "Failed — tap to retry"
 }

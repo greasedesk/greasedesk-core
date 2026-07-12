@@ -65,6 +65,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // SOFT AUTO-ADVANCE (ruling 2026-07-07): an in-job/completion photo on an accepted card IS
     // evidence work began — fire accepted→in_progress in the same tx, audited with auto:true
     // (inferred start; a Start-work press audits without it — different clocking grains).
+    // IDEMPOTENT COMMIT (the outbox turns on this): a replayed queue entry re-commits the SAME
+    // photoId — 200 whether it's the first attempt or the fifth; a double-replay overwrites
+    // itself and nothing else. A photoId that exists on a DIFFERENT card is a forgery, not a replay.
+    const existing = await prisma.jobCardPhoto.findUnique({ where: { id: photoId }, select: { id: true, job_card_id: true } });
+    if (existing && existing.job_card_id !== jobCardId) return res.status(400).json({ message: 'Invalid photo id.' });
+    if (existing) return res.status(200).json({ id: existing.id, replay: true }); // the first commit's row IS the receipt
+
     const autoStart = ctx.card.status === 'accepted' && (stage === 'injob' || stage === 'completion');
     const row = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (autoStart) {
@@ -74,12 +81,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           action: 'status.in_progress', diff: { from: 'accepted', to: 'in_progress', auto: true, trigger: `photo.${stage}` },
         });
       }
-      return tx.jobCardPhoto.create({
-        data: { id: photoId, job_card_id: jobCardId, group_id: ctx.user.group_id, stage, slot, label: label ? String(label).slice(0, 200) : null, media_type: media, duration_seconds: duration, r2_key: key, uploaded_by: ctx.user.id },
+      // upsert (not create): two racing replays of the same id land ONE row either way.
+      return tx.jobCardPhoto.upsert({
+        where: { id: photoId },
+        create: { id: photoId, job_card_id: jobCardId, group_id: ctx.user.group_id, stage, slot, label: label ? String(label).slice(0, 200) : null, media_type: media, duration_seconds: duration, r2_key: key, uploaded_by: ctx.user.id },
+        update: {}, // replay: the original row stands untouched
         select: { id: true },
       });
     });
-    return res.status(201).json({ id: row.id, ...(autoStart ? { status: 'in_progress' } : {}) });
+    return res.status(200).json({ id: row.id, ...(autoStart ? { status: 'in_progress' } : {}) });
   }
 
   res.setHeader('Allow', 'GET, POST');
