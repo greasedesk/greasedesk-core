@@ -1,12 +1,19 @@
 /**
  * File: lib/capacity.ts
- * THE capacity chokepoint — the utilisation denominator (hours available, month × site).
+ * THE capacity chokepoint — the utilisation denominator (SELLABLE hours, month × site).
  *
- * Formula (net-then-allocate, per binding ruling):
+ * Formula (net-then-allocate, then factor-discount — per binding ruling 2026-07-12):
  *   per chargeable+active person:
- *     gross = Σ contracted_hours_per_day over their ROSTERED days in the window
- *     net   = max(0, gross − leave − public holidays)   ← subtractions ONLY on rostered days
- *   site capacity = Σ net × CostAllocation%(person, site)
+ *     gross    = Σ contracted_hours_per_day over their ROSTERED days in the window
+ *     raw      = max(0, gross − leave − public holidays)   ← subtractions ONLY on rostered days
+ *     sellable = raw × utilisation_factor (as of the window end — the value-true-at-time read)
+ *   site capacity = Σ sellable × CostAllocation%(person, site)
+ * THE MODEL: the factor is a SPEED expectation, not an attendance one — an apprentice at 50%
+ * converts half his clock time into billable work, so his 8 rostered hours are ~4 sellable.
+ * `hours`/`available` everywhere downstream MEANS sellable; utilisation = charged ÷ sellable,
+ * so 100% is the target BY CONSTRUCTION (billing exactly to expectation reads as 100%).
+ * ORDER IS BINDING: absence reduces RAW hours first, the factor discounts what remains —
+ * never apply the factor to leave/PH (a day off isn't 50% of a day off), never double-count.
  * Leave/PH apportion via the SAME allocation % as gross — never by LeaveRecord.site_id
  * (that column is attribution only). A day subtracts AT MOST one full day: a public holiday
  * wins over a leave row on the same date (no double-subtraction).
@@ -27,27 +34,27 @@ import { fetchLedgerInvoices, chargedLabourCentihours } from '@/lib/charged-labo
 
 export type CapacityWindow = { from: Date; to: Date };
 export type AvailableHours = {
-  hours: number;                     // decimal hours (e.g. 592)
+  hours: number;                     // SELLABLE decimal hours (factor-adjusted) — THE denominator
+  rawHours: number;                  // pre-factor clock time: rostered × contracted − leave − PH (alloc-scaled)
   configComplete: boolean;           // false iff any chargeable person lacks contracted hours
   missingHoursMechanics: string[];   // their names, for the amber flag
   // Popover grain — the arithmetic must be showable, not just the total:
   mechanicCount: number;             // chargeable people contributing (with hours set)
   rosteredDays: number;              // Σ per-person rostered days in the window (config'd people)
-  leaveHours: number;                // total subtracted for leave (allocation-scaled)
-  phHours: number;                   // total subtracted for public holidays (allocation-scaled)
+  leaveHours: number;                // total subtracted for leave (allocation-scaled, CLOCK time — never factored)
+  phHours: number;                   // total subtracted for public holidays (allocation-scaled, CLOCK time)
   // Waterfall grain (ADDITIVE): gross = contracted × rostered days × allocation BEFORE any
   // deduction (non-rostered days never enter it), and the leave subtraction split by type.
   // FRAMING (binding): leave/PH are reductions to CAPACITY, never "lost hours" — they shrink
-  // the denominator; what's lost is available − charged.
+  // raw hours; the factor then discounts raw to sellable; what's lost is sellable − charged.
   grossHours: number;
   leaveByType: Record<string, number>;
-  // DERIVED TARGET (computed, never typed): Σ(person available × their utilisation factor) ÷
-  // Σ(available). The factor is resolved AS OF THE WINDOW END from the EmploymentEvent series
-  // (the system's FIRST value-true-at-time read — historic months keep the factor that applied
-  // then; changing it today never moves last month's target). The factor is a workshop
-  // expectation, NEVER an individual score — no per-person actuals exist or may be added.
-  targetRatio: number | null;               // null when available = 0
-  targetParts: Array<{ name: string; availableHours: number; factorPct: number }>;
+  // FACTOR exposition (computed, never typed): per person, raw × factor = sellable. The factor
+  // is resolved AS OF THE WINDOW END from the EmploymentEvent series (value-true-at-time —
+  // historic months keep the factor that applied then; changing it today never moves last
+  // month's utilisation). The factor is a workshop expectation, NEVER an individual score —
+  // no per-person actuals exist or may be added.
+  factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
 };
 
 // THE rostered-day decision moved to lib/rostered-days (ISOMORPHIC — the Headcount form shows
@@ -104,9 +111,9 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   }
 
   const days = windowDays(window);
-  let centiTotal = 0, centiLeave = 0, centiPh = 0, centiGross = 0, centiWeighted = 0, rosteredDays = 0;
+  let centiSellable = 0, centiRaw = 0, centiLeave = 0, centiPh = 0, centiGross = 0, rosteredDays = 0;
   const centiByType: Record<string, number> = {};
-  const targetParts: Array<{ name: string; availableHours: number; factorPct: number }> = [];
+  const factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }> = [];
   for (const p of configured) {
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
@@ -131,20 +138,23 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
       }
     }
     subC = leaveC + phC;
-    const netC = Math.max(0, grossC - subC); // clamp: full-month leave = 0 available, never negative
-    const personAvailC = Math.round(netC * alloc);
-    centiTotal += personAvailC;
+    const netC = Math.max(0, grossC - subC); // clamp: full-month leave = 0 raw, never negative
+    const personRawC = Math.round(netC * alloc);
+    // The factor discounts RAW (post-absence) hours to sellable — order is binding (see header).
+    const factorPct = factorAt.get(p.id) ?? Number(p.utilisation_factor ?? 70);
+    const personSellableC = Math.round(personRawC * (factorPct / 100));
+    centiRaw += personRawC;
+    centiSellable += personSellableC;
     centiLeave += Math.round(leaveC * alloc);
     centiPh += Math.round(phC * alloc);
     centiGross += Math.round(grossC * alloc);
     for (const [ty, c] of Object.entries(typeC)) centiByType[ty] = (centiByType[ty] ?? 0) + Math.round(c * alloc);
-    const factorPct = factorAt.get(p.id) ?? Number(p.utilisation_factor ?? 70);
-    centiWeighted += Math.round(personAvailC * (factorPct / 100));
-    if (personAvailC > 0) targetParts.push({ name: p.name, availableHours: personAvailC / 100, factorPct });
+    if (personRawC > 0) factorParts.push({ name: p.name, rawHours: personRawC / 100, factorPct, sellableHours: personSellableC / 100 });
   }
 
   return {
-    hours: centiTotal / 100,
+    hours: centiSellable / 100,
+    rawHours: centiRaw / 100,
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
     mechanicCount: configured.filter((p: any) => p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) > 0).length,
@@ -153,8 +163,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     phHours: centiPh / 100,
     grossHours: centiGross / 100,
     leaveByType: Object.fromEntries(Object.entries(centiByType).map(([ty, c]) => [ty, c / 100])),
-    targetRatio: centiTotal > 0 ? centiWeighted / centiTotal : null,
-    targetParts,
+    factorParts,
   };
 }
 
@@ -185,16 +194,18 @@ async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, 
   return out;
 }
 
-// ---------- Utilisation = hours charged ÷ hours available (month × site) ----------
+// ---------- Utilisation = hours charged ÷ SELLABLE hours (month × site) ----------
 // Numerator = the P&L's OWN charged-hours read (lib/charged-labour — extracted, not re-queried),
-// called single-site. Denominator = getAvailableHours. BOTH receive the SAME window object —
-// numerator and denominator share identical boundaries by construction (the one-truth rail).
-// Group aggregation is Σcharged ÷ Σavailable (never a mean of ratios) — callers sum the parts.
+// called single-site. Denominator = getAvailableHours (factor-adjusted sellable). BOTH receive
+// the SAME window object — numerator and denominator share identical boundaries by construction
+// (the one-truth rail). 100% = performing exactly to expectation (the factor is baked into the
+// denominator, so there is no separate target). Group aggregation is Σcharged ÷ Σsellable
+// (never a mean of ratios) — callers sum the parts.
 export type Utilisation = AvailableHours & {
   charged: number;          // decimal hours charged in the window (this site)
-  available: number;        // = hours (aliased for the tile's charged ÷ available framing)
-  ratio: number | null;     // charged/available; NULL when available === 0 (render "—", never NaN).
-                            // NOT capped at 100% — over-capacity months must show as >100%.
+  available: number;        // = hours (SELLABLE — aliased for the tile's charged ÷ sellable framing)
+  ratio: number | null;     // charged/sellable; NULL when sellable === 0 (render "—", never NaN).
+                            // NOT capped at 100% — beating expectation must show as >100%.
 };
 
 export async function getUtilisation(groupId: string, siteId: string, window: CapacityWindow): Promise<Utilisation> {
@@ -219,12 +230,12 @@ export async function getUtilisation(groupId: string, siteId: string, window: Ca
  *  returned for the breakdown; missing-hours mechanics + mechanicCount are DISTINCT people
  *  (a split-allocated mechanic counts once, though their rostered days appear under each site). */
 export type GroupUtilisation = {
-  charged: number; available: number; ratio: number | null;
+  charged: number; available: number; rawHours: number; ratio: number | null; // available = SELLABLE
   configComplete: boolean; missingHoursMechanics: string[];
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
-  targetRatio: number | null; targetParts: Array<{ name: string; availableHours: number; factorPct: number }>;
-  perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
+  factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
+  perSite: Array<{ siteId: string; siteName: string; charged: number; available: number; rawHours: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
 };
 
 export async function getGroupUtilisation(groupId: string, siteIds: string[], window: CapacityWindow): Promise<GroupUtilisation> {
@@ -238,31 +249,29 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     }) as any,
   ]);
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
-  let charged = 0, available = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0, weightedTarget = 0;
+  let charged = 0, available = 0, rawHours = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
   const leaveByType: Record<string, number> = {};
-  const targetParts: Array<{ name: string; availableHours: number; factorPct: number }> = [];
+  const factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }> = [];
   const perSite = siteIds.map((sid, i) => {
     const u = parts[i];
-    charged += u.charged; available += u.available;
+    charged += u.charged; available += u.available; rawHours += u.rawHours;
     rosteredDays += u.rosteredDays; leaveHours += u.leaveHours; phHours += u.phHours;
     grossHours += u.grossHours;
-    if (u.targetRatio != null) weightedTarget += u.targetRatio * u.available;
-    targetParts.push(...u.targetParts);
+    factorParts.push(...u.factorParts);
     for (const [ty, h] of Object.entries(u.leaveByType)) leaveByType[ty] = Math.round(((leaveByType[ty] ?? 0) + h) * 100) / 100;
-    return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
+    return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, available: u.available, rawHours: u.rawHours, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
-  charged = Math.round(charged * 100) / 100; available = Math.round(available * 100) / 100;
+  charged = Math.round(charged * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
   return {
-    charged, available,
+    charged, available, rawHours,
     ratio: available === 0 ? null : charged / available, // null → "—", never NaN/Infinity; NOT capped
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
     mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,
-    targetRatio: available > 0 ? weightedTarget / available : null,
-    targetParts,
+    factorParts,
     perSite,
   };
 }

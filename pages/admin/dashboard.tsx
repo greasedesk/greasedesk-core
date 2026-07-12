@@ -256,8 +256,8 @@ export default function AdminDashboard(props: PageProps) {
                 <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>
               </div>
             );
-            // Unsold = available − charged (the only genuinely LOST hours; leave/PH are capacity
-            // reductions BY DESIGN — they shrink the denominator and never suppress the ratio).
+            // Unsold = SELLABLE − charged: realistically sellable capacity that went unsold, not
+            // raw clock time (leave/PH shrink raw hours; the factor then discounts raw to sellable).
             const unsold = Math.max(0, u3.available - u3.charged);
             const overtime = u3.charged > u3.available;
             // Unsold in money: per-site unsold × that site's rate (from the costBase compute —
@@ -283,10 +283,13 @@ export default function AdminDashboard(props: PageProps) {
                   <details className="mt-2" open={false}>
                     <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                     <div className="text-xs text-muted mt-1 space-y-0.5">
+                      {/* Order is binding: absence reduces RAW clock time; the factor discounts
+                          what remains — never the other way round (no double-count). */}
                       <p>{t('pnl.wfGross', { gross: h3(u3.grossHours) })}</p>
                       {u3.phHours > 0 && <p>− {h3(u3.phHours)} {t('pnl.wfPh')}</p>}
                       {types.map(([ty, hh]) => <p key={ty}>− {h3(hh)} {t(`pnl.leaveType.${ty}`)}</p>)}
-                      <p className="text-ink">= {h3(u3.available)} {t('pnl.wfAvailable')}</p>
+                      <p className="text-ink">= {h3(u3.rawHours)} {t('pnl.wfRaw')}</p>
+                      <p>{t('pnl.wfFactor', { sellable: h3(u3.available) })}</p>
                       <p>− {h3(u3.charged)} {t('pnl.wfCharged')}</p>
                       <p className="text-ink font-medium">= {h3(unsold)} {t('pnl.wfUnsold')}</p>
                       <p className="italic mt-1">{t('pnl.wfFraming')}</p>
@@ -358,6 +361,11 @@ export default function AdminDashboard(props: PageProps) {
                               <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `£${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
                             ))}
                             <p>{t('pnl.breakEvenRevenue', { value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
+                            {/* Expressed against SELLABLE capacity (factor-adjusted) — the same
+                                denominator the utilisation tile uses. */}
+                            {u2 && u2.available > 0 && cb.breakEvenCentihours > 0 && (
+                              <p>{t('pnl.breakEvenOfSellable', { pct: `${(((cb.breakEvenCentihours / 100) / u2.available) * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>
+                            )}
                             {residualHours != null && <p>{t('pnl.breakEvenResidual', { hours: residualHours.toLocaleString(props.locale, { maximumFractionDigits: 1 }) })}</p>}
                             <p className="italic">{t('pnl.breakEvenHonesty')}</p>
                           </div>
@@ -390,16 +398,13 @@ export default function AdminDashboard(props: PageProps) {
                     </>
                   ) : (
                     <>
-                      <p className="text-2xl font-bold tabular-nums text-ink">
-                        {pct(u.ratio)}
-                        {u.targetRatio != null && <span className="text-sm font-medium text-muted"> · {t('pnl.utilTargetInline', { pct: pct(u.targetRatio) })}</span>}
-                      </p>
-                      {u.targetRatio != null && u.targetRatio > 0 && u.ratio != null && (
-                        <p className="text-xs text-ink mt-0.5">{t('pnl.utilOfTarget', { pct: pct(u.ratio / u.targetRatio) })}</p>
-                      )}
+                      {/* The factor is baked into the denominator — 100% IS the target by
+                          construction, so no separate target line may reappear here. */}
+                      <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
+                      <p className="text-xs text-ink mt-0.5">{t('pnl.utilHundred')}</p>
                       <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
                       {(() => {
-                        // The defensible reference: required utilisation = break-even hours ÷ available.
+                        // The money floor: required share of SELLABLE capacity to cover fixed costs.
                         const cb2 = tiles?.costBase as any;
                         if (!cb2 || !(u.available > 0) || !(cb2.breakEvenCentihours > 0)) return null;
                         const req = (cb2.breakEvenCentihours / 100) / u.available;
@@ -408,24 +413,24 @@ export default function AdminDashboard(props: PageProps) {
                       {!u.configComplete && (
                         <p className="text-xs text-warn mt-1">{t('pnl.utilMissing', { count: u.missingHoursMechanics.length })}</p>
                       )}
-                      {/* The arithmetic, in place — a story told by arithmetic, incl. rostered days. */}
+                      {/* The arithmetic, in place: rostered − leave − PH = raw; × factor = sellable;
+                          charged ÷ sellable = utilisation. */}
                       <details className="mt-2">
                         <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                         <div className="text-xs text-muted mt-1 space-y-1">
-                          <p>{t('pnl.utilCalc', { mechanics: u.mechanicCount, days: u.rosteredDays, leave: h(u.leaveHours), ph: h(u.phHours), available: h(u.available), charged: h(u.charged), pct: pct(u.ratio) })}</p>
+                          <p>{t('pnl.utilCalc', { mechanics: u.mechanicCount, days: u.rosteredDays, leave: h(u.leaveHours), ph: h(u.phHours), raw: h(u.rawHours), available: h(u.available), charged: h(u.charged), pct: pct(u.ratio) })}</p>
+                          {(u.factorParts?.length ?? 0) > 0 && (
+                            <>
+                              <p className="text-ink mt-1">{t('pnl.utilFactorHeading')}</p>
+                              {u.factorParts.map((fp: any, i2: number) => (
+                                <p key={i2}>{fp.name}: {h(fp.rawHours)} × {fp.factorPct}% = {h(fp.sellableHours)}</p>
+                              ))}
+                            </>
+                          )}
                           {u.perSite.length > 1 && u.perSite.map((s2: any) => (
                             <p key={s2.siteId}>{s2.siteName}: {h(s2.charged)} ÷ {h(s2.available)} = {pct(s2.ratio)}</p>
                           ))}
                           {!u.configComplete && <p className="text-warn">{t('pnl.utilMissingNames', { names: u.missingHoursMechanics.join(', ') })}</p>}
-                          {u.targetRatio != null && (u.targetParts?.length ?? 0) > 0 && (
-                            <>
-                              <p className="text-ink mt-1">{t('pnl.utilTargetHeading')}</p>
-                              {u.targetParts.map((tp: any, i2: number) => (
-                                <p key={i2}>{tp.name}: {h(tp.availableHours)} × {tp.factorPct}%</p>
-                              ))}
-                              <p>{t('pnl.utilTargetCalc', { pct: pct(u.targetRatio) })}</p>
-                            </>
-                          )}
                         </div>
                       </details>
                     </>

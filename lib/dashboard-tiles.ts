@@ -161,8 +161,8 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       breakEvenCentihours, ratesMissing, perSite, months,
     };
   },
-  // Utilisation = charged ÷ available over the SAME month window as the pnl (one period state).
-  // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σavailable, never a mean of
+  // Utilisation = charged ÷ SELLABLE (factor-adjusted) over the SAME month window as the pnl.
+  // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σsellable, never a mean of
   // ratios) — the tile only renders. Same group-aggregate site scope as the other month tiles.
   utilisation: async ({ groupId, siteIds, from, to }) => getGroupUtilisation(groupId, siteIds, { from, to }),
   // The missing-hours DRILL (presentation read — the metric itself is untouched): which PRODUCTS
