@@ -275,7 +275,10 @@ export default function AdminDashboard(props: PageProps) {
               return (
                 <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
                   <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.hoursWent')}</h3>
-                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(u3.grossHours)}</p>
+                  {/* HEADLINE = the ABSENCE total (the actionable figure) — gross capacity is the
+                      least actionable number in the chain and lives in the drill. 0 renders as
+                      a clean 0h, never a dash. */}
+                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</p>
                   <p className="text-xs text-muted mt-1">{t('pnl.hoursWentSub')}</p>
                   <details className="mt-2" open={false}>
                     <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>

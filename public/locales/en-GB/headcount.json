@@ -32,10 +32,10 @@
   "shape": {
     "heading": "Employment shape (capacity)",
     "chargeable": "Chargeable (sellable) mechanic",
-    "chargeableHint": "Counts toward workshop utilisation — hours available. Nothing to do with permissions.",
+    "chargeableHint": "Counts toward labour utilisation — hours available. Nothing to do with permissions.",
     "hours": "Contracted hours per day",
     "hoursRange": "Enter between 0 and 24 hours.",
-    "hoursNeeded": "needed for utilisation",
+    "hoursNeeded": "needed for labour utilisation",
     "workingDays": "Working days",
     "inherits": "Inherits the site’s opening days ({{days}}). Pick days to set an explicit pattern.",
     "clearOverride": "Clear override — inherit site opening days",

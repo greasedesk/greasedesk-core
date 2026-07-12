@@ -71,7 +71,7 @@
   "labourHours": "Labour hours (charged)",
   "labourHoursHint": "The labour content of this fixed price (e.g. 7.5). Not the booking duration — this feeds the dashboard’s hours-charged figure.",
   "outsourced": "Outsourced / bought-in",
-  "outsourcedHint": "Bought in per job from a third party (e.g. an MOT station or a specialist), marked up and sold — doesn’t use your own mechanics’ time, so it never counts toward utilisation.",
+  "outsourcedHint": "Bought in per job from a third party (e.g. an MOT station or a specialist), marked up and sold — doesn’t use your own mechanics’ time, so it never counts toward labour utilisation.",
   "outsourcedBadge": "Outsourced",
-  "labourHoursHintOutsourced": "Hours billed to the customer (prices the job). Outsourced — never counted as our mechanics’ time."
+  "labourHoursHintOutsourced": "Hours billed to the customer (prices the job). Outsourced — never counted as your own mechanics’ time."
 }
