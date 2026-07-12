@@ -20,7 +20,7 @@ type Comp = { description: string; qty: number; unitCostExVat: number };
 type TierPrice = { tierId: string; priceExVat: number | null };
 type Item = {
   id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number; unitPrice: number; vatRate: number; active: boolean;
-  basePriceExVat: number | null; labourHours: number | null; components: Comp[]; tierPrices: TierPrice[];
+  basePriceExVat: number | null; labourHours: number | null; labourOutsourced?: boolean; components: Comp[]; tierPrices: TierPrice[];
 };
 type Tier = { id: string; name: string; position: number; active: boolean };
 
@@ -29,7 +29,7 @@ type TierCell = { price: string; manual: boolean };
 type FormState = {
   id: string | null; code: string; title: string; name: string; itemType: ItemType; active: boolean; vatRate: string;
   cost: string; price: string;              // simple
-  basePrice: string; labourHours: string; components: FormComp[]; tierCells: Record<string, TierCell>; // fixed
+  basePrice: string; labourHours: string; labourOutsourced: boolean; components: FormComp[]; tierCells: Record<string, TierCell>; // fixed
 };
 
 const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100));
@@ -87,7 +87,7 @@ export default function ProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady, items]);
 
-  function openAdd() { setMsg(null); setForm({ id: null, code: '', title: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', labourHours: '', components: [], tierCells: blankTierCells() }); }
+  function openAdd() { setMsg(null); setForm({ id: null, code: '', title: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', labourHours: '', labourOutsourced: false, components: [], tierCells: blankTierCells() }); }
   function openEdit(i: Item) {
     setMsg(null);
     const cells: Record<string, TierCell> = {};
@@ -100,6 +100,7 @@ export default function ProductsPage() {
       cost: String(i.unitCost), price: String(i.unitPrice),
       basePrice: i.basePriceExVat == null ? '' : String(i.basePriceExVat),
       labourHours: i.labourHours == null ? '' : String(i.labourHours),
+      labourOutsourced: !!i.labourOutsourced,
       components: i.components.map((c) => ({ description: c.description, qty: String(c.qty), cost: String(c.unitCostExVat) })),
       tierCells: cells,
     });
@@ -128,7 +129,7 @@ export default function ProductsPage() {
         if (cell.price !== '') return [{ tierId: tt.id, priceExVat: Number(cell.price) }];
         return []; // inherit base
       });
-      body = { ...common, basePriceExVat: Number(form.basePrice || 0), labourHours: form.labourHours.trim() === '' ? null : Number(form.labourHours), components: form.components.map((c) => ({ description: c.description.trim(), qty: Number(c.qty || 0), unitCostExVat: Number(c.cost || 0) })), tierPrices };
+      body = { ...common, basePriceExVat: Number(form.basePrice || 0), labourHours: form.labourHours.trim() === '' ? null : Number(form.labourHours), labourOutsourced: form.labourOutsourced, components: form.components.map((c) => ({ description: c.description.trim(), qty: Number(c.qty || 0), unitCostExVat: Number(c.cost || 0) })), tierPrices };
     } else {
       body = { ...common, unitCost: Number(form.cost), unitPrice: Number(form.price) };
     }
@@ -294,7 +295,13 @@ export default function ProductsPage() {
                   <p className="text-xs text-muted mt-1">{t('margin')}: <span className="text-ink font-medium">{money(Number(form.basePrice || 0) - compCost)}</span> {t('exVat')} · <span className="text-ink font-medium">{pctLabel(Number(form.basePrice || 0), compCost)}</span></p>
                   <label className="block sm:w-64 mt-3"><span className={labelCls}>{t('labourHours')}</span>
                     <input type="number" inputMode="decimal" step="0.25" min={0} value={form.labourHours} onChange={(e) => setForm({ ...form, labourHours: e.target.value })} className={inputCls} />
-                    <span className="text-xs text-muted mt-0.5 block">{t('labourHoursHint')}</span></label>
+                    <span className="text-xs text-muted mt-0.5 block">{form.labourOutsourced ? t('labourHoursHintOutsourced') : t('labourHoursHint')}</span></label>
+                  {/* Outsourced / bought-in: cost of sale, invisible to utilisation. The word the
+                      owner must see without reading docs — prominent, with a plain-English hint. */}
+                  <label className="flex items-start gap-2 mt-3 text-sm text-ink">
+                    <input type="checkbox" checked={form.labourOutsourced} onChange={(e) => setForm({ ...form, labourOutsourced: e.target.checked })} className="mt-0.5" />
+                    <span className="font-medium">{t('outsourced')}<span className="block text-xs text-muted font-normal">{t('outsourcedHint')}</span></span>
+                  </label>
                 </div>
 
                 {/* Tier grid */}
@@ -350,6 +357,7 @@ export default function ProductsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="text-ink font-medium truncate">
                       <span className="font-mono text-xs bg-surface-muted border border-line rounded px-1.5 py-0.5 mr-2">{i.code}</span>{i.name}
+                      {i.labourOutsourced && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent-soft text-accent">{t('outsourcedBadge')}</span>}
                       {!i.active && <span className="ml-2 text-[10px] uppercase tracking-wide text-muted">{t('archived')}</span>}
                     </div>
                     <div className="text-xs text-muted mt-0.5">

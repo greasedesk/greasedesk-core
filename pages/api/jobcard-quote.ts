@@ -86,9 +86,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // (SetNull-safe; a line never claims an origin it can't own).
   const sentIds = Array.from(new Set(items.map((it) => (typeof it.catalogue_item_id === 'string' ? it.catalogue_item_id : '')).filter(Boolean)));
   const validIds = new Set<string>();
+  const outsourcedIds = new Set<string>();
   if (sentIds.length) {
-    const found = (await prisma.catalogueItem.findMany({ where: { id: { in: sentIds }, group_id: user.group_id }, select: { id: true } })) as Array<{ id: string }>;
-    found.forEach((f) => validIds.add(f.id));
+    const found = (await prisma.catalogueItem.findMany({ where: { id: { in: sentIds }, group_id: user.group_id }, select: { id: true, labour_outsourced: true } })) as Array<{ id: string; labour_outsourced: boolean }>;
+    found.forEach((f) => { validIds.add(f.id); if (f.labour_outsourced) outsourcedIds.add(f.id); });
   }
 
   // Effective per-line values to store (mirror the compute flooring).
@@ -102,6 +103,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),
     vat_amount: new Prisma.Decimal(penniesToPounds(totals.lines[i].vat_pennies)),
     catalogue_item_id: (typeof items[i].catalogue_item_id === 'string' && validIds.has(items[i].catalogue_item_id as string)) ? (items[i].catalogue_item_id as string) : null,
+    // Inherited from the product AT SAVE (server-derived, never client-sent): frozen per line, so
+    // re-flagging a product later never rewrites history.
+    labour_outsourced: typeof items[i].catalogue_item_id === 'string' && outsourcedIds.has(items[i].catalogue_item_id as string),
     // Fixed lines carry the service's charged labour content (validated non-negative number or null).
     labour_hours: (() => { const v = items[i].labour_hours; if (v === undefined || v === null || v === '') return null; const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 1000 ? new Prisma.Decimal(n.toFixed(2)) : null; })(),
   }));

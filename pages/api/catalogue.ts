@@ -37,6 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, active: true,
           base_price_ex_vat: true,
           labour_hours: true,
+          labour_outsourced: true,
           components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
           tier_prices: { select: { tier_id: true, price_ex_vat: true } },
         },
@@ -52,6 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         unitCost: Number(i.unit_cost), unitPrice: Number(i.unit_price), vatRate: Number(i.vat_rate), active: i.active,
         basePriceExVat: i.base_price_ex_vat == null ? null : Number(i.base_price_ex_vat),
         labourHours: i.labour_hours == null ? null : Number(i.labour_hours),
+        labourOutsourced: !!i.labour_outsourced,
         components: i.components.map((c: any) => ({ description: c.description, qty: Number(c.qty), unitCostExVat: Number(c.unit_cost_ex_vat) })),
         tierPrices: i.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
       })),
@@ -148,7 +150,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Labour hours: the notional labour content of the fixed price (charged hours) — distinct
       // from booking duration and from actual worked hours. Optional; clearable with ''.
       if (body.labourHours !== undefined) {
-        if (body.labourHours === null || body.labourHours === '') data.labour_hours = null;
+        data.labour_outsourced = !!body.labourOutsourced; // bought-in labour: cost of sale, invisible to utilisation
+      if (body.labourHours === null || body.labourHours === '') data.labour_hours = null;
         else {
           const lh = dec(body.labourHours);
           if (lh === null || lh < 0 || lh > 1000) return res.status(400).json({ message: 'Labour hours must be a non-negative number.' });
@@ -173,6 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       data.base_price_ex_vat = null;
       data.labour_hours = null;
+      data.labour_outsourced = false; // only fixed products can be outsourced
     }
 
     try {

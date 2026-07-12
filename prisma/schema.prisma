@@ -725,17 +725,18 @@ model JobCardPhoto {
 }
 
 model JobCardItem {
-  id           String   @id @default(uuid())
-  job_card_id  String
-  item_type    ItemType
-  description  String
-  qty          Decimal  @default(1.00) @db.Decimal(12, 2)
-  unit_cost    Decimal  @default(0) @db.Decimal(12, 2)
-  unit_price   Decimal  @default(0) @db.Decimal(12, 2)
-  vat_rate     Decimal  @default(20.00) @db.Decimal(5, 2)
-  vat_amount   Decimal  @default(0) @db.Decimal(12, 2)
-  labour_hours Decimal? @db.Decimal(6, 2) // fixed lines: inherited labour content; ad-hoc labour lines carry hours in qty
-  created_at   DateTime @default(now())
+  id                String   @id @default(uuid())
+  job_card_id       String
+  item_type         ItemType
+  description       String
+  qty               Decimal  @default(1.00) @db.Decimal(12, 2)
+  unit_cost         Decimal  @default(0) @db.Decimal(12, 2)
+  unit_price        Decimal  @default(0) @db.Decimal(12, 2)
+  vat_rate          Decimal  @default(20.00) @db.Decimal(5, 2)
+  vat_amount        Decimal  @default(0) @db.Decimal(12, 2)
+  labour_hours      Decimal? @db.Decimal(6, 2) // fixed lines: inherited labour content; ad-hoc labour lines carry hours in qty
+  labour_outsourced Boolean  @default(false) // inherited from the product at save — frozen per-line (re-flagging a product never rewrites history)
+  created_at        DateTime @default(now())
 
   // Origin hook: which catalogue item pre-filled this line (for the future per-item margin lens).
   // SetNull so archiving/deleting the catalogue item never breaks a historic line.
@@ -948,6 +949,10 @@ model CatalogueItem {
   // Notional labour CONTENT of a fixed-price service (charged hours). NOT booking duration, NOT
   // actual worked hours (clocking is banked). Inherited by each job line using the service.
   labour_hours      Decimal? @db.Decimal(6, 2)
+  // Bought-in labour/services (MOT, Star clutch): cost of sale via components, marked up,
+  // INVISIBLE to utilisation — labour_hours stays the CUSTOMER-BILLED hours (prices the job)
+  // but never enters the charged-hours numerator or the missing-hours amber.
+  labour_outsourced Boolean  @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 

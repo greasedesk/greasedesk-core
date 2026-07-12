@@ -15,7 +15,7 @@ import { effectiveIssueDateWhere } from '@/lib/invoice';
 
 export type LedgerInvoice = {
   series: string;
-  job_card: { items: Array<{ item_type: string; qty: unknown; unit_price: unknown; unit_cost: unknown; labour_hours: unknown }> } | null;
+  job_card: { items: Array<{ item_type: string; qty: unknown; unit_price: unknown; unit_cost: unknown; labour_hours: unknown; labour_outsourced?: boolean }> } | null;
 };
 
 /** The ONE ledger fetch for month-grained invoice reads (P&L + utilisation): invoices whose
@@ -23,7 +23,7 @@ export type LedgerInvoice = {
 export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; from: Date; to: Date }): Promise<LedgerInvoice[]> {
   return prisma.invoice.findMany({
     where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
-    select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true } } } } },
+    select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } } } } },
   }) as unknown as Promise<LedgerInvoice[]>;
 }
 
@@ -38,7 +38,11 @@ export function chargedLabourCentihours(invoices: LedgerInvoice[]): ChargedLabou
       if (it.item_type === 'labour') {
         centihours += Math.round(qty * 100); // ad-hoc labour: qty IS hours
       } else if (it.item_type === 'fixed') {
-        if (it.labour_hours == null) linesMissingHours += 1; // backfill visibility
+        // OUTSOURCED lines are INVISIBLE here (settled model): bought-in labour is cost of sale —
+        // its labour_hours means CUSTOMER-BILLED hours (prices the job) and must never claim own
+        // payroll capacity (numerator) nor nag the amber (zero own-hours is CORRECT for an MOT).
+        if (it.labour_outsourced) continue;
+        if (it.labour_hours == null) linesMissingHours += 1; // a PAYROLL-time product with no hours set
         else centihours += Math.round(qty * Number(it.labour_hours) * 100);
       }
     }

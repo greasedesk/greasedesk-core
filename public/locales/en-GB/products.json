@@ -69,5 +69,9 @@
     "confirmDelete": "Delete this tier? Its per-service prices are removed; services fall back to their base price."
   },
   "labourHours": "Labour hours (charged)",
-  "labourHoursHint": "The labour content of this fixed price (e.g. 7.5). Not the booking duration — this feeds the dashboard’s hours-charged figure."
+  "labourHoursHint": "The labour content of this fixed price (e.g. 7.5). Not the booking duration — this feeds the dashboard’s hours-charged figure.",
+  "outsourced": "Outsourced / bought-in",
+  "outsourcedHint": "Bought in per job (like Roy’s MOT or a Star clutch), marked up and sold — doesn’t use our mechanics’ time, so it never counts toward utilisation.",
+  "outsourcedBadge": "Outsourced",
+  "labourHoursHintOutsourced": "Hours billed to the customer (prices the job). Outsourced — never counted as our mechanics’ time."
 }
