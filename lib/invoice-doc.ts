@@ -1,23 +1,19 @@
 /**
  * File: lib/invoice-doc.ts
  * THE one resolver of an invoice's renderable document — shared by the invoice view (gssp), the
- * PDF, and the email, so the three can never disagree. One-object model:
- *   issued + chargeable → the card's LIVE items (a job that grows updates the bill, same number)
- *   issued + warranty   → the real lines at NET retail + ONE goodwill line zeroing the total
- *                         (ruling 2026-07-12, supersedes "never itemised": the customer must see
- *                         what they were given). NO VAT anywhere on a warranty document —
- *                         honouring a warranty is not a supply for consideration (treatment per
- *                         Hugh, accountant confirmation pending; never add a VAT line here
- *                         without his say-so). AMOUNT DUE is always £0.00. Retail on warranty
- *                         lines is DISPLAY-ONLY — never revenue/margin/ledger.
- *   paid                → the frozen InvoiceLine snapshot (the income grain)
- * VAT is gated by vat_registered_at_issue in every branch; unit_cost is internal and never
- * leaves this module. Server-only.
+ * PDF, and the email, so the three can never disagree. FREEZE-AT-ISSUE (ruling 2026-07-12,
+ * supersedes the "live while issued" one-object render): EVERY status renders the frozen
+ * InvoiceLine snapshot — the lines lock at mint; post-issue growth requires the audited ADMIN
+ * unlock → edit → re-issue. Warranty documents: real lines at NET retail + ONE goodwill line
+ * zeroing the total; NO VAT anywhere on a warranty document — honouring a warranty is not a
+ * supply for consideration (treatment per Hugh, accountant confirmation pending; never add a
+ * VAT line without his say-so); AMOUNT DUE is always £0.00.
+ * VAT is gated by vat_registered_at_issue at freeze; unit_cost is internal and never leaves
+ * this module. Server-only.
  */
 import { prisma } from '@/lib/db';
-import { computeInvoiceLinePennies, invoiceTotals, InvoiceTotals, effectiveIssueDate } from '@/lib/invoice';
+import { invoiceTotals, InvoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
-import { tServer } from '@/lib/server-i18n';
 import { presignGet } from '@/lib/r2';
 
 export type InvoiceDocLine = {
@@ -34,7 +30,7 @@ export type InvoiceDoc = {
   jobCardId: string;
   siteId: string;
   number: string;
-  status: 'issued' | 'paid_pending' | 'paid';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled';
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
   datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)
@@ -76,55 +72,17 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
 
   const registered = !!inv.vat_registered_at_issue;
   const locale = inv.site?.locale ?? 'en-GB';
-  let lines: InvoiceDocLine[];
-
-  if (inv.status === 'paid' || inv.status === 'paid_pending') {
-    // Frozen snapshot — render exactly what was locked at mark-paid (pending freezes too;
-    // the window is for unmarking, never editing).
-    lines = inv.lines.map((l: any) => ({
-      description: l.description,
-      qty: Number(l.qty),
-      unitPricePennies: poundsToPennies(Number(l.unit_price)),
-      vatRate: Number(l.vat_rate),
-      netPennies: poundsToPennies(Number(l.line_total)),
-      vatPennies: poundsToPennies(Number(l.line_vat)),
-    }));
-  } else if (inv.series === 'warranty') {
-    // Goodwill document: the card's real lines at NET retail, then one zeroing line for the full
-    // amount. Retail here is DISPLAY-ONLY — it never reaches revenue, margin, or the ledger
-    // (every money read filters series='chargeable'; the P&L skips warranty revenue by series).
-    const items = (await prisma.jobCardItem.findMany({
-      where: { job_card_id: inv.job_card_id },
-      select: { description: true, qty: true, unit_price: true },
-      orderBy: { created_at: 'asc' },
-    })) as any[];
-    lines = items.map((it) => {
-      const qty = Number(it.qty);
-      const unitP = poundsToPennies(Number(it.unit_price));
-      const { netPennies } = computeInvoiceLinePennies(qty, unitP, 0, false); // net only — no VAT on warranty
-      return { description: it.description, qty, unitPricePennies: unitP, vatRate: 0, netPennies, vatPennies: 0 };
-    });
-    const value = lines.reduce((a, l) => a + l.netPennies, 0);
-    if (value > 0) {
-      lines.push({ description: tServer(locale, 'invoice', 'warrantyGoodwill'), qty: 1, unitPricePennies: -value, vatRate: 0, netPennies: -value, vatPennies: 0 });
-    } else if (!lines.length) {
-      lines = [{ description: tServer(locale, 'invoice', 'warrantyLine'), qty: 1, unitPricePennies: 0, vatRate: 0, netPennies: 0, vatPennies: 0 }];
-    }
-  } else {
-    // Live one-object render: the card's current items ARE the invoice while issued.
-    const items = (await prisma.jobCardItem.findMany({
-      where: { job_card_id: inv.job_card_id },
-      select: { description: true, qty: true, unit_price: true, vat_rate: true },
-      orderBy: { created_at: 'asc' },
-    })) as any[];
-    lines = items.map((it) => {
-      const qty = Number(it.qty);
-      const unitP = poundsToPennies(Number(it.unit_price));
-      const rate = Number(it.vat_rate);
-      const { netPennies, vatPennies } = computeInvoiceLinePennies(qty, unitP, rate, registered);
-      return { description: it.description, qty, unitPricePennies: unitP, vatRate: registered ? rate : 0, netPennies, vatPennies };
-    });
-  }
+  // FREEZE-AT-ISSUE: every status renders the FROZEN snapshot — the lines lock at mint. An
+  // UNLOCKED invoice (admin deleted the snapshot for correction) renders empty until re-issued/
+  // re-paid; the card's estimate tab is where the correction happens.
+  const lines: InvoiceDocLine[] = inv.lines.map((l: any) => ({
+    description: l.description,
+    qty: Number(l.qty),
+    unitPricePennies: poundsToPennies(Number(l.unit_price)),
+    vatRate: Number(l.vat_rate),
+    netPennies: poundsToPennies(Number(l.line_total)),
+    vatPennies: poundsToPennies(Number(l.line_vat)),
+  }));
 
   const totals = invoiceTotals(lines.map((l) => ({ vat_rate: l.vatRate, line_total: l.netPennies / 100, line_vat: l.vatPennies / 100 })));
 
@@ -151,9 +109,10 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },
-    // Vehicle FACTS (reg/VIN/mileage): LIVE from the card while issued — a correction on the card
-    // flows straight through to the unpaid document; frozen (re-snapshotted in the mark-paid tx,
-    // see snapshotPaidLines) once pending/paid. desc (make/model) stays issue-snapshotted.
+    // DELIBERATE ASYMMETRY (ruling 2026-07-12 — do NOT "tidy" this to match the line freeze):
+    // MONEY freezes at ISSUE; vehicle IDENTITY FACTS (reg/VIN/mileage) stay LIVE-read from the
+    // card while issued (a reg correction flows straight through to the unpaid document) and
+    // freeze at PAID (re-snapshotted in the mark-paid tx). desc stays issue-snapshotted.
     vehicle: inv.status === 'issued'
       ? {
           reg: inv.job_card?.vehicle?.registration ?? inv.vehicle_reg_snapshot,

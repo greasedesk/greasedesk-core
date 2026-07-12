@@ -43,7 +43,6 @@
   "grandTotal": "Total due",
   "total": "Total",
   "editOnCard": "Edit on job card",
-  "liveNote": "This invoice reflects the job card's current estimate — extra authorised work updates it under the same number until it's paid.",
   "paidLocked": "This invoice is paid and locked. Only an admin can unlock it for corrections.",
   "warrantyBadge": "WARRANTY — NO CHARGE",
   "warrantyLine": "Warranty rework — no charge",
@@ -54,7 +53,7 @@
   "emailError": "Could not send the invoice.",
   "unlock": "Unlock (admin)",
   "unlocking": "Unlocking…",
-  "unlockConfirm": "Unlock this paid invoice for corrections? The action is recorded in the audit trail, and the invoice must be marked paid again afterwards.",
+  "unlockConfirm": "Unlock this invoice for corrections? Its frozen lines are removed and it drops out of your figures until it is re-issued or re-paid. The action is recorded in the audit trail.",
   "unlockError": "Could not unlock the invoice.",
   "email": {
     "subject": "Invoice {{number}} from {{garage}}",
@@ -78,5 +77,10 @@
     "saving": "Saving…",
     "error": "Could not save the issue date."
   },
-  "warrantyGoodwill": "Less: warranty — goodwill, no charge"
+  "warrantyGoodwill": "Less: warranty — goodwill, no charge",
+  "frozenNote": "This document is frozen — the lines locked when the invoice was raised. An admin can unlock it to make corrections.",
+  "unlockedNote": "UNLOCKED FOR CORRECTION — this invoice’s lines are not frozen and it currently contributes nothing to your figures. Correct the estimate on the job card, then re-issue (or mark paid) to freeze it again.",
+  "reissue": "Re-issue (freeze corrections)",
+  "reissuing": "Re-issuing…",
+  "reissueError": "Could not re-issue the invoice."
 }

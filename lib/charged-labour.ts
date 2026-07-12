@@ -18,15 +18,18 @@ import { poundsToPennies } from '@/lib/quote-totals';
 
 export type LedgerInvoice = {
   series: string;
-  job_card: { items: Array<{ item_type: string; qty: unknown; unit_price: unknown; unit_cost: unknown; labour_hours: unknown; labour_outsourced?: boolean }> } | null;
+  lines: Array<{ item_type: string | null; qty: unknown; unit_price: unknown; unit_cost: unknown; labour_hours: unknown; labour_outsourced?: boolean }>;
 };
 
 /** The ONE ledger fetch for month-grained invoice reads (P&L + utilisation): invoices whose
- *  EFFECTIVE issue date falls in [from, to), with their card items. */
+ *  EFFECTIVE issue date falls in [from, to), with their FROZEN InvoiceLine rows (freeze-at-issue
+ *  ruling 2026-07-12 — the ledger NEVER reads the mutable JobCardItem; the card is the working
+ *  draft only). item_type/labour_outsourced are the frozen classification, populated on every
+ *  row by the 2026-07-12 backfill + every new snapshot. */
 export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; from: Date; to: Date }): Promise<LedgerInvoice[]> {
   return prisma.invoice.findMany({
     where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
-    select: { series: true, job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } } } } },
+    select: { series: true, lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } } },
   }) as unknown as Promise<LedgerInvoice[]>;
 }
 
@@ -38,7 +41,7 @@ export type ChargedLabour = { centihours: number; reworkCentihours: number; line
 export function partsCostPennies(invoices: LedgerInvoice[]): number {
   let partsCost = 0;
   for (const inv of invoices) {
-    for (const it of inv.job_card?.items ?? []) {
+    for (const it of inv.lines ?? []) {
       if (it.item_type !== 'labour') partsCost += Math.round(Number(it.qty) * poundsToPennies(Number(it.unit_cost)));
     }
   }
@@ -53,7 +56,7 @@ export function chargedLabourCentihours(invoices: LedgerInvoice[]): ChargedLabou
   for (const inv of invoices) {
     const rework = inv.series === 'warranty'; // spent capacity, never sold output
     const add = (c: number) => { if (rework) reworkCentihours += c; else centihours += c; };
-    for (const it of inv.job_card?.items ?? []) {
+    for (const it of inv.lines ?? []) {
       const qty = Number(it.qty);
       if (it.item_type === 'labour') {
         add(Math.round(qty * 100)); // ad-hoc labour: qty IS hours

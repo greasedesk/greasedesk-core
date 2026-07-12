@@ -63,6 +63,7 @@ enum InvoiceStatus {
   issued
   paid_pending
   paid
+  settled // warranty terminal state: £0, no charge, closed at issue — never collects, never AR
 }
 
 // Chargeable vs warranty invoices draw from SEPARATE counters — both independently gapless.
@@ -890,6 +891,10 @@ model InvoiceLine {
   line_total        Decimal  @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
   unit_cost         Decimal  @default(0) @db.Decimal(12, 2) // INTERNAL — margin only; NEVER rendered to the customer
   labour_hours      Decimal? @db.Decimal(6, 2) // frozen labour-content grain (fixed-service lines)
+  // Frozen classification (freeze-at-issue model): the ledger reads THESE, never the mutable card.
+  // Nullable only for pre-backfill legacy rows; every new snapshot writes both.
+  item_type         ItemType?
+  labour_outsourced Boolean  @default(false)
   catalogue_item_id String? // forward hook; NO FK yet (no catalogue table) — added when catalogue lands
   position          Int      @default(0)
   created_at        DateTime @default(now())

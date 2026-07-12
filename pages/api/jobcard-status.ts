@@ -14,7 +14,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
-import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotPaidLines } from '@/lib/invoice-issue';
+import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
@@ -125,10 +125,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (vinMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.vin_skipped' });
           if (mileageMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.mileage_skipped' });
           if (card.is_comeback) {
-            await issueWarrantyInvoiceForCard(tx, jobCardId, user.group_id as string);
+            // FREEZE-AT-ISSUE + SETTLED: mint from the warranty counter, freeze the goodwill
+            // shape, land TERMINAL at `settled` — £0, out of AR, never paid (all inside the helper).
+            const locale = (await tx.site.findUnique({ where: { id: card.site_id }, select: { locale: true } }))?.locale;
+            await issueWarrantyInvoiceForCard(tx, jobCardId, user.group_id as string, {
+              goodwill: tServer(locale, 'invoice', 'warrantyGoodwill'),
+              noCharge: tServer(locale, 'invoice', 'warrantyLine'),
+            });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.warranty_minted' });
           } else {
-            await issueInvoiceForCard(tx, jobCardId, user.group_id as string);
+            await issueInvoiceForCard(tx, jobCardId, user.group_id as string); // mints + FREEZES the lines (freeze-at-issue)
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
           }
         }
@@ -143,12 +149,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           where: { job_card_id: jobCardId },
           select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site: { select: { locale: true } } },
         })) as any;
+        if (inv && inv.series === 'warranty') throw new Error('WARRANTY_NOT_PAYABLE'); // settles at issue — nothing to pay
         if (inv && inv.status === 'issued') {
           if (!method) throw new Error('METHOD_REQUIRED'); // validated pre-tx; belt-and-braces
-          await snapshotPaidLines(tx, inv, {
+          // Idempotent re-freeze (covers re-pay after an ADMIN unlock) + the ONE vehicle-fact
+          // freeze point (identity facts freeze at PAID — the deliberate asymmetry).
+          await snapshotInvoiceLines(tx, inv, {
             goodwill: tServer(inv.site?.locale, 'invoice', 'warrantyGoodwill'),
             noCharge: tServer(inv.site?.locale, 'invoice', 'warrantyLine'),
-          });
+          }, { freezeVehicleFacts: true });
           const now = new Date();
           const docDate = paidDate ?? now; // date_paid = the chosen DOCUMENT date; paid_at stays the attestation
           const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };
@@ -172,7 +181,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
     });
-  } catch (e) {
+  } catch (e: any) {
+    if (e?.message === 'WARRANTY_NOT_PAYABLE') {
+      return res.status(409).json({ message: 'Warranty invoices settle at issue — there is nothing to pay.' });
+    }
     console.error('Status transition error:', e);
     return res.status(500).json({ message: 'Failed to update status.' });
   }

@@ -17,7 +17,8 @@
     "payState": {
       "unpaid": "Unpaid",
       "invoiced": "Invoiced",
-      "paid": "Paid"
+      "paid": "Paid",
+      "settled": "No charge"
     }
   },
   "noSite": "You’re not currently assigned to a location — contact your admin.",

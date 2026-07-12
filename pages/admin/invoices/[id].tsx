@@ -26,7 +26,8 @@ type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies:
 type PageProps = {
   invoiceId: string;
   number: string;
-  status: 'issued' | 'paid_pending' | 'paid';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled';
+  hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
   paymentMethod: string | null;
@@ -73,6 +74,16 @@ export default function InvoicePage(props: PageProps) {
     setBusy(null);
   }
 
+  async function reissue() {
+    setBusy('reissue'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId, action: 'reissue' }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('reissueError'), ok: false }); return; }
+      await router.replace(router.asPath);
+    } catch { setMsg({ text: t('reissueError'), ok: false }); }
+    finally { setBusy(null); }
+  }
   async function unlock() {
     if (!window.confirm(t('unlockConfirm'))) return;
     setBusy('unlock'); setMsg(null);
@@ -128,16 +139,25 @@ export default function InvoicePage(props: PageProps) {
                 {busy === 'unmark' ? t('pending.unmarking') : t('pending.unmark')}
               </button>
             )}
-            {props.status === 'paid' && props.isAdmin && (
+            {(props.status === 'paid' || props.status === 'settled' || (props.status === 'issued' && props.hasFrozenLines)) && props.isAdmin && (
               <button onClick={unlock} disabled={busy !== null} className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger-soft disabled:opacity-50">
                 {busy === 'unlock' ? t('unlocking') : t('unlock')}
+              </button>
+            )}
+            {props.status === 'issued' && !props.hasFrozenLines && props.isAdmin && (
+              <button onClick={reissue} disabled={busy !== null} className="text-sm text-ok border border-ok/40 rounded-lg px-4 py-2 hover:bg-ok-soft disabled:opacity-50">
+                {busy === 'reissue' ? t('reissuing') : t('reissue')}
               </button>
             )}
           </div>
         </div>
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
-        {props.status === 'issued' && props.series === 'chargeable' && <p className="text-xs text-muted mb-3">{t('liveNote')}</p>}
+        {/* Freeze-at-issue: frozen lines are the document; an unlocked invoice is under correction. */}
+        {props.status === 'issued' && props.hasFrozenLines && <p className="text-xs text-muted mb-3">{t('frozenNote')}</p>}
+        {props.status === 'issued' && !props.hasFrozenLines && (
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('unlockedNote')}</div>
+        )}
         {props.status === 'paid_pending' && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">
             {props.manualPending
@@ -347,6 +367,7 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       number: doc.number,
       status: doc.status,
       series: doc.series,
+      hasFrozenLines: doc.lines.length > 0, // freeze-at-issue: empty = admin-unlocked, under correction
       confirmDueAt: doc.confirmDueAt ? doc.confirmDueAt.toLocaleString(doc.locale, { timeZone: 'UTC' }) : null,
       paymentMethod: doc.paymentMethod,
       manualPending: doc.manualPending,
@@ -364,7 +385,7 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       totals: doc.totals,
       currency: doc.currency,
       locale: doc.locale,
-      canEdit: doc.status === 'issued' && doc.series === 'chargeable',
+      canEdit: doc.status === 'issued' && doc.lines.length === 0, // only an UNLOCKED invoice edits on the card (freeze-at-issue)
       canManage: true, // gssp already required canManageSite to view; server re-checks on POST
       isAdmin: vis.isAdmin,
       jobCardId: doc.jobCardId,

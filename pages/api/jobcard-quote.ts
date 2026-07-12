@@ -44,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Card must be in the caller's group; editing requires authority over its site.
   const card = (await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
-    select: { id: true, site_id: true, invoice: { select: { status: true, invoice_number: true } } },
+    select: { id: true, site_id: true, invoice: { select: { status: true, invoice_number: true, lines: { select: { id: true }, take: 1 } } } },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
@@ -52,10 +52,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!canEditEstimate(vis, card.site_id, perms)) {
     return res.status(403).json({ message: 'You do not have permission to edit this job card’s estimate.' });
   }
-  // ONE-OBJECT INVOICE: the card's lines ARE the invoice, so the paid freeze covers them too.
-  // The only escape hatch is the ADMIN unlock (audited) — never a direct edit.
-  if (card.invoice && !canEditInvoice(card.invoice)) {
-    return res.status(409).json({ message: 'This job is paid and its invoice is locked. An admin can unlock it to make corrections.' });
+  // FREEZE-AT-ISSUE: once the invoice's lines are frozen (at mint), the estimate is locked — the
+  // card is the working draft only until issue. The only escape hatch is the audited ADMIN unlock
+  // (which deletes the frozen lines; their absence IS the unlocked state) — never a direct edit.
+  if (card.invoice && !canEditInvoice({ status: card.invoice.status, hasFrozenLines: (card.invoice.lines?.length ?? 0) > 0 })) {
+    return res.status(409).json({ message: 'This job is invoiced and its lines are frozen. An admin can unlock it to make corrections.' });
   }
 
   // Master switch + company default rate (the fallback when the client omits a rate).

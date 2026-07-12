@@ -28,7 +28,10 @@ export type AuditAction =
   | 'invoice.paid'            // attested paid → paid_pending (clearance window starts)
   | 'invoice.paid_unmarked'   // silent revert during the window (manager/admin) — nothing was sent
   | 'invoice.paid_confirmed'  // clearance window elapsed → confirmed by the cron (system actor)
-  | 'invoice.unlocked'      // ADMIN-only escape hatch: CONFIRMED paid → issued for corrections
+  | 'invoice.unlocked'      // ADMIN-only escape hatch: frozen (issued/paid/settled) → unlocked for corrections
+  | 'invoice.reissued'      // ADMIN re-freeze after an unlock: corrected lines snapshot + re-lock (warranty → settled)
+  | 'invoice.lines_classified' // one-off 2026-07-12: item_type/labour_outsourced backfilled onto existing frozen lines
+  | 'invoice.warranty_settled_backfilled' // one-off 2026-07-12: W-series frozen (goodwill shape) + settled
   | 'invoice.renumbered'    // deliberate ledger correction of the rendered number (one-off, admin-approved)
   | 'invoice.date_paid_edited' // the document's paid-date corrected (manager/admin)
   | 'invoice.date_issued_edited' // the document's issue/billing date corrected (manager/admin)

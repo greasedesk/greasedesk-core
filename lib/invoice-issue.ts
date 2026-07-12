@@ -1,20 +1,22 @@
 /**
  * File: lib/invoice-issue.ts
- * ISSUE + FREEZE chokepoints for the one-object invoice model. The invoice IS the card's line
- * items under an assigned number:
+ * ISSUE + FREEZE chokepoints. FREEZE-AT-ISSUE (ruling 2026-07-12, supersedes "live while
+ * issued"): the lines snapshot into InvoiceLine AT MINT and the ledger reads only that copy.
  *
- *  issueInvoiceForCard          → mint a CHARGEABLE number + header snapshot. NO line copy — while
- *                                 `issued`, renderers read the card's live items, so a job that
- *                                 grows after invoicing updates the bill under the same number.
+ *  issueInvoiceForCard          → mint a CHARGEABLE number + header snapshot + LINE FREEZE.
  *  issueWarrantyInvoiceForCard  → the comeback path: mint from the independent WARRANTY counter,
- *                                 same header snapshot, £0 document (single no-charge line at paid).
- *  snapshotPaidLines            → the freeze: copy the card's items into InvoiceLine at PAID (the
- *                                 immutable income grain). Warranty invoices freeze as ONE
- *                                 "no charge" £0 line, never itemised. Idempotent (replaces any
- *                                 previous snapshot — used by re-pay after an ADMIN unlock).
+ *                                 freeze the goodwill shape (retail lines + one zeroing line,
+ *                                 sum £0) and land TERMINAL at `settled` — never AR, never paid.
+ *  snapshotInvoiceLines         → THE freeze: copy the card's items into InvoiceLine (with the
+ *                                 frozen classification: item_type + labour_outsourced).
+ *                                 Idempotent (replaces any previous snapshot) — fires at issue,
+ *                                 at re-issue after an ADMIN unlock, and at re-pay.
  *
  * All run inside the caller's tx (a minted number rolls back with a failed issue). Sticky:
  * one-per-card (Invoice.job_card_id @unique) — re-entering `invoiced` never re-mints.
+ * TODO(tighten): InvoiceLine.item_type is nullable only for pre-backfill legacy rows — all rows
+ * were classified 2026-07-12 and every writer here sets it; tighten the column to NOT NULL in a
+ * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { Prisma } from '@prisma/client';
 import { assignInvoiceNumber, assignWarrantyNumber, formatInvoiceNumber } from '@/lib/invoice-number';
@@ -80,69 +82,86 @@ async function createInvoiceRow(
   return invoice.id;
 }
 
-export function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
-  return createInvoiceRow(tx, jobCardId, groupId, 'chargeable');
+/** Mint a chargeable invoice AND freeze its lines in the same tx (freeze-at-issue). */
+export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
+  const id = await createInvoiceRow(tx, jobCardId, groupId, 'chargeable');
+  const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
+  await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' }); // texts unused on the chargeable branch
+  return id;
 }
 
-export function issueWarrantyInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
-  return createInvoiceRow(tx, jobCardId, groupId, 'warranty');
+/** Mint a warranty invoice, freeze the goodwill shape, and land TERMINAL at `settled` — all one tx. */
+export async function issueWarrantyInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string, warrantyTexts: { goodwill: string; noCharge: string }): Promise<string> {
+  const id = await createInvoiceRow(tx, jobCardId, groupId, 'warranty');
+  const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
+  await snapshotInvoiceLines(tx, inv, warrantyTexts);
+  await tx.invoice.update({ where: { id }, data: { status: 'settled' as any } }); // £0, closed — never AR, never paid
+  return id;
 }
 
 /**
- * Freeze the invoice's lines at PAID. Chargeable → snapshot the card's items (VAT gated by the
- * tenant's registration AT ISSUE, keeping the snapshot consistent with vat_registered_at_issue).
+ * THE freeze — copy the card's items into InvoiceLine with the frozen classification
+ * (item_type + labour_outsourced). Fires at ISSUE, at RE-ISSUE after an ADMIN unlock, and
+ * (idempotently) at re-pay. Chargeable → snapshot with VAT gated by registration AT ISSUE.
  * Warranty (ruling 2026-07-12, supersedes "never itemised") → the real lines at NET retail plus
  * ONE goodwill line zeroing the total (lines sum to £0 — any consumer summing warranty lines
  * still gets zero; NO VAT on any warranty line). Empty card → the legacy single £0 line.
  * `warrantyTexts` are resolved by the caller (site-locale i18n) — this chokepoint doesn't reach
- * into translation files.
+ * into translation files. `freezeVehicleFacts` is TRUE only on the mark-paid path — money
+ * freezes at issue, identity facts freeze at paid (the deliberate asymmetry, see invoice-doc).
  */
-export async function snapshotPaidLines(
+export async function snapshotInvoiceLines(
   tx: Prisma.TransactionClient,
   invoice: { id: string; job_card_id: string; series: 'chargeable' | 'warranty' | string; vat_registered_at_issue: boolean },
   warrantyTexts: { goodwill: string; noCharge: string },
+  opts: { freezeVehicleFacts?: boolean } = {},
 ): Promise<void> {
-  await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // idempotent re-freeze (re-pay after unlock)
+  await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // idempotent re-freeze
 
-  // VEHICLE-FACT RE-SNAPSHOT (ruling 2026-07-10): reg + VIN + mileage are LIVE-read from the card
-  // while issued (corrections flow through); THIS is their one freeze point — the same tx as the
-  // line freeze, so the pending/paid document is frozen at a single lifecycle moment. Company /
-  // customer identity stays issue-snapshotted (different concern).
-  const cardNow = (await tx.jobCard.findUnique({
-    where: { id: invoice.job_card_id },
-    select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } },
-  })) as any;
-  if (cardNow) {
-    await tx.invoice.update({
-      where: { id: invoice.id },
-      data: {
-        vehicle_reg_snapshot: cardNow.vehicle?.registration ?? null,
-        vehicle_vin_snapshot: cardNow.vehicle?.vin ?? null,
-        vehicle_mileage_snapshot: cardNow.odometer_in ?? cardNow.vehicle?.mileage_at_create ?? null,
-      },
-    });
+  // VEHICLE-FACT RE-SNAPSHOT — the DELIBERATE ASYMMETRY (do not "tidy" to match the line freeze):
+  // money freezes at ISSUE; identity facts (reg/VIN/mileage) stay LIVE-read while issued and
+  // freeze ONLY on the mark-paid path (freezeVehicleFacts: true). Company / customer identity
+  // stays issue-snapshotted (different concern).
+  if (opts.freezeVehicleFacts) {
+    const cardNow = (await tx.jobCard.findUnique({
+      where: { id: invoice.job_card_id },
+      select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } },
+    })) as any;
+    if (cardNow) {
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: {
+          vehicle_reg_snapshot: cardNow.vehicle?.registration ?? null,
+          vehicle_vin_snapshot: cardNow.vehicle?.vin ?? null,
+          vehicle_mileage_snapshot: cardNow.odometer_in ?? cardNow.vehicle?.mileage_at_create ?? null,
+        },
+      });
+    }
   }
 
   if (invoice.series === 'warranty') {
     const wItems = (await tx.jobCardItem.findMany({
       where: { job_card_id: invoice.job_card_id },
-      select: { description: true, qty: true, unit_price: true, unit_cost: true, catalogue_item_id: true, labour_hours: true },
+      select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, catalogue_item_id: true, labour_hours: true, labour_outsourced: true },
       orderBy: { created_at: 'asc' },
     })) as any[];
     const valuePennies = wItems.reduce((a, it) => a + Math.round(Number(it.qty) * Number(it.unit_price) * 100), 0);
     if (!wItems.length || valuePennies <= 0) {
-      // Nothing valued on the card — the legacy single no-charge line.
+      // Nothing valued on the card — the legacy single no-charge line (part-class: no hours, no drag).
       await tx.invoiceLine.create({
         data: {
           invoice_id: invoice.id, description: warrantyTexts.noCharge,
           qty: new Prisma.Decimal(1), unit_price: new Prisma.Decimal(0), vat_rate: new Prisma.Decimal(0),
-          line_vat: new Prisma.Decimal(0), line_total: new Prisma.Decimal(0), unit_cost: new Prisma.Decimal(0), position: 0,
+          line_vat: new Prisma.Decimal(0), line_total: new Prisma.Decimal(0), unit_cost: new Prisma.Decimal(0),
+          item_type: 'part' as any, labour_outsourced: false, position: 0,
         },
       });
       return;
     }
     // Real lines at NET retail (vat 0 on every line), then the goodwill line for −the full value:
-    // the frozen lines sum to £0 by construction.
+    // the frozen lines sum to £0 by construction. The goodwill line is PART-CLASS with zero cost
+    // (NEVER labour — the hours grain reads qty as hours on labour lines; classifying it labour
+    // would silently add 1h of rework per warranty invoice).
     await tx.invoiceLine.createMany({
       data: [
         ...wItems.map((it, i) => ({
@@ -156,6 +175,7 @@ export async function snapshotPaidLines(
           unit_cost: it.unit_cost,
           catalogue_item_id: it.catalogue_item_id,
           labour_hours: it.labour_hours, // the rework-hours grain freezes with everything else
+          item_type: it.item_type, labour_outsourced: !!it.labour_outsourced, // frozen classification
           position: i,
         })),
         {
@@ -167,6 +187,7 @@ export async function snapshotPaidLines(
           line_vat: new Prisma.Decimal(0),
           line_total: new Prisma.Decimal((-valuePennies / 100).toFixed(2)),
           unit_cost: new Prisma.Decimal(0),
+          item_type: 'part' as any, labour_outsourced: false, // ASSERTION 1 class: no hours, no drag
           position: wItems.length,
         },
       ],
@@ -176,7 +197,7 @@ export async function snapshotPaidLines(
 
   const items = (await tx.jobCardItem.findMany({
     where: { job_card_id: invoice.job_card_id },
-    select: { description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true, labour_hours: true },
+    select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true, labour_hours: true, labour_outsourced: true },
     orderBy: { created_at: 'asc' },
   })) as any[];
   if (!items.length) return;
@@ -196,6 +217,7 @@ export async function snapshotPaidLines(
         unit_cost: it.unit_cost,
         catalogue_item_id: it.catalogue_item_id,
         labour_hours: it.labour_hours, // freeze the charged-hours grain with everything else
+        item_type: it.item_type, labour_outsourced: !!it.labour_outsourced, // frozen classification
         position: i,
       };
     }),

@@ -21,16 +21,10 @@ export type MonthTileContext = TileContext & { months: number };
 // (date_issued ?? issued_at — billing basis) via effectiveIssueDateWhere.
 
 const PAID_SELECT = { site_id: true, date_paid: true, paid_at: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, site: { select: { site_name: true } } } as const;
+// FREEZE-AT-ISSUE: every invoice carries frozen lines from mint, so issued and paid money read
+// the SAME snapshot — one gross, no live-card recomputation anywhere in the tiles.
 const grossOfPaid = (r: any) => invoiceTotals(r.lines).grossPennies;
-const grossOfIssued = (r: any) => {
-  const registered = !!r.vat_registered_at_issue;
-  let g = 0;
-  for (const it of r.job_card?.items ?? []) {
-    const { netPennies, vatPennies } = computeInvoiceLinePennies(Number(it.qty), poundsToPennies(Number(it.unit_price)), Number(it.vat_rate), registered);
-    g += netPennies + vatPennies;
-  }
-  return g;
-};
+const grossOfIssued = grossOfPaid;
 
 export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown>> = {
   // Confirmed paid revenue in the period (paid ledger; three-state: only `paid` counts).
@@ -56,9 +50,9 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   issuedVsPaid: async ({ groupId, siteIds, from, to }) => {
     const issued = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', ...effectiveIssueDateWhere(from, to) },
-      select: { status: true, vat_registered_at_issue: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, job_card: { select: { items: { select: { qty: true, unit_price: true, vat_rate: true } } } } },
+      select: { status: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
-    const issuedPennies = issued.reduce((a, r) => a + (r.status === 'issued' ? grossOfIssued(r) : grossOfPaid(r)), 0);
+    const issuedPennies = issued.reduce((a, r) => a + grossOfPaid(r), 0); // frozen lines from mint — one gross for every status
     const paidRows = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', series: 'chargeable' },
       select: PAID_SELECT,
@@ -85,7 +79,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   debtors: async ({ groupId, siteIds }) => {
     const rows = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, status: 'issued', series: 'chargeable' },
-      select: { vat_registered_at_issue: true, job_card: { select: { items: { select: { qty: true, unit_price: true, vat_rate: true } } } } },
+      select: { lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
     return { grossPennies: rows.reduce((a, r) => a + grossOfIssued(r), 0), count: rows.length };
   },
@@ -101,7 +95,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
         where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...effectiveIssueDateWhere(from, to) },
         select: {
           id: true, invoice_number: true, series: true, site_id: true, site: { select: { site_name: true } },
-          job_card: { select: { items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } } } },
+          lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } },
         },
       }) as any,
       // Same rate read as the cost-base/unsold tiles: the site's LABOUR_HR default rate.
@@ -132,9 +126,9 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 // ---------- Month-grained P&L (the profit strip) ----------
 // ONE registered compute produces the five P&L figures from a single ledger pass — calendar-month
 // grained BY DESIGN (the wage bill is a monthly lump; partial-month labour profit is fiction).
-// Line grain: the card's items (item_type lives there; card lines LOCK at paid so they equal the
-// frozen snapshot; while issued they're the live truth — same one-object ledger). Ex-VAT
-// throughout: this is a profit statement, VAT is not revenue.
+// Line grain: the FROZEN InvoiceLine rows (freeze-at-issue ruling 2026-07-12 — the ledger never
+// reads the mutable JobCardItem; the card is the working draft only). Ex-VAT throughout: this is
+// a profit statement, VAT is not revenue.
 //  Revenue (invoiced, ex-VAT) → − Parts cost → Gross margin → − wages − overheads → Net profit.
 //  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
 // ---- THE monthly cost-base reads (extracted from pnl VERBATIM — pnl + costBase both call
@@ -202,12 +196,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   missingHours: async ({ groupId, siteIds, from, to }) => {
     const invs = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
-      select: { id: true, invoice_number: true, job_card: { select: { items: { select: { item_type: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true, description: true } } } } },
+      select: { id: true, invoice_number: true, lines: { select: { item_type: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true, description: true } } },
     })) as any[];
     const byProduct = new Map<string, number>();
     const adhoc: Array<{ invoiceId: string; number: string; description: string }> = [];
     for (const inv of invs) {
-      for (const it of inv.job_card?.items ?? []) {
+      for (const it of inv.lines ?? []) {
         if (it.item_type !== 'fixed' || it.labour_hours != null || it.labour_outsourced) continue; // outsourced: zero own-hours is CORRECT
         if (it.catalogue_item_id) byProduct.set(it.catalogue_item_id, (byProduct.get(it.catalogue_item_id) ?? 0) + 1);
         else adhoc.push({ invoiceId: inv.id, number: inv.invoice_number ?? '', description: String(it.description ?? '').split('\n')[0] });
@@ -230,7 +224,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     let revenueNet = 0;
     for (const inv of invoices) {
       const warranty = inv.series === 'warranty';
-      for (const it of inv.job_card?.items ?? []) {
+      for (const it of inv.lines ?? []) {
         const qty = Number(it.qty);
         const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
         if (!warranty) revenueNet += net;

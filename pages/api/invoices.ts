@@ -3,9 +3,9 @@
  * GET ?status=all|unpaid|pending|paid|warranty & q=<customer or reg> → the Invoices (AR/debtors)
  * list. Permission-gated SERVER-SIDE (canViewInvoices — managers/admins always, STANDARD via the
  * tenant toggle; 403 otherwise) and site-scoped SERVER-SIDE (rows filtered to vis.siteIds — a
- * manager cannot query another site's invoices). Amounts computed through the existing money
- * chokepoints: frozen snapshot lines for pending/paid, live card items for issued — never a forked
- * formula. unit_cost never leaves the server.
+ * manager cannot query another site's invoices). Amounts from the FROZEN InvoiceLine rows only
+ * (freeze-at-issue: every invoice carries them from mint) — never a forked formula.
+ * unit_cost never leaves the server.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -13,8 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
-import { invoiceTotals, computeInvoiceLinePennies, effectiveIssueDate } from '@/lib/invoice';
-import { poundsToPennies } from '@/lib/quote-totals';
+import { invoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { isListStatusKey, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
 import { resolveRange } from '@/lib/dashboard-periods';
@@ -66,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       confirm_due_at: true, payment_method_snapshot: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
-      job_card: { select: { vehicle_id: true, customer: { select: { email: true } }, items: { select: { qty: true, unit_price: true, vat_rate: true } } } },
+      job_card: { select: { vehicle_id: true, customer: { select: { email: true } } } },
       site: { select: { currency_code: true, locale: true } },
     },
   })) as any[];
@@ -75,19 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const periodRows = paidRange ? rows.filter((r) => paidPeriodFilter(r, paidRange)) : rows;
 
   const list = await Promise.all(periodRows.map(async (r) => {
-    // Amount = gross (what's owed — the AR number). Frozen lines once pending/paid; live items while issued.
-    let grossPennies = 0;
-    if (r.status !== 'issued') {
-      grossPennies = invoiceTotals(r.lines).grossPennies;
-    } else if (r.series === 'warranty') {
-      grossPennies = 0;
-    } else {
-      const registered = !!r.vat_registered_at_issue;
-      for (const it of r.job_card?.items ?? []) {
-        const { netPennies, vatPennies } = computeInvoiceLinePennies(Number(it.qty), poundsToPennies(Number(it.unit_price)), Number(it.vat_rate), registered);
-        grossPennies += netPennies + vatPennies;
-      }
-    }
+    // Amount = gross (what's owed — the AR number) from the FROZEN lines: every invoice carries
+    // them from mint (freeze-at-issue); warranty lines sum to £0 by construction.
+    const grossPennies = invoiceTotals(r.lines).grossPennies;
     // Recipient for the resend confirmation — edge-resolved current owner, card customer fallback.
     const ownerId = r.job_card?.vehicle_id ? await getCurrentOwnerId(prisma, r.job_card.vehicle_id as string) : null;
     const owner = ownerId ? ((await prisma.customer.findUnique({ where: { id: ownerId }, select: { email: true } })) as any) : null;

@@ -324,10 +324,13 @@
       "paid": "Marked paid — pending confirmation",
       "paid_unmarked": "Payment unmarked during the clearance window",
       "paid_confirmed": "Payment confirmed (clearance window passed)",
-      "unlocked": "Paid invoice unlocked by admin",
+      "unlocked": "Invoice unlocked by admin (frozen lines dropped for correction)",
       "renumbered": "Invoice number corrected (ledger)",
       "sent": "Invoice emailed to the customer",
-      "date_paid_edited": "Invoice paid-date corrected"
+      "date_paid_edited": "Invoice paid-date corrected",
+      "reissued": "Invoice re-issued — corrections frozen",
+      "lines_classified": "Invoice lines classified (one-off ledger backfill)",
+      "warranty_settled_backfilled": "Warranty invoice frozen and settled (one-off backfill)"
     },
     "comeback": {
       "marked": "Marked as warranty / comeback",

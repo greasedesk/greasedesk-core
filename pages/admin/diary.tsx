@@ -40,9 +40,10 @@ const PAY_TONES: Record<PaymentState, string> = {
   unpaid: 'bg-surface-muted border-line text-muted',
   invoiced: 'bg-warn-soft border-warn text-warn',
   paid: 'bg-ok-soft border-ok text-ok',
+  settled: 'bg-accent-soft border-accent text-accent', // warranty: closed at £0, never outstanding
 };
-function PayPill({ status, t, className }: { status: string; t: (k: string) => string; className?: string }) {
-  const state = paymentState(status);
+function PayPill({ status, isComeback, t, className }: { status: string; isComeback?: boolean; t: (k: string) => string; className?: string }) {
+  const state = paymentState(status, isComeback);
   return (
     <span className={`inline-block shrink-0 rounded-full border px-1.5 font-medium whitespace-nowrap ${PAY_TONES[state]} ${className ?? ''}`}>
       {t(`finance.payState.${state}`)}
@@ -51,7 +52,7 @@ function PayPill({ status, t, className }: { status: string; t: (k: string) => s
 }
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; valuePennies: number; segments: Segment[] };
+type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type DiaryView = 'day' | 'week' | 'month' | 'year';
@@ -367,7 +368,7 @@ export default function DiaryPage(props: PageProps) {
         {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
         {/* Payment-state pill at the FOOT of the block (anchored, clear of the text lines above —
             the pb reserves its lane). Follows the permission ONLY, never the toggle. */}
-        {finance.canSeeValues && height > 28 && <PayPill status={c.status} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
+        {finance.canSeeValues && height > 28 && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
       </div>
     );
   }
@@ -580,7 +581,7 @@ export default function DiaryPage(props: PageProps) {
                           <div className="text-sm text-ink">{it.card.customer}</div>
                           {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
                           {/* Payment-state pill at the FOOT of the card — permission-only, toggle-proof. */}
-                          {finance.canSeeValues && <div className="mt-1"><PayPill status={it.card.status} t={t} className="text-[10px] py-0.5" /></div>}
+                          {finance.canSeeValues && <div className="mt-1"><PayPill status={it.card.status} isComeback={it.card.isComeback} t={t} className="text-[10px] py-0.5" /></div>}
                         </div>
                         {showMoney && finance.canSeeValues && (
                           <div className={`shrink-0 text-sm font-semibold tabular-nums ${it.card.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(it.card.valuePennies)}</div>
@@ -1387,6 +1388,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string,
+      isComeback: !!c.is_comeback, // the pay pill reads `settled` for a comeback from invoiced onward
       // Block value (EX-VAT): normal job = ex-VAT revenue; comeback = the DRAIN = −(ex-VAT parts cost),
       // matching what the margin total subtracts. Totals compute from `totals` directly, unaffected.
       valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,

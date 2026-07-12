@@ -6,11 +6,12 @@
  */
 import { poundsToPennies } from '@/lib/quote-totals';
 
-/** Single freeze guard. Server-enforced on every invoice mutation — editable ONLY while issued.
- *  paid_pending freezes too (the snapshot is taken at mark-paid; the pending window is for
- *  unmarking, not editing); paid (confirmed) stays frozen behind the ADMIN unlock. */
-export function canEditInvoice(invoice: { status: string }): boolean {
-  return invoice.status === 'issued';
+/** Single freeze guard — FREEZE-AT-ISSUE (ruling 2026-07-12): the ledger locks when the lines
+ *  freeze, which is at ISSUE, not at paid. The audited ADMIN unlock deletes the frozen lines;
+ *  that absence IS the unlocked state (re-issue / re-pay re-snapshots and re-locks). settled
+ *  (warranty terminal) and paid stay frozen behind the same unlock. */
+export function canEditInvoice(invoice: { status: string; hasFrozenLines: boolean }): boolean {
+  return invoice.status === 'issued' && !invoice.hasFrozenLines;
 }
 
 // ---- Effective document dates (ONE truth for recognition + rendering) ----

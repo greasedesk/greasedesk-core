@@ -47,7 +47,7 @@
     "hoursMissing": "{{count}} own-labour service line(s) missing hours",
     "netProfit": "Net profit",
     "netProfitSub": "margin − {{wages}} wages − {{overheads}} rent & rates",
-    "honesty": "Labour and net figures are based on your Headcount (salaried staff) and Overheads settings, and hours-charged on the labour hours set on each fixed-price service — keep those current for accurate numbers.",
+    "honesty": "Labour and net figures come from your Headcount and Overheads settings. Charged hours come from the labour hours stored on each job line when the service was added — editing a service in Products affects future jobs only, never past ones.",
     "labourContribution": "Labour income vs cost",
     "labourContributionSub": "{{income}} income − {{wages}} wages",
     "degradedNote": "P&L is whole calendar months only — showing {{label}}.",

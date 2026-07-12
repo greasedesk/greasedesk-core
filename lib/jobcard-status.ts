@@ -49,8 +49,11 @@ export function findTransition(from: JobStatus, to: JobStatus): Transition | nul
 // stored column. `paid` covers BOTH pending-clearance and confirmed (clearance is an INVOICE-level
 // distinction; the card sits at `paid` for either) plus `done`. Everything earlier — including
 // declined/cancelled — is simply "unpaid": nothing chargeable has been raised.
-export type PaymentState = 'unpaid' | 'invoiced' | 'paid';
-export function paymentState(status: JobStatus | string): PaymentState {
+// A COMEBACK's invoice settles at issue (£0, terminal — never paid): its card reads `settled`
+// from `invoiced` onward, so a warranty job never looks like outstanding money.
+export type PaymentState = 'unpaid' | 'invoiced' | 'paid' | 'settled';
+export function paymentState(status: JobStatus | string, isComeback = false): PaymentState {
+  if (isComeback && (status === 'invoiced' || status === 'paid' || status === 'done')) return 'settled';
   if (status === 'invoiced') return 'invoiced';
   if (status === 'paid' || status === 'done') return 'paid';
   return 'unpaid';

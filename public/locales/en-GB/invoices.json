@@ -27,7 +27,8 @@
     "pending": "Pending clearance",
     "paid": "Paid",
     "warranty": "Warranty £0",
-    "pendingManual": "Awaiting confirmation (manual)"
+    "pendingManual": "Awaiting confirmation (manual)",
+    "settled": "Settled — no charge"
   },
   "action": {
     "view": "View",
