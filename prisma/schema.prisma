@@ -135,12 +135,23 @@ model Group {
   vat_number       String?
   // Master switch: VAT applies anywhere (quotes/invoices/overheads) only when true. Default true
   // preserves existing tenants' VAT-as-now behaviour; sub-threshold garages turn it off. Resolved
-  // via lib/tenant-vat.ts and gated in computeQuoteTotals — never scattered.
+  // via lib/tax.ts (getTaxProfile → is_registered) and gated in computeTax — never scattered.
   vat_registered   Boolean @default(true)
-  // Company-wide default VAT rate (only meaningful when registered). THE single source that
-  // cascades as an editable pre-fill to quotes + overheads. Read via lib/tenant-vat.ts.
+  // Company-wide default VAT rate (only meaningful when registered). LEGACY Decimal-percent column,
+  // kept in lockstep with tax_default_rate_bp (the canonical integer-basis-point source since the
+  // TaxProfile refactor). getTaxProfile reads bp, falling back to ×100 of this while backfill lands.
   default_vat_rate Decimal @default(20) @db.Decimal(5, 2)
   address          String?
+
+  // ── TaxProfile (item-13 onboarding groundwork). The Group is the LEGAL entity that files one
+  // tax return, so tax identity lives here; currency + locale are TRADING identity and stay on Site
+  // (a UK group may open a Dublin site — same VAT branch, different rate). Assembled + consumed ONLY
+  // via lib/tax.ts::getTaxProfile / computeTax. tax_name is Group.tax_label RELOCATED (one value,
+  // seeded from locale_profiles at onboarding — never a third name source). ──
+  tax_country_code    String  @default("GB")   // ISO 3166-1 alpha-2
+  tax_model           String  @default("vat")  // 'vat' (only live branch) | 'sales_tax' | 'gst_split' (throw NotImplemented)
+  tax_default_rate_bp Int?                      // integer BASIS POINTS (2000 = 20%); NULL until backfilled → derive ×100 of default_vat_rate
+  prices_include_tax  Boolean @default(false)   // false for UK B2B (line prices are ex-tax)
 
   // Invoice number DISPLAY format (per-tenant). Rendered via lib/invoice-number.ts::formatInvoiceNumber.
   // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").

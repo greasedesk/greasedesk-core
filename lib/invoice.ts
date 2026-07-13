@@ -5,6 +5,7 @@
  * reimplemented. formatMoney (lib/format-money) renders; this only computes.
  */
 import { poundsToPennies } from '@/lib/quote-totals';
+import { taxOnBasePennies, aggregateFrozenTax } from '@/lib/tax';
 
 /** Single freeze guard — FREEZE-AT-ISSUE (ruling 2026-07-12): the ledger locks when the lines
  *  freeze, which is at ISSUE, not at paid. The audited ADMIN unlock deletes the frozen lines;
@@ -64,17 +65,19 @@ export function resolveCompanyIdentity(
   };
 }
 
-// ---- Per-line money (pennies). Mirrors quote-totals rounding; VAT zeroed when not registered. ----
+// ---- Per-line money (pennies). Rate applied via the lib/tax chokepoint; VAT zeroed when not registered. ----
 export function computeInvoiceLinePennies(qty: number, unitPricePennies: number, vatRate: number, vatApplies: boolean) {
   const q = Number.isFinite(qty) ? qty : 0;
   const price = Number.isFinite(unitPricePennies) ? unitPricePennies : 0;
   const net = Math.round(q * price);
-  const rate = vatApplies ? Math.min(100, Math.max(0, Number.isFinite(vatRate) ? vatRate : 0)) : 0;
-  const vat = Math.round((net * rate) / 100);
+  // rateBp = rate × 100 (rate is Decimal(5,2), never >2dp) → byte-identical to round(net × rate / 100).
+  const vat = taxOnBasePennies({ taxModel: 'vat', isRegistered: vatApplies }, net, Math.round((Number.isFinite(vatRate) ? vatRate : 0) * 100));
   return { netPennies: net, vatPennies: vat };
 }
 
-// ---- VAT breakdown by rate + grand totals, from STORED line values (Decimal pounds → pennies). ----
+// ---- VAT breakdown by rate + grand totals, from STORED (frozen) line values. This is the RENDER/AR
+// path: it AGGREGATES the frozen per-line net + tax and re-derives nothing — an issued invoice's tax
+// is immutable, so today's registration/rate must never touch it (see lib/tax rule 1). ----
 export type InvoiceLineLike = { vat_rate: unknown; line_total: unknown; line_vat: unknown };
 export type InvoiceTotals = {
   breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>;
@@ -82,20 +85,14 @@ export type InvoiceTotals = {
 };
 
 export function invoiceTotals(lines: InvoiceLineLike[]): InvoiceTotals {
-  const byRate = new Map<string, { rate: number; netPennies: number; vatPennies: number }>();
-  let netP = 0, vatP = 0;
-  for (const l of lines) {
-    const rate = Number(l.vat_rate);
-    const net = poundsToPennies(Number(l.line_total));
-    const vat = poundsToPennies(Number(l.line_vat));
-    netP += net; vatP += vat;
-    const key = rate.toFixed(2);
-    const b = byRate.get(key) ?? { rate, netPennies: 0, vatPennies: 0 };
-    b.netPennies += net; b.vatPennies += vat;
-    byRate.set(key, b);
-  }
+  const agg = aggregateFrozenTax(lines.map((l) => ({
+    rateBp: Math.round(Number(l.vat_rate) * 100),
+    netPennies: poundsToPennies(Number(l.line_total)),
+    taxPennies: poundsToPennies(Number(l.line_vat)),
+  })));
+  // Re-expose in the historical shape (rate as percent, vatPennies) — callers are unchanged.
   return {
-    breakdown: Array.from(byRate.values()).sort((a, b) => b.rate - a.rate),
-    netPennies: netP, vatPennies: vatP, grossPennies: netP + vatP,
+    breakdown: agg.breakdown.map((b) => ({ rate: b.rateBp / 100, netPennies: b.netPennies, vatPennies: b.taxPennies })),
+    netPennies: agg.netPennies, vatPennies: agg.taxPennies, grossPennies: agg.grossPennies,
   };
 }

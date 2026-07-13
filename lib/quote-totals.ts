@@ -15,6 +15,8 @@
  *  - Per-line VATable flag: only VATable lines contribute to VAT.
  *  - VAT = round( (sum of VATable line totals) × vatRate / 100 )  — sum-then-multiply, one rounding.
  */
+import { computeTax, taxOnBasePennies, TaxApplyLine } from '@/lib/tax';
+
 export type QuoteItemType = 'labour' | 'part' | 'misc' | 'fixed';
 
 export type QuoteLineInput = {
@@ -72,21 +74,28 @@ export type QuoteTotalsOpts = {
 export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, opts: QuoteTotalsOpts = {}): QuoteTotals {
   const vatApplies = opts.vatRegistered !== false; // default true (backward-compatible)
   const vat_rate = vatApplies ? clampVatRate(rawVatRate) : 0;
-  let labour = 0, parts = 0, labourCost = 0, partsCost = 0, vatableBase = 0;
+  // ALL tax arithmetic now routes through lib/tax (the one chokepoint). The gate is a lite profile
+  // (taxModel+isRegistered) — the full TaxProfile is server-only; this stays pure/isomorphic.
+  // rateBp = rate × 100: exact because a rate is Decimal(5,2) at most (never >2dp), so this is
+  // byte-identical to the old `round(base × rate / 100)`.
+  const profile = { taxModel: 'vat' as const, isRegistered: vatApplies };
+  const rateBp = Math.round(vat_rate * 100);
+  let labour = 0, parts = 0, labourCost = 0, partsCost = 0;
   const lines: QuoteLineResult[] = [];
+  const vatableLines: TaxApplyLine[] = [];
 
   for (const item of items) {
     const total = lineTotalPennies(item);
     const cost = lineCostPennies(item);
     if (item.item_type === 'labour') { labour += total; labourCost += cost; }
     else { parts += total; partsCost += cost; } // part + misc both bucket into parts
-    if (vatApplies && item.vatable) vatableBase += total;
+    if (item.vatable) vatableLines.push({ netPennies: total, rateBp, taxable: true });
     // Per-line VAT is informational (record only); the card VAT below is the authoritative figure.
-    lines.push({ line_total_pennies: total, vat_pennies: vatApplies && item.vatable ? Math.round((total * vat_rate) / 100) : 0 });
+    lines.push({ line_total_pennies: total, vat_pennies: taxOnBasePennies(profile, item.vatable ? total : 0, rateBp) });
   }
 
-  // Authoritative VAT: sum-then-multiply, rounded once. Zero when not registered.
-  const vat = Math.round((vatableBase * vat_rate) / 100);
+  // Authoritative VAT: sum-then-multiply, rounded once (computeTax groups by rate). Zero when not registered.
+  const vat = computeTax(profile, vatableLines).taxPennies;
 
   return {
     labour_pennies: labour,

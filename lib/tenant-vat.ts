@@ -7,8 +7,36 @@
  * stored per-line VAT flags are never rewritten, so re-registering restores VAT cleanly.
  */
 import { prisma } from '@/lib/db';
+import type { TaxProfile, TaxModel } from '@/lib/tax';
 
 export type TenantVat = { registered: boolean; number: string | null; defaultRate: number };
+
+/**
+ * getTaxProfile — the server-side assembly of the TaxProfile (item-13). Reads Group's tax columns
+ * (tax identity lives on the Group — the legal filing entity). default_rate is integer BASIS
+ * POINTS: reads tax_default_rate_bp, falling back to default_vat_rate × 100 while the guarded
+ * backfill lands (so the system is correct read-through before the bp column is materialised).
+ * tax_name is Group.tax_label relocated — never a third name source.
+ */
+export async function getTaxProfile(groupId: string | null | undefined): Promise<TaxProfile> {
+  const fallback: TaxProfile = { countryCode: 'GB', taxModel: 'vat', taxName: 'VAT', defaultRateBp: 2000, isRegistered: true, taxNumber: null, pricesIncludeTax: false };
+  if (!groupId) return fallback;
+  const g = (await prisma.group.findUnique({
+    where: { id: groupId },
+    select: { vat_registered: true, vat_number: true, default_vat_rate: true, tax_label: true, tax_country_code: true, tax_model: true, tax_default_rate_bp: true, prices_include_tax: true },
+  })) as any;
+  if (!g) return fallback;
+  const bp = g.tax_default_rate_bp != null ? Number(g.tax_default_rate_bp) : Math.round(Number(g.default_vat_rate ?? 20) * 100);
+  return {
+    countryCode: g.tax_country_code || 'GB',
+    taxModel: (g.tax_model || 'vat') as TaxModel,
+    taxName: g.tax_label || 'VAT',
+    defaultRateBp: bp,
+    isRegistered: !!g.vat_registered,
+    taxNumber: g.vat_number ?? null,
+    pricesIncludeTax: !!g.prices_include_tax,
+  };
+}
 
 const DEFAULT_RATE = 20;
 

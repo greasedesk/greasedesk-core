@@ -11,6 +11,8 @@
  *    vatable service discounts WITH its VAT; a non-vatable MOT ex-only) → at most two lines. This is
  *    what "dissolves mixed-VAT": each targeted line keeps its own VAT treatment.
  */
+import { exFromIncPennies } from '@/lib/tax';
+
 export type PromoType = 'fixed' | 'percentage';
 export type PromoTargetLite = { id: string; title: string };
 export type PromoLite = { id: string; code: string; label: string; type: PromoType; amount: number; targets: PromoTargetLite[] };
@@ -60,7 +62,9 @@ export function computePromoDiscounts(
 
   if (promo.type === 'fixed') {
     const incPennies = Math.max(0, round(amount * 100));
-    const exPennies = vatRegistered ? round(incPennies / (1 + (jobRatePct || 0) / 100)) : incPennies;
+    // inc→ex gross-up via the lib/tax chokepoint (rateBp = pct × 100; ≤2dp rate → byte-identical
+    // to round(inc / (1 + rate/100)); unregistered → inc IS ex).
+    const exPennies = exFromIncPennies({ taxModel: 'vat', isRegistered: vatRegistered }, incPennies, round((jobRatePct || 0) * 100));
     return exPennies > 0 ? [{ label: promoLineLabel(promo.code, promo.label), exPennies, vatable: vatRegistered }] : [];
   }
 
