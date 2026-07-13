@@ -334,4 +334,9 @@ function drain() {
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('sync', (e) => { if (e.tag === 'outbox') e.waitUntil(drain()); });
-self.addEventListener('message', (e) => { if (e.data && e.data.type === 'drain') drain(); });
+// waitUntil is LOAD-BEARING here (post-mortem 2026-07-13, the "Load failed" beacon): the message
+// event is iOS's ONLY drain path (no Background Sync), and without it WebKit reaps the worker
+// while the drain is mid-flight — aborting any in-flight part PUT. Photos squeezed through on
+// speed; a 5 MiB video part never did. ExtendableMessageEvent.waitUntil holds the worker open
+// for the drain's whole promise.
+self.addEventListener('message', (e) => { if (e.data && e.data.type === 'drain') e.waitUntil(drain()); });
