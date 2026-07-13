@@ -155,17 +155,22 @@ async function multipartCall(item, body) {
  *  parts: new photos/vehicle facts jump the queue mid-video — a VIN photo never sits behind
  *  28MB on one bar. */
 async function sendVideoItem(db, item, checkInterrupt) {
-  // 0. DISCRIMINATION (ruling 2026-07-13, the "Load failed" trail): prove whether the STORED
-  // blob is readable at all before any slicing or network — WebKit can hold a disk-backed
-  // IndexedDB blob that it cannot materialise (and can silently truncate large IDB blobs
-  // across process restarts; the short-read check catches that). If this step beacons, the
-  // fault is upstream of slicing — MediaRecorder output or the IDB write — and the
-  // slice-of-large-blob hypothesis is dead.
-  try {
-    const whole = await item.blob.arrayBuffer();
-    if (whole.byteLength !== item.blob.size) throw new Error('short read: got ' + whole.byteLength + ' of ' + item.blob.size);
-  } catch (e) {
-    throw stepError('blob-whole-read', 0, null, 'size=' + (item.blob ? item.blob.size : 'no-blob') + ' err=' + String((e && e.message) || e));
+  // POST-MORTEM (proven 2026-07-13, beacon part-read "The object can not be found here."):
+  // WebKit CAN read a large disk-backed IndexedDB blob in full but CANNOT materialise a
+  // Blob.slice() of it — the dangling-handle error surfaced as fetch's "Load failed" for
+  // every part PUT. Therefore: a slice of a large IDB blob must never exist.
+  //   New items carry PRE-SLICED 5 MiB part blobs (item.parts, sliced at enqueue) — small IDB
+  //   blobs read fine (every photo proves it).
+  //   Legacy single-blob items are rescued by materialising the WHOLE blob once (which works —
+  //   blob-whole-read passed) and slicing the ArrayBuffer in memory.
+  let wholeBuf = null;
+  if (!item.parts) {
+    try {
+      wholeBuf = await item.blob.arrayBuffer();
+      if (wholeBuf.byteLength !== item.blob.size) throw new Error('short read: got ' + wholeBuf.byteLength + ' of ' + item.blob.size);
+    } catch (e) {
+      throw stepError('blob-whole-read', 0, null, 'size=' + (item.blob ? item.blob.size : 'no-blob') + ' err=' + String((e && e.message) || e));
+    }
   }
   // 1. Open (or reopen) the multipart upload.
   if (!item.uploadId) {
@@ -190,9 +195,10 @@ async function sendVideoItem(db, item, checkInterrupt) {
     for (const p of status.parts) item.etags[String(p.partNumber)] = p.etag;
     await persistItem(db, item);
   }
-  // 3. Slice + send what's missing (uniform PART_SIZE — an R2 requirement, not a preference).
+  // 3. Send what's missing (uniform PART_SIZE — an R2 requirement, not a preference).
   const partSize = item.partSize || (5 * 1024 * 1024);
-  const total = Math.ceil(item.blob.size / partSize);
+  const totalBytes = item.parts ? item.parts.reduce((s, p) => s + p.size, 0) : item.blob.size;
+  const total = item.parts ? item.parts.length : Math.ceil(totalBytes / partSize);
   if (total > 40) throw Object.assign(new Error('video-too-large'), { terminal: true });
   const missing = [];
   for (let n = 1; n <= total; n++) if (!item.etags || !item.etags[String(n)]) missing.push(n);
@@ -202,18 +208,20 @@ async function sendVideoItem(db, item, checkInterrupt) {
     for (const u of presigned.urls) urlByPart[u.partNumber] = u.url;
     for (const n of missing) {
       // Slice with an EMPTY type: fetch must not add a Content-Type header the part signature never saw.
-      const chunk = item.blob.slice((n - 1) * partSize, Math.min(n * partSize, item.blob.size), '');
-      // DISCRIMINATION step 2: materialise the slice into memory BEFORE fetch. If the whole
-      // blob read (step 0) but this throws, the WebKit slice-of-disk-backed-IDB-blob failure
-      // is proven — and because the PUT below sends the BUFFER, materialise-then-send is
-      // simultaneously the workaround: a body-read failure can no longer masquerade as a
-      // network failure.
+      // Materialise the part's bytes WITHOUT ever slicing a large IDB blob (see post-mortem
+      // above): pre-sliced part blobs read whole; legacy blobs slice the in-memory buffer.
+      // Any read failure beacons as its own step — never masquerading as a network failure.
       let buf;
       try {
-        buf = await chunk.arrayBuffer();
-        if (buf.byteLength !== chunk.size) throw new Error('short read: got ' + buf.byteLength + ' of ' + chunk.size);
+        if (item.parts) {
+          const pb = item.parts[n - 1];
+          buf = await pb.arrayBuffer();
+          if (buf.byteLength !== pb.size) throw new Error('short read: got ' + buf.byteLength + ' of ' + pb.size);
+        } else {
+          buf = wholeBuf.slice((n - 1) * partSize, Math.min(n * partSize, totalBytes));
+        }
       } catch (e) {
-        throw stepError('part-read', 0, null, 'part=' + n + ' size=' + chunk.size + ' err=' + String((e && e.message) || e));
+        throw stepError('part-read', 0, null, 'part=' + n + ' err=' + String((e && e.message) || e));
       }
       let put;
       try {

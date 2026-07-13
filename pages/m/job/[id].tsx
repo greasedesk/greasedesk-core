@@ -102,12 +102,14 @@ export default function MobileJobCard() {
   // Pending thumbnails = THIS card's outbox rows (IndexedDB) — they survive app kills and render
   // on reopen; when the drain sends one, its row vanishes and the server list takes over.
   const loadShots = useCallback(async () => {
-    const items = (await outboxAll()).filter((i: OutboxItem) => i.jobCardId === id && (i.kind === 'photo' || i.kind === 'video') && i.stage && i.blob);
+    const items = (await outboxAll()).filter((i: OutboxItem) => i.jobCardId === id && (i.kind === 'photo' || i.kind === 'video') && i.stage && (i.blob || i.parts?.length));
     setShots((prev) => {
       for (const arr of Object.values(prev)) for (const sh of arr) URL.revokeObjectURL(sh.url);
       const next: Record<string, LocalShot[]> = {};
       for (const it of items) {
-        (next[it.stage!] ??= []).push({ photoId: it.id, url: URL.createObjectURL(it.blob!), state: it.state === 'failed' ? 'failed' : 'pending', lastError: it.lastError, isVideo: it.kind === 'video' });
+        // Videos are stored pre-sliced (WebKit post-mortem) — the preview recomposes the parts.
+        const media = it.blob ?? new Blob(it.parts!, { type: it.contentType || 'video/mp4' });
+        (next[it.stage!] ??= []).push({ photoId: it.id, url: URL.createObjectURL(media), state: it.state === 'failed' ? 'failed' : 'pending', lastError: it.lastError, isVideo: it.kind === 'video' });
       }
       return next;
     });
