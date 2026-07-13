@@ -20,10 +20,11 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import { resizeImage } from '@/lib/image-resize';
-import { enqueuePhoto, enqueueVehicle, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
+import { enqueuePhoto, enqueueVehicle, enqueueVideo, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
 import { isValidVin, normaliseVinInput } from '@/lib/vin';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 import InstallBar from '@/components/pwa/InstallBar';
+import WalkaroundRecorder, { canRecord } from '@/components/media/WalkaroundRecorder';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null };
 type JobData = {
@@ -38,7 +39,7 @@ type StagePhoto = { id: string; stage: string; slot?: string | null; mediaType: 
 // A capture living on THIS phone = an OUTBOX row (IndexedDB-first: an OS-killed app loses
 // nothing). Thumbnails render from the queued blobs; failure is a STATE on the thumbnail
 // (tap retries, explicit discard), never an error dialogue.
-type LocalShot = { photoId: string; url: string; state: 'pending' | 'failed'; lastError: string | null };
+type LocalShot = { photoId: string; url: string; state: 'pending' | 'failed'; lastError: string | null; isVideo: boolean };
 
 const STAGES = ['intake', 'injob', 'completion'] as const;
 
@@ -60,6 +61,9 @@ export default function MobileJobCard() {
   const [vinLocalUrl, setVinLocalUrl] = useState<string | null>(null); // the shot JUST taken — visible offline, before the drain
   const vinFileRef = useRef<HTMLInputElement | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const videoFileRefs = useRef<Record<string, HTMLInputElement | null>>({}); // <input capture> fallback where the recorder can't run
+  const [recordingStage, setRecordingStage] = useState<string | null>(null); // recorder overlay open for this stage
+  const [videoErr, setVideoErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -98,12 +102,12 @@ export default function MobileJobCard() {
   // Pending thumbnails = THIS card's outbox rows (IndexedDB) — they survive app kills and render
   // on reopen; when the drain sends one, its row vanishes and the server list takes over.
   const loadShots = useCallback(async () => {
-    const items = (await outboxAll()).filter((i: OutboxItem) => i.jobCardId === id && i.kind === 'photo' && i.stage && i.blob);
+    const items = (await outboxAll()).filter((i: OutboxItem) => i.jobCardId === id && (i.kind === 'photo' || i.kind === 'video') && i.stage && i.blob);
     setShots((prev) => {
       for (const arr of Object.values(prev)) for (const sh of arr) URL.revokeObjectURL(sh.url);
       const next: Record<string, LocalShot[]> = {};
       for (const it of items) {
-        (next[it.stage!] ??= []).push({ photoId: it.id, url: URL.createObjectURL(it.blob!), state: it.state === 'failed' ? 'failed' : 'pending', lastError: it.lastError });
+        (next[it.stage!] ??= []).push({ photoId: it.id, url: URL.createObjectURL(it.blob!), state: it.state === 'failed' ? 'failed' : 'pending', lastError: it.lastError, isVideo: it.kind === 'video' });
       }
       return next;
     });
@@ -130,6 +134,30 @@ export default function MobileJobCard() {
 
   function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
   function discard(shot: LocalShot) { discardItem(shot.photoId).then(loadShots); }
+
+  // Walkaround video: recorder-constrained (720p / ~2.5 Mbps / 90s hard cap ≈ 28MB) → outbox
+  // kind:'video' (resumable multipart lane, Wi-Fi-preferred, never blocks photos).
+  async function onVideoCaptured(stage: string, blob: Blob, contentType: string, durationSeconds: number) {
+    setRecordingStage(null);
+    await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds });
+    await loadShots();
+  }
+
+  // <input capture> fallback (no MediaRecorder / camera refused): size is UNCONTROLLED here —
+  // a 4K60 handset can hand us hundreds of MB, so anything the multipart lane can't carry
+  // (>200MB) is refused with a plain message instead of failing after the mechanic walks away.
+  async function onVideoFile(stage: string, files: FileList | null) {
+    if (!files || !files.length) return;
+    const file = files[0];
+    if (!file.type.startsWith('video/')) return;
+    if (file.size > 200 * 1024 * 1024) { setVideoErr(t('videoTooLarge')); return; }
+    setVideoErr(null);
+    const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+    const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
+    await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds: null });
+    await loadShots();
+    const el = videoFileRefs.current[stage]; if (el) el.value = '';
+  }
 
   // VIN gate: 17 chars, no I/O/Q, AND the ISO position-9 check digit (lib/vin — one chokepoint,
   // confirmed against real vehicles and a 50/53 pass rate on the existing book). A VIN that fails
@@ -316,6 +344,19 @@ export default function MobileJobCard() {
                 </div>
               )}
 
+              {/* The walkaround recorder — constrained capture (never <input capture>'s 4K surprise). */}
+              {recordingStage && (
+                <WalkaroundRecorder
+                  labels={{
+                    start: t('recStart'), stop: t('recStop'), cancel: t('cancel'),
+                    capNote: t('recCapNote'), countdown: (s) => t('recCountdown', { s }), error: t('recError'),
+                  }}
+                  onCaptured={(blob, contentType, duration) => onVideoCaptured(recordingStage, blob, contentType, duration)}
+                  onClose={() => setRecordingStage(null)}
+                  onUnavailable={() => { const st2 = recordingStage; setRecordingStage(null); videoFileRefs.current[st2!]?.click(); }}
+                />
+              )}
+
               {/* Customer */}
               <section className="bg-surface border border-line rounded-xl p-4">
                 <h2 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">{t('customer')}</h2>
@@ -355,27 +396,57 @@ export default function MobileJobCard() {
                 </section>
               )}
 
-              {/* Stage photos — lazy, live-only thumbnails; capture arrives in step 5. */}
+              {/* Stage media — walkaround VIDEO is the primary intake artefact (a continuous
+                  unbroken take can't be accused of cropping damage out of frame); photos stay
+                  free-form for the sharp deliberate stills a pan can't give (VIN, mileage,
+                  damage close-ups). */}
               {STAGES.map((stage) => {
                 const st = (photos ?? []).filter((p) => p.stage === stage);
                 const mine = shots[stage] ?? [];
                 return (
                   <section key={stage} className="bg-surface border border-line rounded-xl p-4">
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between gap-2 mb-2">
                       <h2 className="text-xs font-semibold text-muted uppercase tracking-wide">{t(`photoStage.${stage}`)} {photos != null && <span className="text-muted font-normal">({st.length + mine.length})</span>}</h2>
-                      {/* Tap 2 of two: opens the NATIVE camera directly — no picker modal, no confirm. */}
-                      <input ref={(el) => { fileRefs.current[stage] = el; }} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => onCapture(stage, e.target.files)} />
-                      <button onClick={() => fileRefs.current[stage]?.click()} className="min-h-[44px] text-sm font-semibold bg-accent text-white rounded-lg px-4" aria-label={t('addPhoto')}>
-                        {t('addPhoto')}
-                      </button>
+                      <div className="flex gap-2">
+                        <input ref={(el) => { videoFileRefs.current[stage] = el; }} type="file" accept="video/*" capture="environment" className="hidden" onChange={(e) => onVideoFile(stage, e.target.files)} />
+                        <button
+                          onClick={() => (canRecord() ? setRecordingStage(stage) : videoFileRefs.current[stage]?.click())}
+                          className={`min-h-[44px] text-sm font-semibold rounded-lg px-3 ${stage === 'intake' ? 'bg-accent text-white' : 'border border-accent text-accent'}`}
+                          aria-label={t('recordWalkaround')}>
+                          {t('recordWalkaround')}
+                        </button>
+                        {/* Tap 2 of two: opens the NATIVE camera directly — no picker modal, no confirm. */}
+                        <input ref={(el) => { fileRefs.current[stage] = el; }} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => onCapture(stage, e.target.files)} />
+                        <button onClick={() => fileRefs.current[stage]?.click()} className={`min-h-[44px] text-sm font-semibold rounded-lg px-3 ${stage === 'intake' ? 'border border-accent text-accent' : 'bg-accent text-white'}`} aria-label={t('addPhoto')}>
+                          {t('addPhoto')}
+                        </button>
+                      </div>
                     </div>
+                    {videoErr && <p className="text-xs text-danger mb-2">{videoErr}</p>}
                     {(photos == null && mine.length === 0) ? (
                       <p className="text-xs text-muted">{net === 'offline' ? t('photosOffline') : t('updating')}</p>
                     ) : (st.length === 0 && mine.length === 0) ? (
                       <p className="text-xs text-muted">{t('noPhotos')}</p>
                     ) : (
                       <div className="grid grid-cols-3 gap-2">
-                        {mine.map((sh) => (
+                        {mine.map((sh) => sh.isVideo ? (
+                          /* The queued walkaround plays FROM THE PHONE (the blob is right here) —
+                             reviewable before it ever sends. Retry is its own control (the video
+                             surface belongs to the player). */
+                          <span key={sh.photoId} className="relative block col-span-3">
+                            <video src={sh.url} className={`w-full aspect-video object-cover rounded-lg border bg-black ${sh.state === 'failed' ? 'border-danger' : 'border-line'}`} preload="metadata" controls playsInline />
+                            {sh.state === 'failed' ? (
+                              <button onClick={() => retry(stage, sh)} className="mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-danger-soft text-danger" aria-label={t('sendFailedRetry')}>
+                                {t('sendFailedRetry')}
+                              </button>
+                            ) : (
+                              <span className="block mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-surface/90 text-muted">{t('videoPending')}</span>
+                            )}
+                            {sh.state === 'failed' && (
+                              <button onClick={() => discard(sh)} aria-label={t('discard')} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-danger text-white text-xs font-bold">✕</button>
+                            )}
+                          </span>
+                        ) : (
                           <span key={sh.photoId} className="relative block">
                             <button onClick={() => sh.state === 'failed' && retry(stage, sh)} className="block w-full" aria-label={sh.state === 'failed' ? t('sendFailedRetry') : t('pendingSend')}>
                               <img src={sh.url} alt="" className={`w-full aspect-square object-cover rounded-lg border ${sh.state === 'failed' ? 'border-danger' : 'border-line'} ${sh.state === 'pending' ? 'opacity-70' : ''}`} />
@@ -391,7 +462,7 @@ export default function MobileJobCard() {
                         ))}
                         {st.map((p) => p.url && (
                           p.mediaType === 'video'
-                            ? <video key={p.id} src={p.url} className="w-full aspect-square object-cover rounded-lg border border-line" preload="metadata" controls />
+                            ? <video key={p.id} src={p.url} className="col-span-3 w-full aspect-video object-cover rounded-lg border border-line bg-black" preload="metadata" controls playsInline />
                             : <img key={p.id} src={p.url} alt={p.label ?? ''} loading="lazy" className="w-full aspect-square object-cover rounded-lg border border-line" />
                         ))}
                       </div>

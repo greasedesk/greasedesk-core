@@ -219,7 +219,13 @@
     "videoAdd": "Video walkaround",
     "videoSizeWarn": "That video is large ({{mb}} MB) — it will still upload, but may be slow on mobile data.",
     "confirmDeleteVideo": "Delete this video? It can’t be recovered.",
-    "deleteVideo": "Delete video"
+    "deleteVideo": "Delete video",
+    "recStart": "Start recording",
+    "recStop": "Stop recording",
+    "recCancel": "Cancel",
+    "recCapNote": "Walk the whole car in one take — recording stops itself at 90 seconds.",
+    "recCountdown": "{{s}}s left",
+    "recError": "Camera unavailable — choose a video file instead."
   },
   "quoteActions": {
     "title": "Quote actions",

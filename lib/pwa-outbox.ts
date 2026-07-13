@@ -12,9 +12,13 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle'; jobCardId: string;
-  stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo'
+  id: string; kind: 'photo' | 'vehicle' | 'video'; jobCardId: string;
+  stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
+  durationSeconds?: number | null;                                     // kind:'video'
+  // kind:'video' multipart progress — persisted per part so an app kill costs ≤ one 5 MiB part:
+  uploadId?: string | null; partSize?: number; etags?: Record<string, string>; key?: string | null;
+  sendNow?: boolean; // user overrode the Wi-Fi hold — sticks until sent
   createdAt: number;
   attempts: number; lastError: string | null; state: OutboxState; nextAttemptAt: number | null; claimedAt: number | null;
 };
@@ -95,6 +99,33 @@ export async function enqueueVehicle(args: { jobCardId: string; vin?: string; mi
   return item.id;
 }
 
+/** Walkaround video — the THIRD kind on the same envelope (same queue, same idempotency id, same
+ *  drain). Sent via the resumable multipart lane in sw.js; held for Wi-Fi where the platform can
+ *  tell us (Android), or for an explicit "Send now" where it can't (iOS). Never blocks photos. */
+export async function enqueueVideo(args: { jobCardId: string; stage: string; blob: Blob; contentType: string; durationSeconds?: number | null }): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'video', jobCardId: args.jobCardId, stage: args.stage, slot: 'walkaround',
+    blob: args.blob, contentType: args.contentType, durationSeconds: args.durationSeconds ?? null,
+    uploadId: null, etags: {}, key: null, sendNow: false,
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item)); // durably parked BEFORE any network
+  triggerDrain();
+  return item.id;
+}
+
+/** Override the Wi-Fi hold on every waiting video (the honest "Send now" tap). Sticks per item
+ *  until sent, so a transient failure on mobile data keeps retrying rather than re-holding. */
+export async function sendVideosNow(): Promise<void> {
+  const items = await outboxAll();
+  for (const it of items) {
+    if (it.kind === 'video' && it.state !== 'failed' && !it.sendNow) {
+      await rw((s) => s.put({ ...it, sendNow: true, nextAttemptAt: 0 }));
+    }
+  }
+  triggerDrain();
+}
+
 export async function retryItem(id: string): Promise<void> {
   const items = await outboxAll();
   const it = items.find((x) => x.id === id);
@@ -103,18 +134,34 @@ export async function retryItem(id: string): Promise<void> {
   triggerDrain();
 }
 
-/** Explicit, deliberate removal of a failed item — the only way an item vanishes unsent. */
+/** Explicit, deliberate removal of a failed item — the only way an item vanishes unsent.
+ *  A discarded video with an in-flight multipart upload gets a best-effort abort (frees the
+ *  invisible billed parts now; the bucket's 7-day abort rule is the backstop either way). */
 export async function discardItem(id: string): Promise<void> {
+  const items = await outboxAll();
+  const it = items.find((x) => x.id === id);
   await rw((s) => s.delete(id));
+  if (it?.kind === 'video' && it.uploadId) {
+    fetch('/api/photos/multipart', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ action: 'abort', jobCardId: it.jobCardId, stage: it.stage, slot: it.slot, contentType: it.contentType, photoId: it.id, uploadId: it.uploadId }),
+    }).catch(() => { /* lifecycle rule reaps it */ });
+  }
   try { new BroadcastChannel('gd-outbox').postMessage({ type: 'outbox' }); } catch { /* count refreshes on next read */ }
 }
 
-/** Live queue counts for the always-visible badge. Returns an unsubscribe. */
-export function subscribeOutbox(cb: (counts: { queued: number; failed: number }) => void): () => void {
+/** Live queue counts for the always-visible badge. Returns an unsubscribe. Videos are counted
+ *  on their OWN line (a 28MB walkaround and a VIN photo are different promises to the mechanic). */
+export function subscribeOutbox(cb: (counts: { queued: number; failed: number; videos: number }) => void): () => void {
   let bc: BroadcastChannel | null = null;
   const push = async () => {
     const items = await outboxAll();
-    cb({ queued: items.filter((i) => i.state === 'queued' || i.state === 'sending').length, failed: items.filter((i) => i.state === 'failed').length });
+    const active = (i: OutboxItem) => i.state === 'queued' || i.state === 'sending';
+    cb({
+      queued: items.filter((i) => active(i) && i.kind !== 'video').length,
+      failed: items.filter((i) => i.state === 'failed').length,
+      videos: items.filter((i) => active(i) && i.kind === 'video').length,
+    });
   };
   push();
   try {
