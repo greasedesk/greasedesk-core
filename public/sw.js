@@ -155,6 +155,18 @@ async function multipartCall(item, body) {
  *  parts: new photos/vehicle facts jump the queue mid-video — a VIN photo never sits behind
  *  28MB on one bar. */
 async function sendVideoItem(db, item, checkInterrupt) {
+  // 0. DISCRIMINATION (ruling 2026-07-13, the "Load failed" trail): prove whether the STORED
+  // blob is readable at all before any slicing or network — WebKit can hold a disk-backed
+  // IndexedDB blob that it cannot materialise (and can silently truncate large IDB blobs
+  // across process restarts; the short-read check catches that). If this step beacons, the
+  // fault is upstream of slicing — MediaRecorder output or the IDB write — and the
+  // slice-of-large-blob hypothesis is dead.
+  try {
+    const whole = await item.blob.arrayBuffer();
+    if (whole.byteLength !== item.blob.size) throw new Error('short read: got ' + whole.byteLength + ' of ' + item.blob.size);
+  } catch (e) {
+    throw stepError('blob-whole-read', 0, null, 'size=' + (item.blob ? item.blob.size : 'no-blob') + ' err=' + String((e && e.message) || e));
+  }
   // 1. Open (or reopen) the multipart upload.
   if (!item.uploadId) {
     const created = await multipartCall(item, { action: 'create' });
@@ -191,13 +203,26 @@ async function sendVideoItem(db, item, checkInterrupt) {
     for (const n of missing) {
       // Slice with an EMPTY type: fetch must not add a Content-Type header the part signature never saw.
       const chunk = item.blob.slice((n - 1) * partSize, Math.min(n * partSize, item.blob.size), '');
+      // DISCRIMINATION step 2: materialise the slice into memory BEFORE fetch. If the whole
+      // blob read (step 0) but this throws, the WebKit slice-of-disk-backed-IDB-blob failure
+      // is proven — and because the PUT below sends the BUFFER, materialise-then-send is
+      // simultaneously the workaround: a body-read failure can no longer masquerade as a
+      // network failure.
+      let buf;
+      try {
+        buf = await chunk.arrayBuffer();
+        if (buf.byteLength !== chunk.size) throw new Error('short read: got ' + buf.byteLength + ' of ' + chunk.size);
+      } catch (e) {
+        throw stepError('part-read', 0, null, 'part=' + n + ' size=' + chunk.size + ' err=' + String((e && e.message) || e));
+      }
       let put;
       try {
-        put = await fetch(urlByPart[n], { method: 'PUT', body: chunk });
+        put = await fetch(urlByPart[n], { method: 'PUT', body: buf });
       } catch (e) {
         // A CORS/preflight-blocked PUT surfaces as an opaque TypeError in fetch — name the layer
-        // rather than letting it collapse into a generic transient.
-        throw stepError('part-put-network', 0, null, String((e && e.message) || 'fetch failed'));
+        // rather than letting it collapse into a generic transient. Body-read failures can't
+        // land here any more (the buffer is already in memory).
+        throw stepError('part-put-network', 0, null, 'part=' + n + ' ' + String((e && e.message) || 'fetch failed'));
       }
       if (!put.ok) {
         let text = ''; try { text = await put.text(); } catch (e2) { /* opaque */ }
