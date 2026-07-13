@@ -9,7 +9,7 @@
  *   GET ?op=mpcreate    → open a multipart upload on a zz-diag/ probe key + presign part 1
  *   GET ?op=mpcomplete&key&uploadId&etag → complete the probe upload with part 1
  *   GET ?op=mpabort&key&uploadId / ?op=del&key → clean the probe up
- * The mp*/del ops are hard-restricted to keys under zz-diag/ — structurally incapable of
+ * The mp and del ops are hard-restricted to keys under zz-diag/ — structurally incapable of
  * touching a real object.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
