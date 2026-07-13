@@ -148,12 +148,16 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
           {photos.map((p) => (
-            <div key={p.id} className={`relative group rounded-lg overflow-hidden border border-line bg-surface-muted ${p.mediaType === 'video' ? 'col-span-3 sm:col-span-4 aspect-video' : 'aspect-square'}`}>
+            <div key={p.id} className={`relative group rounded-lg overflow-hidden border border-line bg-surface-muted ${p.mediaType === 'video' ? 'col-span-3 sm:col-span-4' : 'aspect-square'}`}>
               {!p.url ? (
-                <div className="w-full h-full flex items-center justify-center text-muted text-xs">…</div>
+                <div className="w-full aspect-video flex items-center justify-center text-muted text-xs">…</div>
               ) : p.mediaType === 'video' ? (
-                // R2 honours range requests via the presigned GET → native streaming + seek, no transcoding.
-                <video controls preload="metadata" src={p.url} className="w-full h-full object-contain bg-black" />
+                // NO forced aspect (fix 2026-07-13): a camera-roll portrait clip carries a 90°
+                // rotation matrix; the browser honours it, so the intrinsic size IS portrait —
+                // an aspect-video box would pillarbox (or, with object-cover, crop) it. Let the
+                // decoded, correctly-oriented frame size the element, capped so a tall portrait
+                // doesn't dominate. R2 range requests give native streaming/seek, no transcoding.
+                <video controls preload="metadata" src={p.url} className="w-full h-auto max-h-[70vh] object-contain bg-black" />
               ) : (
                 <img src={p.url} alt={p.label || 'photo'} className="w-full h-full object-cover" loading="lazy" />
               )}

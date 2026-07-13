@@ -512,7 +512,7 @@ export default function MobileJobCard() {
                              2026-07-13: nothing sits in the queue the user can't end) — confirmed,
                              because pre-send it destroys the only copy. */
                           <span key={sh.photoId} className="relative block col-span-3">
-                            <video src={sh.url} className={`w-full aspect-video object-cover rounded-lg border bg-black ${sh.state === 'failed' ? 'border-danger' : 'border-line'}`} preload="metadata" controls playsInline />
+                            <video src={sh.url} className={`w-full h-auto max-h-[70vh] object-contain rounded-lg border bg-black ${sh.state === 'failed' ? 'border-danger' : 'border-line'}`} preload="metadata" controls playsInline />
                             {sh.state === 'failed' ? (
                               sh.lastError?.includes('"code":"unrecoverable"') ? (
                                 <span className="block mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-danger-soft text-danger">{t('videoUnrecoverable')}</span>
@@ -542,7 +542,7 @@ export default function MobileJobCard() {
                         ))}
                         {st.map((p) => p.url && (
                           p.mediaType === 'video'
-                            ? <video key={p.id} src={p.url} className="col-span-3 w-full aspect-video object-cover rounded-lg border border-line bg-black" preload="metadata" controls playsInline />
+                            ? <video key={p.id} src={p.url} className="col-span-3 w-full h-auto max-h-[70vh] object-contain rounded-lg border border-line bg-black" preload="metadata" controls playsInline />
                             : <img key={p.id} src={p.url} alt={p.label ?? ''} loading="lazy" className="w-full aspect-square object-cover rounded-lg border border-line" />
                         ))}
                       </div>
