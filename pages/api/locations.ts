@@ -17,6 +17,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
+import { requireCanWrite } from '@/lib/admin-guard';
+import { syncSubscriptionQuantity } from '@/lib/stripe-sync';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -49,6 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     // Creating a new (billable) location is an ADMIN-only action.
     if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can add a location.' });
+    if (!(await requireCanWrite(groupId, res))) return; // lapsed tenants read-only — adding a site is new work
     const { site_name, address } = (req.body || {}) as { site_name?: string; address?: string };
     const cleanName = (site_name || '').trim();
     if (!cleanName) return res.status(400).json({ message: 'Location name is required.' });
@@ -58,9 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       select: { id: true },
     });
 
-    // TODO(billing): a new Site is a billable unit. When the billing module exists, increment
-    // the Group's active site count / re-rate the subscription here (and reflect it on the
-    // Licences & Subscriptions page). See CLAUDE.md "Group = tenant = billing entity".
+    // A new Site is a billable unit → set the subscription quantity to the live site count; Stripe
+    // prorates. Dormant/no-op until billing is wired (see lib/stripe-sync).
+    await syncSubscriptionQuantity(groupId);
 
     return res.status(201).json({ id: created.id, message: 'Location created.' });
   }
@@ -117,8 +120,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Resources / profit centres / features / services on the site cascade-delete.
     await prisma.site.delete({ where: { id } });
 
-    // TODO(billing): removing a Site reduces billable units — adjust the Group's billing here
-    // when the billing module exists.
+    // Removing a Site reduces billable units → re-rate the subscription quantity (Stripe prorates
+    // the credit). Dormant/no-op until billing is wired.
+    await syncSubscriptionQuantity(groupId);
 
     return res.status(200).json({ message: 'Location deleted.' });
   }

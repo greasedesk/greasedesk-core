@@ -10,6 +10,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
+import { requireCanWrite } from '@/lib/admin-guard';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
@@ -56,6 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!canManageSite(vis, card.site_id)) {
     return res.status(403).json({ message: 'Only a manager or admin can accept and book a job.' });
   }
+  if (!(await requireCanWrite(user.group_id as string, res))) return; // lapsed = read-only; booking a job is new work
 
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

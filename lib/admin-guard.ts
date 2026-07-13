@@ -10,8 +10,27 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility, type Visibility } from '@/lib/site-visibility';
+import { prisma } from '@/lib/db';
+import { canWrite } from '@/lib/billing';
 
 type RedirectResult = { ok: false; redirect: { destination: string; permanent: boolean } };
+
+/**
+ * THE billing write-gate for API routes (item-12). Call at the top of every endpoint that CREATES
+ * NEW WORK — new job card, estimate save, issue invoice, new booking, add site. Reads the
+ * webhook-maintained subscription cache; a LAPSED tenant gets 402 with the non-punitive message and
+ * a Portal route. NEVER gate a read path with this — reads stay open forever, free (the ruling).
+ * Returns true when the write may proceed. Safe-by-default: no subscription cache → allowed.
+ */
+export async function requireCanWrite(groupId: string, res: NextApiResponse): Promise<boolean> {
+  const billing = await prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true } });
+  if (canWrite({ subscriptionStatus: billing?.subscription_status ?? null, status: null })) return true;
+  res.status(402).json({
+    code: 'subscription_lapsed',
+    message: 'Your subscription has lapsed — your records are safe and fully exportable. Resubscribe to add new work.',
+  });
+  return false;
+}
 
 export async function requireAdminPage(
   ctx: GetServerSidePropsContext

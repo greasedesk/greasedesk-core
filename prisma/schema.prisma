@@ -94,10 +94,14 @@ enum OverheadPeriod {
   annual
 }
 
+// The GATE projection of the Stripe subscription (cache of Stripe's truth, webhook-written).
+// 'lapsed' NOT 'suspended' (ruling 2026-07-13): "suspended" invites barring the door, and barring
+// the door bars a garage from its own statutory records. lapsed = READ-ONLY-FOREVER-FREE, never
+// locked out. Read only via lib/billing.ts::canWrite — never inline.
 enum BillingStatus {
-  ok
-  grace
-  suspended
+  ok      // trialing or active — full write access
+  grace   // past_due: Stripe is retrying; writes still allowed, warned
+  lapsed  // canceled / unpaid: reads stay open forever, writes blocked, nothing deleted
 }
 
 enum ItemType {
@@ -239,6 +243,15 @@ model Group {
   employmentEvents EmploymentEvent[]
 }
 
+// Webhook idempotency ledger (item-12): every Stripe event.id is recorded ONCE before its effect
+// is applied; a replay finds the row and is skipped. "A replayed queue that double-logs an hour is
+// bad; a replayed charge is worse" — the outbox discipline, higher stakes.
+model StripeEvent {
+  event_id     String   @id // Stripe event.id — the natural idempotency key
+  type         String
+  processed_at DateTime @default(now())
+}
+
 model GroupBilling {
   id               String        @id @default(uuid())
   group_id         String        @unique
@@ -249,6 +262,15 @@ model GroupBilling {
   active_sites_cnt Int           @default(1)
   created_at       DateTime      @default(now())
   updated_at       DateTime      @default(now())
+
+  // ── Stripe CACHE (item-12). Stripe is the source of truth; these four are a mirror written ONLY
+  // by verified webhook handlers (lib/stripe-webhook). subscription_status is the raw Stripe status
+  // (trialing/active/past_due/canceled/…) that lib/billing derives the gate + the display status
+  // from. NULL until the tenant completes Checkout. Never write these from a redirect. ──
+  stripe_customer_id     String?  @unique
+  stripe_subscription_id String?  @unique
+  subscription_status    String? // raw Stripe subscription.status
+  current_period_end     DateTime? // Stripe's period end (renewal/charge date), webhook-maintained
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }

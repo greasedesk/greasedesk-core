@@ -23,6 +23,7 @@ import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/das
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
+  subscriptionStatus: string | null; siteCount: number;
   currency: string; locale: string;
   sites: Array<{ id: string; name: string }>; // the caller's VISIBLE sites (server-resolved)
 };
@@ -143,20 +144,31 @@ function monthLabel(w: { from: string; to: string }, locale: string): string {
   return one ? f(from, 'long') : `${f(from, 'short')} – ${f(lastIncl, 'short')}`;
 }
 
-function TrialBanner({ status, trialEndsAt }: { status: string; trialEndsAt: string | null }) {
-  let text: string;
-  let tone = 'bg-surface border-line text-ink';
-  if (status !== 'trial') {
-    text = `Account status: ${status}`;
-    if (status === 'active') tone = 'bg-ok-soft border-line text-ok';
-    else if (status === 'suspended' || status === 'cancelled') tone = 'bg-danger-soft border-line text-danger';
-  } else {
-    const d = daysLeft(trialEndsAt);
-    if (d == null) text = 'Trial active';
-    else if (d > 0) { text = `${d} day${d === 1 ? '' : 's'} left in your trial`; tone = 'bg-accent-soft border-accent text-accent'; }
-    else { text = 'Trial ended'; tone = 'bg-warn-soft border-warn text-warn'; }
+// SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
+// charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
+// guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
+function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number }) {
+  const LAPSED = new Set(['canceled', 'unpaid', 'incomplete_expired', 'paused']);
+  const endLabel = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : null;
+  const perMonth = `£${35 * Math.max(1, siteCount)} + VAT`; // £35 × locations
+
+  if (subscriptionStatus && LAPSED.has(subscriptionStatus)) {
+    return <div className="rounded-xl border p-4 mb-6 bg-warn-soft border-warn text-warn">Your subscription has lapsed — your records are safe and fully exportable. Resubscribe from Settings → Licence to add new work.</div>;
   }
-  return <div className={`rounded-xl border p-4 mb-6 ${tone}`}>{text}</div>;
+  if (subscriptionStatus === 'trialing' || (status === 'trial' && (daysLeft(trialEndsAt) ?? 1) > 0)) {
+    const perSite = siteCount > 1 ? ` (${siteCount} locations × £35 + VAT)` : '';
+    const text = endLabel
+      ? `Trial ends ${endLabel} — your card will then be charged ${perMonth} per month${perSite} unless you cancel.`
+      : 'Trial active — £35 + VAT per location per month after the trial unless you cancel.';
+    return <div className="rounded-xl border p-4 mb-6 bg-accent-soft border-accent text-accent">{text}</div>;
+  }
+  if (status === 'trial') {
+    return <div className="rounded-xl border p-4 mb-6 bg-warn-soft border-warn text-warn">Trial ended — add billing from Settings → Licence to keep adding new work.</div>;
+  }
+  let tone = 'bg-surface border-line text-ink';
+  if (subscriptionStatus === 'active' || status === 'active') tone = 'bg-ok-soft border-line text-ok';
+  const label = subscriptionStatus === 'active' ? `Subscribed — ${perMonth} per month` : `Account status: ${status}`;
+  return <div className={`rounded-xl border p-4 mb-6 ${tone}`}>{label}</div>;
 }
 
 export default function AdminDashboard(props: PageProps) {
@@ -233,7 +245,7 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
-      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} />
+      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} />
       {siteId !== 'all' && tiles && (tiles.pnl as any)?.invoiceCount === 0 && (tiles.utilisation as any)?.mechanicCount === 0 && ((tiles.utilisation as any)?.missingHoursMechanics?.length ?? 0) === 0 && (
         <div className="rounded-xl border border-line bg-surface-muted p-3 mb-4 text-sm text-muted">
           {t('notTrading', { site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
@@ -550,6 +562,8 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
     where: { id: user.group_id },
     select: { group_name: true, ref: true, status: true, trial_ends_at: true },
   })) as { group_name: string; ref: string; status: string; trial_ends_at: Date | null } | null;
+  const billing = (await prisma.groupBilling.findUnique({ where: { group_id: user.group_id }, select: { subscription_status: true } })) as { subscription_status: string | null } | null;
+  const siteCount = await prisma.site.count({ where: { group_id: user.group_id } });
   const site = vis.primarySiteId
     ? ((await prisma.site.findUnique({ where: { id: vis.primarySiteId }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null)
     : null;
@@ -563,6 +577,8 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
       accountRef: group?.ref ?? '—',
       status: group?.status ?? 'trial',
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
+      subscriptionStatus: billing?.subscription_status ?? null,
+      siteCount,
       sites: visibleSites.map((s2) => ({ id: s2.id, name: s2.site_name })),
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',

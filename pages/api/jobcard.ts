@@ -13,6 +13,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
+import { requireCanWrite } from '@/lib/admin-guard';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
@@ -87,6 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
+    if (!(await requireCanWrite(groupId, res))) return; // lapsed = read-only; a new job card is new work
     const body = (req.body || {}) as CreateJobCardBody;
 
     // Canonical registration (uppercase, non-alphanumeric stripped) — both the stored/display value and

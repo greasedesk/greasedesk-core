@@ -12,7 +12,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
-import { canAccessSite, canManageSite } from '@/lib/admin-guard';
+import { canAccessSite, canManageSite, requireCanWrite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
@@ -73,6 +73,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       && (card.stage_complete_done || card.stage_complete_skipped);
     if (!allDone) return res.status(409).json({ message: 'Complete (or skip) all four stages first.' });
   }
+
+  // BILLING GATE: issuing an invoice mints NEW financial work → blocked for a lapsed tenant. Marking
+  // PAID is deliberately NOT gated — recording that a customer paid is reality on existing work, and
+  // a lapsed garage must still be able to keep its book straight.
+  if (to === 'invoiced' && !(await requireCanWrite(user.group_id as string, res))) return;
 
   // Marking PAID requires a payment method (the grain) — validated against THIS tenant's active
   // list before the tx. No silent default: misrecorded grain is worse than a second click.
