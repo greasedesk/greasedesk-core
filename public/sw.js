@@ -140,7 +140,7 @@ async function multipartCall(item, body) {
 async function sendVideoItem(db, item, checkInterrupt) {
   // 1. Open (or reopen) the multipart upload.
   if (!item.uploadId) {
-    const created = await multipartCall(item, { action: 'create' }); // 503 until bucket CORS exposes ETag — transient by design
+    const created = await multipartCall(item, { action: 'create' });
     item.uploadId = created.uploadId; item.partSize = created.partSize; item.key = created.key; item.etags = {};
     await persistItem(db, item);
   } else {
@@ -176,8 +176,12 @@ async function sendVideoItem(db, item, checkInterrupt) {
       const chunk = item.blob.slice((n - 1) * partSize, Math.min(n * partSize, item.blob.size), '');
       const put = await fetch(urlByPart[n], { method: 'PUT', body: chunk });
       if (!put.ok) throw Object.assign(new Error('part:' + put.status), { status: put.status >= 500 ? put.status : 500 }); // R2 4xx = expired presign → re-presign next pass
+      // THE true "ETag not exposed" signal (post-mortem 2026-07-13): the part PUT succeeded but
+      // the browser can't read the ETag response header — observed where it actually occurs,
+      // not inferred from bucket introspection. ':cors' is the token the queue bar renders as
+      // the admin-setup message. Retryable, never terminal — fixing the bucket unsticks it.
       const etag = put.headers.get('ETag');
-      if (!etag) throw Object.assign(new Error('etag-missing-cors'), { status: 503 }); // bucket CORS regression — visible, retryable, never terminal
+      if (!etag) throw Object.assign(new Error('part-etag:cors'), { status: 503 });
       item.etags = item.etags || {}; item.etags[String(n)] = etag;
       await persistItem(db, item); // ≤ one part ever repeats
       if (checkInterrupt) await checkInterrupt(); // photos enqueued mid-video go NOW

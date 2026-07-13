@@ -12,7 +12,7 @@
 import {
   S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand, ListPartsCommand, GetBucketCorsCommand,
+  AbortMultipartUploadCommand, ListPartsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -81,21 +81,11 @@ export async function deleteObject(key: string): Promise<void> {
 export const PART_SIZE = 5 * 1024 * 1024; // R2 minimum part size; uniform by construction
 export const MAX_PARTS = 40; // 200 MiB ceiling — a 90s/2.5Mbps walkaround is ~6 parts
 
-/** Does the bucket CORS expose ETag to browsers? Cached per process (config changes need a
- *  cold start to notice — acceptable; it changes once, ever). null = R2 unconfigured. */
-let _corsEtag: boolean | null | undefined;
-export async function corsExposesEtag(): Promise<boolean | null> {
-  const c = client(); if (!c) return null;
-  if (_corsEtag !== undefined) return _corsEtag;
-  try {
-    const res = await c.send(new GetBucketCorsCommand({ Bucket: bucket() }));
-    _corsEtag = (res.CORSRules || []).some((r) => (r.ExposeHeaders || []).some((h) => h === '*' || h.toLowerCase() === 'etag'));
-  } catch (e: any) {
-    console.error('[r2] corsExposesEtag error', e?.name || e?.message);
-    _corsEtag = false; // no CORS config (or unreadable) → multipart refuses to start
-  }
-  return _corsEtag;
-}
+// NOTE (post-mortem 2026-07-13): there is deliberately NO GetBucketCors pre-check here. The
+// app's R2 token is object-scoped — bucket introspection returns 403, which a guard can only
+// misread as "CORS not configured" (it did, and blocked every upload against a correct bucket).
+// The ETag-exposure requirement is detected at the point of actual failure, in the browser
+// (sw.js: part PUT succeeded but ETag header unreadable → the code:'cors' setup message).
 
 export async function createMultipartUpload(key: string, contentType: string): Promise<string | null> {
   const c = client(); if (!c) return null;

@@ -11,9 +11,9 @@
  *   abort    { …ids, uploadId }                                      → { ok }    (explicit discard; the 7-day lifecycle rule reaps the rest)
  *
  * The KEY is derived server-side from ids on EVERY action (same photoKey as presign) — the client
- * never supplies one. 'create' refuses (503, transient for the outbox) until the bucket CORS
- * exposes ETag: without it the browser cannot read part ETags and Complete can never be
- * assembled — better to refuse the first byte than strand every upload at 100%.
+ * never supplies one. The ETag-exposure CORS requirement is detected in the BROWSER at the point
+ * of actual failure (a part PUT whose ETag header is unreadable), not by bucket introspection —
+ * the app's object-scoped R2 token can't read bucket config, and shouldn't.
  * Videos only: photos stay on the single-PUT path (a 300 KB jpeg needs no resume machinery).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -23,7 +23,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import {
-  photoKey, r2Configured, corsExposesEtag, createMultipartUpload, presignUploadPart,
+  photoKey, r2Configured, createMultipartUpload, presignUploadPart,
   listUploadedParts, completeMultipartUpload, abortMultipartUpload, PART_SIZE, MAX_PARTS,
 } from '@/lib/r2';
 
@@ -53,11 +53,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const key = photoKey(user.group_id as string, jobCardId, stage, slot, String(photoId).toLowerCase(), ext);
 
   if (action === 'create') {
-    // CORS prerequisite enforced HERE, before the first byte moves (see file header).
-    // code:'cors' is machine-readable: the outbox surfaces this as a SETUP state ("an admin
-    // needs to finish configuration"), never as a mysterious network failure.
-    const etagOk = await corsExposesEtag();
-    if (!etagOk) return res.status(503).json({ code: 'cors', message: 'Video storage needs a configuration update (CORS must expose ETag) — the video will be retried automatically.' });
+    // NO bucket-config pre-check here (post-mortem 2026-07-13): GetBucketCors is a bucket-admin
+    // operation the app's object-scoped token cannot perform, so the old guard read its own 403
+    // as "CORS not configured" and blocked every upload against a correctly-configured bucket.
+    // The true "ETag not exposed" signal is detected where it actually occurs — in the BROWSER,
+    // when a part PUT succeeds but the ETag response header is unreadable (sw.js sendVideoItem).
     const id = await createMultipartUpload(key, String(contentType).toLowerCase());
     if (!id) return res.status(502).json({ message: 'Could not start the upload.' });
     return res.status(200).json({ uploadId: id, key, partSize: PART_SIZE, maxParts: MAX_PARTS });
