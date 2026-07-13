@@ -89,5 +89,6 @@
   "videoSetupNeeded": "Video uploads aren’t set up yet — an admin needs to finish configuration.",
   "discardVideo": "Discard video",
   "videoDiscardConfirm": "Discard this video? It hasn’t been sent and can’t be recovered.",
-  "videoUnrecoverable": "This video can’t be recovered from the phone — record it again."
+  "videoUnrecoverable": "This video can’t be recovered from the phone — record it again.",
+  "choosePhone": "Choose from phone"
 }

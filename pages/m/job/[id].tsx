@@ -62,6 +62,7 @@ export default function MobileJobCard() {
   const vinFileRef = useRef<HTMLInputElement | null>(null);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const videoFileRefs = useRef<Record<string, HTMLInputElement | null>>({}); // <input capture> fallback where the recorder can't run
+  const libraryRefs = useRef<Record<string, HTMLInputElement | null>>({}); // NO-capture picker: media the app didn't take itself
   const [recordingStage, setRecordingStage] = useState<string | null>(null); // recorder overlay open for this stage
   const [videoErr, setVideoErr] = useState<string | null>(null);
 
@@ -132,6 +133,45 @@ export default function MobileJobCard() {
     }
     await loadShots();
     const el = fileRefs.current[stage]; if (el) el.value = '';
+  }
+
+  // Best-effort duration probe for library-picked videos (metadata only, no decode).
+  function probeDuration(file: File): Promise<number | null> {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.onloadedmetadata = () => { const d = v.duration; URL.revokeObjectURL(url); resolve(Number.isFinite(d) ? Math.round(d) : null); };
+      v.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      v.src = url;
+    });
+  }
+
+  // "Choose from phone" (ruling 2026-07-13): media the app didn't capture — native-camera
+  // walkarounds, clips customers send, photos taken before the card existed. NO capture
+  // attribute → the OS picker (camera or library, user's choice). Same pipeline, one hard
+  // guard: a library video is uncapped (a 4K60 clip can be 500MB — the size explosion the
+  // in-app recorder exists to prevent), so >200MB is refused HERE with a plain message,
+  // before it ever enters the queue. Photos take the existing 1600px downscale; videos are
+  // read to ArrayBuffer parts AT ENQUEUE (never a stored Blob — that's the whole pathology);
+  // ≤20MB single PUT, over that the proven multipart lane. Same ids, same drain, same receipts.
+  async function onLibraryPick(stage: string, files: FileList | null) {
+    if (!files || !files.length) return;
+    setVideoErr(null);
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith('image/')) {
+        const blob = await resizeImage(file);
+        await enqueuePhoto({ jobCardId: id, stage, blob });
+      } else if (file.type.startsWith('video/')) {
+        if (file.size > 200 * 1024 * 1024) { setVideoErr(t('videoTooLarge')); continue; }
+        const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+        const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
+        const durationSeconds = await probeDuration(file);
+        await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds });
+      }
+    }
+    await loadShots();
+    const el = libraryRefs.current[stage]; if (el) el.value = '';
   }
 
   function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
@@ -449,6 +489,12 @@ export default function MobileJobCard() {
                         <input ref={(el) => { fileRefs.current[stage] = el; }} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => onCapture(stage, e.target.files)} />
                         <button onClick={() => fileRefs.current[stage]?.click()} className={`min-h-[44px] text-sm font-semibold rounded-lg px-3 ${stage === 'intake' ? 'border border-accent text-accent' : 'bg-accent text-white'}`} aria-label={t('addPhoto')}>
                           {t('addPhoto')}
+                        </button>
+                        {/* NO capture attribute → the OS picker (library or camera, user's choice):
+                            the route for media the app didn't take itself. */}
+                        <input ref={(el) => { libraryRefs.current[stage] = el; }} type="file" accept="image/*,video/*" multiple className="hidden" onChange={(e) => onLibraryPick(stage, e.target.files)} />
+                        <button onClick={() => libraryRefs.current[stage]?.click()} className="min-h-[44px] text-sm font-semibold rounded-lg px-3 border border-line text-ink" aria-label={t('choosePhone')}>
+                          {t('choosePhone')}
                         </button>
                       </div>
                     </div>
