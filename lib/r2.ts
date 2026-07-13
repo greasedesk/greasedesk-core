@@ -12,7 +12,7 @@
 import {
   S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand, ListPartsCommand,
+  AbortMultipartUploadCommand, ListPartsCommand, HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -64,6 +64,16 @@ export async function presignGet(key: string): Promise<string | null> {
   } catch (e: any) { console.error('[r2] presignGet error', e?.name || e?.message); return null; }
 }
 
+/** Object size in bytes via HeadObject (best-effort; null when unavailable). Used to write the
+ *  verified landed size into the audit trail on video commits. */
+export async function headObjectSize(key: string): Promise<number | null> {
+  const c = client(); if (!c) return null;
+  try {
+    const r = await c.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
+    return r.ContentLength ?? null;
+  } catch (e: any) { console.error('[r2] headObjectSize error', e?.name || e?.message); return null; }
+}
+
 /** Delete an object (best-effort; the DB row is the source of truth). */
 export async function deleteObject(key: string): Promise<void> {
   const c = client(); if (!c) return;
@@ -74,8 +84,8 @@ export async function deleteObject(key: string): Promise<void> {
 // ── Multipart (the resumable video lane) ──────────────────────────────────────────────────────
 // R2 constraints built around here: parts must be UNIFORM size (except the last) — the client
 // slices at exactly PART_SIZE; and the browser can only assemble CompleteMultipartUpload if the
-// bucket CORS EXPOSES the ETag header — checked once per process and refused loudly, never
-// half-uploaded. Incomplete uploads are reaped by the bucket's 7-day abort lifecycle rule (that
+// bucket CORS EXPOSES the ETag header (detected in the browser at the point of failure — see
+// NOTE below). Incomplete uploads are reaped by the bucket's 7-day abort lifecycle rule (that
 // rule type acts on incomplete uploads ONLY — it cannot touch a completed object).
 
 export const PART_SIZE = 5 * 1024 * 1024; // R2 minimum part size; uniform by construction

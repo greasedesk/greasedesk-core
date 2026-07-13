@@ -11,7 +11,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
-import { presignGet } from '@/lib/r2';
+import { presignGet, headObjectSize } from '@/lib/r2';
 import { runVinShadow } from '@/lib/vin-shadow';
 import { writeAudit } from '@/lib/audit';
 
@@ -95,6 +95,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // (the caller is the outbox drain, not a waiting human). Offers nothing anywhere.
     if (slot === 'vin' && media === 'photo') {
       await runVinShadow({ groupId: ctx.user.group_id as string, photoId, jobCardId, r2Key: key }).catch(() => {});
+    }
+    // VIDEO LANDING RECEIPT: verified size via server-side HeadObject, written to the audit
+    // trail as the counterpart of video.upload_error — every landing carries {key, size}
+    // evidence. Best-effort: never fails the commit.
+    if (media === 'video') {
+      try {
+        const size = await headObjectSize(key);
+        await writeAudit(prisma as any, {
+          groupId: ctx.user.group_id as string, userId: ctx.user.id as string, jobCardId,
+          action: 'video.uploaded', diff: { photoId, key, size },
+        });
+      } catch (e) { console.error('[photos] landing receipt failed', e); }
     }
     return res.status(200).json({ id: row.id, ...(autoStart ? { status: 'in_progress' } : {}) });
   }

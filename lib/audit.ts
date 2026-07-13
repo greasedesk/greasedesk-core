@@ -39,7 +39,8 @@ export type AuditAction =
   | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent'          // emailed to the customer (PDF attached)
-  | 'video.upload_error';   // a handset's video upload failed — verbatim step/status/body from the outbox drain
+  | 'video.upload_error'    // a handset's video upload failed — verbatim step/status/body from the outbox drain
+  | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
 
 export async function writeAudit(
   tx: Prisma.TransactionClient,
