@@ -105,10 +105,11 @@ async function sendItem(item) {
 // never a silent 28MB on one bar. sendNow (set by that tap) overrides the hold and STICKS until
 // the item is sent, so a transient failure on mobile data keeps retrying rather than re-holding.
 function videoMaySend(item) {
-  if (item.sendNow) return true;
-  const conn = self.navigator && self.navigator.connection;
-  if (conn && typeof conn.type === 'string') return conn.type === 'wifi' || conn.type === 'ethernet';
-  return false; // no signal (iOS) → hold for the tap
+  // RULING 2026-07-13 (supersedes Wi-Fi-preferred, after a walkaround rotted in IndexedDB over
+  // eight hours): a video uploads the INSTANT it can — no Wi-Fi hold, no waiting. Every second
+  // in the queue is risk; the queue exists for the bay with no bars, not as a resting place.
+  // Photos still always send first, and jump between video parts.
+  return true;
 }
 
 // Persisting progress doubles as a claim HEARTBEAT: a multi-minute video upload must not look

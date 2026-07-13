@@ -9,9 +9,9 @@
  *   · The storage-CORS setup gate (server code 'cors') → named honestly as an admin setup state,
  *     never presented as a mysterious network failure during tenant onboarding.
  *   · Terminal failure → the failed count, with retry/discard on the job's own tiles.
- * Wi-Fi wording: Android exposes connection.type ("will send on Wi-Fi"); iOS exposes no
- * transport signal, so the hold is honest and Send now is the path. Also carries the
- * storage-persistence honesty line when the OS refused durable storage.
+ * Videos send IMMEDIATELY when online (ruling 2026-07-13 — the Wi-Fi hold is gone; a video
+ * rotted in IndexedDB waiting for it). Send now remains as the backoff-reset for failures.
+ * Also carries the storage-persistence honesty line when the OS refused durable storage.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
@@ -23,7 +23,6 @@ export default function OutboxStatus() {
   const { t } = useTranslation('pwa');
   const [counts, setCounts] = useState<OutboxCounts>(EMPTY);
   const [persisted, setPersisted] = useState(true); // assume ok until told otherwise — the line is for a REFUSAL
-  const [wifiAware, setWifiAware] = useState(false); // Android Chrome exposes connection.type; iOS never does
   const [tapped, setTapped] = useState(false); // optimistic "Sending…" between the tap and the queue's first broadcast
   const [retryIn, setRetryIn] = useState<number | null>(null); // live countdown seconds
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -31,7 +30,6 @@ export default function OutboxStatus() {
   useEffect(() => {
     ensureWorker();
     requestPersistence().then(setPersisted);
-    setWifiAware(typeof (navigator as any)?.connection?.type === 'string');
     const un = subscribeOutbox((c) => {
       setCounts(c);
       if (c.sending) setTapped(false); // the queue confirmed the send — the real state takes over
@@ -71,7 +69,7 @@ export default function OutboxStatus() {
       {counts.queued > 0 && <span className="font-semibold" style={{ color: '#FFFFFF' }}>{t('outboxWaiting', { count: counts.queued })}</span>}
       {counts.videos > 0 && (
         <span className="font-semibold inline-flex items-center gap-2" style={{ color: '#FFFFFF' }}>
-          {showSending ? t('outboxSending') : t(wifiAware ? 'videoWaitingWifi' : 'videoWaiting', { count: counts.videos })}
+          {showSending ? t('outboxSending') : t('videoWaiting', { count: counts.videos })}
           {!showSending && (
             <button onClick={onSendNow} className="underline font-semibold min-h-[28px]" style={{ color: '#8AB4F8' }}>
               {t('videoSendNow')}

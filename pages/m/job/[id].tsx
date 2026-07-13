@@ -142,10 +142,32 @@ export default function MobileJobCard() {
     discardItem(shot.photoId).then(loadShots);
   }
 
+  // SECOND COPY OFF THE QUEUE (ruling 2026-07-13, after a walkaround was lost to WebKit IDB
+  // corruption): the recorded bytes auto-download at capture — zero taps. On iOS this lands in
+  // FILES, not Photos: no browser API can write the photo library (verified against Apple's
+  // docs; the share sheet's "Save Video" is user-initiated only). Files is not Photos, but it
+  // is real. Best-effort: a blocked download never disturbs the capture flow.
+  function saveSecondCopy(blob: Blob, contentType: string) {
+    try {
+      const ext = contentType.includes('webm') ? 'webm' : contentType.includes('quicktime') ? 'mov' : 'mp4';
+      const ts = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const name = `walkaround-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}.${ext}`;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+    } catch { /* the queue copy still stands */ }
+  }
+
   // Walkaround video: recorder-constrained (720p / ~2.5 Mbps / 90s hard cap ≈ 28MB) → outbox
-  // kind:'video' (resumable multipart lane, Wi-Fi-preferred, never blocks photos).
+  // kind:'video' (sends IMMEDIATELY when online — the queue is for the bay with no bars, never
+  // a resting place; photos still always go first).
   async function onVideoCaptured(stage: string, blob: Blob, contentType: string, durationSeconds: number) {
     setRecordingStage(null);
+    saveSecondCopy(blob, contentType);
     await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds });
     await loadShots();
   }
@@ -161,6 +183,7 @@ export default function MobileJobCard() {
     setVideoErr(null);
     const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
     const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
+    saveSecondCopy(file, contentType); // iOS <input capture> videos aren't saved to Photos either
     await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds: null });
     await loadShots();
     const el = videoFileRefs.current[stage]; if (el) el.value = '';
