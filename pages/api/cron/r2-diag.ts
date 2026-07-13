@@ -6,9 +6,19 @@
  * server-side where the R2 credentials live. READ-ONLY against the bucket.
  *   GET ?op=cors        → raw GetBucketCors outcome: rules or the full error (name/code/status/message)
  *   GET ?op=head&key=…  → HeadObject: size/type/etag for a key (verify the walkaround landed)
+ *   GET ?op=mpcreate    → open a multipart upload on a zz-diag/ probe key + presign part 1
+ *   GET ?op=mpcomplete&key&uploadId&etag → complete the probe upload with part 1
+ *   GET ?op=mpabort&key&uploadId / ?op=del&key → clean the probe up
+ * The mp*/del ops are hard-restricted to keys under zz-diag/ — structurally incapable of
+ * touching a real object.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { S3Client, GetBucketCorsCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client, GetBucketCorsCommand, HeadObjectCommand,
+  CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand, DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 function client(): S3Client | null {
   if (!process.env.R2_ENDPOINT || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) return null;
@@ -57,5 +67,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  return res.status(400).json({ message: 'op must be cors or head.' });
+  // ── multipart probe (zz-diag/ keys only) ──
+  const diagKey = String(req.query.key || 'zz-diag/probe.mp4');
+  const uploadId = String(req.query.uploadId || '');
+  if (['mpcreate', 'mpcomplete', 'mpabort', 'del'].includes(op) && !diagKey.startsWith('zz-diag/')) {
+    return res.status(400).json({ message: 'probe ops are restricted to zz-diag/ keys.' });
+  }
+
+  if (op === 'mpcreate') {
+    try {
+      const created = await c.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: diagKey, ContentType: 'video/mp4' }));
+      const partUrl = await getSignedUrl(c, new UploadPartCommand({ Bucket: bucket, Key: diagKey, UploadId: created.UploadId, PartNumber: 1 }), { expiresIn: 900 });
+      return res.status(200).json({ outcome: 'success', key: diagKey, uploadId: created.UploadId, partUrl });
+    } catch (e: any) {
+      return res.status(200).json({ outcome: 'error', step: 'create', name: e?.name ?? null, code: e?.Code ?? e?.code ?? null, httpStatusCode: e?.$metadata?.httpStatusCode ?? null, message: e?.message ?? null });
+    }
+  }
+
+  if (op === 'mpcomplete') {
+    const etag = String(req.query.etag || '');
+    if (!uploadId || !etag) return res.status(400).json({ message: 'uploadId and etag required.' });
+    try {
+      await c.send(new CompleteMultipartUploadCommand({ Bucket: bucket, Key: diagKey, UploadId: uploadId, MultipartUpload: { Parts: [{ PartNumber: 1, ETag: etag }] } }));
+      const h = await c.send(new HeadObjectCommand({ Bucket: bucket, Key: diagKey }));
+      return res.status(200).json({ outcome: 'success', key: diagKey, size: h.ContentLength ?? null });
+    } catch (e: any) {
+      return res.status(200).json({ outcome: 'error', step: 'complete', name: e?.name ?? null, code: e?.Code ?? e?.code ?? null, httpStatusCode: e?.$metadata?.httpStatusCode ?? null, message: e?.message ?? null });
+    }
+  }
+
+  if (op === 'mpabort') {
+    if (!uploadId) return res.status(400).json({ message: 'uploadId required.' });
+    try { await c.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: diagKey, UploadId: uploadId })); return res.status(200).json({ outcome: 'success' }); }
+    catch (e: any) { return res.status(200).json({ outcome: 'error', name: e?.name ?? null, message: e?.message ?? null }); }
+  }
+
+  if (op === 'del') {
+    try { await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: diagKey })); return res.status(200).json({ outcome: 'success' }); }
+    catch (e: any) { return res.status(200).json({ outcome: 'error', name: e?.name ?? null, message: e?.message ?? null }); }
+  }
+
+  return res.status(400).json({ message: 'op must be cors, head, mpcreate, mpcomplete, mpabort or del.' });
 }

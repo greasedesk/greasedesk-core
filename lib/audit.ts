@@ -38,7 +38,8 @@ export type AuditAction =
   | 'invoice.date_issued_backfilled' // one-off: issue-date added after minting (approved correction)
   | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
-  | 'invoice.sent';         // emailed to the customer (PDF attached)
+  | 'invoice.sent'          // emailed to the customer (PDF attached)
+  | 'video.upload_error';   // a handset's video upload failed — verbatim step/status/body from the outbox drain
 
 export async function writeAudit(
   tx: Prisma.TransactionClient,

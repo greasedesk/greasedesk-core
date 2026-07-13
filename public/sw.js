@@ -115,6 +115,24 @@ function videoMaySend(item) {
 // stale (2-min window) to a concurrent drain while it is demonstrably alive.
 async function persistItem(db, item) { item.claimedAt = Date.now(); await tx(db, 'readwrite', (s) => s.put(item)); }
 
+// Rich failure detail (ruling 2026-07-13: never swallow an upload failure into a bare string).
+// Every video-step error carries { step, status, code, body } — persisted into lastError as JSON
+// AND beaconed to /api/pwa/upload-error, which writes it to the card's audit trail so the
+// verbatim failure is readable server-side, not trapped in one handset's IndexedDB.
+function stepError(step, status, code, body) {
+  const detail = { step, status: status || 0, code: code || null, body: (body || '').slice(0, 300) };
+  return Object.assign(new Error(JSON.stringify(detail)), { status: status || 0, detail, code });
+}
+
+function beaconUploadError(item, detail) {
+  try {
+    fetch('/api/pwa/upload-error', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ jobCardId: item.jobCardId, photoId: item.id, kind: item.kind, attempts: (item.attempts || 0) + 1, detail }),
+    }).catch(function () { /* telemetry is best-effort — never blocks the queue */ });
+  } catch (e) { /* ditto */ }
+}
+
 async function multipartCall(item, body) {
   const res = await fetch('/api/photos/multipart', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
@@ -123,11 +141,10 @@ async function multipartCall(item, body) {
     }, body)),
   });
   if (!res.ok) {
-    // Carry the server's machine-readable code (e.g. ':cors') into lastError — the queue bar
-    // renders setup states differently from network states, so the code must survive the throw.
-    let code = '';
-    try { const b = await res.json(); if (b && b.code) code = ':' + b.code; } catch (e) { /* no body */ }
-    throw Object.assign(new Error('multipart-' + body.action + ':' + res.status + code), { status: res.status });
+    // ':cors' code survives the throw — the queue bar renders setup states differently.
+    let code = null; let text = '';
+    try { text = await res.text(); const b = JSON.parse(text); if (b && b.code) code = b.code; } catch (e) { /* not json */ }
+    throw stepError('multipart-' + body.action, res.status, code, text);
   }
   return res.json();
 }
@@ -174,14 +191,25 @@ async function sendVideoItem(db, item, checkInterrupt) {
     for (const n of missing) {
       // Slice with an EMPTY type: fetch must not add a Content-Type header the part signature never saw.
       const chunk = item.blob.slice((n - 1) * partSize, Math.min(n * partSize, item.blob.size), '');
-      const put = await fetch(urlByPart[n], { method: 'PUT', body: chunk });
-      if (!put.ok) throw Object.assign(new Error('part:' + put.status), { status: put.status >= 500 ? put.status : 500 }); // R2 4xx = expired presign → re-presign next pass
+      let put;
+      try {
+        put = await fetch(urlByPart[n], { method: 'PUT', body: chunk });
+      } catch (e) {
+        // A CORS/preflight-blocked PUT surfaces as an opaque TypeError in fetch — name the layer
+        // rather than letting it collapse into a generic transient.
+        throw stepError('part-put-network', 0, null, String((e && e.message) || 'fetch failed'));
+      }
+      if (!put.ok) {
+        let text = ''; try { text = await put.text(); } catch (e2) { /* opaque */ }
+        // R2 4xx here = expired presign → transient, re-presign next pass
+        throw stepError('part-put', put.status >= 500 ? put.status : 500, null, text);
+      }
       // THE true "ETag not exposed" signal (post-mortem 2026-07-13): the part PUT succeeded but
       // the browser can't read the ETag response header — observed where it actually occurs,
-      // not inferred from bucket introspection. ':cors' is the token the queue bar renders as
+      // not inferred from bucket introspection. code 'cors' is what the queue bar renders as
       // the admin-setup message. Retryable, never terminal — fixing the bucket unsticks it.
       const etag = put.headers.get('ETag');
-      if (!etag) throw Object.assign(new Error('part-etag:cors'), { status: 503 });
+      if (!etag) throw stepError('part-etag', 503, 'cors', 'part stored but ETag header not readable from JS');
       item.etags = item.etags || {}; item.etags[String(n)] = etag;
       await persistItem(db, item); // ≤ one part ever repeats
       if (checkInterrupt) await checkInterrupt(); // photos enqueued mid-video go NOW
@@ -195,7 +223,10 @@ async function sendVideoItem(db, item, checkInterrupt) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
     body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, photoId: item.id, key: done.key, durationSeconds: item.durationSeconds }),
   });
-  if (!commit.ok) throw Object.assign(new Error('commit:' + commit.status), { status: commit.status });
+  if (!commit.ok) {
+    let text = ''; try { text = await commit.text(); } catch (e) { /* none */ }
+    throw stepError('commit', commit.status, null, text);
+  }
 }
 
 async function drainInner() {
@@ -248,6 +279,9 @@ async function drainInner() {
       const terminal = (e && e.terminal) || TERMINAL_STATUSES.includes(status);
       const attempts = (item.attempts || 0) + 1;
       const failedOut = terminal || attempts >= MAX_ATTEMPTS;
+      // Video failures carry structured detail (stepError) — beacon it to the audit trail so the
+      // verbatim failure is readable server-side, never trapped in this handset's IndexedDB.
+      if (item.kind === 'video' && e && e.detail) beaconUploadError(item, e.detail);
       const updated = {
         ...item, // multipart progress (uploadId/etags) survives — a failed pass resumes, never restarts
         state: failedOut ? 'failed' : 'queued',

@@ -187,7 +187,8 @@ export function subscribeOutbox(cb: (counts: OutboxCounts) => void): () => void 
       videos: items.filter((i) => active(i) && i.kind === 'video').length,
       sending: items.some((i) => i.state === 'sending'),
       nextRetryAt: retryAts.length ? Math.min(...retryAts) : null,
-      corsBlocked: items.some((i) => i.kind === 'video' && i.state !== 'failed' && String(i.lastError || '').includes(':cors')),
+      corsBlocked: items.some((i) => i.kind === 'video' && i.state !== 'failed'
+        && (String(i.lastError || '').includes('"code":"cors"') || String(i.lastError || '').includes(':cors'))), // JSON detail (current sw) or legacy string
     });
   };
   push();
