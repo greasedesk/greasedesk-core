@@ -88,5 +88,8 @@
   "videoTooLarge": "That video is too large to send from the phone (over 200 MB). Record with the in-app camera instead.",
   "outboxSending": "Sending…",
   "outboxRetryIn": "Couldn’t send — retrying in {{s}}s",
-  "videoSetupNeeded": "Video uploads aren’t set up yet — an admin needs to finish configuration."
+  "videoSetupNeeded": "Video uploads aren’t set up yet — an admin needs to finish configuration.",
+  "discardVideo": "Discard video",
+  "videoDiscardConfirm": "Discard this video? It hasn’t been sent and can’t be recovered.",
+  "videoUnrecoverable": "This video can’t be recovered from the phone — record it again."
 }

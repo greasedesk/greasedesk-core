@@ -136,6 +136,11 @@ export default function MobileJobCard() {
 
   function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
   function discard(shot: LocalShot) { discardItem(shot.photoId).then(loadShots); }
+  // Video discard is confirmed: before it sends, this is the only copy in existence.
+  function discardVideo(shot: LocalShot) {
+    if (!window.confirm(t('videoDiscardConfirm'))) return;
+    discardItem(shot.photoId).then(loadShots);
+  }
 
   // Walkaround video: recorder-constrained (720p / ~2.5 Mbps / 90s hard cap ≈ 28MB) → outbox
   // kind:'video' (resumable multipart lane, Wi-Fi-preferred, never blocks photos).
@@ -434,19 +439,23 @@ export default function MobileJobCard() {
                         {mine.map((sh) => sh.isVideo ? (
                           /* The queued walkaround plays FROM THE PHONE (the blob is right here) —
                              reviewable before it ever sends. Retry is its own control (the video
-                             surface belongs to the player). */
+                             surface belongs to the player). Discard exists in EVERY state (ruling
+                             2026-07-13: nothing sits in the queue the user can't end) — confirmed,
+                             because pre-send it destroys the only copy. */
                           <span key={sh.photoId} className="relative block col-span-3">
                             <video src={sh.url} className={`w-full aspect-video object-cover rounded-lg border bg-black ${sh.state === 'failed' ? 'border-danger' : 'border-line'}`} preload="metadata" controls playsInline />
                             {sh.state === 'failed' ? (
-                              <button onClick={() => retry(stage, sh)} className="mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-danger-soft text-danger" aria-label={t('sendFailedRetry')}>
-                                {t('sendFailedRetry')}
-                              </button>
+                              sh.lastError?.includes('"code":"unrecoverable"') ? (
+                                <span className="block mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-danger-soft text-danger">{t('videoUnrecoverable')}</span>
+                              ) : (
+                                <button onClick={() => retry(stage, sh)} className="mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-danger-soft text-danger" aria-label={t('sendFailedRetry')}>
+                                  {t('sendFailedRetry')}
+                                </button>
+                              )
                             ) : (
                               <span className="block mt-1 w-full text-center text-[11px] font-semibold rounded px-1 py-1 bg-surface/90 text-muted">{t('videoPending')}</span>
                             )}
-                            {sh.state === 'failed' && (
-                              <button onClick={() => discard(sh)} aria-label={t('discard')} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-danger text-white text-xs font-bold">✕</button>
-                            )}
+                            <button onClick={() => discardVideo(sh)} aria-label={t('discardVideo')} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-danger text-white text-xs font-bold">✕</button>
                           </span>
                         ) : (
                           <span key={sh.photoId} className="relative block">

@@ -119,10 +119,16 @@ async function persistItem(db, item) { item.claimedAt = Date.now(); await tx(db,
 // Every video-step error carries { step, status, code, body } — persisted into lastError as JSON
 // AND beaconed to /api/pwa/upload-error, which writes it to the card's audit trail so the
 // verbatim failure is readable server-side, not trapped in one handset's IndexedDB.
-function stepError(step, status, code, body) {
+function stepError(step, status, code, body, terminal) {
   const detail = { step, status: status || 0, code: code || null, body: (body || '').slice(0, 300) };
-  return Object.assign(new Error(JSON.stringify(detail)), { status: status || 0, detail, code });
+  return Object.assign(new Error(JSON.stringify(detail)), { status: status || 0, detail, code, terminal: !!terminal });
 }
+
+// WebKit's dangling-blob-handle signature ("The object can not be found here."). Bytes that
+// can't be read are NOT a transient failure — no backoff will bring them back (ruling
+// 2026-07-13: terminal on FIRST occurrence, honest message, no hour-long retries).
+const DANGLING_RE = /can\s?not be found/i;
+const unrecoverable = (msg) => stepError('body-unreadable', 0, 'unrecoverable', msg, true);
 
 function beaconUploadError(item, detail) {
   try {
@@ -162,6 +168,13 @@ async function multipartCall(item, body) {
 const SINGLE_PUT_MAX = 20 * 1024 * 1024;
 
 async function sendVideoSinglePut(item) {
+  // Legacy single-blob item: PROBE the stored bytes before spending a presign — a dangling
+  // handle here means no retry can ever succeed (first-occurrence terminal, honest message).
+  if (!item.parts) {
+    if (!item.blob) throw unrecoverable('no stored bytes');
+    try { await item.blob.slice(0, 65536, '').arrayBuffer(); }
+    catch (e) { throw unrecoverable('probe: ' + String((e && e.message) || e)); }
+  }
   const pres = await fetch('/api/photos/presign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
     body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, contentType: item.contentType, photoId: item.id }),
@@ -206,11 +219,15 @@ async function sendVideoItem(db, item, checkInterrupt) {
   // slicing the buffer in memory; if even that read fails, the beacon names it.
   let wholeBuf = null;
   if (!item.parts) {
+    if (!item.blob) throw unrecoverable('no stored bytes');
     try {
       wholeBuf = await item.blob.arrayBuffer();
       if (wholeBuf.byteLength !== item.blob.size) throw new Error('short read: got ' + wholeBuf.byteLength + ' of ' + item.blob.size);
     } catch (e) {
-      throw stepError('blob-whole-read', 0, null, 'size=' + (item.blob ? item.blob.size : 'no-blob') + ' err=' + String((e && e.message) || e));
+      const msg = String((e && e.message) || e);
+      // Dangling handle = the bytes are gone to every retry → terminal NOW, not after 8 backoffs.
+      throw stepError('blob-whole-read', 0, DANGLING_RE.test(msg) ? 'unrecoverable' : null,
+        'size=' + item.blob.size + ' err=' + msg, DANGLING_RE.test(msg));
     }
   }
   // 1. Open (or reopen) the multipart upload.
@@ -261,7 +278,9 @@ async function sendVideoItem(db, item, checkInterrupt) {
           buf = wholeBuf.slice((n - 1) * partSize, Math.min(n * partSize, totalVideoBytes));
         }
       } catch (e) {
-        throw stepError('part-read', 0, null, 'part=' + n + ' err=' + String((e && e.message) || e));
+        const msg = String((e && e.message) || e);
+        throw stepError('part-read', 0, DANGLING_RE.test(msg) ? 'unrecoverable' : null,
+          'part=' + n + ' err=' + msg, DANGLING_RE.test(msg));
       }
       let put;
       try {
@@ -363,7 +382,21 @@ async function drainInner() {
         lastError: String((e && e.message) || 'error'),
         nextAttemptAt: failedOut ? null : Date.now() + Math.min(30000 * Math.pow(2, attempts), 3600000),
       };
-      await tx(db, 'readwrite', (s) => s.put(updated));
+      try {
+        await tx(db, 'readwrite', (s) => s.put(updated));
+      } catch (persistErr) {
+        // THE SILENT-LOOP KILLER (post-mortem 2026-07-13): re-putting the item structured-clones
+        // its blob, and WebKit can refuse to clone a dangling-handle blob — the attempts counter
+        // then never persists, the stale-claim release requeues the OLD row, and the cap can
+        // never fire. When the full row won't save, persist a SLIMMED terminal row (bytes
+        // dropped — they were unreadable anyway): the tile shows the honest failed state,
+        // discard works, and nothing loops forever.
+        const slim = Object.assign({}, updated);
+        delete slim.blob; delete slim.parts;
+        slim.state = 'failed'; slim.nextAttemptAt = null;
+        slim.lastError = JSON.stringify({ step: 'persist', status: 0, code: 'unrecoverable', body: 'item state could not be re-saved (blob clone refused): ' + String((persistErr && persistErr.message) || persistErr) });
+        try { await tx(db, 'readwrite', (s) => s.put(slim)); } catch (e2) { /* row stands; stale release re-queues it */ }
+      }
       // Ask Chromium to wake us again when connectivity returns (no-op elsewhere).
       if (!failedOut && self.registration && self.registration.sync) {
         try { await self.registration.sync.register('outbox'); } catch (e2) { /* foreground triggers cover it */ }
