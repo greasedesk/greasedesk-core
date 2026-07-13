@@ -114,6 +114,13 @@ export async function enqueueVideo(args: { jobCardId: string; stage: string; blo
   return item.id;
 }
 
+// Queue-control writes must be VISIBLE immediately (never-silent rule) — the SW only broadcasts
+// when a drain touches an item, which offline can be never. Every control pings the channel
+// itself so subscribers re-read IndexedDB at once.
+function pingOutbox(): void {
+  try { new BroadcastChannel('gd-outbox').postMessage({ type: 'outbox' }); } catch { /* counts refresh on next read */ }
+}
+
 /** Override the Wi-Fi hold on every waiting video (the honest "Send now" tap). Sticks per item
  *  until sent, so a transient failure on mobile data keeps retrying rather than re-holding. */
 export async function sendVideosNow(): Promise<void> {
@@ -123,6 +130,7 @@ export async function sendVideosNow(): Promise<void> {
       await rw((s) => s.put({ ...it, sendNow: true, nextAttemptAt: 0 }));
     }
   }
+  pingOutbox();
   triggerDrain();
 }
 
@@ -131,6 +139,7 @@ export async function retryItem(id: string): Promise<void> {
   const it = items.find((x) => x.id === id);
   if (!it) return;
   await rw((s) => s.put({ ...it, state: 'queued', attempts: 0, lastError: null, nextAttemptAt: 0, claimedAt: null }));
+  pingOutbox();
   triggerDrain();
 }
 
@@ -150,17 +159,35 @@ export async function discardItem(id: string): Promise<void> {
   try { new BroadcastChannel('gd-outbox').postMessage({ type: 'outbox' }); } catch { /* count refreshes on next read */ }
 }
 
-/** Live queue counts for the always-visible badge. Returns an unsubscribe. Videos are counted
+export type OutboxCounts = {
+  queued: number; failed: number; videos: number;
+  /** Something is actively mid-send right now. */
+  sending: boolean;
+  /** Earliest scheduled retry among transiently-failed items (ms epoch), or null. The bar turns
+   *  this into "Couldn't send — retrying in Ns" — a tap must NEVER look like nothing happened. */
+  nextRetryAt: number | null;
+  /** A video hit the storage-CORS setup gate (server code 'cors') — a SETUP state to name
+   *  honestly, not a network failure to count down from. */
+  corsBlocked: boolean;
+};
+
+/** Live queue state for the always-visible badge. Returns an unsubscribe. Videos are counted
  *  on their OWN line (a 28MB walkaround and a VIN photo are different promises to the mechanic). */
-export function subscribeOutbox(cb: (counts: { queued: number; failed: number; videos: number }) => void): () => void {
+export function subscribeOutbox(cb: (counts: OutboxCounts) => void): () => void {
   let bc: BroadcastChannel | null = null;
   const push = async () => {
     const items = await outboxAll();
     const active = (i: OutboxItem) => i.state === 'queued' || i.state === 'sending';
+    const retryAts = items
+      .filter((i) => i.state === 'queued' && (i.attempts || 0) > 0 && (i.nextAttemptAt || 0) > Date.now())
+      .map((i) => i.nextAttemptAt as number);
     cb({
       queued: items.filter((i) => active(i) && i.kind !== 'video').length,
       failed: items.filter((i) => i.state === 'failed').length,
       videos: items.filter((i) => active(i) && i.kind === 'video').length,
+      sending: items.some((i) => i.state === 'sending'),
+      nextRetryAt: retryAts.length ? Math.min(...retryAts) : null,
+      corsBlocked: items.some((i) => i.kind === 'video' && i.state !== 'failed' && String(i.lastError || '').includes(':cors')),
     });
   };
   push();

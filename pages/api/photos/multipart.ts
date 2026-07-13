@@ -54,8 +54,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (action === 'create') {
     // CORS prerequisite enforced HERE, before the first byte moves (see file header).
+    // code:'cors' is machine-readable: the outbox surfaces this as a SETUP state ("an admin
+    // needs to finish configuration"), never as a mysterious network failure.
     const etagOk = await corsExposesEtag();
-    if (!etagOk) return res.status(503).json({ message: 'Video storage needs a configuration update (CORS must expose ETag) — the video will be retried automatically.' });
+    if (!etagOk) return res.status(503).json({ code: 'cors', message: 'Video storage needs a configuration update (CORS must expose ETag) — the video will be retried automatically.' });
     const id = await createMultipartUpload(key, String(contentType).toLowerCase());
     if (!id) return res.status(502).json({ message: 'Could not start the upload.' });
     return res.status(200).json({ uploadId: id, key, partSize: PART_SIZE, maxParts: MAX_PARTS });

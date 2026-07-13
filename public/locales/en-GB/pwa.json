@@ -85,5 +85,8 @@
   "videoWaitingWifi_one": "1 video waiting — will send on Wi-Fi",
   "videoWaitingWifi_other": "{{count}} videos waiting — will send on Wi-Fi",
   "videoSendNow": "Send now",
-  "videoTooLarge": "That video is too large to send from the phone (over 200 MB). Record with the in-app camera instead."
+  "videoTooLarge": "That video is too large to send from the phone (over 200 MB). Record with the in-app camera instead.",
+  "outboxSending": "Sending…",
+  "outboxRetryIn": "Couldn’t send — retrying in {{s}}s",
+  "videoSetupNeeded": "Video uploads aren’t set up yet — an admin needs to finish configuration."
 }

@@ -122,7 +122,13 @@ async function multipartCall(item, body) {
       jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, contentType: item.contentType, photoId: item.id,
     }, body)),
   });
-  if (!res.ok) throw Object.assign(new Error('multipart-' + body.action + ':' + res.status), { status: res.status });
+  if (!res.ok) {
+    // Carry the server's machine-readable code (e.g. ':cors') into lastError — the queue bar
+    // renders setup states differently from network states, so the code must survive the throw.
+    let code = '';
+    try { const b = await res.json(); if (b && b.code) code = ':' + b.code; } catch (e) { /* no body */ }
+    throw Object.assign(new Error('multipart-' + body.action + ':' + res.status + code), { status: res.status });
+  }
   return res.json();
 }
 
