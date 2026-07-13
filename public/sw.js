@@ -154,15 +154,56 @@ async function multipartCall(item, body) {
  *  (ListParts) on resume rather than trusting local state. checkInterrupt() is called between
  *  parts: new photos/vehicle facts jump the queue mid-video — a VIN photo never sits behind
  *  28MB on one bar. */
+// A small video takes THE PHOTO PATH (ruling 2026-07-13): whole body, single presigned PUT, no
+// slicing, no ETag reads, no parts — the path proven by every photo from this same handset,
+// worker and bucket. Multipart is for genuinely large files only. Crucially this never touches
+// WebKit's broken JS blob-read layer: fetch streams the body itself (the same pipeline that
+// plays the video), so legacy IDB blobs that arrayBuffer() refuses still send.
+const SINGLE_PUT_MAX = 20 * 1024 * 1024;
+
+async function sendVideoSinglePut(item) {
+  const pres = await fetch('/api/photos/presign', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, contentType: item.contentType, photoId: item.id }),
+  });
+  if (!pres.ok) {
+    let text = ''; try { text = await pres.text(); } catch (e) { /* none */ }
+    throw stepError('presign', pres.status, null, text);
+  }
+  const { key, uploadUrl } = await pres.json();
+  // parts (ArrayBuffers) recompose in memory; a legacy blob is handed to fetch UNREAD.
+  const body = item.parts ? new Blob(item.parts, { type: item.contentType }) : item.blob;
+  let put;
+  try {
+    put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': item.contentType }, body });
+  } catch (e) {
+    throw stepError('single-put-network', 0, null, String((e && e.message) || 'fetch failed'));
+  }
+  if (!put.ok) {
+    let text = ''; try { text = await put.text(); } catch (e) { /* opaque */ }
+    throw stepError('single-put', put.status >= 500 ? put.status : 500, null, text); // expired presign → transient, re-presign next pass
+  }
+  const commit = await fetch('/api/photos', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+    body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, photoId: item.id, key, durationSeconds: item.durationSeconds }),
+  });
+  if (!commit.ok) {
+    let text = ''; try { text = await commit.text(); } catch (e) { /* none */ }
+    throw stepError('commit', commit.status, null, text);
+  }
+}
+
 async function sendVideoItem(db, item, checkInterrupt) {
-  // POST-MORTEM (proven 2026-07-13, beacon part-read "The object can not be found here."):
-  // WebKit CAN read a large disk-backed IndexedDB blob in full but CANNOT materialise a
-  // Blob.slice() of it — the dangling-handle error surfaced as fetch's "Load failed" for
-  // every part PUT. Therefore: a slice of a large IDB blob must never exist.
-  //   New items carry PRE-SLICED 5 MiB part blobs (item.parts, sliced at enqueue) — small IDB
-  //   blobs read fine (every photo proves it).
-  //   Legacy single-blob items are rescued by materialising the WHOLE blob once (which works —
-  //   blob-whole-read passed) and slicing the ArrayBuffer in memory.
+  const partBytes = (p) => (p && typeof p.byteLength === 'number') ? p.byteLength : (p ? p.size : 0);
+  const totalVideoBytes = item.parts ? item.parts.reduce((s, p) => s + partBytes(p), 0) : (item.blob ? item.blob.size : 0);
+  // THE FORK: small videos go down the proven photo path; multipart is reserved for the >20MB
+  // walkaround on a busier scene.
+  if (totalVideoBytes <= SINGLE_PUT_MAX) return sendVideoSinglePut(item);
+
+  // ── multipart (>20MB only) ──
+  // Parts are ArrayBuffers stored inline in IDB (immune to the WebKit blob-read failure).
+  // A legacy oversize single-blob item is rescued by materialising the whole blob once and
+  // slicing the buffer in memory; if even that read fails, the beacon names it.
   let wholeBuf = null;
   if (!item.parts) {
     try {
@@ -197,8 +238,7 @@ async function sendVideoItem(db, item, checkInterrupt) {
   }
   // 3. Send what's missing (uniform PART_SIZE — an R2 requirement, not a preference).
   const partSize = item.partSize || (5 * 1024 * 1024);
-  const totalBytes = item.parts ? item.parts.reduce((s, p) => s + p.size, 0) : item.blob.size;
-  const total = item.parts ? item.parts.length : Math.ceil(totalBytes / partSize);
+  const total = item.parts ? item.parts.length : Math.ceil(totalVideoBytes / partSize);
   if (total > 40) throw Object.assign(new Error('video-too-large'), { terminal: true });
   const missing = [];
   for (let n = 1; n <= total; n++) if (!item.etags || !item.etags[String(n)]) missing.push(n);
@@ -208,17 +248,17 @@ async function sendVideoItem(db, item, checkInterrupt) {
     for (const u of presigned.urls) urlByPart[u.partNumber] = u.url;
     for (const n of missing) {
       // Slice with an EMPTY type: fetch must not add a Content-Type header the part signature never saw.
-      // Materialise the part's bytes WITHOUT ever slicing a large IDB blob (see post-mortem
-      // above): pre-sliced part blobs read whole; legacy blobs slice the in-memory buffer.
-      // Any read failure beacons as its own step — never masquerading as a network failure.
+      // Part bytes WITHOUT ever touching WebKit's blob-read layer on stored data: ArrayBuffer
+      // parts are used directly (IDB keeps them inline); a transitional Blob part (the brief
+      // Blob[] deploy) or legacy whole-blob slice goes through a guarded read that beacons as
+      // its own step — never masquerading as a network failure.
       let buf;
       try {
         if (item.parts) {
           const pb = item.parts[n - 1];
-          buf = await pb.arrayBuffer();
-          if (buf.byteLength !== pb.size) throw new Error('short read: got ' + buf.byteLength + ' of ' + pb.size);
+          buf = (pb && typeof pb.byteLength === 'number') ? pb : await pb.arrayBuffer();
         } else {
-          buf = wholeBuf.slice((n - 1) * partSize, Math.min(n * partSize, totalBytes));
+          buf = wholeBuf.slice((n - 1) * partSize, Math.min(n * partSize, totalVideoBytes));
         }
       } catch (e) {
         throw stepError('part-read', 0, null, 'part=' + n + ' err=' + String((e && e.message) || e));

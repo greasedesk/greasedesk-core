@@ -16,11 +16,12 @@ export type OutboxItem = {
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
   durationSeconds?: number | null;                                     // kind:'video'
-  // kind:'video' is stored as PRE-SLICED 5 MiB part blobs (post-mortem 2026-07-13: WebKit
-  // cannot materialise a Blob.slice() of a large disk-backed IDB blob — "The object can not
-  // be found here." — so a slice of a large stored blob must never exist; small blobs read
-  // fine, every photo proves it). Legacy items may still carry one big `blob`.
-  parts?: Blob[];
+  // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
+  // JS read path — arrayBuffer()/slice() — can fail on a disk-backed IDB Blob whose bytes are
+  // demonstrably intact, "The object can not be found here." ArrayBuffers are stored INLINE in
+  // the IDB record — no external file reference — so that failure class structurally cannot
+  // occur). Legacy items may still carry one big `blob`; the drain sends it whole, unread.
+  parts?: ArrayBuffer[];
   // kind:'video' multipart progress — persisted per part so an app kill costs ≤ one 5 MiB part:
   uploadId?: string | null; partSize?: number; etags?: Record<string, string>; key?: string | null;
   sendNow?: boolean; // user overrode the Wi-Fi hold — sticks until sent
@@ -108,12 +109,14 @@ export async function enqueueVehicle(args: { jobCardId: string; vin?: string; mi
  *  drain). Sent via the resumable multipart lane in sw.js; held for Wi-Fi where the platform can
  *  tell us (Android), or for an explicit "Send now" where it can't (iOS). Never blocks photos. */
 export async function enqueueVideo(args: { jobCardId: string; stage: string; blob: Blob; contentType: string; durationSeconds?: number | null }): Promise<string> {
-  // Pre-slice INTO the envelope (see OutboxItem.parts): slicing the in-memory recorder blob is
-  // zero-copy, and each 5 MiB part lands in IndexedDB as its own small, reliably-readable blob.
-  // MUST match the server's PART_SIZE (uniform parts are an R2 requirement).
+  // Read ONCE while the recorder blob is fresh and in-memory (reliable — the WebKit read
+  // pathology applies to IDB-restored blobs), then store pre-sliced ArrayBuffers, which IDB
+  // keeps inline in the record. Part size MUST match the server's PART_SIZE (uniform parts
+  // are an R2 requirement) — only the >20MB multipart path ever uses the slicing.
   const PART = 5 * 1024 * 1024;
-  const parts: Blob[] = [];
-  for (let o = 0; o < args.blob.size; o += PART) parts.push(args.blob.slice(o, Math.min(o + PART, args.blob.size), ''));
+  const whole = await args.blob.arrayBuffer();
+  const parts: ArrayBuffer[] = [];
+  for (let o = 0; o < whole.byteLength; o += PART) parts.push(whole.slice(o, Math.min(o + PART, whole.byteLength)));
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'video', jobCardId: args.jobCardId, stage: args.stage, slot: 'walkaround',
     parts, partSize: PART, contentType: args.contentType, durationSeconds: args.durationSeconds ?? null,
