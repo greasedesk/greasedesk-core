@@ -17,6 +17,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { daysLeft } from '@/lib/trial';
+import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
 import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/dashboard-periods';
@@ -150,16 +151,16 @@ function monthLabel(w: { from: string; to: string }, locale: string): string {
 function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number }) {
   const LAPSED = new Set(['canceled', 'unpaid', 'incomplete_expired', 'paused']);
   const endLabel = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : null;
-  const perMonth = `£${35 * Math.max(1, siteCount)} + VAT`; // £35 × locations
+  const perMonth = monthlyPriceLabel(siteCount); // single pricing source (flat £35 until VAT-registered)
 
   if (subscriptionStatus && LAPSED.has(subscriptionStatus)) {
     return <div className="rounded-xl border p-4 mb-6 bg-warn-soft border-warn text-warn">Your subscription has lapsed — your records are safe and fully exportable. Resubscribe from Settings → Licence to add new work.</div>;
   }
   if (subscriptionStatus === 'trialing' || (status === 'trial' && (daysLeft(trialEndsAt) ?? 1) > 0)) {
-    const perSite = siteCount > 1 ? ` (${siteCount} locations × £35 + VAT)` : '';
+    const perSite = siteCount > 1 ? ` (${siteCount} locations × ${perLocationLabel()})` : '';
     const text = endLabel
       ? `Trial ends ${endLabel} — your card will then be charged ${perMonth} per month${perSite} unless you cancel.`
-      : 'Trial active — £35 + VAT per location per month after the trial unless you cancel.';
+      : `Trial active — ${perLocationLabel()} per location per month after the trial unless you cancel.`;
     return <div className="rounded-xl border p-4 mb-6 bg-accent-soft border-accent text-accent">{text}</div>;
   }
   if (status === 'trial') {

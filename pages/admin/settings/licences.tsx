@@ -11,6 +11,7 @@ import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
+import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 
 type PageProps = {
   groupName: string;
@@ -58,7 +59,7 @@ export default function LicencesSettings(props: PageProps) {
   return (
     <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Licence & Subscriptions - GreaseDesk</title></Head>
-      <p className="text-muted mb-6">Your GreaseDesk subscription. Billing is £35 + VAT per location, per month.</p>
+      <p className="text-muted mb-6">Your GreaseDesk subscription. Billing is {perLocationLabel()} per location, per month.</p>
 
       {lapsed && (
         <div className="bg-warn-soft border border-warn text-warn rounded-xl p-4 max-w-xl mb-4">
@@ -70,7 +71,7 @@ export default function LicencesSettings(props: PageProps) {
         <Row label="Account" value={groupName} />
         <Row label="Status" value={subscriptionStatus ? (STATUS_LABEL[subscriptionStatus] || subscriptionStatus) : 'No subscription'} />
         <Row label="Current locations" value={siteCount} />
-        <Row label="Monthly" value={`£${perMonthPounds} + VAT`} />
+        <Row label="Monthly" value={monthlyPriceLabel(siteCount)} />
         {currentPeriodEnd && <Row label={subscribed ? 'Renews / next charge' : 'Period end'} value={new Date(currentPeriodEnd).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} />}
       </div>
 

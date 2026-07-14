@@ -5,7 +5,8 @@
  * day 1 but NOT charged (trial_period_days), so the day-61 conversion is an OFF-SESSION charge
  * against an authenticated card with an established mandate — it cannot fail SCA.
  *   payment_method_collection:'always' → a card is required to start the trial (no card, no trial).
- *   automatic_tax + billing_address_collection → Stripe Tax: £35 + VAT.
+ *   Stripe Tax is enabled ONLY when GreaseDesk Ltd is VAT-registered (GARAGE_VAT_REGISTERED) —
+ *   flat £35 today; flip that one flag and Checkout adds VAT automatically. The price is £35 flat.
  *   client_reference_id = group_id → the webhook maps the subscription back with zero trust in the
  *   redirect. The redirect writes NOTHING; the webhook is the ledger.
  * Idempotency key = group_id + site count, so a double-submit reuses one session.
@@ -14,6 +15,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -40,17 +42,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       mode: 'subscription',
       line_items: [{ price: priceId, quantity }],
       // Trial with a mandatory, authenticated card (see file header) — the SCA-safe conversion.
+      // missing_payment_method: 'create_invoice' (ruling 2026-07-14): if the card is missing/fails
+      // at trial end, ISSUE the invoice and let Stripe dunning chase for ~2 weeks — only THEN does
+      // the sub go past_due → (later) lapsed. 'cancel' was the harshest reading of a soft failure —
+      // it would drop the tenant into read-only mid-morning with no warning.
       subscription_data: {
         trial_period_days: TRIAL_PERIOD_DAYS,
-        trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+        trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
       },
       payment_method_collection: 'always',
-      automatic_tax: { enabled: true },
-      billing_address_collection: 'required',
-      tax_id_collection: { enabled: true },
+      // Stripe Tax ONLY when GreaseDesk Ltd is VAT-registered — flat £35 until the flag flips.
+      ...(GARAGE_VAT_REGISTERED
+        ? { automatic_tax: { enabled: true }, billing_address_collection: 'required' as const, tax_id_collection: { enabled: true } }
+        : {}),
       client_reference_id: groupId,
       ...(billing?.stripe_customer_id
-        ? { customer: billing.stripe_customer_id, customer_update: { address: 'auto', name: 'auto' } }
+        ? { customer: billing.stripe_customer_id }
         : { customer_email: group.billing_email ?? undefined }),
       success_url: `${base}/admin/settings/licences?billing=success`,
       cancel_url: `${base}/admin/settings/licences?billing=cancelled`,

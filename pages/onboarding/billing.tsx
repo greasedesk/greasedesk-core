@@ -3,13 +3,14 @@
  * Start-subscription step. NO card fields, NO false strings — a hosted Stripe Checkout launcher
  * (ruling 2026-07-13: the previous disabled-input form made untrue statements about money on a
  * live domain and was deleted). Real terms only: 60-day free trial, card verified now, first charge
- * £35 + VAT per site per month at trial end unless cancelled. When billing is not yet configured
+ * a flat monthly price per site at trial end unless cancelled (see lib/billing-pricing — VAT-status aware). When billing is not yet configured
  * (sandbox keys absent) the step is skippable so onboarding still completes.
  */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { useSession, signIn } from 'next-auth/react';
+import { perLocationLabel } from '@/lib/billing-pricing';
 
 export default function BillingPage() {
   const router = useRouter();
@@ -49,7 +50,7 @@ export default function BillingPage() {
         <div className="max-w-md w-full bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl p-8">
           <h1 className="text-xl font-semibold text-white mb-4 text-center">Start your 60-day free trial</h1>
           <div className="bg-slate-700/40 p-4 rounded-lg mb-6 text-sm text-slate-300 space-y-2">
-            <p><span className="text-white font-semibold">£35 + VAT</span> per location, per month.</p>
+            <p><span className="text-white font-semibold">{perLocationLabel()}</span> per location, per month.</p>
             <p>Your card is verified today but <span className="text-white font-semibold">not charged</span>. The trial runs 60 days.</p>
             <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
           </div>
