@@ -333,6 +333,30 @@ async function drainInner() {
       await tx(db, 'readwrite', (s) => s.put(it));
     }
   }
+  // GHOST SWEEP (ruling 2026-07-14): a queue item that can NEVER be sent must not haunt the queue
+  // forever — "a queue item that cannot be removed owns the mechanic forever." Two ghosts self-clear
+  // here, each with ONE telemetry row (never silent):
+  //   (a) NO sendable bytes — a photo/video envelope from an OLDER app version, or a slimmed
+  //       terminal row (blob was dropped). Nothing to send, ever.
+  //   (b) A FAILED legacy single-blob whose bytes are UNREADABLE — WebKit lost the disk-backed blob
+  //       (the "object can not be found here" class). Probe one byte; a throw means it's gone.
+  // A readable failed blob is LEFT alone (the user may still retry/discard it deliberately).
+  for (const it of all) {
+    if (it.kind !== 'photo' && it.kind !== 'video') continue;
+    const hasBytes = !!it.blob || (it.parts && it.parts.length > 0);
+    if (!hasBytes) {
+      beaconUploadError(it, { step: 'ghost-swept', status: 0, code: 'unrecoverable', body: 'no sendable bytes (old-schema envelope or slimmed terminal row)' });
+      await tx(db, 'readwrite', (s) => s.delete(it.id));
+      continue;
+    }
+    if (it.state === 'failed' && it.blob && (!it.parts || !it.parts.length)) {
+      try { await it.blob.slice(0, 1024).arrayBuffer(); } // readable → keep (deliberate retry/discard still available)
+      catch (e) {
+        beaconUploadError(it, { step: 'ghost-swept', status: 0, code: 'unrecoverable', body: 'legacy blob unreadable on sweep: ' + String((e && e.message) || e) });
+        await tx(db, 'readwrite', (s) => s.delete(it.id));
+      }
+    }
+  }
   // One item: claim (compare-and-set) → send by kind → delete on success / taxonomy on failure.
   // Returns true if the item was sent. Only the drain that flips queued→sending sends an item —
   // a concurrent drain sees 'sending' and skips.
@@ -369,11 +393,22 @@ async function drainInner() {
       sent = true;
     } catch (e) {
       const status = e && e.status;
+      const code = (e && (e.code || (e.detail && e.detail.code))) || null;
+      // SELF-CLEAR (ruling 2026-07-14): an UNRECOVERABLE item (bytes gone) or one whose CARD NO
+      // LONGER RESOLVES (404) can never succeed — delete it with one telemetry row rather than
+      // leave a failed item the mechanic must chase forever. (400/403 stay visible as 'failed':
+      // a forgery/permission block is not a ghost.)
+      if (code === 'unrecoverable' || status === 404) {
+        beaconUploadError(item, (e && e.detail) || { step: 'self-cleared', status: status || 0, code: code || 'unrecoverable', body: String((e && e.message) || e) });
+        await tx(db, 'readwrite', (s) => s.delete(item.id));
+        await broadcastNow(db);
+        return sent;
+      }
       const terminal = (e && e.terminal) || TERMINAL_STATUSES.includes(status);
       const attempts = (item.attempts || 0) + 1;
       const failedOut = terminal || attempts >= MAX_ATTEMPTS;
-      // Video failures carry structured detail (stepError) — beacon it to the audit trail so the
-      // verbatim failure is readable server-side, never trapped in this handset's IndexedDB.
+      // Video failures carry structured detail (stepError) — beacon it to telemetry so the verbatim
+      // failure is readable server-side, never trapped in this handset's IndexedDB.
       if (item.kind === 'video' && e && e.detail) beaconUploadError(item, e.detail);
       const updated = {
         ...item, // multipart progress (uploadId/etags) survives — a failed pass resumes, never restarts

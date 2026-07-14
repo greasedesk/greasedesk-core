@@ -93,5 +93,6 @@
   "choosePhone": "Choose from phone",
   "fullSite": "Full site →",
   "outboxFailedNamed": "{{reg}} — failed to send, tap to retry or discard",
-  "outboxFailedUnknownReg": "A job"
+  "outboxFailedUnknownReg": "A job",
+  "outboxDiscardConfirm": "Discard this upload? It hasn’t been sent and can’t be recovered."
 }

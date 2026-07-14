@@ -15,7 +15,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { ensureWorker, requestPersistence, sendVideosNow, subscribeOutbox, triggerDrain, OutboxCounts } from '@/lib/pwa-outbox';
+import { ensureWorker, requestPersistence, sendVideosNow, subscribeOutbox, triggerDrain, discardItem, OutboxCounts } from '@/lib/pwa-outbox';
+import { cacheGet } from '@/lib/pwa-idb';
 
 const EMPTY: OutboxCounts = { queued: 0, failed: 0, videos: 0, sending: false, nextRetryAt: null, corsBlocked: false, failedItems: [] };
 
@@ -25,7 +26,38 @@ export default function OutboxStatus() {
   const [persisted, setPersisted] = useState(true); // assume ok until told otherwise — the line is for a REFUSAL
   const [tapped, setTapped] = useState(false); // optimistic "Sending…" between the tap and the queue's first broadcast
   const [retryIn, setRetryIn] = useState<number | null>(null); // live countdown seconds
+  const [regByCard, setRegByCard] = useState<Record<string, string>>({}); // resolved reg per jobCardId (envelope-label fallback)
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Resolve the reg for FAILED items whose envelope predates the `label` field (the envelope is a
+  // cache; old items lack it). Card-first: the cached job text, then a best-effort fetch. The card
+  // LINK always works regardless — a null reg never makes the item unreachable, only unnamed.
+  useEffect(() => {
+    const need = counts.failedItems.filter((f) => !f.label && f.jobCardId && !regByCard[f.jobCardId]);
+    if (!need.length) return;
+    let live = true;
+    (async () => {
+      const found: Record<string, string> = {};
+      for (const f of need) {
+        try {
+          const cached = await cacheGet<any>(`job:${f.jobCardId}`);
+          let reg = cached?.value?.vehicle?.registration;
+          if (!reg) {
+            const res = await fetch(`/api/pwa/job/${encodeURIComponent(f.jobCardId)}`, { cache: 'no-store' });
+            if (res.ok) reg = (await res.json())?.vehicle?.registration;
+          }
+          if (reg) found[f.jobCardId] = reg;
+        } catch { /* offline / gone — the link still works, name stays generic */ }
+      }
+      if (live && Object.keys(found).length) setRegByCard((m) => ({ ...m, ...found }));
+    })();
+    return () => { live = false; };
+  }, [counts.failedItems, regByCard]);
+
+  function discardFailed(id: string) {
+    if (!window.confirm(t('outboxDiscardConfirm'))) return;
+    discardItem(id); // broadcasts → the banner updates itself
+  }
 
   useEffect(() => {
     ensureWorker();
@@ -83,16 +115,22 @@ export default function OutboxStatus() {
       ) : (retryIn != null && !showSending) ? (
         <span style={{ color: '#FCD34D' }}>{t('outboxRetryIn', { s: retryIn })}</span>
       ) : null}
-      {/* FAILED items name their car and LINK to the card (never a dead-end "1 failed"): tapping
-          opens the job so the mechanic can retry or discard right there. */}
-      {counts.failedItems.map((f) => (
-        <a key={f.id} href={`/m/job/${f.jobCardId}`} className="font-semibold underline" style={{ color: '#FCA5A5' }}>
-          {t('outboxFailedNamed', { reg: f.label || t('outboxFailedUnknownReg') })}
-        </a>
-      ))}
-      {counts.failed > counts.failedItems.length && (
-        <span className="font-semibold" style={{ color: '#FCA5A5' }}>{t('outboxFailed', { count: counts.failed - counts.failedItems.length })}</span>
-      )}
+      {/* FAILED items name their car (card-resolved when the envelope lacks it), LINK to the card,
+          AND carry their OWN discard — so NO item is ever unreachable, even a ghost from an older
+          schema with no tile to tap. This is the rule the outbox was built on. */}
+      {counts.failedItems.map((f) => {
+        const reg = f.label || (f.jobCardId && regByCard[f.jobCardId]) || t('outboxFailedUnknownReg');
+        return (
+          <span key={f.id} className="inline-flex items-center gap-2">
+            <a href={`/m/job/${f.jobCardId}`} className="font-semibold underline" style={{ color: '#FCA5A5' }}>
+              {t('outboxFailedNamed', { reg })}
+            </a>
+            <button onClick={() => discardFailed(f.id)} className="underline min-h-[28px]" style={{ color: '#8AB4F8' }}>
+              {t('discard')}
+            </button>
+          </span>
+        );
+      })}
       {!persisted && <span>{t('storageNote')}</span>}
     </div>
   );
