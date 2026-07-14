@@ -36,20 +36,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const pmToken = q('pm') || 'pm_card_authenticationRequired';
       const clock = await (stripe as any).testHelpers.testClocks.create({ frozen_time: Math.floor(Date.now() / 1000) });
       const customer = await stripe.customers.create({ test_clock: clock.id, email: `zz-accept-${clock.id.slice(-6)}@example.com`, name: 'ZZ Acceptance' });
-      await stripe.paymentMethods.attach(pmToken, { customer: customer.id });
-      await stripe.customers.update(customer.id, { invoice_settings: { default_payment_method: pmToken } });
+      const attached = await stripe.paymentMethods.attach(pmToken, { customer: customer.id }); // shared token → cloned PM id
+      const pmId = attached.id;
+      await stripe.customers.update(customer.id, { invoice_settings: { default_payment_method: pmId } });
       // Establish the OFF-SESSION mandate via a SetupIntent (what Checkout's card setup does at day 1).
       let setupIntent: any = null, setupErr: any = null;
       try {
-        setupIntent = await stripe.setupIntents.create({ customer: customer.id, payment_method: pmToken, usage: 'off_session', confirm: true, automatic_payment_methods: { enabled: true, allow_redirects: 'never' } });
+        setupIntent = await stripe.setupIntents.create({ customer: customer.id, payment_method: pmId, usage: 'off_session', confirm: true, automatic_payment_methods: { enabled: true, allow_redirects: 'never' } });
       } catch (e: any) { setupErr = { type: e?.type, code: e?.code, message: e?.message, decline_code: e?.decline_code }; }
       const sub: any = await stripe.subscriptions.create({
         customer: customer.id, items: [{ price, quantity: 1 }], trial_period_days: 60,
-        default_payment_method: pmToken, off_session: true,
+        default_payment_method: pmId, off_session: true,
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
         expand: ['latest_invoice', 'items.data'],
       } as any);
-      return res.status(200).json({ op, pm: pmToken, clock: clock.id, customer: customer.id, sub: sub.id, item: sub.items?.data?.[0]?.id,
+      return res.status(200).json({ op, pm: pmId, pmToken, clock: clock.id, customer: customer.id, sub: sub.id, item: sub.items?.data?.[0]?.id,
         subscription_status: sub.status, trial_end: sub.trial_end, latest_invoice_amount_paid: sub.latest_invoice?.amount_paid ?? 0,
         setupIntent_status: setupIntent?.status ?? null, setupIntent_next_action: setupIntent?.next_action?.type ?? null, setupErr,
         report: { subscription_status: sub.status, charged_pennies: sub.latest_invoice?.amount_paid ?? 0, mandate_setupintent: setupIntent?.status ?? 'errored', threeDS_demanded_at_setup: setupIntent?.next_action?.type ?? setupErr?.code ?? 'none' } });
