@@ -58,16 +58,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (op === 'quantity') {
       const sub = q('sub'); const item = q('item'); const customer = q('customer');
+      const preview = async () => {
+        const inv: any = await (stripe.invoices as any).createPreview({ customer, subscription: sub });
+        return { total: inv.total, lines: inv.lines.data.map((l: any) => ({ desc: l.description, amount: l.amount, proration: l.proration })) };
+      };
       const up2 = await stripe.subscriptions.update(sub, { items: [{ id: item, quantity: 2 }], proration_behavior: 'create_prorations' });
-      const upcoming2 = await (stripe.invoices as any).retrieveUpcoming({ customer });
+      const upcoming2 = await preview();
       const down1 = await stripe.subscriptions.update(sub, { items: [{ id: item, quantity: 1 }], proration_behavior: 'create_prorations' });
-      const upcoming1 = await (stripe.invoices as any).retrieveUpcoming({ customer });
+      const upcoming1 = await preview();
       return res.status(200).json({ op,
         after_up_qty: (up2 as any).items.data[0].quantity,
-        upcoming_after_up_lines: upcoming2.lines.data.map((l: any) => ({ desc: l.description, amount: l.amount, proration: l.proration })),
+        upcoming_after_up: upcoming2,
         after_down_qty: (down1 as any).items.data[0].quantity,
-        upcoming_after_down_lines: upcoming1.lines.data.map((l: any) => ({ desc: l.description, amount: l.amount, proration: l.proration })),
-        upcoming_after_down_total: upcoming1.total });
+        upcoming_after_down: upcoming1 });
     }
 
     if (op === 'advance') {
