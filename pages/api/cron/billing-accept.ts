@@ -30,26 +30,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (op === 'setup') {
-      const cardNum = q('card') || '4000002500003155'; // requires auth on-session, succeeds off-session
+      // Shared Stripe TEST PaymentMethod token (raw PANs are blocked). Default = the SCA card
+      // 4000002500003155: requires authentication on-session, succeeds OFF-SESSION once a mandate
+      // is set up — exactly our day-1-Checkout → day-61-off-session claim.
+      const pmToken = q('pm') || 'pm_card_authenticationRequired';
       const clock = await (stripe as any).testHelpers.testClocks.create({ frozen_time: Math.floor(Date.now() / 1000) });
       const customer = await stripe.customers.create({ test_clock: clock.id, email: `zz-accept-${clock.id.slice(-6)}@example.com`, name: 'ZZ Acceptance' });
-      // Attach a card + establish an OFF-SESSION mandate via a SetupIntent (what Checkout does at day 1).
-      const pm = await stripe.paymentMethods.create({ type: 'card', card: { number: cardNum, exp_month: 12, exp_year: 2032, cvc: '123' } as any });
-      await stripe.paymentMethods.attach(pm.id, { customer: customer.id });
-      await stripe.customers.update(customer.id, { invoice_settings: { default_payment_method: pm.id } });
+      await stripe.paymentMethods.attach(pmToken, { customer: customer.id });
+      await stripe.customers.update(customer.id, { invoice_settings: { default_payment_method: pmToken } });
+      // Establish the OFF-SESSION mandate via a SetupIntent (what Checkout's card setup does at day 1).
       let setupIntent: any = null, setupErr: any = null;
       try {
-        setupIntent = await stripe.setupIntents.create({ customer: customer.id, payment_method: pm.id, usage: 'off_session', confirm: true, automatic_payment_methods: { enabled: true, allow_redirects: 'never' } });
+        setupIntent = await stripe.setupIntents.create({ customer: customer.id, payment_method: pmToken, usage: 'off_session', confirm: true, automatic_payment_methods: { enabled: true, allow_redirects: 'never' } });
       } catch (e: any) { setupErr = { type: e?.type, code: e?.code, message: e?.message, decline_code: e?.decline_code }; }
-      const sub = await stripe.subscriptions.create({
+      const sub: any = await stripe.subscriptions.create({
         customer: customer.id, items: [{ price, quantity: 1 }], trial_period_days: 60,
-        default_payment_method: pm.id, off_session: true,
+        default_payment_method: pmToken, off_session: true,
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
-        payment_behavior: 'default_incomplete', expand: ['latest_invoice.payment_intent', 'items.data'],
-      } as any).catch(async () => stripe.subscriptions.create({ customer: customer.id, items: [{ price, quantity: 1 }], trial_period_days: 60, default_payment_method: pm.id, off_session: true, trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } }, expand: ['latest_invoice', 'items.data'] } as any));
-      return res.status(200).json({ op, clock: clock.id, customer: customer.id, pm: pm.id, sub: sub.id, item: (sub as any).items?.data?.[0]?.id,
-        subscription_status: sub.status, latest_invoice_amount_due: (sub as any).latest_invoice?.amount_due, setupIntent_status: setupIntent?.status ?? null, setupIntent_next_action: setupIntent?.next_action?.type ?? null, setupErr,
-        report: { subscription_status: sub.status, charged: (sub as any).latest_invoice?.amount_paid ?? 0, mandate: setupIntent?.status } });
+        expand: ['latest_invoice', 'items.data'],
+      } as any);
+      return res.status(200).json({ op, pm: pmToken, clock: clock.id, customer: customer.id, sub: sub.id, item: sub.items?.data?.[0]?.id,
+        subscription_status: sub.status, trial_end: sub.trial_end, latest_invoice_amount_paid: sub.latest_invoice?.amount_paid ?? 0,
+        setupIntent_status: setupIntent?.status ?? null, setupIntent_next_action: setupIntent?.next_action?.type ?? null, setupErr,
+        report: { subscription_status: sub.status, charged_pennies: sub.latest_invoice?.amount_paid ?? 0, mandate_setupintent: setupIntent?.status ?? 'errored', threeDS_demanded_at_setup: setupIntent?.next_action?.type ?? setupErr?.code ?? 'none' } });
     }
 
     if (op === 'quantity') {
@@ -69,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (op === 'advance') {
       const clock = q('clock'); const sub = q('sub'); const days = Number(q('days') || 61);
       const target = Math.floor(Date.now() / 1000) + days * 86400;
-      await (stripe as any).testHelpers.testClocks.advance({ frozen_time: target } as any, undefined as any).catch(async () => (stripe as any).testHelpers.testClocks.advance(clock, { frozen_time: target }));
+      await (stripe as any).testHelpers.testClocks.advance(clock, { frozen_time: target });
       // poll until ready
       let c: any; for (let i = 0; i < 25; i++) { c = await (stripe as any).testHelpers.testClocks.retrieve(clock); if (c.status === 'ready') break; await new Promise((r) => setTimeout(r, 1500)); }
       const s: any = await stripe.subscriptions.retrieve(sub, { expand: ['latest_invoice.payment_intent'] });
