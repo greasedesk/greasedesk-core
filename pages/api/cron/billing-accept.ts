@@ -87,6 +87,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         off_session: true, report_THE_ONE: { payment_intent_status: pi?.status, next_action: pi?.next_action?.type ?? 'none', invoice_status: s.latest_invoice?.status } });
     }
 
+    if (op === 'touch') {
+      // Fire a customer.subscription.updated to the LIVE webhook (proves the webhook — not the
+      // redirect — writes the GroupBilling cache). Metadata bump; no billing effect.
+      const s = await stripe.subscriptions.update(q('sub'), { metadata: { acc_touch: String(Date.now()) } });
+      return res.status(200).json({ op, subscription_status: s.status, customer: s.customer });
+    }
+
     if (op === 'cancel') {
       const s = await stripe.subscriptions.cancel(q('sub'));
       return res.status(200).json({ op, subscription_status: s.status, canceled_at: s.canceled_at });
