@@ -13,6 +13,7 @@ const DB_VERSION = 1;
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
   id: string; kind: 'photo' | 'vehicle' | 'video'; jobCardId: string;
+  label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
   durationSeconds?: number | null;                                     // kind:'video'
@@ -78,9 +79,9 @@ export async function triggerDrain(): Promise<void> {
 }
 
 /** Capture → IDB FIRST → then the network is invited. Returns the idempotency id. */
-export async function enqueuePhoto(args: { jobCardId: string; stage: string; blob: Blob; slot?: string }): Promise<string> {
+export async function enqueuePhoto(args: { jobCardId: string; stage: string; blob: Blob; slot?: string; label?: string }): Promise<string> {
   const item: OutboxItem = {
-    id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, stage: args.stage, slot: args.slot ?? 'freeform',
+    id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, label: args.label, stage: args.stage, slot: args.slot ?? 'freeform',
     blob: args.blob, contentType: 'image/jpeg', createdAt: Date.now(),
     attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
@@ -108,7 +109,7 @@ export async function enqueueVehicle(args: { jobCardId: string; vin?: string; mi
 /** Walkaround video — the THIRD kind on the same envelope (same queue, same idempotency id, same
  *  drain). Sent via the resumable multipart lane in sw.js; held for Wi-Fi where the platform can
  *  tell us (Android), or for an explicit "Send now" where it can't (iOS). Never blocks photos. */
-export async function enqueueVideo(args: { jobCardId: string; stage: string; blob: Blob; contentType: string; durationSeconds?: number | null }): Promise<string> {
+export async function enqueueVideo(args: { jobCardId: string; stage: string; blob: Blob; contentType: string; durationSeconds?: number | null; label?: string }): Promise<string> {
   // Read ONCE while the recorder blob is fresh and in-memory (reliable — the WebKit read
   // pathology applies to IDB-restored blobs), then store pre-sliced ArrayBuffers, which IDB
   // keeps inline in the record. Part size MUST match the server's PART_SIZE (uniform parts
@@ -118,7 +119,7 @@ export async function enqueueVideo(args: { jobCardId: string; stage: string; blo
   const parts: ArrayBuffer[] = [];
   for (let o = 0; o < whole.byteLength; o += PART) parts.push(whole.slice(o, Math.min(o + PART, whole.byteLength)));
   const item: OutboxItem = {
-    id: crypto.randomUUID(), kind: 'video', jobCardId: args.jobCardId, stage: args.stage, slot: 'walkaround',
+    id: crypto.randomUUID(), kind: 'video', jobCardId: args.jobCardId, label: args.label, stage: args.stage, slot: 'walkaround',
     parts, partSize: PART, contentType: args.contentType, durationSeconds: args.durationSeconds ?? null,
     uploadId: null, etags: {}, key: null, sendNow: false,
     createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
@@ -183,6 +184,9 @@ export type OutboxCounts = {
   /** A video hit the storage-CORS setup gate (server code 'cors') — a SETUP state to name
    *  honestly, not a network failure to count down from. */
   corsBlocked: boolean;
+  /** The FAILED items, named + linkable — so the banner says WHICH car and jumps to the card
+   *  (never a dead-end "1 failed"). label = the vehicle reg captured at enqueue. */
+  failedItems: Array<{ id: string; jobCardId: string; label: string | null; kind: string }>;
 };
 
 /** Live queue state for the always-visible badge. Returns an unsubscribe. Videos are counted
@@ -203,6 +207,7 @@ export function subscribeOutbox(cb: (counts: OutboxCounts) => void): () => void 
       nextRetryAt: retryAts.length ? Math.min(...retryAts) : null,
       corsBlocked: items.some((i) => i.kind === 'video' && i.state !== 'failed'
         && (String(i.lastError || '').includes('"code":"cors"') || String(i.lastError || '').includes(':cors'))), // JSON detail (current sw) or legacy string
+      failedItems: items.filter((i) => i.state === 'failed').map((i) => ({ id: i.id, jobCardId: i.jobCardId, label: i.label ?? null, kind: i.kind })),
     });
   };
   push();

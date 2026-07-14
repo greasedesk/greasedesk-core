@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import { ensureWorker, requestPersistence, sendVideosNow, subscribeOutbox, triggerDrain, OutboxCounts } from '@/lib/pwa-outbox';
 
-const EMPTY: OutboxCounts = { queued: 0, failed: 0, videos: 0, sending: false, nextRetryAt: null, corsBlocked: false };
+const EMPTY: OutboxCounts = { queued: 0, failed: 0, videos: 0, sending: false, nextRetryAt: null, corsBlocked: false, failedItems: [] };
 
 export default function OutboxStatus() {
   const { t } = useTranslation('pwa');
@@ -83,7 +83,16 @@ export default function OutboxStatus() {
       ) : (retryIn != null && !showSending) ? (
         <span style={{ color: '#FCD34D' }}>{t('outboxRetryIn', { s: retryIn })}</span>
       ) : null}
-      {counts.failed > 0 && <span className="font-semibold" style={{ color: '#FCA5A5' }}>{t('outboxFailed', { count: counts.failed })}</span>}
+      {/* FAILED items name their car and LINK to the card (never a dead-end "1 failed"): tapping
+          opens the job so the mechanic can retry or discard right there. */}
+      {counts.failedItems.map((f) => (
+        <a key={f.id} href={`/m/job/${f.jobCardId}`} className="font-semibold underline" style={{ color: '#FCA5A5' }}>
+          {t('outboxFailedNamed', { reg: f.label || t('outboxFailedUnknownReg') })}
+        </a>
+      ))}
+      {counts.failed > counts.failedItems.length && (
+        <span className="font-semibold" style={{ color: '#FCA5A5' }}>{t('outboxFailed', { count: counts.failed - counts.failedItems.length })}</span>
+      )}
       {!persisted && <span>{t('storageNote')}</span>}
     </div>
   );

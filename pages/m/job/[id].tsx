@@ -129,7 +129,7 @@ export default function MobileJobCard() {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith('image/')) continue;
       const blob = await resizeImage(file); // 1600px/q0.8 — the ONLY size that ever exists from here on
-      await enqueuePhoto({ jobCardId: id, stage, blob }); // durably parked, then the drain is invited
+      await enqueuePhoto({ jobCardId: id, stage, blob, label: job?.vehicle.registration }); // durably parked, then the drain is invited
     }
     await loadShots();
     const el = fileRefs.current[stage]; if (el) el.value = '';
@@ -161,13 +161,13 @@ export default function MobileJobCard() {
     for (const file of Array.from(files)) {
       if (file.type.startsWith('image/')) {
         const blob = await resizeImage(file);
-        await enqueuePhoto({ jobCardId: id, stage, blob });
+        await enqueuePhoto({ jobCardId: id, stage, blob, label: job?.vehicle.registration });
       } else if (file.type.startsWith('video/')) {
         if (file.size > 200 * 1024 * 1024) { setVideoErr(t('videoTooLarge')); continue; }
         const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
         const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
         const durationSeconds = await probeDuration(file);
-        await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds });
+        await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds, label: job?.vehicle.registration });
       }
     }
     await loadShots();
@@ -208,7 +208,7 @@ export default function MobileJobCard() {
   async function onVideoCaptured(stage: string, blob: Blob, contentType: string, durationSeconds: number) {
     setRecordingStage(null);
     saveSecondCopy(blob, contentType);
-    await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds });
+    await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds, label: job?.vehicle.registration });
     await loadShots();
   }
 
@@ -224,7 +224,7 @@ export default function MobileJobCard() {
     const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
     const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
     saveSecondCopy(file, contentType); // iOS <input capture> videos aren't saved to Photos either
-    await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds: null });
+    await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds: null, label: job?.vehicle.registration });
     await loadShots();
     const el = videoFileRefs.current[stage]; if (el) el.value = '';
   }
@@ -268,7 +268,7 @@ export default function MobileJobCard() {
     if (!file.type.startsWith('image/')) return;
     const blob = await resizeImage(file);
     setVinLocalUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob); }); // beside the input immediately — a bay has no signal
-    await enqueuePhoto({ jobCardId: id, stage: 'intake', blob, slot: 'vin' });
+    await enqueuePhoto({ jobCardId: id, stage: 'intake', blob, slot: 'vin', label: job?.vehicle.registration });
     await loadShots();
     if (vinFileRef.current) vinFileRef.current.value = '';
     if (vinEdit == null) setVinEdit(job?.vehicle.vin ?? ''); // open the input — the typing happens against the photo

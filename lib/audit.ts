@@ -39,8 +39,9 @@ export type AuditAction =
   | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent'          // emailed to the customer (PDF attached)
-  | 'video.upload_error'    // a handset's video upload failed — verbatim step/status/body from the outbox drain
   | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
+  // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
+  // never the business audit trail. The audit trail carries business events only. Nothing technical.
 
 export async function writeAudit(
   tx: Prisma.TransactionClient,

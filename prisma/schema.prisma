@@ -243,6 +243,28 @@ model Group {
   employmentEvents EmploymentEvent[]
 }
 
+// Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
+// {step, status, code, body} for a failed photo/video upload. DELIBERATELY separate from AuditLog:
+// the audit trail is the card's BUSINESS record (invoice raised, marked paid, work started) and the
+// future Car Owner product surfaces it — a WebKit stack trace has no place there. Nothing technical
+// in the ledger, ever. Joined to the card for diagnosis; never rendered to a customer.
+model UploadTelemetry {
+  id          String   @id @default(uuid())
+  group_id    String
+  job_card_id String
+  photo_id    String
+  kind        String
+  step        String
+  status      Int      @default(0)
+  code        String?
+  body        String?
+  attempts    Int      @default(0)
+  created_at  DateTime @default(now())
+
+  @@index([job_card_id, created_at])
+  @@index([group_id, created_at])
+}
+
 // Webhook idempotency ledger (item-12): every Stripe event.id is recorded ONCE before its effect
 // is applied; a replay finds the row and is skipped. "A replayed queue that double-logs an hour is
 // bad; a replayed charge is worse" — the outbox discipline, higher stakes.

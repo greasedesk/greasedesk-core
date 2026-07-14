@@ -2,9 +2,9 @@
  * File: pages/api/pwa/upload-error.ts
  * Upload-failure telemetry from the outbox drain (ruling 2026-07-13: a video failure must never
  * be swallowed into a bare string on one handset). The drain beacons { step, status, code, body }
- * and it lands on the card's audit trail (action video.upload_error) — readable server-side,
- * verbatim. Best-effort by design: the drain never waits on or retries this call; the queue's
- * own state is the source of truth, this is the black-box recorder.
+ * and it lands in the UploadTelemetry table — the TECHNICAL black-box, deliberately NOT the audit
+ * trail (ruling 2026-07-14: the audit trail is the card's BUSINESS record; stack traces have no
+ * place in the ledger). Best-effort by design: the drain never waits on or retries this call.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -12,7 +12,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
-import { writeAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -28,11 +27,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'No access.' });
 
-  await writeAudit(prisma as any, {
-    groupId: user.group_id as string, userId: user.id as string, jobCardId,
-    action: 'video.upload_error',
-    diff: {
-      photoId: String(photoId || '').slice(0, 64),
+  await prisma.uploadTelemetry.create({
+    data: {
+      group_id: user.group_id as string,
+      job_card_id: jobCardId,
+      photo_id: String(photoId || '').slice(0, 64),
       kind: String(kind || '').slice(0, 16),
       attempts: Number(attempts) || 0,
       step: String(detail.step || '').slice(0, 64),

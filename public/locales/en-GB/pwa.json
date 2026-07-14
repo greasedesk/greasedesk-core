@@ -91,5 +91,7 @@
   "videoDiscardConfirm": "Discard this video? It hasn’t been sent and can’t be recovered.",
   "videoUnrecoverable": "This video can’t be recovered from the phone — record it again.",
   "choosePhone": "Choose from phone",
-  "fullSite": "Full site →"
+  "fullSite": "Full site →",
+  "outboxFailedNamed": "{{reg}} — failed to send, tap to retry or discard",
+  "outboxFailedUnknownReg": "A job"
 }
