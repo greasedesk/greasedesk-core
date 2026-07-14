@@ -90,5 +90,6 @@
   "discardVideo": "Discard video",
   "videoDiscardConfirm": "Discard this video? It hasn’t been sent and can’t be recovered.",
   "videoUnrecoverable": "This video can’t be recovered from the phone — record it again.",
-  "choosePhone": "Choose from phone"
+  "choosePhone": "Choose from phone",
+  "fullSite": "Full site →"
 }

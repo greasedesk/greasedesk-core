@@ -16,6 +16,7 @@ import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
+import { hhmm } from '@/lib/diary-time'; // shared diary-time chokepoint (floating wall-clock; no tz conversion)
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 import InstallBar from '@/components/pwa/InstallBar';
 
@@ -108,7 +109,8 @@ export default function MobileDiaryDay() {
     return () => clearTimeout(h);
   }, [q]);
 
-  const hhmm = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : '—';
+  // Diary time via THE shared chokepoint — renders the stored floating wall-clock (matches desktop).
+  // The old Europe/London conversion added the BST hour to a value that was already local (the +1 bug).
   const chipTone = (s: string) => STATUS_TONES[s] ?? 'bg-surface-muted text-muted border-line';
   const barTone = (s: string) => STATUS_BAR[s] ?? 'var(--border)';
   const nav = (delta: number) => { if (!data?.date) return; const next = dayShift(data.date, delta); setDate(next); load(undefined, next); };
@@ -157,6 +159,11 @@ export default function MobileDiaryDay() {
               <p className="text-xs" style={{ color: '#C7D2E1' }}>
                 {net === 'offline' ? t('offline') : net === 'fresh' ? t('updated') : t('updating')}
               </p>
+              {/* Escape hatch to the desktop app (ruling 2026-07-14): role decides where a mechanic
+                  LANDS (/m), not where they're ALLOWED — a STANDARD user at the office PC must reach
+                  the full diary. The desktop's finance chokepoint already strips money/margin for
+                  STANDARD, so nothing new needs gating. Plain <a> = leave the /m PWA scope. */}
+              <a href="/admin/diary" className="text-xs underline inline-block mt-0.5" style={{ color: '#8AB4F8' }}>{t('fullSite')}</a>
             </div>
             {(data?.sites?.length ?? 0) > 1 && (
               <select

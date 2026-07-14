@@ -16,6 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
 import { getVisibility } from '@/lib/site-visibility';
+import { hhmm } from '@/lib/diary-time'; // THE shared diary-time chokepoint (floating wall-clock render)
 import { canManageSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canCreateDiaryEntry, financeVisibility } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
@@ -73,7 +74,7 @@ type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; vatRegistere
 
 function ymd(d: Date) { return d.toISOString().slice(0, 10); }
 function dayStartMs(date: string) { return Date.parse(`${date}T00:00:00.000Z`); }
-function hhmm(iso: string) { return new Date(iso).toISOString().slice(11, 16); }
+// hhmm now imported from the shared lib/diary-time chokepoint (top of file).
 const pad = (n: number) => String(n).padStart(2, '0');
 const snap15 = (min: number) => Math.round(min / 15) * 15;
 const menuBtn = 'w-full text-left px-3 py-2.5 hover:bg-surface-muted text-ink';
