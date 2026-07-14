@@ -13,7 +13,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { signOut } from 'next-auth/react';
+import { signOut, useSession } from 'next-auth/react';
 import { useTranslation } from 'next-i18next';
 import BrandLogo from '@/components/BrandLogo';
 
@@ -192,14 +192,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   );
 }
 
-// A NUDGE, never a redirect: managers/admins on a narrow viewport get a dismissible pointer to
-// the workshop view. md:hidden = CSS-narrow, not UA-sniffed; dismissal remembered per browser.
+// A NUDGE, never a redirect: a dismissible pointer to the workshop view on a narrow viewport.
+// md:hidden = CSS-narrow, not UA-sniffed; dismissal remembered FOREVER per browser.
+// SUPPRESSED (ruling 2026-07-14, demo hardening) for ADMIN and SITE_MANAGER — they OPENED the
+// admin app deliberately (STANDARD mechanics land on /m and never see this), and NEVER on the
+// diary — an admin on a phone looking at the diary knows exactly where they are. With the current
+// role model those two gates mean it doesn't nag anyone during a demo; the component + its
+// dismissible-forever memory stay for any future non-admin role that reaches the admin app.
 function WorkshopNudge({ t }: { t: (k: string) => string }) {
+  const router = useRouter();
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role;
   const [show, setShow] = React.useState(false);
   React.useEffect(() => {
     try { setShow(localStorage.getItem('gd-m-nudge') !== 'dismissed'); } catch { setShow(true); }
   }, []);
   if (!show) return null;
+  if (role === 'ADMIN' || role === 'SITE_MANAGER') return null; // they chose the admin app — no nag
+  if (router.pathname.startsWith('/admin/diary')) return null;   // never on the diary
   return (
     <div className="md:hidden flex items-center gap-2 px-4 py-2 text-sm bg-accent-soft text-accent border-b border-line">
       <a href="/m" className="flex-1 font-medium underline min-h-[44px] flex items-center">{t('workshopNudge')}</a>

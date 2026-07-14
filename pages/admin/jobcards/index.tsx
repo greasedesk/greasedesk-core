@@ -124,7 +124,10 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel }: PagePro
           className="sm:ml-auto sm:w-72 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm focus:ring-accent focus:border-accent" />
       </div>
 
-      <div className="bg-surface border border-line rounded-xl overflow-hidden">
+      {/* overflow-x-auto (demo hardening 2026-07-14): the 5-column table SCROLLS inside its own
+          container on a narrow screen — it never pushes the page wider or clips columns. Matches
+          the invoices tables. */}
+      <div className="bg-surface border border-line rounded-xl overflow-x-auto">
         <table className="w-full text-left text-sm text-ink">
           <thead className="bg-surface-muted text-xs uppercase text-muted">
             <tr>

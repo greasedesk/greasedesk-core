@@ -104,7 +104,12 @@ function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose 
   return (
     <>
       <div className="fixed inset-0 z-30" onClick={onClose} />
-      <div className="absolute right-0 mt-1 z-40 w-72 bg-surface border border-line rounded-xl shadow-lg p-3">
+      {/* Viewport-safe by construction (demo hardening 2026-07-14): on desktop an anchored
+          right-aligned popover; below md a CENTRED fixed overlay (like the booking dialogs) so it
+          can never spill off the edge from a left-placed trigger. width capped to the viewport. */}
+      <div className="z-40 w-72 max-w-[calc(100vw-1.5rem)] bg-surface border border-line rounded-xl shadow-lg p-3
+        fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
+        md:absolute md:left-auto md:top-auto md:right-0 md:mt-1 md:translate-x-0 md:translate-y-0">
         <div className="flex items-center justify-between mb-2">
           <button aria-label={t('prev')} onClick={() => shift(-1)} className="px-2 py-1 rounded-md hover:bg-surface-muted text-ink">‹</button>
           <div className="text-sm font-semibold text-ink">{monthLabel}</div>

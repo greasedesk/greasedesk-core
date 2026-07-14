@@ -9,6 +9,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* PAGE BACKSTOP (demo hardening 2026-07-14): nothing may make the whole page scroll sideways on a
+   phone. `clip` (not `hidden`) stops horizontal overflow WITHOUT establishing a scroll container,
+   so it never breaks position:sticky (the diary/sidebar rely on it). Real overflow lives inside
+   its own container (tables → overflow-x-auto; popovers/modals → viewport-clamped) — this only
+   catches strays so the admin app never looks broken on a handset at a demo. */
+html, body { overflow-x: clip; max-width: 100%; }
+
 :root {
   /* Dark navy rail (brand-derived) */
   --sidebar-bg: #0B1E3B;
