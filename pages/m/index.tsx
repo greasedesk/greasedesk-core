@@ -8,7 +8,7 @@
  * date; quiet offline line; outbox strip; 56px touch targets. NO MONEY on this surface — the
  * server projects it out before it leaves the building.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { getServerSession } from 'next-auth';
@@ -115,6 +115,27 @@ export default function MobileDiaryDay() {
   const barTone = (s: string) => STATUS_BAR[s] ?? 'var(--border)';
   const nav = (delta: number) => { if (!data?.date) return; const next = dayShift(data.date, delta); setDate(next); load(undefined, next); };
   const goToday = () => { setDate(null); load(undefined, null); };
+
+  // SWIPE to change day (ruling 2026-07-14): the content moves under the finger, iOS/Android calendar
+  // convention — swipe LEFT → next day, RIGHT → previous. Guarded so it never fights vertical scroll
+  // (needs a clearly horizontal gesture: ≥60px travel AND dx > 2×dy) and never fights the search field
+  // (skipped when the gesture starts on an input/select/textarea). The ← date → buttons stay — gloved
+  // hands, cold mornings — this is an addition. Cache-first paint comes free (nav → load, cache-first).
+  const swipe = useRef<{ x: number; y: number; skip: boolean } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const skip = !!(e.target as HTMLElement).closest('input, textarea, select'); // never fight an input
+    const p = e.touches[0];
+    swipe.current = { x: p.clientX, y: p.clientY, skip };
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const s = swipe.current; swipe.current = null;
+    if (!s || s.skip || !data?.date) return;
+    const p = e.changedTouches[0];
+    const dx = p.clientX - s.x, dy = p.clientY - s.y;
+    if (Math.abs(dx) < 60 || Math.abs(dx) <= 2 * Math.abs(dy)) return; // clearly horizontal only — vertical scroll survives
+    nav(dx < 0 ? 1 : -1); // swipe left → next day; swipe right → previous
+    try { (navigator as any).vibrate?.(10); } catch { /* Android only; silently absent on iOS, never shimmed */ }
+  };
   const dayLabel = data?.date
     ? new Date(`${data.date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
     : '…';
@@ -150,7 +171,7 @@ export default function MobileDiaryDay() {
         <meta name="apple-mobile-web-app-title" content="GreaseDesk" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
       </Head>
-      <div className="min-h-screen" style={{ background: 'var(--content-bg)' }}>
+      <div className="min-h-screen" style={{ background: 'var(--content-bg)' }} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <header className="px-4 py-3" style={{ background: '#0B1E3B', color: '#FFFFFF', paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
           <div className="flex items-center justify-between gap-3">
             <div>
