@@ -111,23 +111,33 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
   const { defaultVatRate, defaultLabourRate, timezone, currencyCode } =
     req.body as SaveRatesBody;
 
-  const vat = Number(defaultVatRate);
   const labour = Number(defaultLabourRate);
-
-  if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
-    return res.status(400).json({ message: 'Invalid VAT rate' });
-  }
-
   if (!Number.isFinite(labour) || labour < 0) {
     return res.status(400).json({ message: 'Invalid labour rate' });
+  }
+
+  // VAT/tax is now its OWN onboarding step (item-13) — the rates step no longer sends it. Accept it
+  // when present (legacy/settings callers), skip the VAT writes when absent.
+  const hasVat = defaultVatRate != null && String(defaultVatRate).trim() !== '';
+  const vat = hasVat ? Number(defaultVatRate) : NaN;
+  if (hasVat && (!Number.isFinite(vat) || vat < 0 || vat > 100)) {
+    return res.status(400).json({ message: 'Invalid VAT rate' });
   }
 
   // ─────────────────────────────────────────────────────────────
   // 4. Atomic DB update for Site, TaxRate, ServiceCatalogue
   // ─────────────────────────────────────────────────────────────
   try {
+    // The service's VAT rate falls back to the group's current default when this call carries no VAT
+    // (the onboarding rates step). The tax step is authoritative for VAT.
+    const grpForVat = hasVat ? null : (await prisma.group.findUnique({ where: { id: groupId! }, select: { default_vat_rate: true } }));
+    const serviceVatDec = hasVat ? new Prisma.Decimal(vat.toFixed(2)) : new Prisma.Decimal(grpForVat?.default_vat_rate ?? 20);
+
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // A. Site regional settings
+      // A. Site regional settings. The labour rate lives on the LABOUR_HR ServiceCatalogue row
+      // (written in step C) — that row is the onboarding "rates done" SIGNAL the root gate reads
+      // (item-13), so writing it advances the wizard past the rates step.
+      const rateDec = new Prisma.Decimal(labour.toFixed(2));
       await tx.site.update({
         where: { id: siteId! },
         data: {
@@ -136,35 +146,28 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         },
       });
 
-      // B. Company default VAT rate on Group — THE source that cascades as the pre-fill everywhere.
-      const vatDec = new Prisma.Decimal(vat.toFixed(2));
-      await tx.group.update({ where: { id: groupId! }, data: { default_vat_rate: vatDec } });
-
-      // B2. Legacy 'UK VAT' TaxRate (deterministic id per group) — kept for the legacy rates page.
-      const ukVatId = `${groupId}-UK-VAT`;
-      await tx.taxRate.upsert({
-        where: { id: ukVatId },
-        update: {
-          percentage: vatDec,
-        },
-        create: {
-          id: ukVatId,
-          group_id: groupId!,
-          name: 'UK VAT',
-          percentage: vatDec,
-          valid_from: new Date(),
-        },
-      });
+      // B. VAT writes only when this caller carried a VAT value (legacy / settings path).
+      if (hasVat) {
+        const vatDec = new Prisma.Decimal(vat.toFixed(2));
+        // Company default VAT rate on Group — THE source that cascades as the pre-fill everywhere.
+        await tx.group.update({ where: { id: groupId! }, data: { default_vat_rate: vatDec } });
+        // Legacy 'UK VAT' TaxRate (deterministic id per group) — kept for the legacy rates page.
+        const ukVatId = `${groupId}-UK-VAT`;
+        await tx.taxRate.upsert({
+          where: { id: ukVatId },
+          update: { percentage: vatDec },
+          create: { id: ukVatId, group_id: groupId!, name: 'UK VAT', percentage: vatDec, valid_from: new Date() },
+        });
+      }
 
       // C. Default labour service for this site
-      const rateDec = new Prisma.Decimal(labour.toFixed(2));
       const labourServiceId = `${groupId}-${siteId}-LABOUR_HR`;
       await tx.serviceCatalogue.upsert({
         where: { id: labourServiceId },
         update: {
           default_labour_rate: rateDec,
           default_price: rateDec,
-          vat_rate: vatDec,
+          vat_rate: serviceVatDec,
         },
         create: {
           id: labourServiceId,
@@ -176,7 +179,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
           default_duration_minutes: 60,
           default_labour_rate: rateDec,
           default_price: rateDec,
-          vat_rate: vatDec,
+          vat_rate: serviceVatDec,
           is_active: true,
         },
       });

@@ -12,8 +12,21 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility, type Visibility } from '@/lib/site-visibility';
 import { prisma } from '@/lib/db';
 import { canWrite } from '@/lib/billing';
+import { getOnboardingState, stepPath, type OnboardingStep } from '@/lib/onboarding';
 
 type RedirectResult = { ok: false; redirect: { destination: string; permanent: boolean } };
+
+/**
+ * THE onboarding root gate (item-13), for the raw entry points that don't route through
+ * requireAdminPage (landing, dashboard, diary, job cards, /m). Returns a redirect destination to the
+ * first incomplete step, or null when the tenant is fully set up. Short-circuits inside
+ * getOnboardingState — microseconds on the request path. This single call REPLACES the five
+ * scattered `!site_id → setup-location` leaf patches: one gate, not five defensive checks.
+ */
+export async function onboardingGateRedirect(groupId: string | null | undefined): Promise<string | null> {
+  const state = await getOnboardingState(groupId);
+  return state.onboarded ? null : stepPath(state.firstIncompleteStep ?? 'site');
+}
 
 /**
  * THE billing write-gate for API routes (item-12). Call at the top of every endpoint that CREATES
@@ -40,6 +53,10 @@ export async function requireAdminPage(
   if (!u?.id) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
   const vis = await getVisibility(u.id as string);
   if (!vis.isAdmin) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
+  // Root onboarding gate: an admin whose tenant isn't fully set up is sent to its first incomplete
+  // step. Every admin page built on this guard inherits it — no per-page onboarding checks.
+  const onboard = await onboardingGateRedirect(vis.groupId);
+  if (onboard) return { ok: false, redirect: { destination: onboard, permanent: false } };
   return { ok: true, vis };
 }
 
@@ -50,6 +67,30 @@ export async function requireAdminApi(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(u.id as string);
   if (!vis.isAdmin) { res.status(403).json({ message: 'Admin access required.' }); return null; }
   return vis;
+}
+
+/**
+ * Wizard step-guard (item-13). Used by each /onboarding/* page's gssp so the wizard self-sequences:
+ * you can only be ON your current step. Bounces skip-ahead (opening `tax` before `rates` → rates),
+ * resumes a half-finished tenant at its first incomplete step, and sends an already-complete tenant
+ * to the dashboard. Onboarding is owner/ADMIN work — non-admins are sent to the dashboard.
+ */
+export async function requireOnboardingStep(
+  ctx: GetServerSidePropsContext,
+  step: OnboardingStep,
+): Promise<{ ok: true; vis: Visibility } | RedirectResult> {
+  const session = await getServerSession(ctx.req, ctx.res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) return { ok: false, redirect: { destination: `/admin/login?callbackUrl=${encodeURIComponent(stepPath(step))}`, permanent: false } };
+  const vis = await getVisibility(u.id as string);
+  if (!vis.groupId) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
+  if (!vis.isAdmin) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
+  const state = await getOnboardingState(vis.groupId);
+  if (state.onboarded) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
+  if (state.firstIncompleteStep !== step) {
+    return { ok: false, redirect: { destination: stepPath(state.firstIncompleteStep ?? 'site'), permanent: false } };
+  }
+  return { ok: true, vis };
 }
 
 // ---- site authority chokepoints ------------------------------------------------------

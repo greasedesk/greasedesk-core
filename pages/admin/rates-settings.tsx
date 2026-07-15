@@ -14,6 +14,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
+import { getVisibility } from '@/lib/site-visibility';
+import { onboardingGateRedirect } from '@/lib/admin-guard';
 
 // Data Types
 type SiteRates = {
@@ -166,11 +168,16 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     const user = session?.user as any;
 
     if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false }, props: {} as any };
-    if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false }, props: {} as any }; // siteless → graceful, never a logout
+    // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
+    const onboard = await onboardingGateRedirect(user.group_id);
+    if (onboard) return { redirect: { destination: onboard, permanent: false }, props: {} as any };
+    // Site is DB-derived (primarySiteId), never the stale-JWT token site_id.
+    const vis = await getVisibility(user.id as string);
+    const siteId = vis.primarySiteId as string;
 
     const [site, vatRow, labourSvc] = await Promise.all([
         prisma.site.findUnique({
-            where: { id: user.site_id },
+            where: { id: siteId },
             select: { timezone: true, currency_code: true },
         }),
         prisma.taxRate.findFirst({
@@ -178,7 +185,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
             select: { percentage: true },
         }),
         prisma.serviceCatalogue.findFirst({
-            where: { group_id: user.group_id, site_id: user.site_id, service_code: 'LABOUR_HR' },
+            where: { group_id: user.group_id, site_id: siteId, service_code: 'LABOUR_HR' },
             select: { default_labour_rate: true },
         }),
     ]);

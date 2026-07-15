@@ -102,6 +102,17 @@ export const authOptions: NextAuthOptions = {
         token.site_id = (user as any).site_id;
         token.group_id = (user as any).group_id;
       }
+      // Stale-JWT backfill (item-13): a tenant that finishes onboarding AFTER this token was minted
+      // (the site is created mid-session, at the onboarding site step) has group_id but no site_id,
+      // and site_id is otherwise only stamped at login. Re-read it ONCE from the DB the moment it
+      // exists, so site-scoped pages/APIs work in the first session without a re-login. Self-limiting:
+      // fires only while site_id is absent, then never again. This retires the stale-JWT root cause
+      // the old setup-location leaf pages were papering over.
+      if (token.id && token.group_id && !token.site_id) {
+        const u = await prisma.user.findUnique({ where: { id: token.id as string }, select: { site_id: true, primary_site_id: true } });
+        const sid = u?.primary_site_id ?? u?.site_id ?? null;
+        if (sid) token.site_id = sid;
+      }
       return token;
     },
   },

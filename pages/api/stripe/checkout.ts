@@ -37,6 +37,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const quantity = Math.max(1, siteCount);
   const base = appBaseUrl();
 
+  // Onboarding returns INTO the wizard (item-13) so completion is confirmed by a synchronous
+  // session retrieve on the billing step — never left at Settings → Licence. The settings-page
+  // "Start subscription" path keeps its own return URL.
+  const onboarding = (req.body && (req.body as any).context === 'onboarding') === true;
+  const successUrl = onboarding
+    ? `${base}/onboarding/billing?session_id={CHECKOUT_SESSION_ID}`
+    : `${base}/admin/settings/licences?billing=success`;
+  const cancelUrl = onboarding
+    ? `${base}/onboarding/billing?billing=cancelled`
+    : `${base}/admin/settings/licences?billing=cancelled`;
+
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -59,8 +70,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(billing?.stripe_customer_id
         ? { customer: billing.stripe_customer_id }
         : { customer_email: group.billing_email ?? undefined }),
-      success_url: `${base}/admin/settings/licences?billing=success`,
-      cancel_url: `${base}/admin/settings/licences?billing=cancelled`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
     }, { idempotencyKey: `checkout:${groupId}:${quantity}` });
 
     return res.status(200).json({ url: session.url });

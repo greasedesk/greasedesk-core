@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 
@@ -183,7 +184,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const user = session?.user as any;
 
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
-  if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false } }; // siteless → graceful, never a logout
+  // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
+  const onboard = await onboardingGateRedirect(user.group_id);
+  if (onboard) return { redirect: { destination: onboard, permanent: false } };
 
   type JobCardListDbRow = {
     id: string;

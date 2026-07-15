@@ -59,6 +59,15 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       postcode?: string;
     };
 
+    // MANDATORY garage name (item-13) — no silent derivation from the person's name. The wizard
+    // marks this required client-side; enforce it here so the tenant name is always the real garage.
+    if (!groupName || !groupName.trim()) {
+      return res.status(400).json({ message: 'Please enter your garage / company name.' });
+    }
+    if (!siteName || !siteName.trim()) {
+      return res.status(400).json({ message: 'Please enter your primary location name.' });
+    }
+
     const fullAddressParts = [addressLine1, city, postcode].filter(Boolean);
     const fullAddress = fullAddressParts.length ? fullAddressParts.join(', ') : null;
 
@@ -73,7 +82,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         group = await tx.group.update({
           where: { id: groupId },
           data: {
-            group_name: groupName ?? undefined,
+            group_name: groupName.trim(),
           },
         });
       } else {

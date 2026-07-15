@@ -11,7 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
-import { billingStatusFromStripe } from '@/lib/billing';
+import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
 
 export const config = { api: { bodyParser: false } };
 
@@ -26,32 +26,6 @@ function readRaw(req: NextApiRequest): Promise<Buffer> {
       resolve(Buffer.from(merged.buffer, merged.byteOffset, merged.byteLength));
     });
     req.on('error', reject);
-  });
-}
-
-/** Map a Stripe subscription onto the GroupBilling cache (by customer id, else client_reference). */
-async function applySubscription(sub: Stripe.Subscription, fallbackGroupId?: string | null) {
-  const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-  const where = customerId
-    ? { stripe_customer_id: customerId }
-    : (fallbackGroupId ? { group_id: fallbackGroupId } : null);
-  if (!where) return;
-  const target = await prisma.groupBilling.findFirst({
-    where: 'stripe_customer_id' in where ? { stripe_customer_id: where.stripe_customer_id } : { group_id: (where as any).group_id },
-    select: { group_id: true },
-  });
-  const groupId = target?.group_id ?? fallbackGroupId;
-  if (!groupId) return;
-  const periodEnd = (sub as any).current_period_end ? new Date((sub as any).current_period_end * 1000) : null;
-  await prisma.groupBilling.update({
-    where: { group_id: groupId },
-    data: {
-      stripe_customer_id: customerId ?? undefined,
-      stripe_subscription_id: sub.id,
-      subscription_status: sub.status,
-      current_period_end: periodEnd,
-      status: billingStatusFromStripe(sub.status), // coarse projection for display
-    },
   });
 }
 
@@ -90,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Seed the customer link so later subscription.* events map by customer id.
           await prisma.groupBilling.update({ where: { group_id: groupId }, data: { stripe_customer_id: customerId, stripe_subscription_id: subId ?? undefined } }).catch(() => {});
         }
-        if (subId) { const sub = await stripe.subscriptions.retrieve(subId); await applySubscription(sub, groupId); }
+        if (subId) { const sub = await stripe.subscriptions.retrieve(subId); await applyStripeSubscriptionToCache(sub, groupId); }
         break;
       }
       case 'customer.subscription.created':
@@ -98,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case 'customer.subscription.deleted':
       case 'customer.subscription.paused':
       case 'customer.subscription.resumed': {
-        await applySubscription(event.data.object as Stripe.Subscription, null);
+        await applyStripeSubscriptionToCache(event.data.object as Stripe.Subscription, null);
         break;
       }
       default:

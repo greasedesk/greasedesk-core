@@ -275,30 +275,31 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   // ADMIN-ONLY: financial settings (rates/VAT/currency/PC tags) are not editable by STANDARD users.
+  // requireAdminPage now carries the root onboarding gate (item-13): a not-fully-set-up tenant is
+  // redirected to its first incomplete step here, so the old !site_id → setup-location leaf patch is
+  // gone. site is DB-derived (vis.primarySiteId), never the stale-JWT token site_id.
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
-  const session = await getServerSession(ctx.req, ctx.res, authOptions);
-  const user = session?.user as any;
-  if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
-  if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false } }; // siteless → graceful, never a logout
+  const { vis } = gate;
+  const groupId = vis.groupId as string;
 
   type PcDbRow = { id: string; name: string; category: string | null };
   type SiteDbRow = { id: string; site_name: string };
 
   // All-locations: pick the target site from ?site=<id>, validated to belong to the group;
-  // fall back to the caller's own site. The per-site settings below load for that site.
+  // fall back to the caller's primary site. The per-site settings below load for that site.
   const allSites = (await prisma.site.findMany({
-    where: { group_id: user.group_id }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true },
+    where: { group_id: groupId }, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true },
   })) as SiteDbRow[];
   const requested = typeof ctx.query.site === 'string' ? ctx.query.site : '';
-  const selectedSiteId = allSites.some((s) => s.id === requested) ? requested : (user.site_id as string);
+  const selectedSiteId = allSites.some((s) => s.id === requested) ? requested : (vis.primarySiteId ?? allSites[0]?.id as string);
 
   const [site, labourSvc, pcs] = await Promise.all([
     prisma.site.findUnique({
       where: { id: selectedSiteId },
       select: { site_name: true, timezone: true, currency_code: true, pricing_display_mode: true, supported_countries: true, supported_currencies: true },
     }),
-    prisma.serviceCatalogue.findFirst({ where: { group_id: user.group_id, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
+    prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
     prisma.profitCentre.findMany({ where: { site_id: selectedSiteId }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
   ]);
 
@@ -315,6 +316,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  const grpTax = (await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { tax_label: true } })) as any;
+  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true } })) as any;
   return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, taxLabelInitial: grpTax?.tax_label ?? 'VAT' } };
 };

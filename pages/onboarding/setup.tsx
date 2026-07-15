@@ -7,6 +7,16 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import type { GetServerSideProps } from 'next';
+import { requireOnboardingStep } from '@/lib/admin-guard';
+
+// Wizard step-guard: only reachable as the FIRST incomplete step; bounces skip-ahead / resumes /
+// sends a complete tenant to the dashboard (item-13).
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  const gate = await requireOnboardingStep(ctx, 'site');
+  if (!gate.ok) return { redirect: gate.redirect };
+  return { props: {} };
+};
 
 // Define the expected form data shape
 interface SetupData {

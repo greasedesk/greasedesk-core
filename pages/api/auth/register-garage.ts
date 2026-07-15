@@ -67,7 +67,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { user } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
         // ref is auto-assigned by the DB sequence default; status defaults to 'trial'.
-        data: { group_name: `${name}'s Garage`, billing_email: emailNorm, trial_ends_at: trialEndsFromNow() },
+        // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
+        // asks the real garage name and it's mandatory there (item-13). "Iain Gunn's Garage" was this
+        // personal-name default surviving because setup used to be skippable; it no longer is.
+        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: trialEndsFromNow() },
       });
 
       const user = await tx.user.create({

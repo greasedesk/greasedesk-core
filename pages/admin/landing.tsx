@@ -9,6 +9,7 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
+import { onboardingGateRedirect } from '@/lib/admin-guard';
 import type { GetServerSideProps } from 'next';
 
 export default function Landing() { return null; }
@@ -18,7 +19,14 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const user = session?.user as any;
   if (!user?.id) return { redirect: { destination: '/admin/login', permanent: false } };
   const vis = await getVisibility(user.id as string);
-  if (vis.isAdmin) return { redirect: { destination: '/admin/dashboard', permanent: false } };
+  // Root onboarding gate: an admin/owner whose tenant isn't fully set up is routed to its first
+  // incomplete step BEFORE any landing decision. (Only the owner/ADMIN onboards; STANDARD users
+  // only exist post-onboarding, so they never hit this.)
+  if (vis.isAdmin) {
+    const onboard = await onboardingGateRedirect(vis.groupId);
+    if (onboard) return { redirect: { destination: onboard, permanent: false } };
+    return { redirect: { destination: '/admin/dashboard', permanent: false } };
+  }
   if (vis.role === 'STANDARD') return { redirect: { destination: '/m', permanent: false } }; // mechanics land on the workshop view — every device, every time
   const site = vis.primarySiteId ?? vis.siteIds[0] ?? null;
   return { redirect: { destination: site ? `/admin/diary?site=${encodeURIComponent(site)}` : '/admin/diary', permanent: false } };

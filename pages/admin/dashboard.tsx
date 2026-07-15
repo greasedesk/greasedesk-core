@@ -16,6 +16,7 @@ import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
+import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { daysLeft } from '@/lib/trial';
 import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 import { formatMoney } from '@/lib/format-money';
@@ -558,6 +559,11 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
   if (!(vis.isAdmin || vis.role === 'SITE_MANAGER')) {
     const site = vis.primarySiteId ?? vis.siteIds[0] ?? null;
     return { redirect: { destination: site ? `/admin/diary?site=${encodeURIComponent(site)}` : '/admin/diary', permanent: false } };
+  }
+  // Root onboarding gate — a half-set-up admin can never reach the dashboard; resume at first step.
+  if (vis.isAdmin) {
+    const onboard = await onboardingGateRedirect(vis.groupId);
+    if (onboard) return { redirect: { destination: onboard, permanent: false } };
   }
   const group = (await prisma.group.findUnique({
     where: { id: user.group_id },

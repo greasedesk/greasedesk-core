@@ -15,7 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
-import { canManageSite, canAccessSite } from '@/lib/admin-guard';
+import { canManageSite, canAccessSite, onboardingGateRedirect } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
@@ -183,9 +183,10 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
+  // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
+  const onboard = await onboardingGateRedirect(user.group_id);
+  if (onboard) return { redirect: { destination: onboard, permanent: false } };
   // Valid session, no location yet (siteless — e.g. between signup and first-site): a graceful
-  // empty state, NEVER a login bounce (ruling 2026-07-14). setup-location is stale-JWT-safe.
-  if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false } };
   // ONE builder shared with /api/jobcard-pane (the diary's inline card) — lib/jobcard-page-data.ts.
   const props = await buildJobCardPageProps(user.id as string, user.group_id as string, ctx.params?.id as string);
   if (!props) return { notFound: true };

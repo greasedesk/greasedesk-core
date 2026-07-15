@@ -63,8 +63,10 @@ export default async function handle(
       });
     });
 
-    // 3. SUCCESS: Redirect to the Admin Login page
-    const callbackUrl = `${baseUrl}/onboarding/billing`; // Final destination after login
+    // 3. SUCCESS: Redirect to the Admin Login page. Land on /admin/landing and let the ONE root
+    // onboarding gate route to the first incomplete step (site → rates → tax → checkout) — verify
+    // no longer hard-codes a step, so the sequence has a single owner (item-13).
+    const callbackUrl = `${baseUrl}/admin/landing`;
 
     return res.redirect(
         302, 
