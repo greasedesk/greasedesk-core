@@ -23,6 +23,23 @@
   },
   "noSite": "You’re not currently assigned to a location — contact your admin.",
   "noResources": "This location has no resources. Add some in Settings → Locations & Resources.",
+  "resourceType": {
+    "lift": "Lift",
+    "mot_bay": "MOT bay",
+    "spray_booth": "Spray booth"
+  },
+  "firstResource": {
+    "title": "Add your first lift or bay",
+    "body": "You need at least one lift or bay to book jobs into the diary. Add one here to get started.",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. Lift 1",
+    "typeLabel": "Type",
+    "add": "Add lift",
+    "adding": "Adding…",
+    "nameRequired": "Please give it a name.",
+    "failed": "Could not add it. Please try again.",
+    "viewer": "This location has no lifts or bays yet — ask an admin to add one so jobs can be scheduled."
+  },
   "closedDay": "Closed",
   "breakBand": "Break (non-working)",
   "place": {

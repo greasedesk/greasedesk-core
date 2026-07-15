@@ -195,7 +195,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
         timezone: site?.timezone ?? 'Europe/London',
         currencyCode: site?.currency_code ?? 'GBP',
         defaultVatRate: vatRow ? new Prisma.Decimal(vatRow.percentage).toFixed(2) : '20.00',
-        defaultLabourRate: labourSvc ? new Prisma.Decimal(labourSvc.default_labour_rate).toFixed(2) : '75.00',
+        defaultLabourRate: labourSvc ? new Prisma.Decimal(labourSvc.default_labour_rate).toFixed(2) : '', // never pre-fill TMBS's £75
     };
 
     return { props: { initial } };

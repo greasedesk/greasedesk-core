@@ -22,9 +22,10 @@ type FormData = {
   currencyCode: string;
 };
 
-// Initial state, based on UK defaults. VAT/tax moved to its own step (item-13).
+// Initial state. VAT/tax moved to its own step (item-13). Labour rate starts BLANK — the owner must
+// enter their own; we never pre-fill a number (£75 was TMBS's rate leaking into new tenants).
 const initialData: FormData = {
-  defaultLabourRate: '75.00',
+  defaultLabourRate: '',
   timezone: 'Europe/London',
   currencyCode: 'GBP',
 };

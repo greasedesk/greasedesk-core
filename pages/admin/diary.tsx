@@ -217,6 +217,32 @@ export default function DiaryPage(props: PageProps) {
   const clickTimer = useRef<number | null>(null);
   const pressTimer = useRef<number | null>(null);
 
+  // Inline "add your first lift/bay" (empty-state action — create a resource without leaving the diary).
+  const [firstResName, setFirstResName] = useState('Lift 1');
+  const [firstResType, setFirstResType] = useState<'lift' | 'mot_bay' | 'spray_booth'>('lift');
+  const [firstResBusy, setFirstResBusy] = useState(false);
+  const [firstResErr, setFirstResErr] = useState<string | null>(null);
+  async function addFirstResource(e: React.FormEvent) {
+    e.preventDefault();
+    if (firstResBusy) return;
+    const name = firstResName.trim();
+    if (!name) { setFirstResErr(t('firstResource.nameRequired')); return; }
+    setFirstResBusy(true); setFirstResErr(null);
+    try {
+      const res = await fetch('/api/resources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: siteId, name, type: firstResType }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || t('firstResource.failed'));
+      refresh(); // re-runs gssp → the new column appears immediately
+    } catch (err: any) {
+      setFirstResErr(err?.message || t('firstResource.failed'));
+      setFirstResBusy(false); // leave the form up on error; success unmounts via refresh
+    }
+  }
+
   if (noSites) {
     return (
       <>
@@ -524,7 +550,36 @@ export default function DiaryPage(props: PageProps) {
             <p className="text-sm text-muted">{t('revenue.placeholderBody')}</p>
           </div>
         ) : resources.length === 0 ? (
-          <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('noResources')}</div>
+          canManage ? (
+            /* EMPTY-STATE ACTION: create the first lift/bay right here — the owner is standing exactly
+               where the resource is needed; refresh() repopulates the diary the moment it's saved. */
+            <div className="bg-surface border border-line rounded-xl p-8 max-w-md mx-auto text-center">
+              <h2 className="text-lg font-semibold text-ink mb-1">{t('firstResource.title')}</h2>
+              <p className="text-sm text-muted mb-5">{t('firstResource.body')}</p>
+              <form onSubmit={addFirstResource} className="text-left space-y-3">
+                <div>
+                  <label htmlFor="firstResName" className="block text-xs font-medium text-muted mb-1">{t('firstResource.nameLabel')}</label>
+                  <input id="firstResName" value={firstResName} onChange={(e) => setFirstResName(e.target.value)} disabled={firstResBusy}
+                    className="w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm" placeholder={t('firstResource.namePlaceholder')} />
+                </div>
+                <div>
+                  <label htmlFor="firstResType" className="block text-xs font-medium text-muted mb-1">{t('firstResource.typeLabel')}</label>
+                  <select id="firstResType" value={firstResType} onChange={(e) => setFirstResType(e.target.value as any)} disabled={firstResBusy}
+                    className="w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm">
+                    <option value="lift">{t('resourceType.lift')}</option>
+                    <option value="mot_bay">{t('resourceType.mot_bay')}</option>
+                    <option value="spray_booth">{t('resourceType.spray_booth')}</option>
+                  </select>
+                </div>
+                {firstResErr && <p className="text-sm text-danger">{firstResErr}</p>}
+                <button type="submit" disabled={firstResBusy} className="w-full bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">
+                  {firstResBusy ? t('firstResource.adding') : t('firstResource.add')}
+                </button>
+              </form>
+            </div>
+          ) : (
+            <div className="bg-surface-muted border border-line rounded-xl p-8 text-center text-muted">{t('firstResource.viewer')}</div>
+          )
         ) : (
           <>
             {/* All-day ABSENCE banner (day view + mobile list) — every leave type, type-labelled. */}

@@ -17,6 +17,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
+import { getSetupChecklist } from '@/lib/setup-checklist';
 import { daysLeft } from '@/lib/trial';
 import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 import { formatMoney } from '@/lib/format-money';
@@ -28,6 +29,7 @@ type PageProps = {
   subscriptionStatus: string | null; siteCount: number;
   currency: string; locale: string;
   sites: Array<{ id: string; name: string }>; // the caller's VISIBLE sites (server-resolved)
+  setupTodo: Array<{ key: string; href: string }>; // OPTIONAL post-signup items still outstanding
 };
 
 // ---------- Tile framework (client side) ----------
@@ -248,6 +250,27 @@ export default function AdminDashboard(props: PageProps) {
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} />
+
+      {/* OPTIONAL post-signup checklist (item-13): surfaces the things a new owner should still do —
+          NOT in the required gate. Vanishes once everything's done. Resources is flagged as needed
+          to schedule jobs, so the owner meets it here before hitting an empty diary. */}
+      {props.setupTodo.length > 0 && (
+        <div className="rounded-xl border border-accent/40 bg-accent-soft p-4 mb-4">
+          <h2 className="text-sm font-semibold text-ink mb-1">{t('setup.title')}</h2>
+          <p className="text-xs text-muted mb-3">{t('setup.subtitle')}</p>
+          <ul className="space-y-2">
+            {props.setupTodo.map((item) => (
+              <li key={item.key} className="flex items-center justify-between gap-3 bg-surface rounded-lg border border-line px-3 py-2">
+                <span className="text-sm">
+                  <span className="text-ink font-medium">{t(`setup.items.${item.key}.label`)}</span>
+                  <span className="text-muted"> — {t(`setup.items.${item.key}.why`)}</span>
+                </span>
+                <Link href={item.href} className="shrink-0 text-sm font-medium text-accent hover:underline whitespace-nowrap">{t(`setup.items.${item.key}.cta`)} →</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {siteId !== 'all' && tiles && (tiles.pnl as any)?.invoiceCount === 0 && (tiles.utilisation as any)?.mechanicCount === 0 && ((tiles.utilisation as any)?.missingHoursMechanics?.length ?? 0) === 0 && (
         <div className="rounded-xl border border-line bg-surface-muted p-3 mb-4 text-sm text-muted">
           {t('notTrading', { site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
@@ -578,6 +601,10 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
     where: { id: { in: vis.siteIds } }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true },
   })) as Array<{ id: string; site_name: string }>;
 
+  // Optional post-signup checklist — only the OUTSTANDING items (empty once everything's done).
+  const checklist = await getSetupChecklist(user.group_id, vis.primarySiteId);
+  const setupTodo = checklist.filter((i) => !i.done).map((i) => ({ key: i.key, href: i.href }));
+
   return {
     props: {
       groupName: group?.group_name ?? 'Your garage',
@@ -589,6 +616,7 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
       sites: visibleSites.map((s2) => ({ id: s2.id, name: s2.site_name })),
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
+      setupTodo,
     },
   };
 });

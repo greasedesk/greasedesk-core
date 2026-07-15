@@ -310,7 +310,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     pricingDisplayMode: (site?.pricing_display_mode as 'ex_vat' | 'inc_vat') ?? 'ex_vat',
     supportedCountries: (site?.supported_countries as string[]) ?? ['United Kingdom'],
     supportedCurrencies: (site?.supported_currencies as string[]) ?? ['GBP'],
-    defaultLabourRate: labourSvc ? Number(labourSvc.default_labour_rate) : 75,
+    defaultLabourRate: labourSvc ? Number(labourSvc.default_labour_rate) : 0, // never pre-fill TMBS's £75
   };
 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
