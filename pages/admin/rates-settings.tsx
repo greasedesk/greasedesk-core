@@ -165,9 +165,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     const session = await getServerSession(ctx.req, ctx.res, authOptions);
     const user = session?.user as any;
 
-    if (!user?.group_id || !user?.site_id) {
-        return { redirect: { destination: '/admin/login', permanent: false }, props: {} as any };
-    }
+    if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false }, props: {} as any };
+    if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false }, props: {} as any }; // siteless → graceful, never a logout
 
     const [site, vatRow, labourSvc] = await Promise.all([
         prisma.site.findUnique({

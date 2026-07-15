@@ -279,9 +279,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   if (!gate.ok) return { redirect: gate.redirect };
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
-  if (!user?.group_id || !user?.site_id) {
-    return { redirect: { destination: '/admin/login', permanent: false } };
-  }
+  if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
+  if (!user?.site_id) return { redirect: { destination: '/admin/setup-location', permanent: false } }; // siteless → graceful, never a logout
 
   type PcDbRow = { id: string; name: string; category: string | null };
   type SiteDbRow = { id: string; site_name: string };

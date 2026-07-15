@@ -24,14 +24,14 @@ import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
-  // Wave 1 — param-keyed queries, all fired together. Invoice + audit key on the cardId param
-  // (not the fetched row), so they can start now; if the card turns out to be invisible their
-  // results are simply discarded (nothing is returned).
-  const [vis, perms, vat, invoiceRow, [catalogueRows, tierRows, promoRows], auditRows] = await Promise.all([
+  // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
+  // (ruling 2026-07-14): the invoice + audit reads were previously fired here on the cardId PARAM,
+  // before the access check — so a cross-tenant card's invoice/audit rows were read into memory and
+  // discarded. They now wait for Wave 2 (ownership proven). No cross-tenant row is read, ever.
+  const [vis, perms, vat, [catalogueRows, tierRows, promoRows]] = await Promise.all([
     getVisibility(userId),
     getTenantPermissions(groupId),
     getTenantVat(groupId),
-    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true, status: true } }) as Promise<{ id: string; invoice_number: string | null; status: string } | null>,
     Promise.all([
       prisma.catalogueItem.findMany({
         where: { group_id: groupId, active: true },
@@ -45,15 +45,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       prisma.serviceTier.findMany({ where: { group_id: groupId, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
       prisma.promo.findMany({ where: { group_id: groupId, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true, targets: { select: { item: { select: { id: true, title: true, name: true } } } } } }) as Promise<any[]>,
     ]),
-    prisma.auditLog.findMany({
-      where: { entity: 'job_card', entity_id: cardId },
-      orderBy: { created_at: 'desc' },
-      take: 100,
-      select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
-    }) as Promise<any[]>,
   ]);
 
-  // Wave 2 — the card row (must wait for visibility: the site filter IS the access control).
+  // Wave 2 — the card row. The site filter IS the access control; nothing card-keyed runs before it.
   const row = (await prisma.jobCard.findFirst({
     where: { id: cardId, site_id: { in: vis.siteIds } },
     include: {
@@ -63,6 +57,17 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     },
   })) as any;
   if (!row) return null;
+
+  // Card ownership proven → NOW safe to read its invoice + audit trail (keyed on the card).
+  const [invoiceRow, auditRows] = await Promise.all([
+    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true, status: true } }) as Promise<{ id: string; invoice_number: string | null; status: string } | null>,
+    prisma.auditLog.findMany({
+      where: { entity: 'job_card', entity_id: cardId },
+      orderBy: { created_at: 'desc' },
+      take: 100,
+      select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
+    }) as Promise<any[]>,
+  ]);
 
   // Wave 3 — row-keyed queries, fired together. The owner chain keeps its internal order:
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
