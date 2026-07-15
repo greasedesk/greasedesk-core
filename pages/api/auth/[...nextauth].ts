@@ -42,6 +42,13 @@ export const authOptions: NextAuthOptions = {
         // Inactive accounts cannot log in.
         if (!user.is_active) throw FAIL;
 
+        // ARCHIVED tenant → login blocked (SuperAdmin soft-delete). Same generic failure — never
+        // reveal that the tenant was archived. Reversible: un-archiving restores login instantly.
+        if (user.group_id) {
+          const g = await prisma.group.findUnique({ where: { id: user.group_id }, select: { archived_at: true } });
+          if (g?.archived_at) throw FAIL;
+        }
+
         // Verify the supplied password against the stored bcrypt hash.
         const ok = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!ok) throw FAIL;

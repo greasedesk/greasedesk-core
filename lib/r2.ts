@@ -13,6 +13,7 @@ import {
   S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand, ListPartsCommand, HeadObjectCommand,
+  ListObjectsV2Command, DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -72,6 +73,39 @@ export async function headObjectSize(key: string): Promise<number | null> {
     const r = await c.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
     return r.ContentLength ?? null;
   } catch (e: any) { console.error('[r2] headObjectSize error', e?.name || e?.message); return null; }
+}
+
+/**
+ * Delete EVERY object under a key prefix (tenant purge). R2/S3 has no native prefix delete —
+ * ListObjectsV2 (paginated, 1000/page) → DeleteObjects (batched). Returns the count deleted.
+ * Used only by the SuperAdmin purge; the tenant partition is {groupId}/… so prefix = `${groupId}/`.
+ */
+export async function deleteByPrefix(prefix: string): Promise<{ deleted: number }> {
+  const c = client(); if (!c) return { deleted: 0 };
+  let deleted = 0;
+  let token: string | undefined;
+  do {
+    const list = await c.send(new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }));
+    const objs = (list.Contents || []).map((o) => ({ Key: o.Key as string })).filter((o) => o.Key);
+    if (objs.length) {
+      await c.send(new DeleteObjectsCommand({ Bucket: bucket(), Delete: { Objects: objs, Quiet: true } }));
+      deleted += objs.length;
+    }
+    token = list.IsTruncated ? list.NextContinuationToken : undefined;
+  } while (token);
+  return { deleted };
+}
+
+/** Count objects under a prefix (proof / verification; does not delete). */
+export async function countByPrefix(prefix: string): Promise<number> {
+  const c = client(); if (!c) return 0;
+  let n = 0; let token: string | undefined;
+  do {
+    const list = await c.send(new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }));
+    n += (list.Contents || []).length;
+    token = list.IsTruncated ? list.NextContinuationToken : undefined;
+  } while (token);
+  return n;
 }
 
 /** Delete an object (best-effort; the DB row is the source of truth). */

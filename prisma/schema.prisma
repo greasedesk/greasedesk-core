@@ -192,6 +192,10 @@ model Group {
   ref           String       @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
   status        TenantStatus @default(trial) // tenant lifecycle (console-managed later)
   trial_ends_at DateTime? // set on signup to now + TRIAL_DAYS
+  // SuperAdmin soft-delete (operator portal). Non-null = ARCHIVED: login blocked (authorize()),
+  // hidden from active use, ALL data kept, fully reversible (un-archive clears it). Set only via
+  // /api/superadmin/archive — never a tenant-facing action.
+  archived_at   DateTime?
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
@@ -263,6 +267,32 @@ model UploadTelemetry {
 
   @@index([job_card_id, created_at])
   @@index([group_id, created_at])
+}
+
+// PLATFORM OPERATOR allowlist (SuperAdmin portal). A user id here can reach /superadmin — this is
+// entirely SEPARATE from UserRole (a tenant's ADMIN is NOT an operator; no tenant-role change can
+// ever grant this). Resolved only via lib/superadmin::requireSuperAdmin, never getVisibility.
+model PlatformOperator {
+  user_id    String   @id
+  note       String?
+  created_at DateTime @default(now())
+}
+
+// PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT
+// AuditLog: AuditLog is group-scoped and cascade-deleted with the tenant, so a purge record can't
+// live in the tenant it destroys. This survives the purge — target_name/ref are SNAPSHOTS.
+model SuperAdminAudit {
+  id                   String   @id @default(uuid())
+  operator_user_id     String
+  action               String // 'tenant.archived' | 'tenant.unarchived' | 'tenant.purged'
+  target_group_id      String
+  target_name_snapshot String
+  target_ref_snapshot  String?
+  detail               Json? // e.g. purge row counts, r2 objects deleted, stripe sub id
+  created_at           DateTime @default(now())
+
+  @@index([created_at])
+  @@index([target_group_id])
 }
 
 // Webhook idempotency ledger (item-12): every Stripe event.id is recorded ONCE before its effect
