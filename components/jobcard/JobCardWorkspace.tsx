@@ -8,7 +8,7 @@
  * Tabs: Customer Details (edge-resolved owner) → Quote (renamed estimate + accept-&-book) → Intake →
  * In-Job → Completion photos (gated stages; upload is a placeholder until the R2 slice) → Invoice.
  */
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
@@ -135,9 +135,32 @@ export default function JobCardWorkspace(p: Props) {
   const urlTab = (router.query.tab as string) as TabKey | undefined;
   const active: TabKey = urlTab && TAB_KEYS.includes(urlTab) && eff.tabsState[urlTab].reachable ? urlTab : firstOpen;
 
-  function selectTab(k: TabKey) {
+  async function selectTab(k: TabKey) {
+    // Leaving the Quote step: PERSIST the estimate first, so a financial edit is never lost when
+    // moving to another step. (Bug: the quote lived in EstimateBuilder's transient local state, which
+    // unmounted on step change — the entered quotation silently vanished.) Blocking on failure: keep
+    // the user on the Quote rather than advance and lose the data.
+    if (active === 'quote' && k !== 'quote' && p.canEditPricing && !cancelled) {
+      const r = await commitEstimate();
+      if (!r.ok) { setErr(r.message || t('estimate.saveError')); return; }
+      await refreshCard();
+    }
     router.replace({ pathname: router.pathname, query: { ...router.query, tab: k } }, undefined, { shallow: true });
   }
+  // Belt-and-braces: navigating AWAY from the card entirely (sidebar, back) while on the Quote step —
+  // best-effort persist so the estimate survives leaving the page. Shallow (tab) changes are handled
+  // by selectTab above; skip them here to avoid a double-commit.
+  const activeTabRef = useRef<TabKey>('details');
+  activeTabRef.current = active;
+  useEffect(() => {
+    const onLeave = (_url: string, opts?: { shallow?: boolean }) => {
+      if (opts?.shallow) return;
+      if (activeTabRef.current === 'quote' && p.canEditPricing) void commitEstimate();
+    };
+    router.events.on('routeChangeStart', onLeave);
+    return () => router.events.off('routeChangeStart', onLeave);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function run(key: string, fn: () => Promise<Response>, optimistic?: Partial<Overlay>) {
     const snapshot = ov; // revert point — honest reconcile on failure
@@ -502,8 +525,10 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'details' && detailsPane}
 
-      {active === 'quote' && (
-        <div className="space-y-5">
+      {/* The Quote section stays MOUNTED across steps (hidden when inactive) so its in-progress
+          estimate state is never destroyed by a step change — the root of the "quote lost on next
+          screen" bug. Persistence to the DB is handled by selectTab / route-away commits above. */}
+      <div className={active === 'quote' ? 'space-y-5' : 'hidden'}>
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={eff.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
@@ -520,8 +545,7 @@ export default function JobCardWorkspace(p: Props) {
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
             </label>
           )}
-        </div>
-      )}
+      </div>
 
       {active === 'intake' && (
         <div className="space-y-5">
