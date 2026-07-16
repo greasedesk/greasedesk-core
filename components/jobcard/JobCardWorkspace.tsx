@@ -619,11 +619,17 @@ function QuoteActions(props: {
   // we report the booking failure; never a silent revert.
   async function saveAll(kind: 'estimate' | 'reschedule' | 'accept' | 'quoted', navigateAfter = false) {
     const needsBooking = kind === 'reschedule' || kind === 'accept';
-    if (needsBooking && (!liftId || !startDate || !startTime || !(workingMinutes > 0))) { setErr(t('booking.needLiftAndTimes')); return; }
+    const bookingReady = !!liftId && !!startDate && !!startTime && workingMinutes > 0;
     setBusy('save'); setErr(null);
+    // Commit the estimate FIRST, ALWAYS — a financial edit must NEVER be lost to a booking-field
+    // guard. (Bug: the guard used to `return` here BEFORE this commit, so clicking "Save" on an
+    // accepted-but-unbooked card silently discarded the quote edit while only showing a booking error.)
     const est = await commitEstimate();
     let secondOk = true, secondMsg = '';
-    if (needsBooking) {
+    if (needsBooking && !bookingReady) {
+      // Estimate is already saved; the booking simply still needs a lift + time. Report it, don't lose the quote.
+      secondOk = false; secondMsg = t('booking.needLiftAndTimes');
+    } else if (needsBooking) {
       const url = kind === 'accept' ? '/api/jobcard-accept' : '/api/diary';
       const method = kind === 'accept' ? 'POST' : 'PATCH';
       try {
