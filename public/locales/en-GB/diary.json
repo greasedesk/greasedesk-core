@@ -120,7 +120,7 @@
     "lookupBtn": "Look up",
     "lookupBusy": "Looking up…",
     "lookupRecord": "Filled from your records — edit if needed.",
-    "lookupDvla": "Filled from DVLA — edit if needed. Model isn’t in the DVLA record, so add it if you need it.",
+    "lookupDvsa": "Filled from DVSA — edit if needed.",
     "lookupNone": "Not found — enter the details manually.",
     "groupVehicle": "Vehicle",
     "groupOwner": "Owner",

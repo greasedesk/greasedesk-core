@@ -963,17 +963,20 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
         setLookMsg({ text: t('create.lookupRecord'), ok: true });
         return;
       }
-      // 2) New car → DVLA VES (free, no per-tenant cost, NO MOT): make/colour/year/fuel/engine.
-      //    VES has no model — it stays manual. MOT is the job card's separate DVSA action.
-      const vres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
+      // 2) New car → DVSA MOT History — the SAME provider the job card uses (one genuinely shared
+      //    path; DVLA VES is not configured in prod, which is why the VES call always missed). DVSA
+      //    returns make + MODEL + colour/year/fuel/engine. MOT is still NOT captured here — it's the
+      //    job card's separate explicit action — so a booking stays off the MOT hot path.
+      const vres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
       const d = vres?.ok ? await vres.json() : { found: false };
       if (d.found) {
         if (!make.trim() && d.make) setMake(d.make);
+        if (!model.trim() && d.model) setModel(d.model);
         if (!vColour.trim() && d.colour) setVColour(d.colour);
         if (!fuel.trim() && d.fuel) setFuel(d.fuel);
         if (!year.trim() && d.year != null) setYear(String(d.year));
         if (!engineCc.trim() && d.engineCc != null) setEngineCc(String(d.engineCc));
-        setLookMsg({ text: t('create.lookupDvla'), ok: true });
+        setLookMsg({ text: t('create.lookupDvsa'), ok: true });
       } else {
         setLookMsg({ text: t('create.lookupNone'), ok: false }); // personal/trade/import/very new — manual
       }
