@@ -931,61 +931,55 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const [liftId, setLiftId] = useState(pickWhen ? '' : (defaultResourceId ?? resources[0]?.id ?? '')); // blank flow: no default lift
   // note fields
   const [title, setTitle] = useState(''); const [noteLift, setNoteLift] = useState(defaultResourceId ?? ''); const [colour, setColour] = useState('');
-  // Reg auto-fill: on reg-blur, look up a known car and pre-fill its vehicle + current-owner details so
-  // returning cars aren't re-typed. lastLookedRef guards against repeat calls; autoFilledRef remembers
-  // the reg we filled from, so switching to an unknown reg clears the STALE fill (but never a genuinely
-  // hand-typed new car). Display convenience only — the create path stays authoritative for a known reg.
-  const lastLookedRef = useRef<string>(''); const autoFilledRef = useRef<string | null>(null);
-  // DVSA MOT reference (distinct from current mileage) — displayed + sent on create.
-  const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
-  // Reg blur: canonicalise VISIBLY (uppercase, spaces stripped) so the user sees the stored form, then
-  // look the car up on the canonical key.
-  function onRegBlur() {
-    const canon = normalizeReg(reg) || '';
-    if (canon !== reg) setReg(canon);
-    lookupReg(canon);
-  }
-  const [dvlaBusy, setDvlaBusy] = useState(false);
-  async function lookupReg(regArg?: string) {
-    const r = normalizeReg(regArg ?? reg) || '';
-    if (!r || r === lastLookedRef.current) return;
-    lastLookedRef.current = r;
+  // EXPLICIT reg lookup — a deliberate button press, NEVER auto-fire on typing/blur (a part-typed reg
+  // is a wrong reg → misses or wrong vehicles; and this is the app's highest-frequency form). Fill-
+  // blanks-only so a manual correction is never clobbered; any miss/failure just shows "enter manually"
+  // and never blocks the booking. MOT (DVSA) is a SEPARATE explicit action on the job card — off this
+  // hot path — so a new card carries make/colour/year now and gets its MOT check later.
+  const [lookBusy, setLookBusy] = useState(false);
+  const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  async function lookupVehicle() {
+    const r = normalizeReg(reg) || '';
+    if (r !== reg) setReg(r);
+    if (!r) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; }
+    setLookBusy(true); setLookMsg(null);
     try {
-      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      // 1) OUR record first (returning car) — owner + full vehicle incl. model. Fill blanks only.
+      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
+      const data = res?.ok ? await res.json() : { found: false };
       if (data.found) {
-        // Returning car — fill from OUR record (owner + vehicle). No DVLA call.
         const v = data.vehicle || {};
-        setCust(data.owner?.name || ''); setPhone(data.owner?.phone || ''); setEmail(data.owner?.email || '');
-        setVin(v.vin || ''); setMileage(v.mileage != null ? String(v.mileage) : '');
-        setMake(v.make || ''); setModel(v.model || ''); setVColour(v.colour || '');
-        setFuel(v.fuel || ''); setYear(v.year != null ? String(v.year) : ''); setEngineCc(v.engineCc != null ? String(v.engineCc) : '');
-        setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null }); // returning car — record already holds it
-        autoFilledRef.current = r;
+        if (!cust.trim() && data.owner?.name) setCust(data.owner.name);
+        if (!phone.trim() && data.owner?.phone) setPhone(data.owner.phone);
+        if (!email.trim() && data.owner?.email) setEmail(data.owner.email);
+        if (!vin.trim() && v.vin) setVin(v.vin);
+        if (!mileage.trim() && v.mileage != null) setMileage(String(v.mileage));
+        if (!make.trim() && v.make) setMake(v.make);
+        if (!model.trim() && v.model) setModel(v.model);
+        if (!vColour.trim() && v.colour) setVColour(v.colour);
+        if (!fuel.trim() && v.fuel) setFuel(v.fuel);
+        if (!year.trim() && v.year != null) setYear(String(v.year));
+        if (!engineCc.trim() && v.engineCc != null) setEngineCc(String(v.engineCc));
+        setLookMsg({ text: t('create.lookupRecord'), ok: true });
         return;
       }
-      // New car: clear any stale auto-fill from a prior known reg, then enrich from DVSA / DVLA.
-      if (autoFilledRef.current) {
-        setCust(''); setPhone(''); setEmail(''); setVin(''); setMileage('');
-        setMake(''); setModel(''); setVColour(''); setFuel(''); setYear(''); setEngineCc('');
-        autoFilledRef.current = null;
+      // 2) New car → DVLA VES (free, no per-tenant cost, NO MOT): make/colour/year/fuel/engine.
+      //    VES has no model — it stays manual. MOT is the job card's separate DVSA action.
+      const vres = await fetch(`/api/dvla-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
+      const d = vres?.ok ? await vres.json() : { found: false };
+      if (d.found) {
+        if (!make.trim() && d.make) setMake(d.make);
+        if (!vColour.trim() && d.colour) setVColour(d.colour);
+        if (!fuel.trim() && d.fuel) setFuel(d.fuel);
+        if (!year.trim() && d.year != null) setYear(String(d.year));
+        if (!engineCc.trim() && d.engineCc != null) setEngineCc(String(d.engineCc));
+        setLookMsg({ text: t('create.lookupDvla'), ok: true });
+      } else {
+        setLookMsg({ text: t('create.lookupNone'), ok: false }); // personal/trade/import/very new — manual
       }
-      setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
-      setDvlaBusy(true);
-      try {
-        // Enrich from DVSA MOT History (make AND model + MOT metadata). cache:'no-store' so the browser
-        // never serves a 304 — every reg must actually hit the route.
-        let d: any = { found: false };
-        const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
-        if (sres?.ok) d = await sres.json();
-        if (d.found) { // fill what DVSA gave
-          if (d.make) setMake(d.make); if (d.model) setModel(d.model); if (d.colour) setVColour(d.colour);
-          if (d.fuel) setFuel(d.fuel); if (d.year != null) setYear(String(d.year)); if (d.engineCc != null) setEngineCc(String(d.engineCc));
-          setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
-        }
-      } finally { setDvlaBusy(false); }
-    } catch { /* best-effort — a failed pre-fill / DVLA error never blocks manual entry */ }
+    } catch {
+      setLookMsg({ text: t('create.lookupNone'), ok: false }); // never blocks the booking
+    } finally { setLookBusy(false); }
   }
   // Start: seeded from the clicked cell, or user-picked (pickWhen). End is naive start + hours (the
   // /api/jobcard bridge → workingMinutes = end-start = hours*60; the footprint re-expands correctly
@@ -1013,7 +1007,6 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
           vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
           make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
           fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
-          motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined,
           siteId, resourceId: liftId, startAt, endAt,
         }),
       });
@@ -1069,8 +1062,18 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
             <div>
               <label className={labelCls}>{t('create.reg')}</label>
-              <input className={`${inputCls} max-w-[11rem] tracking-wider`} value={reg} maxLength={8} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setReg(normalizeReg(e.target.value) || '')} onBlur={onRegBlur} />
-              {dvlaBusy && <p className="text-[11px] text-muted mt-1">{t('create.dvlaLooking')}</p>}
+              {/* Reg + explicit "Look up" button — the trade convention, and NEVER auto-fire (a
+                  part-typed reg is a wrong reg). Enter in the field also triggers the lookup. */}
+              <div className="flex items-center gap-2">
+                <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={8} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+                  onChange={(e) => setReg(normalizeReg(e.target.value) || '')}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupVehicle(); } }} />
+                <button type="button" onClick={lookupVehicle} disabled={lookBusy || !reg.trim()}
+                  className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
+                  {lookBusy ? t('create.lookupBusy') : t('create.lookupBtn')}
+                </button>
+              </div>
+              {lookMsg && <p className={`text-[11px] mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
@@ -1097,12 +1100,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
                 {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
               </div>
             </div>
-            {(mot.motExpiry || mot.lastMotMileage != null) && (
-              <p className="text-[11px] text-muted">
-                {mot.motExpiry && <>{t('create.motExpiry')}: <span className="text-ink">{mot.motExpiry}</span></>}
-                {mot.lastMotMileage != null && <> · {t('create.lastMotMileage')}: <span className="text-ink">{mot.lastMotMileage}{mot.lastMotDate ? ` (${mot.lastMotDate})` : ''}</span></>}
-              </p>
-            )}
+            {/* MOT is intentionally NOT shown/captured here — it's a separate explicit DVSA action on
+                the job card, kept off this high-frequency booking path. */}
             {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupOwner')}</div>
             <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} value={cust} onChange={(e) => setCust(e.target.value)} /></div>
