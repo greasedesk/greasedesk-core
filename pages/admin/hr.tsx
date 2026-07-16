@@ -11,6 +11,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import Link from 'next/link';
 import { requireAdminPage } from '@/lib/admin-guard';
@@ -51,6 +52,7 @@ const inputClass = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py
 export default function HrPage() {
   const { t } = useTranslation('headcount');
   const { t: th } = useTranslation('hr');
+  const router = useRouter();
   const [tab, setTab] = useState<'current' | 'former' | 'changes'>('current');
   const [sites, setSites] = useState<SiteOpt[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
@@ -75,6 +77,12 @@ export default function HrPage() {
       fetch('/api/employment-events').then((r) => (r.ok ? r.json() : null)).then((d) => d && setChanges(d.events));
     }
   }, [tab, changes]);
+  // Guided-setup walkthrough: auto-open the add-employee form on arrival (item-13).
+  const [autoOpened, setAutoOpened] = useState(false);
+  useEffect(() => {
+    if (!autoOpened && router.query.add === '1') { setAutoOpened(true); setMsg(null); setForm(emptyForm()); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query.add]);
 
   async function loadHistory(personId: string, force = false) {
     if (!force && history[personId]) return; // force: the caller just invalidated the cache (stale closure would still see it)
@@ -129,6 +137,8 @@ export default function HrPage() {
         return;
       }
       if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); return; }
+      // Guided-setup walkthrough: a NEW employee returns to the sequence so it advances (item-13).
+      if (!form.id && router.query.setup === '1') { router.push('/admin/setup?walk=1'); return; }
       await afterSaved(form.id);
     } catch { setMsg({ text: t('error'), ok: false }); }
     finally { setBusy(false); } // ALWAYS back to idle — the refresh doesn't remount this page

@@ -236,6 +236,8 @@ export default function DiaryPage(props: PageProps) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || t('firstResource.failed'));
+      // Guided-setup walkthrough: return to the sequence so it advances (item-13). Else refresh in place.
+      if (router.query.setup === '1') { router.push('/admin/setup?walk=1'); return; }
       refresh(); // re-runs gssp → the new column appears immediately
     } catch (err: any) {
       setFirstResErr(err?.message || t('firstResource.failed'));

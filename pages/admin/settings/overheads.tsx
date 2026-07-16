@@ -7,6 +7,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
@@ -27,6 +28,7 @@ const clampRate = (r: number) => Math.min(100, Math.max(0, Number.isFinite(r) ? 
 
 export default function OverheadsSettings() {
   const { t } = useTranslation('overheads');
+  const router = useRouter();
   const [sites, setSites] = useState<SiteOpt[]>([]);
   const [overheads, setOverheads] = useState<Overhead[]>([]);
   const [vatRegistered, setVatRegistered] = useState(true);
@@ -34,6 +36,7 @@ export default function OverheadsSettings() {
   const [form, setForm] = useState<FormState | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   async function load() {
     const res = await fetch('/api/overheads');
@@ -43,8 +46,16 @@ export default function OverheadsSettings() {
     setOverheads(data.overheads || []);
     setVatRegistered(!!data.vatRegistered);
     if (data.defaultVatRate != null) setDefaultVatRate(String(data.defaultVatRate));
+    setLoaded(true);
   }
   useEffect(() => { load(); }, []);
+  // Guided-setup walkthrough: auto-open the add form on arrival (item-13). After load so the VAT
+  // prefill is correct. openOnce guards against re-opening.
+  const [autoOpened, setAutoOpened] = useState(false);
+  useEffect(() => {
+    if (loaded && !autoOpened && router.query.add === '1') { setAutoOpened(true); openAdd(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, router.query.add]);
 
   // New overhead pre-fills the VAT rate from the company default (editable per-expense).
   function openAdd() { setMsg(null); setForm({ id: null, name: '', exVat: '', vatRate: vatRegistered ? defaultVatRate : '0', period: 'monthly', rows: [] }); }
@@ -74,6 +85,8 @@ export default function OverheadsSettings() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('error'), ok: false }); setBusy(false); return; }
+      // Guided-setup walkthrough: return to the sequence so it advances (item-13).
+      if (router.query.setup === '1') { router.push('/admin/setup?walk=1'); return; }
       await load(); setForm(null); setMsg({ text: t('saved'), ok: true });
     } catch { setMsg({ text: t('error'), ok: false }); }
     setBusy(false);

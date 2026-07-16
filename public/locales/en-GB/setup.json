@@ -1,0 +1,42 @@
+{
+  "title": "Set up your garage",
+  "subtitle": "A few things to get you running. You can do these in any order.",
+  "progress": "{{done}} of {{total}} done",
+  "state": {
+    "done": "Done",
+    "todo": "To do",
+    "not_applicable": "Not applicable"
+  },
+  "startWalk": "Start guided setup",
+  "backToPanel": "Back to setup",
+  "markNA": "Not applicable",
+  "markApplicable": "Applies to me",
+  "setUp": "Set up",
+  "edit": "Edit",
+  "review": "Review",
+  "signals": {
+    "location": { "label": "Location", "why": "your garage’s address and hours" },
+    "labour_rate": { "label": "Labour rate", "why": "the hourly rate jobs are priced at" },
+    "tax": { "label": "Tax", "why": "VAT status and rate for your quotes and invoices" },
+    "subscription": { "label": "Subscription", "why": "your GreaseDesk plan" },
+    "resources": { "label": "Lifts & bays", "why": "needed to schedule jobs in the diary" },
+    "employees": { "label": "Employees", "why": "your mechanics and staff for the roster and reports" },
+    "company_number": { "label": "Company number", "why": "shown on your invoices (limited companies)" },
+    "overheads": { "label": "Overheads", "why": "fixed costs, so your margins are accurate" }
+  },
+  "allDoneTitle": "You’re all set",
+  "allDoneBody": "Everything that applies to your garage is set up.",
+  "walk": {
+    "stepOf": "Step {{n}} of {{total}}",
+    "doIt": "Set this up",
+    "skip": "Skip for now",
+    "finishTitle": "That’s everything",
+    "finishBody": "Your garage is set up. You can revisit any of this from Settings.",
+    "toDiary": "Go to the diary",
+    "toDashboard": "Back to the dashboard"
+  },
+  "dashboard": {
+    "title": "Finish setting up",
+    "cta": "Continue setup"
+  }
+}

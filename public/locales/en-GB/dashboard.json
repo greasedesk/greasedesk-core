@@ -3,19 +3,8 @@
   "loading": "Loading…",
   "setup": {
     "title": "Finish setting up",
-    "subtitle": "Optional, but these get you running.",
-    "items": {
-      "resources": {
-        "label": "Add a lift or bay",
-        "why": "needed to schedule jobs in the diary",
-        "cta": "Add"
-      },
-      "team": {
-        "label": "Invite your team",
-        "why": "so mechanics can pick up and update jobs",
-        "cta": "Invite"
-      }
-    }
+    "progress": "{{done}} of {{total}} done",
+    "cta": "Continue setup"
   },
   "footnote": "All figures come from the invoice ledger — the same numbers as the Invoices view. Debtors is the current outstanding total, independent of the period.",
   "period": {

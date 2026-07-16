@@ -7,6 +7,7 @@
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
@@ -23,6 +24,7 @@ const labelClass = 'block text-xs text-muted';
 export default function CompanyDetails(props: PageProps) {
   const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint } = props;
   const { t } = useTranslation('company');
+  const router = useRouter();
   const [name, setName] = useState(groupName);
   const [num, setNum] = useState(companyNumber);
   const [addr, setAddr] = useState(address);
@@ -48,6 +50,9 @@ export default function CompanyDetails(props: PageProps) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('details.error'), ok: false }); setBusy(false); return; }
+      // Guided-setup walkthrough: if a company number was provided (signal now done), return to the
+      // sequence so it advances (item-13). Blank save just stays here.
+      if (router.query.setup === '1' && num.trim() !== '') { router.push('/admin/setup?walk=1'); return; }
       setMsg({ text: t('details.saved'), ok: true });
     } catch { setMsg({ text: t('details.error'), ok: false }); }
     setBusy(false);

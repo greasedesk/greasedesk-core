@@ -137,6 +137,13 @@ model Group {
   trading_name     String?
   company_number   String?
   vat_number       String?
+  // Setup-checklist APPLICABILITY declarations (item-13) — NOT "done" flags (completion is always
+  // derived from real rows). A sole trader legitimately has no company number and no employees, so
+  // these let the owner mark those two signals "not applicable" instead of forever "to do". Scoped
+  // to EXACTLY these two signals; resources + financial items are always applicable. Read only via
+  // lib/setup-signals.
+  employees_not_applicable      Boolean @default(false)
+  company_number_not_applicable Boolean @default(false)
   // Master switch: VAT applies anywhere (quotes/invoices/overheads) only when true. Default true
   // preserves existing tenants' VAT-as-now behaviour; sub-threshold garages turn it off. Resolved
   // via lib/tax.ts (getTaxProfile → is_registered) and gated in computeTax — never scattered.
