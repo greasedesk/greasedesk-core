@@ -329,13 +329,7 @@ export default function DiaryPage(props: PageProps) {
     if (!canManage) return;
     const tch = e.touches[0]; const y = tch.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top;
     const cx = tch.clientX, cy = tch.clientY;
-    pressTimer.current = window.setTimeout(() => {
-      pressTimer.current = null;
-      // The click synthesised after a long-press must NOT also open the create form.
-      suppressColClick.current = true;
-      window.setTimeout(() => { suppressColClick.current = false; }, 700);
-      openEmptyMenu(col, cx, cy, y);
-    }, 500);
+    pressTimer.current = window.setTimeout(() => { pressTimer.current = null; openEmptyMenu(col, cx, cy, y); }, 500);
   }
   // Y within the column body (a block's offsetParent), so "Book a job here" seeds the clicked time even
   // when the click landed on a booking that fills the column.
@@ -352,14 +346,24 @@ export default function DiaryPage(props: PageProps) {
   }
   async function unbook(card: DiaryCard) { setMenu(null); await fetch(`/api/diary?jobCardId=${card.id}`, { method: 'DELETE' }); refresh(); }
 
-  // ---- single-click an EMPTY slot → open the booking form pre-filled (Google/Outlook convention) ----
-  // Bookings/notes stopPropagation on their own click, so a click that reaches the column body is on
-  // genuinely empty space. suppressColClick blocks the synthetic click that can follow a touch
-  // long-press (which opened the menu); right-click never sets it, so it can't swallow a real click.
-  const suppressColClick = useRef(false);
-  function onColClick(col: { date: string; resourceId?: string }, e: React.MouseEvent) {
+  // ---- DOUBLE-click an EMPTY slot → open the booking form pre-filled (calendar-native gesture) ----
+  // The ONE guarded gesture→create handler. Single-click deliberately does NOT create — on a dense
+  // diary that would fire the modal every time someone clicks to inspect. Guards, so no phantom can
+  // be opened by a drag / resize / select / existing-booking interaction:
+  //   • existing booking — JobBlock/NoteBlock stopPropagation their own dblclick, so this only fires
+  //     on genuinely empty column space;
+  //   • drag — the browser does not synthesise `dblclick` when the pointer moved between the two
+  //     clicks (a drag), so a drag-to-select or drag gesture can never reach here;
+  //   • resize — no resize handle exists on blocks (nothing to exclude);
+  //   • select — if the double-click landed a text selection, bail.
+  // (Even if the modal opens, a card still requires reg + customer + explicit submit — creation is
+  //  impossible without deliberate form entry.)
+  function onColDblClick(col: { date: string; resourceId?: string }, e: React.MouseEvent) {
     if (!canManage) return;
-    if (suppressColClick.current) { suppressColClick.current = false; return; }
+    if (typeof window !== 'undefined') {
+      const sel = window.getSelection?.();
+      if (sel && sel.type === 'Range' && sel.toString().length > 0) return; // a select, not a create
+    }
     const y = e.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top;
     setPeek(null);
     // Same create path as the right-click "Book a job here" — seeded with the clicked slot's time.
@@ -758,8 +762,8 @@ export default function DiaryPage(props: PageProps) {
                         ); })()}
                         <div
                           className="relative bg-surface"
-                          style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'copy' : undefined }}
-                          onClick={(e) => onColClick(col, e)}
+                          style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
+                          onDoubleClick={(e) => onColDblClick(col, e)}
                           onContextMenu={(e) => onColContext(col, e)}
                           onTouchStart={(e) => onColTouchStart(col, e)}
                           onTouchEnd={cancelPress}
