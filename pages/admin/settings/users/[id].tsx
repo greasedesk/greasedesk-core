@@ -15,6 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
+import { normalizePhone } from '@/lib/quick-validate';
 import { getVisibility } from '@/lib/site-visibility';
 
 type Profile = {
@@ -83,9 +84,9 @@ function ProfileTabs({ profile, isSelf, canSeeEmergency }: { profile: Profile; i
   async function save() {
     setBusy(true); setMsg(null);
     const payload: any = {
-      name: f.name, job_title: f.job_title, phone: f.phone, address: f.address,
+      name: f.name, job_title: f.job_title, phone: normalizePhone(f.phone), address: f.address,
       driving_licence_categories: f.driving_licence_categories,
-      next_of_kin_name: f.next_of_kin_name, next_of_kin_relationship: f.next_of_kin_relationship, next_of_kin_phone: f.next_of_kin_phone,
+      next_of_kin_name: f.next_of_kin_name, next_of_kin_relationship: f.next_of_kin_relationship, next_of_kin_phone: normalizePhone(f.next_of_kin_phone),
       certifications: f.certifications, working_hours: f.working_hours,
     };
     if (canSeeEmergency) payload.emergency_note = f.emergency_note ?? '';

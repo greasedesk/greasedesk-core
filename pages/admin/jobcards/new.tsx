@@ -15,6 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
+import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 
 const inputClass =
   'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
@@ -125,6 +126,7 @@ export default function NewJobCardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form, ...flags,
+          phone: normalizePhone(form.phone), // store the ONE canonical phone form
           motExpiry: mot.motExpiry ?? undefined,
           lastMotMileage: mot.lastMotMileage ?? undefined,
           lastMotDate: mot.lastMotDate ?? undefined,
@@ -204,7 +206,8 @@ export default function NewJobCardPage() {
             </div>
             <div>
               <label className={labelClass}>Phone</label>
-              <input name="phone" value={form.phone} onChange={handleField} className={inputClass} />
+              <input name="phone" type="tel" inputMode="tel" value={form.phone} onChange={handleField} className={inputClass} />
+              {phoneWarn(form.phone) && <p className="text-[11px] text-warn mt-1">That doesn’t look like a phone number.</p>}
             </div>
             <div>
               <label className={labelClass}>Email</label>

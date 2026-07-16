@@ -8,6 +8,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import { normalizeReg } from '@/lib/vehicle-identity';
+import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 
 type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
 type Vehicle = {
@@ -74,7 +75,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
     setBusy(true); setMsg(null);
     const body = {
       jobCardId, confirmReg,
-      owner: { name, phone, email, address },
+      owner: { name, phone: normalizePhone(phone), email, address }, // store the ONE canonical phone form
       vehicle: {
         registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc,
         ...(mot ? { motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined } : {}),
@@ -152,7 +153,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
           </div>
         )}
         <div><label className={labelCls}>{t('field.customer')}</label><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div><label className={labelCls}>{t('field.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />{phoneWarn(phone) && <p className="text-[11px] text-warn mt-1">{t('field.phoneWarn')}</p>}</div>
         <div><label className={labelCls}>{t('field.email')}</label><input className={inputCls} type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
         <div className="sm:col-span-2"><label className={labelCls}>{t('field.address')}</label><textarea className={`${inputCls} resize-y`} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} /></div>
       </div>
