@@ -36,6 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const site = await prisma.site.create({ data: { group_id: group.id, site_name: 'ZZ Workshop', timezone: 'Europe/London', currency_code: 'GBP', locale: 'en-GB' } });
     await prisma.user.create({ data: { name: 'ZZ Owner', email, passwordHash: await bcrypt.hash(password, 12), role: 'ADMIN', is_owner: true, group_id: group.id, site_id: site.id, is_active: true, emailVerified: new Date(), site_assignments: { create: { site_id: site.id } } } });
     await prisma.groupBilling.create({ data: { group_id: group.id, plan_name: 'TRIAL', status: 'ok', retention_months: 12, included_sites: 1, active_sites_cnt: 1, subscription_status: 'trialing' } });
+    await prisma.serviceCatalogue.create({ data: { group_id: group.id, site_id: site.id, service_code: 'LABOUR_HR', name: 'Labour (per hour)', default_labour_rate: '75.00', default_price: '75.00', vat_rate: '20.00', is_active: true } }); // onboarding gate: rates done
 
     async function invoice(seq: number, series: 'chargeable' | 'warranty', lines: Array<{ net: number; rate: number }>) {
       const veh = await prisma.vehicle.create({ data: { group_id: group.id, registration: `ZZ${seq}${series[0].toUpperCase()}`, registration_normalized: `ZZ${seq}${series[0].toUpperCase()}` } });
