@@ -9,7 +9,7 @@
  * Note: LineRow is defined at MODULE SCOPE (not inside the component) and rows are keyed by a
  * stable per-line _uid — otherwise React remounts each input every keystroke and focus is lost.
  */
-import React, { useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import React, { useMemo, useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
 import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
@@ -152,6 +152,7 @@ export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: st
 const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
   const [pickPromo, setPickPromo] = useState('');
@@ -261,24 +262,48 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     ...(item_type === 'labour' && labourRate != null && labourRate > 0 ? { unit_price: String(labourRate) } : {}),
   }]);
 
-  // Persist the estimate lines. Returns a result; the parent's unified Save orchestrates messaging +
-  // refresh (and pairs this with the booking commit). No router.replace here — the parent handles it.
+  // THE draft persistence: a serialised snapshot of what's on the server, and the payload builder.
+  // The estimate lives on the DRAFT JobCard's JobCardItem rows (Option B) — this writes to them.
+  const serialize = (ls: Row[], vr: string) => JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest) });
+  const lastSavedRef = useRef<string>(serialize(initialLines.map((l) => ({ ...l, _uid: '' } as Row)), String(initialVatRate)));
+
+  // Persist the estimate lines. Also updates lastSavedRef, so autosave never re-posts an unchanged
+  // draft after a manual Save. The parent's unified Save uses this via the imperative handle.
   async function commit(): Promise<{ ok: boolean; message?: string }> {
+    const snap = serialize(lines, vatRate);
     try {
-      // strip the client-only id + the transient code (not a JobCardItem field); keep catalogue_item_id.
-      const items = lines.map(({ _uid, code, ...rest }) => rest);
+      const items = lines.map(({ _uid, code, ...rest }) => rest); // strip client-only id + transient code
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { ok: false, message: data?.message || t('estimate.saveError') };
+      lastSavedRef.current = snap; // now on the server
       return { ok: true };
     } catch {
       return { ok: false, message: t('estimate.saveError') };
     }
   }
   useImperativeHandle(ref, () => ({ commit }), [lines, vatRate, jobCardId]);
+
+  // AUTOSAVE (Option B): debounced write of the draft on every line-item / VAT change, so a quote
+  // survives step changes, navigating away and back, and a tab close WITHOUT a manual Save. The draft
+  // JobCard is the durable store; this keeps it current. Skips the initial mount and unchanged state;
+  // an in-flight write shows "Saving…", a failure keeps the local edit and the manual Save as a retry.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    const snap = serialize(lines, vatRate);
+    if (!didMountRef.current) { didMountRef.current = true; lastSavedRef.current = snap; return; }
+    if (!canEdit || snap === lastSavedRef.current) return; // read-only, or nothing changed
+    setSaveState('saving');
+    const timer = setTimeout(async () => {
+      const r = await commit(); // commit() reads the current lines/vatRate + updates lastSavedRef
+      setSaveState(r.ok ? 'saved' : 'error');
+    }, 900);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, vatRate, canEdit]);
 
   // Each row carries its original index so per-line totals map back to totals.lines[idx].
   const withIdx = lines.map((l, idx) => ({ l, idx }));
@@ -293,7 +318,15 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
           {catalogue.map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
         </datalist>
       )}
-      <h2 className="text-lg font-semibold text-ink mb-1">{t('estimate.title')}</h2>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <h2 className="text-lg font-semibold text-ink">{t('estimate.title')}</h2>
+        {/* Autosave status — the quote is saved as you build it (Option B: the draft is the store). */}
+        {canEdit && (
+          <span className={`text-xs ${saveState === 'error' ? 'text-danger' : 'text-muted'}`}>
+            {saveState === 'saving' ? t('estimate.autosaveSaving') : saveState === 'error' ? t('estimate.autosaveError') : t('estimate.autosaveSaved')}
+          </span>
+        )}
+      </div>
       {!canEdit && <p className="text-warn text-sm mb-3">{t('estimate.readOnly')}</p>}
 
       {/* Labour */}
