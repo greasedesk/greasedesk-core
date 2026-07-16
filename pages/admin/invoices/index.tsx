@@ -43,7 +43,7 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
 }
 
-export default function InvoicesPage() {
+export default function InvoicesPage({ isAdmin }: { isAdmin: boolean }) {
   const { t } = useTranslation('invoices');
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
@@ -108,7 +108,10 @@ export default function InvoicesPage() {
       <Head><title>{t('title')} - GreaseDesk</title></Head>
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
+            {isAdmin && <Link href="/admin/reports/vat" className="text-sm text-accent hover:underline font-medium">VAT on sales →</Link>}
+          </div>
           {cur && <span className="text-sm text-muted">{t('totalShown')}: <span className="text-ink font-semibold tabular-nums">{formatMoney(totalShown, { currency: cur.currency, locale: cur.locale })}</span></span>}
         </div>
 
@@ -193,5 +196,5 @@ export const getServerSideProps: GetServerSideProps = withI18n(['invoices'])(asy
   const vis = await getVisibility(user.id as string);
   const perms = await getTenantPermissions(user.group_id as string);
   if (!canViewInvoices(vis, perms)) return { redirect: { destination: '/admin/dashboard', permanent: false } };
-  return { props: {} };
+  return { props: { isAdmin: vis.isAdmin } };
 });
