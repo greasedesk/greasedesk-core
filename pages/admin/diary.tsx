@@ -329,7 +329,13 @@ export default function DiaryPage(props: PageProps) {
     if (!canManage) return;
     const tch = e.touches[0]; const y = tch.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top;
     const cx = tch.clientX, cy = tch.clientY;
-    pressTimer.current = window.setTimeout(() => { pressTimer.current = null; openEmptyMenu(col, cx, cy, y); }, 500);
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      // The click synthesised after a long-press must NOT also open the create form.
+      suppressColClick.current = true;
+      window.setTimeout(() => { suppressColClick.current = false; }, 700);
+      openEmptyMenu(col, cx, cy, y);
+    }, 500);
   }
   // Y within the column body (a block's offsetParent), so "Book a job here" seeds the clicked time even
   // when the click landed on a booking that fills the column.
@@ -345,6 +351,33 @@ export default function DiaryPage(props: PageProps) {
     pressTimer.current = window.setTimeout(() => { pressTimer.current = null; setPeek(null); setMenu({ x: cx, y: cy, card, date: col.date, resourceId: col.resourceId, atMin: atMinFromY(y) }); }, 500);
   }
   async function unbook(card: DiaryCard) { setMenu(null); await fetch(`/api/diary?jobCardId=${card.id}`, { method: 'DELETE' }); refresh(); }
+
+  // ---- single-click an EMPTY slot → open the booking form pre-filled (Google/Outlook convention) ----
+  // Bookings/notes stopPropagation on their own click, so a click that reaches the column body is on
+  // genuinely empty space. suppressColClick blocks the synthetic click that can follow a touch
+  // long-press (which opened the menu); right-click never sets it, so it can't swallow a real click.
+  const suppressColClick = useRef(false);
+  function onColClick(col: { date: string; resourceId?: string }, e: React.MouseEvent) {
+    if (!canManage) return;
+    if (suppressColClick.current) { suppressColClick.current = false; return; }
+    const y = e.clientY - (e.currentTarget as HTMLElement).getBoundingClientRect().top;
+    setPeek(null);
+    // Same create path as the right-click "Book a job here" — seeded with the clicked slot's time.
+    setCreate({ date: col.date, startAt: minToISO(col.date, atMinFromY(y)), resourceId: col.resourceId, mode: 'job' });
+  }
+
+  // "+ Add booking" (header). With resources: seed viewed date + first resource + first open slot,
+  // all adjustable. With NO resources: don't open an unusable form — send them to add a lift first.
+  function onAddBooking() {
+    if (!canManage) return;
+    if (resources.length === 0) {
+      const el = typeof document !== 'undefined' ? (document.getElementById('firstResName') as HTMLInputElement | null) : null;
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); }
+      return;
+    }
+    setPeek(null);
+    setCreate({ date: anchor, startAt: minToISO(anchor, openHour * 60), resourceId: resources[0].id, mode: 'job' });
+  }
 
   const columns = view === 'week'
     ? days.map((d) => ({ key: d.date, label: d.label, date: d.date, resourceId: undefined as string | undefined }))
@@ -459,6 +492,13 @@ export default function DiaryPage(props: PageProps) {
           <div className="w-40" aria-hidden />
         </div>
         <div className="hidden md:flex justify-end items-center gap-2 mb-3">
+          {/* The discoverable primary action — a new user looks for this first. Opens the SAME create
+              path as the grid gesture; with no resources it prompts to add a lift first. */}
+          {canManage && !isRevenueView && (
+            <button onClick={onAddBooking} className="mr-auto shrink-0 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5">
+              {t('addBooking')}
+            </button>
+          )}
           <div className="relative">
             <button onClick={() => setPickerOpen((o) => !o)} className="px-3 py-1.5 bg-surface-muted border border-line rounded-lg text-sm text-ink hover:bg-surface">{pillLabel}</button>
             {pickerOpen && (
@@ -718,7 +758,8 @@ export default function DiaryPage(props: PageProps) {
                         ); })()}
                         <div
                           className="relative bg-surface"
-                          style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
+                          style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'copy' : undefined }}
+                          onClick={(e) => onColClick(col, e)}
                           onContextMenu={(e) => onColContext(col, e)}
                           onTouchStart={(e) => onColTouchStart(col, e)}
                           onTouchEnd={cancelPress}
