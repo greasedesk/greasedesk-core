@@ -51,7 +51,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const resource = await prisma.resource.create({ data: { site_id: site.id, name: 'Lift 1', type: 'lift' } });
     const customer = await prisma.customer.create({ data: { group_id: group.id, site_id: site.id, name: 'Repro Customer' } });
     const vehicle = await prisma.vehicle.create({ data: { group_id: group.id, registration: 'ZZ11REP', registration_normalized: 'ZZ11REP', make: 'Test', model: 'Repro' } });
-    const card = await prisma.jobCard.create({ data: { group_id: group.id, site_id: site.id, vehicle_id: vehicle.id, customer_id: customer.id, status: 'draft', vat_rate: '20.00', resource_id: resource.id } });
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: vehicle.id, customer_id: customer.id, is_current: true } });
+    // ACCEPTED + BOOKED + details done → the Quote tab is reachable and shows the exact
+    // "Save" / "Save and return to Diary" pair the bug report is about.
+    const startAt = new Date(Date.parse('2026-07-20T09:00:00.000Z'));
+    const card = await prisma.jobCard.create({ data: { group_id: group.id, site_id: site.id, vehicle_id: vehicle.id, customer_id: customer.id, status: 'accepted', vat_rate: '20.00', resource_id: resource.id, start_at: startAt, booking_duration_minutes: 60, stage_details_done: true } });
     await prisma.jobCardItem.create({ data: { job_card_id: card.id, item_type: 'labour', description: 'Original labour line', qty: '1.00', unit_price: '100.00', vat_rate: '20.00' } });
     const base = appBaseUrl();
     return res.status(200).json({ email, password, groupId: group.id, cardId: card.id, cardUrl: `${base}/admin/jobcards/${card.id}` });
