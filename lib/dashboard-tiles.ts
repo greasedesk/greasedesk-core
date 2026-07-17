@@ -10,7 +10,7 @@
 import { prisma } from '@/lib/db';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
-import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies } from '@/lib/charged-labour';
+import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts } from '@/lib/charged-labour';
 import { getGroupUtilisation } from '@/lib/capacity';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
@@ -231,8 +231,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       }
     }
     // Parts cost via THE extracted read (lib/charged-labour.partsCostPennies — also the warranty
-    // tile's read; comeback drag preserved by construction).
+    // tile's read; comeback drag preserved by construction). Un-costed (null-cost) parts are
+    // EXCLUDED there and surfaced HERE so the margin is never silently trusted with unknowns in it.
     const partsCost = partsCostPennies(invoices);
+    const uncosted = uncostedParts(invoices);
     // Hours charged — the EXTRACTED numerator (lib/charged-labour), reused verbatim by
     // getUtilisation. Grain + comeback behaviour documented at the helper.
     const { centihours: hoursChargedCentihours, linesMissingHours } = chargedLabourCentihours(invoices);
@@ -250,7 +252,8 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // uses; by construction contribution − operatingCosts === netProfit.
     const labourContribution = grossMargin - wageBill;
     const netProfit = grossMargin - wageBill - operatingCosts; // wages counted ONCE, here
-    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, labourContribution, operatingCosts, netProfit, months, invoiceCount: invoices.length };
+    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, labourContribution, operatingCosts, netProfit, months, invoiceCount: invoices.length,
+      uncostedPartsLines: uncosted.lines, uncostedPartsRetailPennies: uncosted.retailPennies, uncostedPartsInvoices: uncosted.invoices };
   },
 };
 

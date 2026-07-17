@@ -552,6 +552,23 @@ export default function AdminDashboard(props: PageProps) {
                     parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '', income: d ? fmt.money(d.grossMargin) : '',
                     overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
                   })}</p>
+                  {/* Un-costed parts exposure: null-cost parts are EXCLUDED from parts cost above (never
+                      counted as £0), so the owner sees the margin has un-costed parts in it. Drill →
+                      the invoices; fix by adding the part to the catalogue (its cost home). */}
+                  {(k === 'partsCost' || k === 'grossMargin') && d?.uncostedPartsLines > 0 && (
+                    <details className="mt-2">
+                      <summary className="text-xs text-warn cursor-pointer">{t('pnl.uncostedParts', { count: d.uncostedPartsLines, retail: fmt.money(d.uncostedPartsRetailPennies) })} →</summary>
+                      <div className="text-xs mt-1 space-y-0.5">
+                        <p className="text-muted">{t('pnl.uncostedPartsHelp')}</p>
+                        {(d.uncostedPartsInvoices ?? []).map((iv: any) => (
+                          <p key={iv.id}>
+                            <Link href={`/admin/invoices/${iv.id}`} className="text-accent underline">{iv.number}</Link>
+                            <span className="text-muted"> — {t('pnl.uncostedPartsLine', { count: iv.lines })}</span>
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </>
               ) : <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p>}
             </div>

@@ -88,11 +88,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
  * a source of trade-cost figures for ANY role. Resolution, server-side:
  *   product-linked line → the catalogue product's unit_cost (same server-derived pattern as
  *                         labour_outsourced; frozen per line at save)
- *   ad-hoc line         → the existing line's cost, matched by exact (item_type, description),
- *                         consumed once — a rename resets the match to 0
- *   genuinely new ad-hoc → 0 (a user cannot invent a cost; the catalogue is the cost home).
+ *   ad-hoc discount line (negative price) → 0 (genuinely free — a KNOWN value)
+ *   ad-hoc part         → the existing line's cost, matched by exact (item_type, description),
+ *                         consumed once (number OR a preserved null); a rename resets the match
+ *   genuinely new ad-hoc → NULL (cost UNKNOWN; a user cannot invent a cost).
  * The catalogue-prompt (Option A) is how an ad-hoc part acquires a real cost: promote it to a product,
- * cost lives server-side there. [Pending Option A slice: ad-hoc cost becomes NULL, not 0 — cost unknown.]
+ * cost lives server-side there. NULL vs 0 is deliberate: the margin readers EXCLUDE null and surface it.
  */
 export async function performEstimateSave(args: { groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean }) {
   const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
@@ -113,11 +114,13 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
     select: { item_type: true, description: true, unit_cost: true },
     orderBy: { created_at: 'asc' },
   })) as any[];
-  const pool = existing.map((e) => ({ key: `${e.item_type}||${String(e.description ?? '').trim()}`, cost: Number(e.unit_cost ?? 0) }));
-  const takeExisting = (itemType: string, description: string): number => {
+  // Preserve the existing cost EXACTLY — including a preserved null (cost still unknown). A number
+  // (incl. 0) stays a number.
+  const pool = existing.map((e) => ({ key: `${e.item_type}||${String(e.description ?? '').trim()}`, cost: e.unit_cost == null ? null : Number(e.unit_cost) }));
+  const takeExisting = (itemType: string, description: string): number | null => {
     const k = `${itemType}||${description}`;
     const i = pool.findIndex((p) => p.key === k);
-    if (i < 0) return 0;
+    if (i < 0) return null; // genuinely new ad-hoc → cost UNKNOWN (null), never invented as 0
     return pool.splice(i, 1)[0].cost;
   };
 
@@ -133,14 +136,19 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
     }
     const description = String(raw.description ?? '').trim();
     const catalogueItemId = (typeof raw.catalogue_item_id === 'string' && validIds.has(raw.catalogue_item_id)) ? (raw.catalogue_item_id as string) : null;
-    // Catalogue-linked → inherit product cost. Ad-hoc → preserve existing cost by type+description
-    // (client cost never trusted). The catalogue is the cost home.
-    const costPounds = catalogueItemId != null ? (costById.get(catalogueItemId) ?? 0) : takeExisting(t, description);
+    // Cost resolution (client cost NEVER trusted — the browser is not a source of trade-cost figures):
+    //   catalogue-linked → inherit the product cost (a known number)
+    //   ad-hoc discount line (negative price) → 0 (genuinely free, a KNOWN value)
+    //   ad-hoc part → preserve the existing cost by type+description (number OR null); genuinely new
+    //                 → NULL (cost UNKNOWN — the catalogue prompt is how it acquires a real cost).
+    const costPounds: number | null = catalogueItemId != null
+      ? (costById.get(catalogueItemId) ?? 0)
+      : (num(raw.unit_price) < 0 ? 0 : takeExisting(t, description));
     inputs.push({
       item_type: t,
       qty: num(raw.qty),
       unit_price_pennies: poundsToPennies(num(raw.unit_price)),
-      unit_cost_pennies: poundsToPennies(Math.max(0, costPounds)), // server-resolved — feeds the numerics too
+      unit_cost_pennies: costPounds == null ? null : poundsToPennies(Math.max(0, costPounds)), // null = UNKNOWN
       vatable: !!raw.vatable,
     });
     resolved.push({
@@ -161,7 +169,8 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
     description: resolved[i].description,
     qty: new Prisma.Decimal(Math.max(0, it.qty)),
     unit_price: new Prisma.Decimal(penniesToPounds(it.item_type === 'labour' ? Math.max(0, it.unit_price_pennies) : it.unit_price_pennies)),
-    unit_cost: new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies ?? 0))), // server-resolved above
+    unit_cost: it.unit_cost_pennies == null ? null : new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies))), // null = cost UNKNOWN
+
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),
     vat_amount: new Prisma.Decimal(penniesToPounds(totals.lines[i].vat_pennies)),
     catalogue_item_id: resolved[i].catalogueItemId,

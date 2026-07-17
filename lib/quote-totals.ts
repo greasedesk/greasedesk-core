@@ -23,7 +23,7 @@ export type QuoteLineInput = {
   item_type: QuoteItemType;
   qty: number;                 // labour: hours; parts/misc: quantity. Floored at 0.
   unit_price_pennies: number;  // labour: hourly rate (floored at 0); parts/misc: unit price (NOT floored)
-  unit_cost_pennies?: number;  // optional; floored at 0
+  unit_cost_pennies?: number | null; // number (incl 0) = known cost; NULL = cost UNKNOWN (excluded from margin, tallied as exposure)
   vatable: boolean;
 };
 
@@ -35,7 +35,9 @@ export type QuoteTotals = {
   vat_pennies: number;           // VAT on VATable lines at vatRate
   total_pennies: number;         // labour + parts + vat
   labour_cost_pennies: number;   // sum of labour costs (margin reporting later)
-  parts_cost_pennies: number;    // sum of part + misc costs
+  parts_cost_pennies: number;    // sum of part + misc costs — KNOWN costs only (null excluded)
+  uncosted_parts_lines: number;  // count of part/misc lines with UNKNOWN (null) cost — the exposure
+  uncosted_parts_pennies: number;// their line-total retail (ex VAT) — the exposure value
   vat_rate: number;              // the clamped rate actually used
   lines: QuoteLineResult[];      // per-line, index-aligned with the input
 };
@@ -58,9 +60,11 @@ function lineTotalPennies(item: QuoteLineInput): number {
   return Math.round(nz(item.unit_price_pennies) * qty);
 }
 
-function lineCostPennies(item: QuoteLineInput): number {
+// null = cost UNKNOWN (excluded from the cost sum, tallied as exposure); a number (incl 0) = known.
+function lineCostPennies(item: QuoteLineInput): number | null {
+  if (item.unit_cost_pennies == null) return null;
   const qty = Math.max(0, nz(item.qty));
-  const cost = Math.max(0, nz(item.unit_cost_pennies ?? 0)); // cost floored at 0
+  const cost = Math.max(0, nz(item.unit_cost_pennies)); // cost floored at 0
   return Math.round(cost * qty);
 }
 
@@ -80,15 +84,19 @@ export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, 
   // byte-identical to the old `round(base × rate / 100)`.
   const profile = { taxModel: 'vat' as const, isRegistered: vatApplies };
   const rateBp = Math.round(vat_rate * 100);
-  let labour = 0, parts = 0, labourCost = 0, partsCost = 0;
+  let labour = 0, parts = 0, labourCost = 0, partsCost = 0, uncostedLines = 0, uncostedPennies = 0;
   const lines: QuoteLineResult[] = [];
   const vatableLines: TaxApplyLine[] = [];
 
   for (const item of items) {
     const total = lineTotalPennies(item);
-    const cost = lineCostPennies(item);
-    if (item.item_type === 'labour') { labour += total; labourCost += cost; }
-    else { parts += total; partsCost += cost; } // part + misc both bucket into parts
+    const cost = lineCostPennies(item); // null = cost unknown
+    if (item.item_type === 'labour') { labour += total; if (cost != null) labourCost += cost; }
+    else { // part + misc both bucket into parts
+      parts += total;
+      if (cost == null) { uncostedLines += 1; uncostedPennies += total; } // UNKNOWN cost — never counted as 0
+      else partsCost += cost;
+    }
     if (item.vatable) vatableLines.push({ netPennies: total, rateBp, taxable: true });
     // Per-line VAT is informational (record only); the card VAT below is the authoritative figure.
     lines.push({ line_total_pennies: total, vat_pennies: taxOnBasePennies(profile, item.vatable ? total : 0, rateBp) });
@@ -104,6 +112,8 @@ export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, 
     total_pennies: labour + parts + vat,
     labour_cost_pennies: labourCost,
     parts_cost_pennies: partsCost,
+    uncosted_parts_lines: uncostedLines,
+    uncosted_parts_pennies: uncostedPennies,
     vat_rate,
     lines,
   };

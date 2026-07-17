@@ -824,7 +824,10 @@ model JobCardItem {
   item_type         ItemType
   description       String
   qty               Decimal  @default(1.00) @db.Decimal(12, 2)
-  unit_cost         Decimal  @default(0) @db.Decimal(12, 2)
+  // NULLABLE (2026-07-17): null = trade cost UNKNOWN (ad-hoc part not yet catalogued); a number
+  // (incl. 0 = genuinely free, e.g. a discount line) = known. The margin readers EXCLUDE null and
+  // surface it — never silently count unknown as zero. The catalogue is the cost home.
+  unit_cost         Decimal? @db.Decimal(12, 2)
   unit_price        Decimal  @default(0) @db.Decimal(12, 2)
   vat_rate          Decimal  @default(20.00) @db.Decimal(5, 2)
   vat_amount        Decimal  @default(0) @db.Decimal(12, 2)
@@ -982,7 +985,10 @@ model InvoiceLine {
   vat_rate          Decimal  @default(0) @db.Decimal(5, 2)
   line_vat          Decimal  @default(0) @db.Decimal(12, 2)
   line_total        Decimal  @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
-  unit_cost         Decimal  @default(0) @db.Decimal(12, 2) // INTERNAL — margin only; NEVER rendered to the customer
+  // INTERNAL — margin only; NEVER rendered to the customer. NULLABLE (2026-07-17): null = cost
+  // UNKNOWN (frozen from an un-catalogued ad-hoc part); a number (incl. 0 = free) = known. The P&L
+  // EXCLUDES null from parts-cost and surfaces the exposure — never counts unknown as zero.
+  unit_cost         Decimal? @db.Decimal(12, 2)
   labour_hours      Decimal? @db.Decimal(6, 2) // frozen labour-content grain (fixed-service lines)
   // Frozen classification (freeze-at-issue model): the ledger reads THESE, never the mutable card.
   // Nullable only for pre-backfill legacy rows; every new snapshot writes both.
