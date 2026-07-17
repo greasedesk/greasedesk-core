@@ -122,20 +122,21 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
           disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
       </div>
-      {/* unit_cost — the margin grain, shown only to cost-visible users. Catalogue/fixed lines inherit
-          cost server-side (read-only here). Ad-hoc parts have no cost home, so a cost-visible editor
-          types it (server re-checks the caller's authority); an ADMIN can instead promote the part to
-          the catalogue, the canonical cost home. Never printed on the customer document. */}
-      {costVisible && (isAdHocPart && canEdit ? (
+      {/* unit_cost — the margin grain, shown only to cost-visible users, NEVER a browser input (the
+          browser is not a source of trade-cost figures). Catalogue/fixed lines inherit cost server-side
+          (read-only). An ad-hoc part has no cost home, so a cost-visible user is prompted to promote it
+          to the catalogue (cost lives there, server-owned); an ADMIN gets the one-tap link. */}
+      {costVisible && (isAdHocPart ? (
         <div className="sm:w-28">
           <label className={labelCls}>{t('estimate.cost')}</label>
-          <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.unit_cost}
-            title={t('estimate.costHint')} placeholder="0.00"
-            onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
-          {canCatalogue && row.description.trim() !== '' && (
-            <a href={`/admin/products?add=part&name=${encodeURIComponent(row.description.split('\n')[0].trim())}&price=${encodeURIComponent(row.unit_price)}&cost=${encodeURIComponent(row.unit_cost)}`}
-              target="_blank" rel="noreferrer"
-              className="block text-[11px] text-accent hover:underline mt-1 whitespace-nowrap">{t('estimate.addToCatalogue')}</a>
+          {row.unit_cost !== '' ? (
+            <div className="text-muted text-sm tabular-nums py-2">{row.unit_cost}</div>
+          ) : canCatalogue && canEdit && row.description.trim() !== '' ? (
+            <a href={`/admin/products?add=part&name=${encodeURIComponent(row.description.split('\n')[0].trim())}&price=${encodeURIComponent(row.unit_price)}`}
+              target="_blank" rel="noreferrer" title={t('estimate.costHint')}
+              className="block text-[11px] text-accent hover:underline py-2 whitespace-nowrap">{t('estimate.addToCatalogue')}</a>
+          ) : (
+            <div className="text-warn text-xs py-2" title={t('estimate.costHint')}>{t('estimate.noCost')}</div>
           )}
         </div>
       ) : row.unit_cost !== '' ? (
