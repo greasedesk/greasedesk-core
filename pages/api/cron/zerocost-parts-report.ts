@@ -8,7 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
-import { effectiveIssueDate } from '@/lib/invoice';
+import { effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const secret = process.env.CRON_SECRET;
@@ -48,8 +48,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  // June reconciliation: the frozen parts-cost the P&L reads for 2026-06. My forward fix writes only
+  // the DRAFT JobCardItem, never InvoiceLine, so this must still be £3,612.88 (proof it doesn't move).
+  const juneInvoices = (await prisma.invoice.findMany({
+    where: { group_id: TMBS_GROUP_ID, ...effectiveIssueDateWhere(new Date('2026-06-01T00:00:00Z'), new Date('2026-07-01T00:00:00Z')) },
+    select: { lines: { select: { item_type: true, qty: true, unit_cost: true } } },
+  })) as Array<{ lines: Array<{ item_type: string; qty: unknown; unit_cost: unknown }> }>;
+  let junePartsCost = 0;
+  for (const inv of juneInvoices) for (const l of inv.lines) if (l.item_type !== 'labour') junePartsCost += n(l.qty) * n(l.unit_cost);
+
+  // Split: a genuinely mis-costed ad-hoc part has POSITIVE retail; negative/zero-retail zero-cost
+  // lines are discounts / warranty goodwill and CORRECTLY carry no cost.
+  const genuine = affected.flatMap((a) => a.lines.filter((l: any) => l.unitPriceRetail > 0).map((l: any) => ({ invoice: a.invoice, issued: a.issued, ...l })));
+
   affected.sort((a, b) => (a.issued < b.issued ? -1 : 1));
   return res.status(200).json({
+    juneReconcile: { partsCostPounds: Number(junePartsCost.toFixed(2)), invoices: juneInvoices.length },
+    genuineMiscostedAdHocParts: { lines: genuine.length, retailAtZeroCostPounds: Number(genuine.reduce((s, l) => s + l.qty * l.unitPriceRetail, 0).toFixed(2)), detail: genuine },
     scope: 'TMBS issued invoices (frozen InvoiceLine)',
     summary: {
       invoicesAffected: affected.length,
