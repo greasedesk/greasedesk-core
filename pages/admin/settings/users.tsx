@@ -16,7 +16,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 
 type Role = 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null; canInvoice: boolean };
 type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean };
 
 const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE MANAGER', STANDARD: 'STANDARD' };
@@ -105,6 +105,7 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
   const [siteIds, setSiteIds] = useState<string[]>(user.siteIds);
   const [primary, setPrimary] = useState<string>(user.primarySiteId ?? '');
   const [role, setRole] = useState<Role>(user.role);
+  const [canInvoice, setCanInvoice] = useState<boolean>(user.canInvoice);
   const [err, setErr] = useState<string | null>(null);
   const isSelf = selfId === user.id;
   const toggle = (id: string) => setSiteIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -118,6 +119,7 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
   async function save() {
     const body: any = { id: user.id, name, siteIds };
     if (canEditRole) body.role = role;
+    if (canEditRole) body.canInvoice = canInvoice; // ADMIN-only grant (server re-checks)
     // Primary must be one of the selected sites; else fall back to auto (first assigned).
     body.primarySiteId = siteIds.includes(primary) ? primary : null;
     const error = await mutate('/api/users', 'PATCH', body);
@@ -189,9 +191,17 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
               </select>
             </div>
           )}
+          {canEditRole && (
+            <label className="flex items-start gap-2 text-xs">
+              <input type="checkbox" className="w-4 h-4 mt-0.5" checked={canInvoice} onChange={(e) => setCanInvoice(e.target.checked)} />
+              <span className="text-ink">Can raise invoices
+                <span className="block text-muted">Issue an invoice on jobs at their location. Does not grant mark-paid, unlock, or cost/margin visibility.</span>
+              </span>
+            </label>
+          )}
           <div className="flex items-center gap-2">
             <button onClick={save} className="text-xs bg-ok hover:bg-ok text-white rounded px-3 py-1.5">Save</button>
-            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setPrimary(user.primarySiteId ?? ''); setRole(user.role); }} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
+            <button onClick={() => { setEditing(false); setName(user.name ?? ''); setSiteIds(user.siteIds); setPrimary(user.primarySiteId ?? ''); setRole(user.role); setCanInvoice(user.canInvoice); }} className="text-xs text-muted hover:text-ink px-2">Cancel</button>
           </div>
         </div>
       )}
@@ -239,7 +249,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
   const { vis } = gate;
   const isAdmin = vis.isAdmin;
 
-  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; primary_site_id: string | null; site_assignments: { site_id: string }[] };
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; primary_site_id: string | null; can_invoice: boolean; site_assignments: { site_id: string }[] };
   const selfId = vis.userId;
   const userWhere = isAdmin
     ? { group_id: vis.groupId }
@@ -251,7 +261,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     prisma.user.findMany({
       where: userWhere,
       orderBy: { email: 'asc' },
-      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, primary_site_id: true, site_assignments: { select: { site_id: true } } },
+      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, primary_site_id: true, can_invoice: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
     prisma.site.findMany({ where: siteWhere, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
   ]);
@@ -260,6 +270,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     id: u.id, name: u.name, email: u.email, isActive: u.is_active, role: u.role, isOwner: u.is_owner,
     siteIds: u.site_assignments.map((a) => a.site_id),
     primarySiteId: u.primary_site_id ?? null,
+    canInvoice: !!u.can_invoice,
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
 

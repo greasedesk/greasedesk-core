@@ -489,6 +489,10 @@ model User {
   role_id         String?
   is_active       Boolean  @default(true)
   is_owner        Boolean  @default(false) // immutable: marks the one primary-subscriber per group
+  // Per-user grant (ADMIN-set, off by default): a trusted STANDARD mechanic may RAISE an invoice
+  // (in_progress→invoiced) at an assigned site, without being promoted to SITE_MANAGER. Grants ONLY
+  // the issue transition + retail price visibility — NOT mark-paid, NOT unlock (ADMIN), NOT margin.
+  can_invoice     Boolean  @default(false)
   created_at      DateTime @default(now())
 
   // --- INVITE / SET-PASSWORD TOKEN (single-use; SHA-256 of a high-entropy random token) ---

@@ -37,6 +37,7 @@ type PageProps = {
   isAdmin: boolean;
   canEdit: boolean;
   canEditPricing: boolean;
+  canIssueInvoice: boolean;
   priceVisible: boolean;
   costVisible: boolean;
   canOperate: boolean;
@@ -102,6 +103,7 @@ export default function JobCardDetailPage(props: PageProps) {
         status={props.status}
         tabsState={props.tabsState}
         canManage={props.canEdit}
+        canIssueInvoice={props.canIssueInvoice}
         priceVisible={props.priceVisible}
         costVisible={props.costVisible}
         canOperate={props.canOperate}

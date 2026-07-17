@@ -114,8 +114,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, siteIds, role, primarySiteId } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null };
+    const { id, name, siteIds, role, primarySiteId, canInvoice } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null; canInvoice?: boolean };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
+    // can_invoice is an ADMIN-only grant (a ledger power) — a site manager may manage their mechanics
+    // but may not hand out invoice-raising authority.
+    if (canInvoice !== undefined && isManagerOnly) {
+      return res.status(403).json({ message: 'Only an admin can grant invoice-raising permission.' });
+    }
     const target = await prisma.user.findFirst({
       where: { id, group_id: groupId },
       select: { id: true, is_owner: true, role: true, primary_site_id: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
@@ -186,6 +191,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await tx.user.update({ where: { id }, data: { primary_site_id: val, ...(val ? { site_id: val } : {}) } });
         } else if (siteIds !== undefined && target.primary_site_id && !(nextSites as string[]).includes(target.primary_site_id)) {
           await tx.user.update({ where: { id }, data: { primary_site_id: null } });
+        }
+        // Per-user invoice-raising grant (ADMIN-only, guarded above).
+        if (canInvoice !== undefined) {
+          await tx.user.update({ where: { id }, data: { can_invoice: !!canInvoice } });
         }
       });
       return res.status(200).json({ message: 'User updated.' });

@@ -50,14 +50,25 @@ export async function getTenantPermissions(groupId: string | null | undefined): 
 export type FinanceVisibility = { seeValues: boolean; seeMargin: boolean };
 export function financeVisibility(vis: Visibility, perms: TenantPermissions): FinanceVisibility {
   if (vis.isAdmin) return { seeValues: true, seeMargin: true };
-  if (vis.role === 'SITE_MANAGER') return { seeValues: perms.managerSeeValues, seeMargin: perms.managerSeeMargin };
-  return { seeValues: perms.standardSeeValues, seeMargin: perms.standardSeeMargin };
+  // A user who may RAISE invoices must see RETAIL totals (you cannot issue a bill you can't read) —
+  // retail only; unit_cost/margin stays gated by seeMargin. This never opens the trade-cost surface.
+  const base = vis.role === 'SITE_MANAGER'
+    ? { seeValues: perms.managerSeeValues, seeMargin: perms.managerSeeMargin }
+    : { seeValues: perms.standardSeeValues, seeMargin: perms.standardSeeMargin };
+  return { seeValues: base.seeValues || vis.canInvoice, seeMargin: base.seeMargin };
 }
 
 // Edit an estimate/pricing on a card at `siteId`: managers/admins always; STANDARD only if the
 // tenant toggle is on AND they're assigned to that site.
 export function canEditEstimate(vis: Visibility, siteId: string | null | undefined, perms: TenantPermissions): boolean {
   return canManageSite(vis, siteId) || (perms.standardEditPricing && canAccessSite(vis, siteId));
+}
+
+// RAISE an invoice (the in_progress→invoiced mint) at `siteId`: managers/admins always; any user with
+// the per-user can_invoice grant if they're assigned to that site. This is the ONLY commercial power
+// the grant relaxes — mark-paid, unlock, date edits and the rest stay canManageSite / isAdmin.
+export function canIssueInvoice(vis: Visibility, siteId: string | null | undefined): boolean {
+  return canManageSite(vis, siteId) || (vis.canInvoice && canAccessSite(vis, siteId));
 }
 
 // Open the Invoices (AR/debtors) view at all: managers/admins always; STANDARD only via the tenant

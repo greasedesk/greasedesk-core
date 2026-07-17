@@ -13,6 +13,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite, requireCanWrite } from '@/lib/admin-guard';
+import { canIssueInvoice } from '@/lib/permissions';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
@@ -51,7 +52,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!tr) return res.status(400).json({ message: `Cannot move from ${card.status} to ${to}.` });
 
   const vis = await getVisibility(user.id as string);
-  const permitted = tr.kind === 'operational' ? canAccessSite(vis, card.site_id) : canManageSite(vis, card.site_id);
+  // Authority by transition KIND — with ONE relaxation: raising the invoice (in_progress→invoiced) is
+  // also open to a per-user can_invoice grant (canIssueInvoice). Every OTHER commercial transition
+  // (quote/accept/decline/cancel/paid/done/reopen) stays manager/admin. The mint itself is unchanged.
+  const permitted = tr.kind === 'operational'
+    ? canAccessSite(vis, card.site_id)
+    : to === 'invoiced'
+      ? canIssueInvoice(vis, card.site_id)
+      : canManageSite(vis, card.site_id);
   if (!permitted) {
     return res.status(403).json({
       message: tr.kind === 'commercial'

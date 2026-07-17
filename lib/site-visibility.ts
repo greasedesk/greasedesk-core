@@ -17,18 +17,19 @@ export type Visibility = {
   role: 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
   isOwner: boolean;
   isAdmin: boolean;      // ADMIN or owner → sees all group sites (SITE_MANAGER is NOT admin)
+  canInvoice: boolean;   // per-user grant: may RAISE an invoice at an assigned site (see canIssueInvoice)
   siteIds: string[];     // the sites this user may see/act on
   primarySiteId: string | null; // the user's default landing site (falls back to first accessible)
 };
 
 export async function getVisibility(userId: string): Promise<Visibility> {
-  const empty: Visibility = { userId, groupId: null, role: 'STANDARD', isOwner: false, isAdmin: false, siteIds: [], primarySiteId: null };
+  const empty: Visibility = { userId, groupId: null, role: 'STANDARD', isOwner: false, isAdmin: false, canInvoice: false, siteIds: [], primarySiteId: null };
   if (!userId) return empty;
 
   const user = (await prisma.user.findUnique({
     where: { id: userId },
-    select: { group_id: true, role: true, is_owner: true, primary_site_id: true, site_id: true, site_assignments: { select: { site_id: true } } },
-  })) as { group_id: string | null; role: 'ADMIN' | 'SITE_MANAGER' | 'STANDARD'; is_owner: boolean; primary_site_id: string | null; site_id: string | null; site_assignments: Array<{ site_id: string }> } | null;
+    select: { group_id: true, role: true, is_owner: true, can_invoice: true, primary_site_id: true, site_id: true, site_assignments: { select: { site_id: true } } },
+  })) as { group_id: string | null; role: 'ADMIN' | 'SITE_MANAGER' | 'STANDARD'; is_owner: boolean; can_invoice: boolean; primary_site_id: string | null; site_id: string | null; site_assignments: Array<{ site_id: string }> } | null;
 
   if (!user) return empty;
   const isAdmin = user.role === 'ADMIN' || user.is_owner;
@@ -45,7 +46,8 @@ export async function getVisibility(userId: string): Promise<Visibility> {
   const prefs = [user.primary_site_id, user.site_id];
   const primarySiteId = prefs.find((id) => id && siteIds.includes(id)) ?? siteIds[0] ?? null;
 
-  return { userId, groupId: user.group_id, role: user.role, isOwner: user.is_owner, isAdmin, siteIds, primarySiteId };
+  // can_invoice is a STANDARD/manager grant; ADMIN already outranks it (canManageSite covers issue).
+  return { userId, groupId: user.group_id, role: user.role, isOwner: user.is_owner, isAdmin, canInvoice: !!user.can_invoice, siteIds, primarySiteId };
 }
 
 export async function canAccessSite(userId: string, siteId: string | null | undefined): Promise<boolean> {

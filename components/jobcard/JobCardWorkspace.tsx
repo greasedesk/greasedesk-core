@@ -32,6 +32,7 @@ type Props = {
   status: JobStatus;
   tabsState: Record<TabKey, TabState>;
   canManage: boolean;     // commercial (status/accept/booking/invoice)
+  canIssueInvoice: boolean; // may RAISE the invoice (in_progress→invoiced) — canManage OR the per-user grant
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
@@ -476,7 +477,7 @@ export default function JobCardWorkspace(p: Props) {
             )}
             {invoiceActions}
             {startWorkBtn}
-            {eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled && !mintOpen && (
+            {eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !cancelled && !mintOpen && (
               <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
             {mintPanel}
@@ -498,7 +499,7 @@ export default function JobCardWorkspace(p: Props) {
             )}
             {payPanel}
           </>
-        ) : eff.status === 'in_progress' && allAdvanced && p.canManage && !cancelled ? (
+        ) : eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !cancelled ? (
           <>
             <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
             {!mintOpen && (

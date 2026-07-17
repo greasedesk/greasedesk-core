@@ -12,7 +12,7 @@
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
-import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
+import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { computeTabs } from '@/lib/jobcard-tabs';
@@ -94,6 +94,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
   const canEditPricing = canEditEstimate(vis, row.site_id, perms);
+  const canIssue = canIssueInvoice(vis, row.site_id); // canManage OR the per-user can_invoice grant
   // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
   // a user who may not see money never RECEIVES money. Absent, not hidden.
   //   priceVisible = seeValues OR canEditPricing (edit implies see, for PRICES only)
@@ -175,7 +176,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     createdAt: row.created_at.toISOString(),
     status: row.status,
     jobCardId: row.id,
-    canEdit, canEditPricing, canOperate,
+    canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue,
     isAdmin: vis.isAdmin,
     currency: site?.currency_code ?? 'GBP',
     locale: site?.locale ?? 'en-GB',
