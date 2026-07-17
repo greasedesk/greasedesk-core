@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api
+Disallow: /m
+Disallow: /onboarding
+Disallow: /superadmin
+
+Sitemap: https://greasedesk.com/sitemap.xml
