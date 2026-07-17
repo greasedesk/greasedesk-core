@@ -106,6 +106,7 @@ export default function JobCardDetailPage(props: PageProps) {
         costVisible={props.costVisible}
         canOperate={props.canOperate}
         canEditPricing={props.canEditPricing}
+        isAdmin={props.isAdmin}
         owner={props.owner}
         vehicle={props.vehicle}
         flags={props.flags}

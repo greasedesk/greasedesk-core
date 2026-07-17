@@ -24,6 +24,8 @@
     "unitPrice": "Unit price",
     "qty": "Qty",
     "cost": "Cost / ea",
+    "costHint": "Ad-hoc cost — for margin only, never printed. Catalogue parts inherit cost.",
+    "addToCatalogue": "Add to catalogue",
     "vat": "VAT",
     "lineTotal": "Line total",
     "remove": "Remove line",

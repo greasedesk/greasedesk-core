@@ -87,6 +87,20 @@ export default function ProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady, items]);
 
+  // Prefill from the estimate builder's "Add to catalogue" shortcut: ?add=part&name=&price=&cost=.
+  // Opens the create form pre-populated so an ADMIN only picks a code + VAT. The catalogue is the
+  // cost home — cost is authored HERE, never trusted from the estimate line.
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (prefilled.current || !router.isReady) return;
+    prefilled.current = true;
+    if (router.query.add !== 'part') return;
+    const str = (v: unknown) => (typeof v === 'string' ? v : '');
+    setMsg(null);
+    setForm({ id: null, code: '', title: '', name: str(router.query.name), itemType: 'part', active: true, vatRate: defaultVatRate, cost: str(router.query.cost), price: str(router.query.price), basePrice: '', labourHours: '', labourOutsourced: false, components: [], tierCells: blankTierCells() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady]);
+
   function openAdd() { setMsg(null); setForm({ id: null, code: '', title: '', name: '', itemType: 'part', active: true, vatRate: defaultVatRate, cost: '', price: '', basePrice: '', labourHours: '', labourOutsourced: false, components: [], tierCells: blankTierCells() }); }
   function openEdit(i: Item) {
     setMsg(null);

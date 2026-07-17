@@ -65,9 +65,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vat = await getTenantVat(user.group_id as string);
   const rate = clampVatRate(typeof vatRate === 'string' ? parseFloat(vatRate) : (vatRate ?? vat.defaultRate));
 
+  // COST AUTHORITY: only a cost-visible caller (seeMargin — ADMIN always) may assert an ad-hoc line's
+  // cost. For everyone else the server keeps ignoring client cost and preserves the existing value.
+  // Catalogue-linked lines ALWAYS inherit the product cost regardless of who saves (see below).
+  const fin = financeVisibility(vis, perms);
+
   let saved;
   try {
-    saved = await performEstimateSave({ groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered });
+    saved = await performEstimateSave({ groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered, costWritable: fin.seeMargin });
   } catch (e: any) {
     if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
     console.error('quote save error:', e);
@@ -76,7 +81,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Cost figures are the MARGIN grain — stripped from the response unless the saver is
   // cost-visible (same rule as the shaped page props: absent, not hidden).
-  const fin = financeVisibility(vis, perms);
   const totals: any = { ...saved.totals };
   if (!fin.seeMargin) { delete totals.labour_cost_pennies; delete totals.parts_cost_pennies; }
   return res.status(200).json({ message: 'Estimate saved.', totals });
@@ -84,17 +88,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 /**
  * THE estimate save core (exported for the proof matrix — the matrix drives the REAL write path).
- * unit_cost IS NEVER CLIENT-WRITABLE (ruling 2026-07-12, for EVERY role): the browser has no
- * business asserting what the garage paid a supplier. Resolution, server-side:
- *   product-linked line → the catalogue product's unit_cost (same server-derived pattern as
- *                         labour_outsourced; frozen per line at save)
- *   ad-hoc line         → the existing line's cost, matched by exact (item_type, description),
- *                         consumed once — a rename resets the match (cost drops to 0, visible to
- *                         cost-visible users)
- *   genuinely new ad-hoc → 0 (a user cannot invent a cost; the catalogue is the cost home)
+ * unit_cost is SERVER-RESOLVED, never blindly trusted from the browser (ruling 2026-07-12). Resolution:
+ *   product-linked line → the catalogue product's unit_cost (server-derived, like labour_outsourced;
+ *                         frozen per line at save). The client cost is IGNORED — the catalogue is the
+ *                         cost home — regardless of who saves.
+ *   ad-hoc line, costWritable caller → the client-sent unit_cost (validated ≥0). Only a cost-visible
+ *                         caller (seeMargin — ADMIN always) reaches this; STANDARD/price-only users
+ *                         never send nor set cost. This is the 2026-07-17 reopening of ad-hoc cost
+ *                         capture WITHOUT reopening the leak: the authority is re-checked server-side.
+ *   ad-hoc line, non-cost caller → the existing line's cost, matched by exact (item_type, description),
+ *                         consumed once (preserves a cost a cost-visible user set earlier; a rename
+ *                         resets the match to 0).
  */
-export async function performEstimateSave(args: { groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean }) {
-  const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
+export async function performEstimateSave(args: { groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean; costWritable?: boolean }) {
+  const { groupId, jobCardId, items, vatRate, vatRegistered, costWritable = false } = args;
 
   // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to
   // null (SetNull-safe) — and read the SERVER truths inherited per line: outsourced flag + cost.
@@ -132,7 +139,11 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
     }
     const description = String(raw.description ?? '').trim();
     const catalogueItemId = (typeof raw.catalogue_item_id === 'string' && validIds.has(raw.catalogue_item_id)) ? (raw.catalogue_item_id as string) : null;
-    const costPounds = catalogueItemId != null ? (costById.get(catalogueItemId) ?? 0) : takeExisting(t, description);
+    // Catalogue-linked → inherit product cost (client cost ignored). Ad-hoc → a cost-visible caller
+    // may assert it (validated ≥0); anyone else preserves the existing cost by type+description.
+    const costPounds = catalogueItemId != null
+      ? (costById.get(catalogueItemId) ?? 0)
+      : (costWritable ? Math.max(0, num(raw.unit_cost)) : takeExisting(t, description));
     inputs.push({
       item_type: t,
       qty: num(raw.qty),

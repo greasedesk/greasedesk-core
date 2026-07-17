@@ -61,7 +61,8 @@ type Props = {
   tiers?: TierLite[]; // active tenant tiers
   promos?: PromoLite[]; // active promotions for the apply-promo picker
   priceVisible?: boolean; // finance-shaped: prices absent from props when false (defaults true)
-  costVisible?: boolean;  // margin grain: read-only display only; unit_cost is never client-writable
+  costVisible?: boolean;  // margin grain: ad-hoc parts editable for cost-visible; else read-only
+  canCatalogue?: boolean; // ADMIN — surface "Add to catalogue" on ad-hoc parts (the cost home)
 };
 
 const CODES_DATALIST = 'gd-catalogue-codes';
@@ -80,7 +81,8 @@ type RowProps = {
   showVat: boolean;
   hasCatalogue: boolean;
   priceVisible: boolean; // finance-shaped server-side — when false the props carry no prices at all
-  costVisible: boolean;  // the margin grain; display-only (unit_cost is never client-writable)
+  costVisible: boolean;  // the margin grain; ad-hoc parts editable for cost-visible, else read-only
+  canCatalogue: boolean; // ADMIN — may promote an ad-hoc part to the catalogue (the cost home)
   lineTotal: string;
   t: (k: string) => string;
   onChange: (idx: number, patch: Partial<EstimateLine>) => void;
@@ -88,7 +90,11 @@ type RowProps = {
   onRemove: (idx: number) => void;
 };
 
-function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible, costVisible, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
+function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible, costVisible, canCatalogue, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
+  // An ad-hoc part = a parts/misc line with no catalogue origin and no fixed-service labour content,
+  // and not a (negative) discount line. Only these have no cost home, so only these accept a typed
+  // cost — from a cost-visible user, re-validated server-side. Catalogue/fixed rows show cost read-only.
+  const isAdHocPart = kind === 'part' && !row.catalogue_item_id && row.labour_hours == null && Number(row.unit_price || 0) >= 0;
   return (
     <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
       {hasCatalogue && (
@@ -116,14 +122,28 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
           disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
       </div>
-      {/* unit_cost is SERVER-DERIVED at save (catalogue inheritance / preserved) — never a client
-          input for any role. Cost-visible users see it read-only. */}
-      {costVisible && row.unit_cost !== '' && (
+      {/* unit_cost — the margin grain, shown only to cost-visible users. Catalogue/fixed lines inherit
+          cost server-side (read-only here). Ad-hoc parts have no cost home, so a cost-visible editor
+          types it (server re-checks the caller's authority); an ADMIN can instead promote the part to
+          the catalogue, the canonical cost home. Never printed on the customer document. */}
+      {costVisible && (isAdHocPart && canEdit ? (
+        <div className="sm:w-28">
+          <label className={labelCls}>{t('estimate.cost')}</label>
+          <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.unit_cost}
+            title={t('estimate.costHint')} placeholder="0.00"
+            onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
+          {canCatalogue && row.description.trim() !== '' && (
+            <a href={`/admin/products?add=part&name=${encodeURIComponent(row.description.split('\n')[0].trim())}&price=${encodeURIComponent(row.unit_price)}&cost=${encodeURIComponent(row.unit_cost)}`}
+              target="_blank" rel="noreferrer"
+              className="block text-[11px] text-accent hover:underline mt-1 whitespace-nowrap">{t('estimate.addToCatalogue')}</a>
+          )}
+        </div>
+      ) : row.unit_cost !== '' ? (
         <div className="sm:w-24">
           <label className={labelCls}>{t('estimate.cost')}</label>
           <div className="text-muted text-sm tabular-nums py-2">{row.unit_cost}</div>
         </div>
-      )}
+      ) : null)}
       {showVat && (
         <label className="flex items-center gap-2 text-sm text-muted sm:w-16 py-2">
           <input type="checkbox" className="w-5 h-5" checked={row.vatable} disabled={!canEdit}
@@ -149,7 +169,7 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
 // "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
 export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
@@ -333,7 +353,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
       {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
       {labour.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible}
+        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
@@ -342,7 +362,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
       {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
       {parts.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible}
+        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
           lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
       ))}
       {canEdit && (
@@ -360,7 +380,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
           {fixed.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyFixed')}</p>}
           {fixed.map(({ l, idx }) => (
             <div key={l._uid}>
-              <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false} priceVisible={priceVisible} costVisible={costVisible}
+              <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
                 lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
               {l.labour_hours != null && (
                 <p className="text-xs text-muted -mt-1 mb-2">{t('estimate.fixedHours', { hours: l.labour_hours })}</p>
