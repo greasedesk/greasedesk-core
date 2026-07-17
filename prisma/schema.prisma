@@ -153,6 +153,10 @@ model Group {
   // TaxProfile refactor). getTaxProfile reads bp, falling back to ×100 of this while backfill lands.
   default_vat_rate Decimal @default(20) @db.Decimal(5, 2)
   address          String?
+  // Marketing attribution captured at signup from a public `?ref=` parameter (DORMANT — no rep
+  // system yet; we just never lose the attribution, which is expensive to retrofit). Sanitised +
+  // capped at write; null when the signup carried no ref.
+  signup_ref       String?
 
   // ── TaxProfile (item-13 onboarding groundwork). The Group is the LEGAL entity that files one
   // tax return, so tax identity lives here; currency + locale are TRADING identity and stay on Site

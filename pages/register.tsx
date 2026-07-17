@@ -16,6 +16,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 
+// Marketing attribution stashed by _app when a public ?ref= landed. Read it at signup so it reaches
+// the server (dormant — persisted to Group.signup_ref, no rep system yet). null when absent.
+function readRefCookie(): string | null {
+  if (typeof document === 'undefined') return null;
+  const m = document.cookie.match(/(?:^|;\s*)gd_ref=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 /* ─────────────────────  SAFE JSON PATCH (browser + dev only)  ───────────────────── */
 
 declare global {
@@ -102,7 +110,7 @@ export default function RegisterPage() {
           'Cache-Control': 'no-store',
           'Pragma': 'no-cache',
         },
-        body: JSON.stringify({ name: nameTrim, email: emailNorm, password: pass }),
+        body: JSON.stringify({ name: nameTrim, email: emailNorm, password: pass, ref: readRefCookie() }),
       });
 
       const status = res.status;

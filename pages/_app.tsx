@@ -6,6 +6,7 @@
  * Also keeps the global safe Response.json() patch.
  */
 import App, { AppContext, AppProps } from 'next/app';
+import { useEffect } from 'react';
 import '@/styles/globals.css';
 import { SessionProvider } from 'next-auth/react';
 import { appWithTranslation } from 'next-i18next';
@@ -44,6 +45,17 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
 // Login renders bare; the settings redirect shims return null and redirect server-side (harmless).
 function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   const useAdminShell = router.pathname.startsWith('/admin') && router.pathname !== '/admin/login';
+  // REFERRAL CAPTURE (dormant): stash a public ?ref= into a first-party cookie the moment it lands,
+  // on ANY page, so the attribution survives navigation to /register even if the link drops the query.
+  // No rep system yet — we simply never lose it (expensive to retrofit). Sanitised + capped here too.
+  useEffect(() => {
+    if (!router.isReady) return;
+    const raw = router.query.ref;
+    const ref = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+    if (!ref) return;
+    const clean = ref.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
+    if (clean) document.cookie = `gd_ref=${encodeURIComponent(clean)}; path=/; max-age=${60 * 60 * 24 * 90}; SameSite=Lax`;
+  }, [router.isReady, router.query.ref]);
   const page = <Component {...pageProps} />;
   return (
     <SessionProvider session={pageProps.session}>

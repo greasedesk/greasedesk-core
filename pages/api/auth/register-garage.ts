@@ -11,7 +11,7 @@ import { Resend } from 'resend';
 import crypto from 'crypto';
 import { trialEndsFromNow } from '@/lib/trial';
 
-type Payload = { name: string; email: string; password: string };
+type Payload = { name: string; email: string; password: string; ref?: string };
 
 export const config = {
   api: { bodyParser: true },
@@ -36,7 +36,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { name, email, password } = (req.body || {}) as Payload;
+    const { name, email, password, ref } = (req.body || {}) as Payload;
+    // Marketing attribution (dormant): sanitise + cap; never trust the client's raw value. null when absent.
+    const signupRef = (typeof ref === 'string' ? ref.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) : '') || null;
     // ... (Validation logic remains unchanged) ...
     if (!name || !email || !password) {
       return res
@@ -70,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
         // asks the real garage name and it's mandatory there (item-13). "Iain Gunn's Garage" was this
         // personal-name default surviving because setup used to be skippable; it no longer is.
-        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: trialEndsFromNow() },
+        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: trialEndsFromNow(), signup_ref: signupRef },
       });
 
       const user = await tx.user.create({
