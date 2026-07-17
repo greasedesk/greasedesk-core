@@ -231,8 +231,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       }
     }
     // Parts cost via THE extracted read (lib/charged-labour.partsCostPennies — also the warranty
-    // tile's read; comeback drag preserved by construction). Un-costed (null-cost) parts are
-    // EXCLUDED there and surfaced HERE so the margin is never silently trusted with unknowns in it.
+    // tile's read; comeback drag preserved by construction). GENUINELY un-costed parts (no cost
+    // recorded) bring in revenue with no cost offset, so they INFLATE gross margin — surfaced HERE
+    // (uncostedParts) so the owner sees it, never silently trusts a 100%-margin part.
     const partsCost = partsCostPennies(invoices);
     const uncosted = uncostedParts(invoices);
     // Hours charged — the EXTRACTED numerator (lib/charged-labour), reused verbatim by

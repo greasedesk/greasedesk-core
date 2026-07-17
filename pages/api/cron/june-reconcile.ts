@@ -15,17 +15,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sites = (await prisma.site.findMany({ where: { group_id: TMBS_GROUP_ID }, select: { id: true } })) as Array<{ id: string }>;
   const siteIds = sites.map((s) => s.id);
-  const from = new Date('2026-06-01T00:00:00Z');
-  const to = new Date('2026-07-01T00:00:00Z');
-  const invoices = await fetchLedgerInvoices({ groupId: TMBS_GROUP_ID, siteIds, from, to });
-
-  const partsCost = partsCostPennies(invoices); // DEPLOYED reader (now excludes null)
-  const exposure = uncostedParts(invoices);
+  const month = async (fromISO: string, toISO: string) => {
+    const invoices = await fetchLedgerInvoices({ groupId: TMBS_GROUP_ID, siteIds, from: new Date(fromISO), to: new Date(toISO) });
+    const partsCost = partsCostPennies(invoices);
+    const exposure = uncostedParts(invoices);
+    return { invoices: invoices.length, partsCostPounds: (partsCost / 100).toFixed(2), uncostedParts: { lines: exposure.lines, retailPounds: (exposure.retailPennies / 100).toFixed(2), invoices: exposure.invoices } };
+  };
   return res.status(200).json({
-    tmbsJune: {
-      invoices: invoices.length,
-      partsCostPounds: (partsCost / 100).toFixed(2), // MUST be 3612.88
-      uncostedParts: { lines: exposure.lines, retailPounds: (exposure.retailPennies / 100).toFixed(2), invoices: exposure.invoices },
-    },
+    tmbsJune: await month('2026-06-01T00:00:00Z', '2026-07-01T00:00:00Z'), // partsCost MUST be 3612.88, uncosted 0
+    tmbsJuly: await month('2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z'), // exposure should surface the 6 lines
   });
 }

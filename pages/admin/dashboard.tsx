@@ -552,9 +552,9 @@ export default function AdminDashboard(props: PageProps) {
                     parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '', income: d ? fmt.money(d.grossMargin) : '',
                     overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
                   })}</p>
-                  {/* Un-costed parts exposure: null-cost parts are EXCLUDED from parts cost above (never
-                      counted as £0), so the owner sees the margin has un-costed parts in it. Drill →
-                      the invoices; fix by adding the part to the catalogue (its cost home). */}
+                  {/* Un-costed parts exposure: an un-costed part brings in revenue with no cost offset,
+                      so it inflates gross margin (shown at 100%). We SURFACE it — never silently trust
+                      the margin. Drill → the invoices; fix by adding the part to the catalogue. */}
                   {(k === 'partsCost' || k === 'grossMargin') && d?.uncostedPartsLines > 0 && (
                     <details className="mt-2">
                       <summary className="text-xs text-warn cursor-pointer">{t('pnl.uncostedParts', { count: d.uncostedPartsLines, retail: fmt.money(d.uncostedPartsRetailPennies) })} →</summary>
