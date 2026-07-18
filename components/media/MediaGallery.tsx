@@ -159,27 +159,33 @@ function Lightbox({ items, index, setIndex, onRotate, onDelete, canEdit }: {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center select-none touch-none"
+    // Near-opaque backdrop — the card behind must not read through (contrast + a finished feel).
+    <div className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center select-none touch-none"
       onClick={(e) => { if (e.target === e.currentTarget) setIndex(null); }}>
-      {/* Controls */}
-      <div className="absolute top-0 inset-x-0 flex items-center justify-between p-3 z-10">
+      {/* Controls — cleared past the iOS status bar / notch / home indicator via the safe-area insets
+          (device-adaptive, never a fixed pixel offset). Targets are ≥44px (gloved taps). */}
+      <div className="absolute top-0 inset-x-0 flex items-center justify-between z-10"
+        style={{
+          paddingTop: 'calc(env(safe-area-inset-top) + 12px)', paddingBottom: 12,
+          paddingLeft: 'calc(env(safe-area-inset-left) + 12px)', paddingRight: 'calc(env(safe-area-inset-right) + 12px)',
+        }}>
         <span className="text-white/80 text-sm">{index + 1} / {items.length}</span>
         <div className="flex items-center gap-2">
           {canEdit && onRotate && (
-            <button onClick={rotate} aria-label="Rotate" className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center">
+            <button onClick={rotate} aria-label="Rotate" className="w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center">
               <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-15-3M4 14a8 8 0 0015 3" /></svg>
             </button>
           )}
           {canEdit && onDelete && (
-            <button onClick={() => { onDelete(m.id, m.mediaType); setIndex(null); }} aria-label="Delete" className="w-10 h-10 rounded-full bg-white/15 hover:bg-danger text-white flex items-center justify-center text-lg">🗑</button>
+            <button onClick={() => { onDelete(m.id, m.mediaType); setIndex(null); }} aria-label="Delete" className="w-11 h-11 rounded-full bg-white/15 hover:bg-danger text-white flex items-center justify-center text-lg">🗑</button>
           )}
-          <button onClick={() => setIndex(null)} aria-label="Close" className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xl">✕</button>
+          <button onClick={() => setIndex(null)} aria-label="Close" className="w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center text-xl">✕</button>
         </div>
       </div>
 
-      {/* Prev / next (desktop) */}
-      {index > 0 && <button onClick={() => go(-1)} aria-label="Previous" className="absolute left-2 z-10 w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-2xl hidden sm:flex items-center justify-center">‹</button>}
-      {index < items.length - 1 && <button onClick={() => go(1)} aria-label="Next" className="absolute right-2 z-10 w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-2xl hidden sm:flex items-center justify-center">›</button>}
+      {/* Prev / next (desktop) — kept clear of a landscape notch via the horizontal safe-area insets. */}
+      {index > 0 && <button onClick={() => go(-1)} aria-label="Previous" style={{ left: 'calc(env(safe-area-inset-left) + 8px)' }} className="absolute z-10 w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-2xl hidden sm:flex items-center justify-center">‹</button>}
+      {index < items.length - 1 && <button onClick={() => go(1)} aria-label="Next" style={{ right: 'calc(env(safe-area-inset-right) + 8px)' }} className="absolute z-10 w-11 h-11 rounded-full bg-white/15 hover:bg-white/25 text-white text-2xl hidden sm:flex items-center justify-center">›</button>}
 
       {/* Media */}
       {isPhoto ? (
