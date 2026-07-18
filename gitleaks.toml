@@ -1,0 +1,57 @@
+# GreaseDesk gitleaks config.
+#
+# Extends the stock ruleset — it is good, but it MISSED BOTH OF THIS REPO'S ACTUAL LEAKS:
+#   • the Neon `DATABASE_URL` in env_file.txt (public ~8 months) -> "no leaks found" with defaults
+#   • the `RESEND_API_KEY` in .env            (still live)       -> not matched in its real context
+#     (the stock `generic-api-key` rule is entropy-dependent; the same key IS caught in isolation
+#      and ISN'T inside the full file — detection you cannot rely on is not detection)
+# The rules below make those two classes deterministic rather than probabilistic.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "greasedesk-database-uri"
+description = "Database connection URI with an inline password (Postgres/MySQL/Mongo/Redis)"
+# Requires a NON-EMPTY password between ':' and '@' — so a placeholder like
+# postgres://user:@host or postgres://user:PASSWORD@host still reads as a hit worth a look,
+# while a URI with no credentials at all does not.
+regex = '''(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss)://[^\s:/@]+:[^\s@'"]+@[^\s/'"]+'''
+keywords = ["postgres", "postgresql", "mysql", "mongodb", "redis"]
+
+[[rules]]
+id = "greasedesk-resend-api-key"
+description = "Resend API key (re_…) — sends mail as our verified domain, so a leak is invoice/reset-link impersonation"
+regex = '''\bre_[A-Za-z0-9][A-Za-z0-9_-]{15,}\b'''
+keywords = ["re_"]
+
+[[rules]]
+id = "greasedesk-neon-password"
+description = "Neon database role password (npg_…) — leaks alone, without a full URI, in prose and comments"
+regex = '''\bnpg_[A-Za-z0-9]{12,}\b'''
+keywords = ["npg_"]
+
+[[rules]]
+id = "greasedesk-nextauth-secret"
+description = "NEXTAUTH_SECRET assignment — forges sessions for every tenant if leaked"
+regex = '''(?i)\bNEXTAUTH_SECRET\s*[=:]\s*['"]?([A-Za-z0-9+/=_-]{24,})['"]?'''
+secretGroup = 1
+keywords = ["nextauth_secret"]
+
+[[rules]]
+id = "greasedesk-r2-secret"
+description = "Cloudflare R2 secret access key assignment (40-char hex) — private tenant media"
+regex = '''(?i)\bR2_SECRET_ACCESS_KEY\s*[=:]\s*['"]?([A-Za-z0-9]{32,})['"]?'''
+secretGroup = 1
+keywords = ["r2_secret_access_key"]
+
+[allowlist]
+description = "Paths that never contain live credentials"
+paths = [
+  # Lockfiles carry integrity hashes that trip entropy rules; they hold no credentials.
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)yarn\.lock$''',
+  # Our own scanner config: the regexes above literally contain the token shapes they hunt for.
+  '''(^|/)gitleaks\.toml$''',
+]

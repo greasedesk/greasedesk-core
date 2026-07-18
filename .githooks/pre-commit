@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# GreaseDesk pre-commit secret guard.
+#
+# WHY THIS EXISTS: this repo is PUBLIC, and it has leaked before — `env_file.txt` carried a live
+# Neon connection string for ~8 months, and a `.env` commit exposed a Resend API key that was still
+# valid when found (see .gitignore:15). .gitignore stops the files it knows about; this stops the
+# secret that arrives in a file nobody thought to ignore.
+#
+# Scans ONLY what is staged, so it is fast and cannot be confused by unstaged working-tree noise.
+# BLOCKS the commit on any finding (non-zero exit). Bypassable with `git commit --no-verify` — which
+# is deliberate, for the rare false positive, and should be a conscious act.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  # FAIL CLOSED on a repo with this history: a missing scanner must not silently mean "no secrets".
+  echo "pre-commit: gitleaks is not installed — refusing to commit unscanned." >&2
+  echo "            install it (brew install gitleaks), or bypass once with: git commit --no-verify" >&2
+  exit 1
+fi
+
+gitleaks git --staged --redact --no-banner
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo "" >&2
+  echo "────────────────────────────────────────────────────────────────────────" >&2
+  echo " COMMIT BLOCKED: gitleaks found a possible secret in the staged changes." >&2
+  echo "" >&2
+  echo " Values above are redacted. Do NOT 'fix' this by committing anyway —" >&2
+  echo " this repo is public, so anything committed is disclosed permanently," >&2
+  echo " and rotation (not deletion) is the only real remedy." >&2
+  echo "" >&2
+  echo "   • real secret   -> remove it, put it in .env (git-ignored) or Vercel" >&2
+  echo "   • false positive-> git commit --no-verify   (and consider a" >&2
+  echo "                      .gitleaksignore entry with the finding fingerprint)" >&2
+  echo "────────────────────────────────────────────────────────────────────────" >&2
+  exit 1
+fi
+
+exit 0

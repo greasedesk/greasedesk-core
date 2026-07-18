@@ -1,0 +1,30 @@
+# Known, disclosed, REMEDIATED historical leaks — suppressed by EXACT FINGERPRINT only.
+#
+# Each line is commit:path:rule:line. Nothing here is a rule-wide or path-wide exemption, so a NEW
+# secret in .env or env_file.txt — or a new occurrence on a different line — still fails the scan.
+# These blobs are permanently in public history; they cannot be un-disclosed, only rotated. They are
+# listed so the baseline is green and a real regression is visible, NOT because they were harmless.
+#
+# Incident: commit 6b0be09 (2025-11-03) committed .env and env_file.txt to a PUBLIC repo.
+#   .env         — removed same day (c3106a2), but permanent in history
+#   env_file.txt — removed 2026-06-24 (75fae5d), ~7 months 3 weeks of public exposure
+#
+# REMEDIATION STATUS at time of writing (2026-07-18):
+#   DATABASE_URL / Neon password ... ROTATED (endpoint also changed)
+#   NEXTAUTH_SECRET ................ ROTATED
+#   RESEND_API_KEY ................. *** NOT ROTATED — still live, still exposed ***
+# The Resend entry below is suppressed so CI is usable, NOT because it is resolved.
+# Remove that one line once the key is rotated; it should then never match again.
+
+# ── .env @ 6b0be09 ────────────────────────────────────────────────────────────────────────────
+6b0be09e014e19cbd735275361da1f83dd508040:.env:greasedesk-database-uri:1
+6b0be09e014e19cbd735275361da1f83dd508040:.env:greasedesk-neon-password:1
+6b0be09e014e19cbd735275361da1f83dd508040:.env:greasedesk-nextauth-secret:2
+6b0be09e014e19cbd735275361da1f83dd508040:.env:generic-api-key:2
+6b0be09e014e19cbd735275361da1f83dd508040:.env:greasedesk-resend-api-key:3
+
+# ── env_file.txt @ 6b0be09 (line 4 = active DATABASE_URL, line 6 = commented UNPOOLED copy) ────
+6b0be09e014e19cbd735275361da1f83dd508040:env_file.txt:greasedesk-database-uri:4
+6b0be09e014e19cbd735275361da1f83dd508040:env_file.txt:greasedesk-neon-password:4
+6b0be09e014e19cbd735275361da1f83dd508040:env_file.txt:greasedesk-database-uri:6
+6b0be09e014e19cbd735275361da1f83dd508040:env_file.txt:greasedesk-neon-password:6

@@ -1,0 +1,62 @@
+name: gitleaks
+
+# The backstop the local hook cannot be: a pre-commit hook lives on one machine and is bypassable
+# with `git commit --no-verify`. This runs on GitHub, on every push and PR, and cannot be skipped
+# by the author. This repo is PUBLIC and has leaked live credentials before (see .gitleaksignore),
+# so "someone forgot to install the hook" must not be the same as "no secrets were committed".
+#
+# Deliberately NOT using the gitleaks-action marketplace action: it requires a paid licence key for
+# organisation-owned repos. We install the binary and invoke it directly — same scanner, no licence.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout FULL history
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 is load-bearing. The default shallow clone (depth 1) would scan only the
+          # tip commit, so a secret added and then removed in a later commit of the same push would
+          # pass — which is exactly how this repo's .env leak survived (added and deleted same day).
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1 # pinned: an auto-updated scanner can change findings under us
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full history
+        run: |
+          set -euo pipefail
+          # --redact: never print a live secret into a PUBLIC repo's build log — that would turn a
+          #           detection into a second disclosure.
+          # Exit code is non-zero on any finding, which fails the job. .gitleaksignore suppresses
+          # ONLY the known-and-rotated historical fingerprints, never a rule or a path.
+          gitleaks git . \
+            --config gitleaks.toml \
+            --redact \
+            --no-banner \
+            --report-format sarif \
+            --report-path gitleaks.sarif
+
+      - name: Upload findings report
+        if: always() # the report matters most when the previous step FAILED
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-sarif
+          path: gitleaks.sarif
+          if-no-files-found: ignore
