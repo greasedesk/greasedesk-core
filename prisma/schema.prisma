@@ -814,6 +814,10 @@ model JobCardPhoto {
   media_type       String? // 'photo' | 'video' — NULL means photo (pre-video rows; never backfilled)
   duration_seconds Int? // video length (client-probed metadata; display only)
   r2_key           String? // private R2 object key; display via presigned GET (URL never stored)
+  poster_r2_key    String? // VIDEO ONLY: a small JPEG poster frame (captured client-side ~1-2s into
+                           // the clip), its own R2 object. NULL = pre-poster video → placeholder tile.
+  rotation         Int     @default(0) // 0/90/180/270 — a display INTERPRETATION applied as a CSS
+                           // transform (grid + lightbox). NEVER re-encodes or rewrites the R2 bytes.
   photo_type       String?
   file_url         String? // legacy (pre-R2); nullable now
   uploaded_by      String?

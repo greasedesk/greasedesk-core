@@ -20,11 +20,13 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { withI18n } from '@/lib/gssp-i18n';
 import { cacheGet, cachePut } from '@/lib/pwa-idb';
 import { resizeImage } from '@/lib/image-resize';
-import { enqueuePhoto, enqueueVehicle, enqueueVideo, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
+import { enqueuePhoto, enqueuePoster, enqueueVehicle, enqueueVideo, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
 import { isValidVin, normaliseVinInput } from '@/lib/vin';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 import InstallBar from '@/components/pwa/InstallBar';
 import WalkaroundRecorder, { canRecord } from '@/components/media/WalkaroundRecorder';
+import { posterFromVideoBlob } from '@/lib/video-poster';
+import MediaGallery from '@/components/media/MediaGallery';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null };
 type JobData = {
@@ -35,7 +37,7 @@ type JobData = {
   lines: JobLine[]; notes: string; invoice: { number: string; status: string } | null;
   currency: string; locale: string;
 };
-type StagePhoto = { id: string; stage: string; slot?: string | null; mediaType: 'photo' | 'video'; url: string | null; label: string | null };
+type StagePhoto = { id: string; stage: string; slot?: string | null; mediaType: 'photo' | 'video'; url: string | null; posterUrl?: string | null; rotation?: number; durationSeconds?: number | null; label: string | null };
 // A capture living on THIS phone = an OUTBOX row (IndexedDB-first: an OS-killed app loses
 // nothing). Thumbnails render from the queued blobs; failure is a STATE on the thumbnail
 // (tap retries, explicit discard), never an error dialogue.
@@ -167,11 +169,20 @@ export default function MobileJobCard() {
         const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
         const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
         const durationSeconds = await probeDuration(file);
-        await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds, label: job?.vehicle.registration });
+        await enqueueVideoWithPoster(stage, file, contentType, durationSeconds);
       }
     }
     await loadShots();
     const el = libraryRefs.current[stage]; if (el) el.value = '';
+  }
+
+  // Rotate a committed photo/video — display interpretation, PATCH-persisted (no re-encode). Optimistic.
+  async function rotateM(photoId: string, rotation: number) {
+    setPhotos((ps) => (ps ? ps.map((p) => (p.id === photoId ? { ...p, rotation } : p)) : ps));
+    try {
+      const res = await fetch('/api/photos', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId, rotation }) });
+      if (!res.ok) await refreshPhotos();
+    } catch { await refreshPhotos(); }
   }
 
   function retry(_stage: string, shot: LocalShot) { retryItem(shot.photoId); }
@@ -202,13 +213,22 @@ export default function MobileJobCard() {
     } catch { /* the queue copy still stands */ }
   }
 
+  // Enqueue a video AND its poster: video on its lane, poster on the fast photo lane (posterFor links
+  // it to the video row at commit). The recorder hands us a poster grabbed ~1.2s in; for library/
+  // input-capture videos we derive one from the blob (seek ~1s — a good frame, not the floor).
+  async function enqueueVideoWithPoster(stage: string, blob: Blob, contentType: string, durationSeconds: number | null, poster?: Blob | null) {
+    const videoId = await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds, label: job?.vehicle.registration });
+    const posterBlob = poster ?? await posterFromVideoBlob(blob).catch(() => null);
+    if (posterBlob) await enqueuePoster({ jobCardId: id, stage, blob: posterBlob, posterFor: videoId, label: job?.vehicle.registration });
+  }
+
   // Walkaround video: recorder-constrained (720p / ~2.5 Mbps / 90s hard cap ≈ 28MB) → outbox
   // kind:'video' (sends IMMEDIATELY when online — the queue is for the bay with no bars, never
   // a resting place; photos still always go first).
-  async function onVideoCaptured(stage: string, blob: Blob, contentType: string, durationSeconds: number) {
+  async function onVideoCaptured(stage: string, blob: Blob, contentType: string, durationSeconds: number, poster: Blob | null) {
     setRecordingStage(null);
     saveSecondCopy(blob, contentType);
-    await enqueueVideo({ jobCardId: id, stage, blob, contentType, durationSeconds, label: job?.vehicle.registration });
+    await enqueueVideoWithPoster(stage, blob, contentType, durationSeconds, poster);
     await loadShots();
   }
 
@@ -224,7 +244,7 @@ export default function MobileJobCard() {
     const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
     const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
     saveSecondCopy(file, contentType); // iOS <input capture> videos aren't saved to Photos either
-    await enqueueVideo({ jobCardId: id, stage, blob: file, contentType, durationSeconds: null, label: job?.vehicle.registration });
+    await enqueueVideoWithPoster(stage, file, contentType, null);
     await loadShots();
     const el = videoFileRefs.current[stage]; if (el) el.value = '';
   }
@@ -421,7 +441,7 @@ export default function MobileJobCard() {
                     start: t('recStart'), stop: t('recStop'), cancel: t('cancel'),
                     capNote: t('recCapNote'), countdown: (s) => t('recCountdown', { s }), error: t('recError'),
                   }}
-                  onCaptured={(blob, contentType, duration) => onVideoCaptured(recordingStage, blob, contentType, duration)}
+                  onCaptured={(blob, contentType, duration, poster) => onVideoCaptured(recordingStage, blob, contentType, duration, poster)}
                   onClose={() => setRecordingStage(null)}
                   onUnavailable={() => { const st2 = recordingStage; setRecordingStage(null); videoFileRefs.current[st2!]?.click(); }}
                 />
@@ -504,7 +524,9 @@ export default function MobileJobCard() {
                     ) : (st.length === 0 && mine.length === 0) ? (
                       <p className="text-xs text-muted">{t('noPhotos')}</p>
                     ) : (
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-2">
+                        {mine.length > 0 && (
+                        <div className="grid grid-cols-3 gap-2">
                         {mine.map((sh) => sh.isVideo ? (
                           /* The queued walkaround plays FROM THE PHONE (the blob is right here) —
                              reviewable before it ever sends. Retry is its own control (the video
@@ -540,11 +562,16 @@ export default function MobileJobCard() {
                             )}
                           </span>
                         ))}
-                        {st.map((p) => p.url && (
-                          p.mediaType === 'video'
-                            ? <video key={p.id} src={p.url} className="col-span-3 w-full h-auto max-h-[70vh] object-contain rounded-lg border border-line bg-black" preload="metadata" controls playsInline />
-                            : <img key={p.id} src={p.url} alt={p.label ?? ''} loading="lazy" className="w-full aspect-square object-cover rounded-lg border border-line" />
-                        ))}
+                        </div>
+                        )}
+                        {/* Committed media — THE shared grid + lightbox + rotation (same as desktop). */}
+                        {st.length > 0 && (
+                          <MediaGallery
+                            items={st.map((p) => ({ id: p.id, mediaType: p.mediaType, url: p.url, posterUrl: p.posterUrl, rotation: p.rotation, durationSeconds: p.durationSeconds, label: p.label }))}
+                            onRotate={rotateM}
+                            canEdit
+                          />
+                        )}
                       </div>
                     )}
                   </section>

@@ -93,7 +93,7 @@ async function sendItem(item) {
   if (!put.ok) throw Object.assign(new Error('put:' + put.status), { status: put.status >= 500 ? put.status : 500 }); // R2 4xx here = expired presign → transient, re-presigns next pass
   const commit = await fetch('/api/photos', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-    body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, photoId: item.id, key }),
+    body: JSON.stringify({ jobCardId: item.jobCardId, stage: item.stage, slot: item.slot, photoId: item.id, key, ...(item.posterFor ? { posterFor: item.posterFor } : {}) }),
   });
   if (!commit.ok) throw Object.assign(new Error('commit:' + commit.status), { status: commit.status });
 }

@@ -14,8 +14,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'next-i18next';
 import { resizeImage } from '@/lib/image-resize';
 import WalkaroundRecorder, { canRecord } from '@/components/media/WalkaroundRecorder';
+import MediaGallery from '@/components/media/MediaGallery';
+import { posterFromVideoBlob } from '@/lib/video-poster';
 
-type Photo = { id: string; slot: string | null; label: string | null; mediaType: 'photo' | 'video'; durationSeconds: number | null; url: string | null; uploadedAt: string; uploadedBy: string | null };
+type Photo = { id: string; slot: string | null; label: string | null; mediaType: 'photo' | 'video'; durationSeconds: number | null; url: string | null; posterUrl: string | null; rotation: number; uploadedAt: string; uploadedBy: string | null };
 type Props = { jobCardId: string; stage: 'intake' | 'injob' | 'completion'; canEdit: boolean; locked: boolean; locale: string };
 
 // Probe a video's duration client-side (metadata only — no decode). Best-effort; null on any failure.
@@ -72,7 +74,20 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
   // client-side transcoding). Desktop stays single-PUT (workshop LAN; the resumable multipart
   // lane exists for the phone's 4G, in sw.js). Recorder-made blobs are size-pinned (~28MB);
   // file-picked ones aren't, so >80 MB still gets a WARNING, not a block.
-  async function uploadVideoBlob(blob: Blob, contentType: string, durationSeconds: number | null) {
+  // Poster: presign→PUT→commit with posterFor (attaches to the video row, no tile of its own).
+  // Sequential AFTER the video commit here, so the row exists — best-effort (failure → placeholder).
+  async function uploadPoster(posterBlob: Blob, videoPhotoId: string) {
+    try {
+      const pres = await fetch('/api/photos/presign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId, stage, slot: 'poster', contentType: 'image/jpeg' }) });
+      if (!pres.ok) return;
+      const { photoId, key, uploadUrl } = await pres.json();
+      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: posterBlob });
+      if (!put.ok) return;
+      await fetch('/api/photos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId, stage, slot: 'poster', photoId, key, posterFor: videoPhotoId }) });
+    } catch { /* poster is best-effort → placeholder tile */ }
+  }
+
+  async function uploadVideoBlob(blob: Blob, contentType: string, durationSeconds: number | null, poster?: Blob | null) {
     setBusy(true); setErr(null); setWarn(null);
     try {
       if (blob.size > 80 * 1024 * 1024) setWarn(t('photos.videoSizeWarn', { mb: Math.round(blob.size / 1048576) }));
@@ -82,6 +97,8 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
       const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': contentType }, body: blob });
       if (!put.ok) throw new Error('upload');
       await fetch('/api/photos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId, stage, slot: 'walkaround', photoId, key, durationSeconds }) });
+      const posterBlob = poster ?? await posterFromVideoBlob(blob).catch(() => null);
+      if (posterBlob) await uploadPoster(posterBlob, photoId);
       await load();
     } catch (e: any) { setErr(e?.message && e.message !== 'presign' && e.message !== 'upload' ? e.message : t('photos.uploadError')); }
     finally { setBusy(false); if (videoRef.current) videoRef.current.value = ''; }
@@ -94,7 +111,16 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
     const byExt: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
     const contentType = file.type || byExt[(file.name.split('.').pop() || '').toLowerCase()] || 'video/mp4';
     const durationSeconds = await probeDuration(file);
-    await uploadVideoBlob(file, contentType, durationSeconds);
+    await uploadVideoBlob(file, contentType, durationSeconds); // poster derived from the blob inside
+  }
+
+  // Rotation: persist via PATCH (display interpretation, no re-encode), then reflect locally.
+  async function rotate(id: string, rotation: number) {
+    setPhotos((ps) => ps.map((p) => (p.id === id ? { ...p, rotation } : p)));
+    try {
+      const res = await fetch('/api/photos', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photoId: id, rotation }) });
+      if (!res.ok) await load(); // revert to server truth on failure
+    } catch { await load(); }
   }
 
   async function del(id: string, mediaType: 'photo' | 'video') {
@@ -134,7 +160,7 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
             start: t('photos.recStart'), stop: t('photos.recStop'), cancel: t('photos.recCancel'),
             capNote: t('photos.recCapNote'), countdown: (s) => t('photos.recCountdown', { s }), error: t('photos.recError'),
           }}
-          onCaptured={(blob, contentType, duration) => { setRecording(false); uploadVideoBlob(blob, contentType, duration); }}
+          onCaptured={(blob, contentType, duration, poster) => { setRecording(false); uploadVideoBlob(blob, contentType, duration, poster); }}
           onClose={() => setRecording(false)}
           onUnavailable={() => { setRecording(false); videoRef.current?.click(); }}
         />
@@ -146,33 +172,13 @@ export default function PhotoStage({ jobCardId, stage, canEdit, locked }: Props)
       {photos.length === 0 ? (
         <p className="text-sm text-muted">{t('photos.empty')}</p>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-          {photos.map((p) => (
-            <div key={p.id} className={`relative group rounded-lg overflow-hidden border border-line bg-surface-muted ${p.mediaType === 'video' ? 'col-span-3 sm:col-span-4' : 'aspect-square'}`}>
-              {!p.url ? (
-                <div className="w-full aspect-video flex items-center justify-center text-muted text-xs">…</div>
-              ) : p.mediaType === 'video' ? (
-                // NO forced aspect (fix 2026-07-13): a camera-roll portrait clip carries a 90°
-                // rotation matrix; the browser honours it, so the intrinsic size IS portrait —
-                // an aspect-video box would pillarbox (or, with object-cover, crop) it. Let the
-                // decoded, correctly-oriented frame size the element, capped so a tall portrait
-                // doesn't dominate. R2 range requests give native streaming/seek, no transcoding.
-                <video controls preload="metadata" src={p.url} className="w-full h-auto max-h-[70vh] object-contain bg-black" />
-              ) : (
-                <img src={p.url} alt={p.label || 'photo'} className="w-full h-full object-cover" loading="lazy" />
-              )}
-              {p.mediaType === 'video' && p.durationSeconds != null && (
-                <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[10px] rounded px-1.5 py-0.5 pointer-events-none">{fmtDur(p.durationSeconds)}</span>
-              )}
-              {/* Always visible while the stage is OPEN (hover-only was undiscoverable on touch).
-                  Locked stage → no control here; the note above points at the reopen route. */}
-              {canEdit && !locked && (
-                <button onClick={() => del(p.id, p.mediaType)} aria-label={t(p.mediaType === 'video' ? 'photos.deleteVideo' : 'photos.delete')}
-                  className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white rounded-full w-7 h-7 text-sm flex items-center justify-center shadow">✕</button>
-              )}
-            </div>
-          ))}
-        </div>
+        // THE shared media surface (grid + lightbox + rotation) — identical on desktop and /m.
+        <MediaGallery
+          items={photos.map((p) => ({ id: p.id, mediaType: p.mediaType, url: p.url, posterUrl: p.posterUrl, rotation: p.rotation, durationSeconds: p.durationSeconds, label: p.label }))}
+          onRotate={rotate}
+          onDelete={del}
+          canEdit={canEdit && !locked}
+        />
       )}
     </div>
   );

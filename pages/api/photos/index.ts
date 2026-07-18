@@ -39,24 +39,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rows = await prisma.jobCardPhoto.findMany({
       where: { job_card_id: jobCardId, ...(stage ? { stage } : {}) },
       orderBy: { uploaded_at: 'asc' },
-      select: { id: true, stage: true, slot: true, label: true, media_type: true, duration_seconds: true, r2_key: true, uploaded_at: true, user: { select: { name: true } } },
+      select: { id: true, stage: true, slot: true, label: true, media_type: true, duration_seconds: true, r2_key: true, poster_r2_key: true, rotation: true, uploaded_at: true, user: { select: { name: true } } },
     });
-    const photos = await Promise.all(rows.map(async (r: any) => ({
+    // Poster rows (slot 'poster') are NOT tiles of their own — they attach to their video. Filter out.
+    const tiles = rows.filter((r: any) => r.slot !== 'poster');
+    const photos = await Promise.all(tiles.map(async (r: any) => ({
       id: r.id, stage: r.stage, slot: r.slot, label: r.label,
       mediaType: r.media_type === 'video' ? 'video' : 'photo', // NULL (pre-video rows) = photo
       durationSeconds: r.duration_seconds ?? null,
+      rotation: r.rotation ?? 0,
       url: r.r2_key ? await presignGet(r.r2_key) : null,
+      posterUrl: r.poster_r2_key ? await presignGet(r.poster_r2_key) : null, // null → placeholder tile
       uploadedAt: r.uploaded_at, uploadedBy: r.user?.name ?? null,
     })));
     return res.status(200).json({ photos });
   }
 
+  // ROTATION (display interpretation): PATCH { photoId, rotation } → persist 0/90/180/270. Never
+  // touches R2 bytes. Operational authority via the photo's own card.
+  if (req.method === 'PATCH') {
+    const { photoId, rotation } = (req.body || {}) as any;
+    const rot = Number(rotation);
+    if (!photoId || ![0, 90, 180, 270].includes(rot)) return res.status(400).json({ message: 'rotation must be 0, 90, 180 or 270.' });
+    const photo = await prisma.jobCardPhoto.findUnique({ where: { id: String(photoId) }, select: { id: true, job_card_id: true } });
+    if (!photo) return res.status(404).json({ message: 'Photo not found.' });
+    const ctx = await authCard(req, res, photo.job_card_id); if (!ctx) return;
+    await prisma.jobCardPhoto.update({ where: { id: photo.id }, data: { rotation: rot } });
+    return res.status(200).json({ id: photo.id, rotation: rot });
+  }
+
   if (req.method === 'POST') {
-    const { jobCardId, stage, slot, label, photoId, key, durationSeconds } = (req.body || {}) as any;
+    const { jobCardId, stage, slot, label, photoId, key, durationSeconds, posterFor } = (req.body || {}) as any;
     if (!jobCardId || !stage || !slot || !photoId || !key || !STAGES.includes(stage)) return res.status(400).json({ message: 'Missing photo fields.' });
     const ctx = await authCard(req, res, jobCardId); if (!ctx) return;
     // key must belong to this tenant + card (defence against a forged commit).
     if (!String(key).startsWith(`${ctx.user.group_id}/${jobCardId}/`)) return res.status(400).json({ message: 'Invalid key.' });
+
+    // POSTER ATTACH: this upload is a video's poster frame — attach the key to the VIDEO row, don't
+    // create a tile of its own. If the video row isn't committed yet (poster raced ahead on the fast
+    // lane), 503 → the outbox retries until the video lands. Idempotent (setting the same key twice is fine).
+    if (posterFor && typeof posterFor === 'string') {
+      const updated = await prisma.jobCardPhoto.updateMany({
+        where: { id: posterFor, job_card_id: jobCardId, media_type: 'video' },
+        data: { poster_r2_key: key },
+      });
+      if (updated.count === 0) return res.status(503).json({ message: 'Video not committed yet — retry.' });
+      return res.status(200).json({ id: posterFor, poster: true });
+    }
     // media_type derived from the key EXTENSION (the presign route allowlisted it) — server-authoritative,
     // not the client's word. Duration is display-only metadata; sanity-clamped.
     const ext = String(key).split('.').pop()?.toLowerCase();
@@ -111,6 +140,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ id: row.id, ...(autoStart ? { status: 'in_progress' } : {}) });
   }
 
-  res.setHeader('Allow', 'GET, POST');
+  res.setHeader('Allow', 'GET, POST, PATCH');
   return res.status(405).json({ message: 'Method Not Allowed' });
 }

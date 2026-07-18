@@ -43,7 +43,9 @@ export type RecorderLabels = {
 };
 type Props = {
   labels: RecorderLabels;
-  onCaptured: (blob: Blob, contentType: string, durationSeconds: number) => void;
+  // posterBlob: a JPEG frame grabbed ~1.2s INTO the clip (a good frame of the car — NOT the last
+  // frame, which is the phone being lowered to the floor). null when the clip was too short to grab one.
+  onCaptured: (blob: Blob, contentType: string, durationSeconds: number, posterBlob: Blob | null) => void;
   onClose: () => void;
   /** getUserMedia refused / recorder failed — caller shows its fallback path. */
   onUnavailable: () => void;
@@ -56,13 +58,30 @@ export default function WalkaroundRecorder({ labels, onCaptured, onClose, onUnav
   const chunksRef = useRef<BlobPart[]>([]);
   const startedAtRef = useRef(0);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const posterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const posterRef = useRef<Blob | null>(null);
   const doneRef = useRef<'captured' | 'cancelled' | null>(null);
+
+  // Grab a poster frame from the live preview (best-effort — a missing poster just shows the placeholder).
+  const capturePoster = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth || !v.videoHeight) return;
+    try {
+      const scale = Math.min(1, 640 / v.videoWidth);
+      const w = Math.round(v.videoWidth * scale), h = Math.round(v.videoHeight * scale);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const cx = c.getContext('2d'); if (!cx) return;
+      cx.drawImage(v, 0, 0, w, h);
+      c.toBlob((b) => { if (b) posterRef.current = b; }, 'image/jpeg', 0.7);
+    } catch { /* no poster → placeholder tile */ }
+  }, []);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [failed, setFailed] = useState(false);
 
   const teardown = useCallback(() => {
     if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+    if (posterTimerRef.current) clearTimeout(posterTimerRef.current);
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -105,12 +124,15 @@ export default function WalkaroundRecorder({ labels, onCaptured, onClose, onUnav
       const base = mime.split(';')[0];
       const blob = new Blob(chunksRef.current, { type: base });
       const duration = Math.min(MAX_SECONDS, Math.round((Date.now() - startedAtRef.current) / 1000));
-      onCaptured(blob, base, duration);
+      onCaptured(blob, base, duration, posterRef.current);
     };
     startedAtRef.current = Date.now();
+    posterRef.current = null;
     rec.start(3000); // timeslice: chunks land every 3s — an encoder hiccup loses seconds, not the take
     recRef.current = rec;
     setRecording(true);
+    // Poster frame ~1.2s in — a good frame of the car, not the last frame (phone pointed at the floor).
+    posterTimerRef.current = setTimeout(() => { if (recRef.current?.state === 'recording') capturePoster(); }, 1200);
     // THE HARD CAP — the recorder stops itself; the interval below is only the visible clock.
     stopTimerRef.current = setTimeout(stop, MAX_SECONDS * 1000);
   }

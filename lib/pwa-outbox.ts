@@ -15,6 +15,7 @@ export type OutboxItem = {
   id: string; kind: 'photo' | 'vehicle' | 'video'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
+  posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
   payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
   durationSeconds?: number | null;                                     // kind:'video'
   // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
@@ -86,6 +87,20 @@ export async function enqueuePhoto(args: { jobCardId: string; stage: string; blo
     attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item)); // durably parked BEFORE any upload attempt
+  triggerDrain();
+  return item.id;
+}
+
+/** A video's POSTER FRAME (small JPEG captured ~1-2s into the clip). Rides the FAST photo lane as a
+ *  kind:'photo' item with slot 'poster' + posterFor = the video's photoId; the commit attaches its key
+ *  to the video row (see /api/photos). Replay-safe (same id → same key → idempotent attach). */
+export async function enqueuePoster(args: { jobCardId: string; stage: string; blob: Blob; posterFor: string; label?: string }): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, label: args.label, stage: args.stage, slot: 'poster',
+    posterFor: args.posterFor, blob: args.blob, contentType: 'image/jpeg', createdAt: Date.now(),
+    attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
   triggerDrain();
   return item.id;
 }
@@ -165,6 +180,10 @@ export async function discardItem(id: string): Promise<void> {
   const items = await outboxAll();
   const it = items.find((x) => x.id === id);
   await rw((s) => s.delete(id));
+  // Discarding a video also drops its orphan poster item (else it 503-retries forever with no parent).
+  if (it?.kind === 'video') {
+    for (const p of items.filter((x) => x.slot === 'poster' && x.posterFor === id)) await rw((s) => s.delete(p.id));
+  }
   if (it?.kind === 'video' && it.uploadId) {
     fetch('/api/photos/multipart', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
