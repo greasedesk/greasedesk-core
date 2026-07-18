@@ -115,7 +115,11 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
             </div>
 
             <div>
-              <label htmlFor="login-password" className="block text-sm font-medium text-muted mb-1">Password</label>
+              <div className="flex items-baseline justify-between mb-1">
+                <label htmlFor="login-password" className="block text-sm font-medium text-muted">Password</label>
+                {/* THE entry point that was missing — a locked-out owner previously had no route back. */}
+                <Link href="/forgot-password" className="text-sm text-accent hover:underline">Forgotten your password?</Link>
+              </div>
               <div className="relative">
                 <input
                   id="login-password"

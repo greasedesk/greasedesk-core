@@ -504,6 +504,18 @@ model User {
   invite_token_expires DateTime?
   invite_token_used_at DateTime?
 
+  // --- PASSWORD RESET TOKEN — DELIBERATELY SEPARATE from the invite token (ruling 2026-07-18).
+  // Different semantics: an invite is single-use-and-dead; a reset is legitimately REPEATABLE.
+  // Reusing invite_* would inherit its "already been used" messaging and the 409-on-existing-email
+  // behaviour. 1-hour expiry; consumed (nulled) on a successful reset; only the SHA-256 is stored.
+  reset_token_hash    String?
+  reset_token_expires DateTime?
+  // Session revocation floor. The auth strategy is JWT (self-contained, NOT revocable by deleting
+  // rows — the Session table is vestigial under strategy:'jwt'), so a stolen 90-day cookie would
+  // otherwise outlive a password reset. Set to now() on reset; the jwt callback kills any token
+  // whose `iat` predates it. THE one place a session is invalidated server-side.
+  sessions_valid_from DateTime?
+
   // --- PROFILE FIELDS (all optional; name + email above are the existing identity fields) ---
   job_title                  String?
   start_date                 DateTime? @db.Date
@@ -1397,4 +1409,17 @@ model CostAllocation {
   @@index([site_id])
   @@index([cost_person_id])
   @@index([overhead_id])
+}
+
+// Shared-state rate limiting for unauthenticated auth endpoints (forgot-password). Serverless has
+// no usable in-memory state — invocations are cold and concurrent — and there's no Redis/KV in the
+// stack, so the DB every request already touches IS the shared store. Append-only; counted over a
+// window; pruned opportunistically. `key` is HASHED (email:<sha256>) so this never becomes a
+// plaintext list of who asked for a reset. ip:<addr> keys are the second axis.
+model AuthRateLimit {
+  id         String   @id @default(uuid())
+  key        String   // 'email:<sha256>' | 'ip:<addr>'
+  created_at DateTime @default(now())
+
+  @@index([key, created_at])
 }

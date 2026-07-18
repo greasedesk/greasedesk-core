@@ -20,3 +20,16 @@ export function makeInviteToken(): { raw: string; hash: string; expires: Date } 
     expires: new Date(Date.now() + INVITE_TOKEN_DAYS * 24 * 60 * 60 * 1000),
   };
 }
+
+/** Password-reset token — SHORT life (1 hour) and stored hashed, like the invite. Kept SEPARATE
+ *  from the invite token on purpose: a reset is legitimately repeatable, an invite is not. */
+export const RESET_TOKEN_MINUTES = 60;
+
+export function makeResetToken(): { raw: string; hash: string; expires: Date } {
+  const raw = crypto.randomBytes(32).toString('hex');
+  return {
+    raw,
+    hash: hashToken(raw),
+    expires: new Date(Date.now() + RESET_TOKEN_MINUTES * 60 * 1000),
+  };
+}

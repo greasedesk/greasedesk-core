@@ -102,6 +102,21 @@ export const authOptions: NextAuthOptions = {
         token.site_id = (user as any).site_id;
         token.group_id = (user as any).group_id;
       }
+
+      // ── SESSION REVOCATION (the ONLY server-side kill switch) ──────────────────────────────
+      // strategy:'jwt' means the cookie is SELF-CONTAINED: it cannot be revoked by deleting rows
+      // (the Session table is vestigial here), so without this a stolen 90-day /m session would
+      // outlive a password reset by up to three months. A reset stamps User.sessions_valid_from;
+      // any token ISSUED BEFORE that instant is dead. Safe with rolling re-issue: NextAuth
+      // re-stamps `iat` AFTER this callback, so we always compare the PREVIOUS issue time — the
+      // first touch after a reset is caught. Returning an empty token leaves no `sub`, so
+      // getServerSession yields no user and every guard fails closed.
+      if (!user && token.id) {
+        const u = await prisma.user.findUnique({ where: { id: token.id as string }, select: { sessions_valid_from: true } });
+        const floor = u?.sessions_valid_from ? new Date(u.sessions_valid_from).getTime() : 0;
+        const issuedAt = typeof token.iat === 'number' ? token.iat * 1000 : 0;
+        if (floor && issuedAt && issuedAt < floor) return {} as any; // revoked — sign out everywhere
+      }
       // Stale-JWT backfill (item-13): a tenant that finishes onboarding AFTER this token was minted
       // (the site is created mid-session, at the onboarding site step) has group_id but no site_id,
       // and site_id is otherwise only stamped at login. Re-read it ONCE from the DB the moment it
