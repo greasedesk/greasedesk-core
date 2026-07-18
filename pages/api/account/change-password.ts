@@ -43,8 +43,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const ok = await bcrypt.compare(currentPassword, user.passwordHash);
   if (!ok) return res.status(400).json({ message: 'Current password is incorrect.' });
 
-  const newHash = await bcrypt.hash(newPassword, 10);
-  await prisma.user.update({ where: { id: sUser.id }, data: { passwordHash: newHash } });
+  const newHash = await bcrypt.hash(newPassword, 12);
+  // Stamp the revocation floor, exactly as the reset path does: a voluntary password change must
+  // kill every OTHER session too (the old password may be the reason they're changing it). Without
+  // this a compromised 90-day /m cookie survived a password change untouched.
+  // This also kills the CALLER's own session — unavoidable, one mechanism, no per-session exemption.
+  // The client re-authenticates immediately with the new password (it still has it in the form), so
+  // the user stays where they are; `reauth: true` tells it to.
+  await prisma.user.update({
+    where: { id: sUser.id },
+    data: { passwordHash: newHash, sessions_valid_from: new Date() },
+  });
 
-  return res.status(200).json({ message: 'Password changed.' });
+  return res.status(200).json({ message: 'Password changed.', reauth: true });
 }

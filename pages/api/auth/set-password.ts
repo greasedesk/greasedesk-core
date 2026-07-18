@@ -36,7 +36,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(410).json({ message: 'This invite link has expired. Ask your admin to resend it.' });
   }
 
-  const passwordHash = await bcrypt.hash(newPassword, 10);
+  // Cost 12 — the house standard (register, reset, change-password). An invite-flow password must
+  // not be hashed weaker than one set through any other route.
+  const passwordHash = await bcrypt.hash(newPassword, 12);
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Re-read inside the tx and guard again, so two concurrent submits can't both consume it.

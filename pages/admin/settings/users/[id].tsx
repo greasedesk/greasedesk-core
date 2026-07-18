@@ -12,6 +12,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
+import { signIn, signOut } from 'next-auth/react';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
@@ -45,16 +46,27 @@ async function post(url: string, method: string, body: any): Promise<string | nu
   } catch { return 'Network error.'; }
 }
 
-function ChangePassword() {
+function ChangePassword({ email }: { email: string }) {
   const [cur, setCur] = useState(''); const [nw, setNw] = useState(''); const [cf, setCf] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setMsg(null);
     const err = await post('/api/account/change-password', 'POST', { currentPassword: cur, newPassword: nw, confirmPassword: cf });
+    if (err) { setBusy(false); return setMsg({ text: err, type: 'error' }); }
+    // The change stamped the revocation floor, which killed THIS session too. Re-mint it silently
+    // with the password just set — the user stays on the page instead of hitting a dead screen on
+    // their next click. If that re-auth fails for any reason, fall back to an honest sign-out
+    // rather than leaving them holding a cookie that no longer resolves to a user.
+    const re = await signIn('credentials', { redirect: false, email, password: nw });
     setBusy(false);
-    if (err) return setMsg({ text: err, type: 'error' });
-    setCur(''); setNw(''); setCf(''); setMsg({ text: 'Password changed.', type: 'success' });
+    if (re?.error) {
+      setMsg({ text: 'Password changed. Please sign in again.', type: 'success' });
+      setTimeout(() => signOut({ callbackUrl: '/admin/login?status=password-changed' }), 1200);
+      return;
+    }
+    setCur(''); setNw(''); setCf('');
+    setMsg({ text: 'Password changed. You’ve been signed out on your other devices.', type: 'success' });
   }
   return (
     <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
@@ -66,6 +78,56 @@ function ChangePassword() {
         <div><label className={labelClass}>Confirm new password</label><input type="password" value={cf} onChange={(e) => setCf(e.target.value)} required className={inputClass} /></div>
         <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Change password'}</button>
       </form>
+    </div>
+  );
+}
+
+/**
+ * ADMIN-only, on someone else's record (the self mirror-image of ChangePassword above).
+ * THE STOLEN-PHONE ACTION: the handset holds a live 90-day /m session, and whoever holds the phone
+ * holds the access — no password required. Revocation closes that completely. It does NOT lock out
+ * someone who knows the password; the helper text says so rather than implying a lockout.
+ */
+function SignOutAllDevices({ userId, name, isSelf }: { userId: string; name: string; isSelf: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  async function run() {
+    const prompt = isSelf
+      ? 'Sign yourself out of all devices?\n\nThis includes the session you are using right now — you will be returned to the sign-in screen.'
+      : `Sign ${name} out of all devices?\n\nThey'll need to sign in again everywhere, including their phone.`;
+    if (!confirm(prompt)) return;
+    setBusy(true); setMsg(null);
+    // Read the body, not just ok/err: `self` decides whether THIS session just died.
+    let ok = false; let self = false; let text = 'Request failed.';
+    try {
+      const res = await fetch('/api/user-sign-out', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      ok = res.ok; self = !!data?.self; text = data?.message || text;
+    } catch { text = 'Network error.'; }
+    if (!ok) { setBusy(false); return setMsg({ text, type: 'error' }); }
+    if (self) {
+      // We just revoked our own cookie — it no longer resolves to a user. Say so, then leave
+      // deliberately instead of letting the next click hit a dead screen.
+      setMsg({ text: 'Signed out everywhere. Returning you to sign in…', type: 'success' });
+      setTimeout(() => signOut({ callbackUrl: '/admin/login?status=signed-out-everywhere' }), 1200);
+      return;
+    }
+    setBusy(false);
+    setMsg({ text: `${name} has been signed out everywhere.`, type: 'success' });
+  }
+  return (
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-ink mb-2">Sessions</h2>
+      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
+      <button onClick={run} disabled={busy} className="bg-danger hover:opacity-90 text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+        {busy ? 'Signing out…' : 'Sign out all devices'}
+      </button>
+      <p className="text-xs text-muted mt-2">
+        Signs this user out everywhere, including their phone. If you think their password is known,
+        reset it or deactivate the account as well.
+      </p>
     </div>
   );
 }
@@ -162,7 +224,13 @@ export default function UserDetail({ selfId, isSelf, canSeeEmergency, isAdmin, i
         {isSelf ? <>Your account — <strong>{profile.email}</strong></> : <>Editing <strong>{profile.name || profile.email}</strong> (admin)</>}
       </p>
 
-      {isSelf && <ChangePassword />}
+      {isSelf && <ChangePassword email={profile.email} />}
+      {/* ADMIN only — mirrors requireAdminApi on the endpoint, so the button can never 403. Covers
+          an admin acting on a group member AND on themselves (your own phone can be the stolen one).
+          A STANDARD/manager user viewing their own record does not get this. */}
+      {isAdmin && (
+        <SignOutAllDevices userId={profile.id} name={isSelf ? 'you' : (profile.name || profile.email)} isSelf={isSelf} />
+      )}
       <ProfileTabs profile={profile} isSelf={isSelf} canSeeEmergency={canSeeEmergency} />
     </SettingsLayout>
   );

@@ -43,6 +43,35 @@ export type AuditAction =
   // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
   // never the business audit trail. The audit trail carries business events only. Nothing technical.
 
+/**
+ * Actions recorded against a USER rather than a job card (entity: 'user'). Separate union because
+ * the entity differs — same AuditLog table, same taxonomy, different subject.
+ */
+export type UserAuditAction =
+  | 'user.sessions_revoked'; // ADMIN signed this user out of every device (stolen-phone case)
+
+/**
+ * Same table, same discipline, subject = a USER. Sibling of writeAudit rather than a second audit
+ * path: everything still lands in AuditLog through lib/audit, so there is one place to read a trail
+ * from. actorUserId is WHO DID IT; targetUserId is WHO IT HAPPENED TO — for an admin acting on
+ * someone else these differ, and conflating them would make the trail useless.
+ */
+export async function writeUserAudit(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; actorUserId?: string | null; targetUserId: string; action: UserAuditAction; diff?: unknown },
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      group_id: args.groupId,
+      user_id: args.actorUserId ?? null,
+      entity: 'user',
+      entity_id: args.targetUserId,
+      action: args.action,
+      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+    },
+  });
+}
+
 export async function writeAudit(
   tx: Prisma.TransactionClient,
   args: { groupId: string; userId?: string | null; jobCardId: string; action: AuditAction; diff?: unknown },

@@ -65,6 +65,13 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
     if (status === 'verified') {
       return 'Email verified! Please enter your password to continue.';
     }
+    // Fallback landing when the post-change silent re-auth didn't take: say why they're here.
+    if (status === 'password-changed') {
+      return 'Password changed. Please sign in with your new password.';
+    }
+    if (status === 'signed-out-everywhere') {
+      return 'You’ve been signed out on all devices. Sign in to continue.';
+    }
     return null;
   };
 
@@ -87,7 +94,7 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
 
           {/* Error/Status Message Display */}
           {getErrorMessage() && (
-            <div className={`p-3 rounded-lg text-center mb-4 ${status === 'verified' ? 'bg-green-800 text-green-200' : 'bg-danger-soft text-danger'}`}>
+            <div className={`p-3 rounded-lg text-center mb-4 ${status === 'verified' || status === 'password-changed' || status === 'signed-out-everywhere' ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>
               <p className="text-sm">{getErrorMessage()}</p>
             </div>
           )}
