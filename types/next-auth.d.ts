@@ -29,5 +29,9 @@ declare module 'next-auth/jwt' {
     role: UserRole;
     site_id: string;
     group_id: string;
+    /** OUR issued-at (ms), stamped at sign-in. Compared against User.sessions_valid_from to revoke
+     *  sessions that predate a password reset. Optional: tokens minted before this shipped lack it,
+     *  and the revocation check treats a missing value as "too old" (fails closed). */
+    authAt?: number;
   }
 }

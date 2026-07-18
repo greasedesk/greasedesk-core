@@ -83,6 +83,10 @@ export const authOptions: NextAuthOptions = {
   // Callbacks are used to control what happens when an action is performed.
   callbacks: {
     async session({ session, token }) {
+      // REVOKED TOKEN → user-less session. The jwt callback strips the token to {} when the session
+      // predates a password reset; without this the default session would still carry name/email and
+      // read as signed in. Every guard checks user?.id, so a user-less session fails closed.
+      if (!token?.id) return { ...session, user: undefined } as any;
       // Send properties to the client, like the user's ID and role.
       // This makes `session.user.role` available in your React components.
       if (token && session.user) {
@@ -101,21 +105,26 @@ export const authOptions: NextAuthOptions = {
         token.role = (user as any).role; // 'user' object is shaped by 'authorize'
         token.site_id = (user as any).site_id;
         token.group_id = (user as any).group_id;
+        // OUR OWN issued-at, stamped once at sign-in and carried through every rolling re-issue.
+        // Deliberately NOT NextAuth's `iat`: v4 does not reliably expose it to this callback, and a
+        // silently-absent value made the revocation below a no-op (caught by the live-session probe).
+        token.authAt = Date.now();
       }
 
       // ── SESSION REVOCATION (the ONLY server-side kill switch) ──────────────────────────────
       // strategy:'jwt' means the cookie is SELF-CONTAINED: it cannot be revoked by deleting rows
       // (the Session table is vestigial here), so without this a stolen 90-day /m session would
       // outlive a password reset by up to three months. A reset stamps User.sessions_valid_from;
-      // any token ISSUED BEFORE that instant is dead. Safe with rolling re-issue: NextAuth
-      // re-stamps `iat` AFTER this callback, so we always compare the PREVIOUS issue time — the
-      // first touch after a reset is caught. Returning an empty token leaves no `sub`, so
-      // getServerSession yields no user and every guard fails closed.
+      // any token minted BEFORE that instant is dead. FAILS CLOSED: a token with no authAt (minted
+      // before this shipped) is also killed once a floor exists. Returning an empty token strips
+      // `id`, and the session callback below then yields a user-less session, so every guard 401s.
       if (!user && token.id) {
         const u = await prisma.user.findUnique({ where: { id: token.id as string }, select: { sessions_valid_from: true } });
         const floor = u?.sessions_valid_from ? new Date(u.sessions_valid_from).getTime() : 0;
-        const issuedAt = typeof token.iat === 'number' ? token.iat * 1000 : 0;
-        if (floor && issuedAt && issuedAt < floor) return {} as any; // revoked — sign out everywhere
+        if (floor) {
+          const authAt = typeof token.authAt === 'number' ? token.authAt : 0;
+          if (!authAt || authAt < floor) return {} as any; // revoked — signed out everywhere
+        }
       }
       // Stale-JWT backfill (item-13): a tenant that finishes onboarding AFTER this token was minted
       // (the site is created mid-session, at the onboarding site step) has group_id but no site_id,
