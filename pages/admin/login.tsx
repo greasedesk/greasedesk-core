@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { signIn, getCsrfToken } from 'next-auth/react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import SiteChrome from '@/components/marketing/SiteChrome';
 import Link from 'next/link'; // <<< CRITICAL FIX: ADDED IMPORT
 
 // We get the CSRF token on the server side to secure the form
@@ -72,8 +73,9 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
       <Head>
         <title>Sign in - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8">
+      <SiteChrome>
+      <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+        <div className="bg-surface border border-line rounded-2xl shadow-card p-8">
           
           <h1 className="text-xl font-semibold text-ink mb-6 text-center">
             Sign in
@@ -96,7 +98,7 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
             {/* Phone-first fields: email keyboard + password-manager hints, no autocapitalise,
                 reveal toggle, ≥48px touch targets — this form gets used with gloves on. */}
             <div>
-              <label htmlFor="login-email" className="block text-sm font-medium text-muted mb-1">Email Address</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-muted mb-1">Email</label>
               <input
                 id="login-email"
                 type="email"
@@ -151,7 +153,8 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
             </Link>
           </div>
         </div>
-      </main>
+      </div>
+      </SiteChrome>
     </>
   );
 }

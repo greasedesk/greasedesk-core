@@ -6,6 +6,7 @@
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
+import SiteChrome from '@/components/marketing/SiteChrome';
 import Link from 'next/link';
 import { GetServerSideProps } from 'next';
 import { signIn } from 'next-auth/react';
@@ -53,8 +54,9 @@ export default function SetPasswordPage({ state, email, token }: PageProps) {
   return (
     <>
       <Head><title>Set your password - GreaseDesk</title></Head>
-      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-xl p-8">
+      <SiteChrome>
+      <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+        <div className="bg-surface border border-line rounded-2xl shadow-card p-8">
           <h1 className="text-xl font-semibold text-ink mb-6 text-center">Set your password</h1>
 
           {state !== 'valid' ? (
@@ -82,7 +84,8 @@ export default function SetPasswordPage({ state, email, token }: PageProps) {
             </form>
           )}
         </div>
-      </main>
+      </div>
+      </SiteChrome>
     </>
   );
 }

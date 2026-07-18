@@ -8,6 +8,7 @@
 
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import SiteChrome from '@/components/marketing/SiteChrome';
 import Link from 'next/link';
 
 // Simple SVG icon for the email
@@ -38,8 +39,9 @@ export default function CheckEmailPage() {
       <Head>
         <title>Check Your Email - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8 text-center">
+      <SiteChrome>
+      <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+        <div className="bg-surface border border-line rounded-2xl shadow-card p-8 text-center">
           
           <EmailIcon />
 
@@ -62,7 +64,8 @@ export default function CheckEmailPage() {
           </div>
           
         </div>
-      </main>
+      </div>
+      </SiteChrome>
     </>
   );
 }

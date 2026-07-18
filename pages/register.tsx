@@ -15,6 +15,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import SiteChrome from '@/components/marketing/SiteChrome';
 
 // Marketing attribution stashed by _app when a public ?ref= landed. Read it at signup so it reaches
 // the server (dormant — persisted to Group.signup_ref, no rep system yet). null when absent.
@@ -153,12 +154,13 @@ export default function RegisterPage() {
   return (
     <>
       <Head>
-        <title>Start Your Free Trial - GreaseDesk</title>
+        <title>Start your free trial - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8">
+      <SiteChrome>
+      <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+        <div className="bg-surface border border-line rounded-2xl shadow-card p-8">
           <h1 className="text-xl font-semibold text-ink mb-6 text-center">
-            Start Your Free Trial
+            Start your free trial
           </h1>
 
         {/* Error Message */}
@@ -177,7 +179,7 @@ export default function RegisterPage() {
         {/* Signup Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-muted mb-1">Full Name</label>
+            <label className="block text-sm font-medium text-muted mb-1">Full name</label>
             <input
               type="text"
               value={name}
@@ -189,7 +191,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-muted mb-1">Email Address</label>
+            <label className="block text-sm font-medium text-muted mb-1">Email</label>
             <input
               type="email"
               value={email}
@@ -227,7 +229,8 @@ export default function RegisterPage() {
           </Link>
         </div>
         </div>
-      </main>
+      </div>
+      </SiteChrome>
     </>
   );
 }
