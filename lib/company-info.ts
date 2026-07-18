@@ -23,7 +23,8 @@ export const COMPANY = {
   phoneE164: '+443305553333', // for tel: links — phone is the only published non-form contact route
   // Canonical public origin — used for OG/canonical URLs, sitemap and schema. No trailing slash.
   siteUrl: 'https://greasedesk.com',
-  logoPath: '/greasedesk-Logo.png',
+  logoPath: '/greasedesk-Logo.png',      // full lockup (mark + wordmark) — OG / schema image
+  markPath: '/android-chrome-512x512.png', // the gear-and-spanner MARK alone, transparent — header/UI
 } as const;
 
 /** One-line registered office, verbatim: "Unit 7 Tinsley Street, Tipton, England, DY4 7LH". */

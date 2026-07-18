@@ -4,25 +4,74 @@
  * (surface/ink/line/accent) — so the site and the product read as one thing (the gd* palette is
  * retired here). Legal facts come from lib/company-info; wrap any public page in <SiteChrome>.
  */
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
 
 const YEAR = 2026; // © year — bump per release (Date.now is avoided; this is a deliberate constant)
 
+// The mobile panel carries the FULL nav — nothing is dropped on a phone (the old header silently
+// lost Features + Contact). Reseller lives here and in the footer, but deliberately NOT in the
+// desktop nav bar: it's a secondary audience, and the bar stays for garages.
+const MOBILE_LINKS = [
+  { href: '/#features', label: 'Features' },
+  { href: '/pricing', label: 'Pricing' },
+  { href: '/contact', label: 'Contact' },
+  { href: '/reseller', label: 'Become a reseller' },
+  { href: '/admin/login', label: 'Sign in' },
+];
+
 function Header() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <header className="border-b border-line bg-surface">
       <nav className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
-        <Link href="/" className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</Link>
-        <div className="flex items-center gap-4 sm:gap-6 text-sm">
-          <Link href="/#features" className="hidden sm:inline text-muted hover:text-ink transition-colors">Features</Link>
+        {/* Mark + wordmark — the SAME gear-and-spanner mark the product uses, so site and app match. */}
+        <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
+          <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
+          <span className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</span>
+        </Link>
+
+        {/* Desktop nav (sm+) — Reseller intentionally absent (footer + mobile panel only). */}
+        <div className="hidden sm:flex items-center gap-5 text-sm">
+          <Link href="/#features" className="text-muted hover:text-ink transition-colors">Features</Link>
           <Link href="/pricing" className="text-muted hover:text-ink transition-colors">Pricing</Link>
-          <Link href="/contact" className="hidden sm:inline text-muted hover:text-ink transition-colors">Contact</Link>
-          <span className="hidden sm:inline w-px h-5 bg-line" aria-hidden="true" />
+          <Link href="/contact" className="text-muted hover:text-ink transition-colors">Contact</Link>
+          <span className="w-px h-5 bg-line" aria-hidden="true" />
           <Link href="/admin/login" className="text-muted hover:text-ink transition-colors">Sign in</Link>
           <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2 transition-colors">Start free trial</Link>
         </div>
+
+        {/* Mobile: one 44px hamburger — nothing crushed, and it still works as the nav grows. */}
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls="site-menu"
+          aria-label={open ? 'Close menu' : 'Open menu'}
+          className="sm:hidden -mr-2 w-11 h-11 flex items-center justify-center rounded-lg text-ink hover:bg-surface-muted">
+          <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            {open ? <path d="M6 6l12 12M18 6L6 18" /> : <><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /></>}
+          </svg>
+        </button>
       </nav>
+
+      {open && (
+        <div id="site-menu" className="sm:hidden border-t border-line bg-surface">
+          <div className="max-w-6xl mx-auto px-4 py-2 flex flex-col">
+            {MOBILE_LINKS.map((l) => (
+              <Link key={l.href} href={l.href} onClick={() => setOpen(false)}
+                className="py-3.5 text-base text-ink border-b border-line last:border-b-0">{l.label}</Link>
+            ))}
+            <Link href="/register" onClick={() => setOpen(false)}
+              className="my-3 bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-3 text-center transition-colors">
+              Start free trial
+            </Link>
+          </div>
+        </div>
+      )}
     </header>
   );
 }
