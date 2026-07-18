@@ -46,7 +46,7 @@ function Footer() {
           <div className="flex flex-col gap-2 text-sm">
             <span className="text-xs uppercase tracking-wide text-muted mb-1">Contact</span>
             <a href={`tel:${COMPANY.phoneE164}`} className="text-muted hover:text-ink">{COMPANY.phone}</a>
-            <a href={`mailto:${COMPANY.email}`} className="text-muted hover:text-ink">{COMPANY.email}</a>
+            <Link href="/contact" className="text-muted hover:text-ink">Send us a message</Link>
           </div>
         </div>
         {/* Legal identity — read from company-info, never hardcoded. */}

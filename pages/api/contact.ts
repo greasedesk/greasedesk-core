@@ -1,13 +1,19 @@
 /**
  * File: pages/api/contact.ts
- * Public contact-form handler. POST { name, email, message, website? }. Sends to COMPANY.email via
- * Resend, with the submitter as Reply-To so a reply goes straight back to them. Validates every field
- * and returns a real status — the form NEVER silently fails: a send error is surfaced to the user.
- * `website` is a honeypot (bots fill hidden fields); when present we accept-and-drop.
+ * Public contact-form handler. POST { name, email, message, website? }. Sends to CONTACT_FORM_TO via
+ * Resend, with the submitter as Reply-To so a reply goes straight back to them. The DESTINATION lives
+ * ONLY in this server-side route's env — it is never in company-info, any client bundle, the schema,
+ * a reply-to the submitter sees, or an API response. Validates every field and returns a real status
+ * — NEVER a silent failure. `website` is a honeypot (bots fill hidden fields); when set we accept-and-drop.
+ *
+ * CONTACT_FORM_TO is read from the environment (set it in Vercel). The fallback below lives ONLY in
+ * this server function — API-route source is never shipped to the browser — so it stays unscrapable.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { sendEmail } from '@/lib/email-service';
 import { COMPANY } from '@/lib/company-info';
+
+const CONTACT_TO = process.env.CONTACT_FORM_TO || 'hugh@greasedesk.com';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const esc = (s: string) => s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
@@ -36,14 +42,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     <p style="white-space:pre-wrap">${esc(cleanMessage)}</p>
   `;
 
-  const sent = await sendEmail(COMPANY.email, `Contact form: ${cleanName}`, html, {
+  const sent = await sendEmail(CONTACT_TO, `Contact form: ${cleanName}`, html, {
     fromName: 'GreaseDesk Contact Form',
-    replyTo: cleanEmail, // replies go straight to the enquirer
+    replyTo: cleanEmail, // replies go to the ENQUIRER — never exposes the destination address
   });
 
   if (!sent) {
-    // Never a silent failure — the client shows an error and the phone/email fallback.
-    return res.status(502).json({ ok: false, message: 'Sorry — we couldn’t send your message just now. Please email or call us instead.' });
+    // Never a silent failure — the client shows an error pointing at the phone (the only public route).
+    return res.status(502).json({ ok: false, message: `Sorry — we couldn’t send your message just now. Please call us on ${COMPANY.phone} instead.` });
   }
   return res.status(200).json({ ok: true, message: 'Thanks — we’ll be in touch shortly.' });
 }

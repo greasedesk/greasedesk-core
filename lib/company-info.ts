@@ -1,34 +1,35 @@
 /**
  * File: lib/company-info.ts
- * THE single source of GreaseDesk Ltd's public identity + legal facts. Footer, contact page, SEO
- * schema, emails — EVERY surface reads from here; never hardcode a company number, office address,
- * phone, email or trademark in a template. Change a fact once, it changes everywhere.
+ * THE single source of GreaseDesk Ltd's PUBLIC identity + legal facts. Footer, contact page and SEO
+ * schema read from here; never hardcode a company number, office address, phone or trademark in a
+ * template. NO EMAIL LIVES HERE — this file is client-imported, so a published address would ship in
+ * served JS and be scrapable. Contact is form-only; the destination is server-side env (CONTACT_FORM_TO).
  */
 export const COMPANY = {
   legalName: 'GreaseDesk Ltd',
   tradingName: 'GreaseDesk',
   trademark: 'GreaseDesk™',
   companyNumber: '17312623',
-  // Registered office (Companies House). One string + structured parts for schema.org PostalAddress.
+  // Registered office — VERBATIM from Companies House ("Unit 7 Tinsley Street, Tipton, England,
+  // DY4 7LH"). One string + structured parts for schema.org PostalAddress.
   office: {
     line1: 'Unit 7 Tinsley Street',
-    line2: 'Great Bridge',
-    locality: 'West Midlands',
+    locality: 'Tipton',
+    region: 'England',
     postcode: 'DY4 7LH',
     country: 'GB',
   },
   phone: '0330 555 3333',
-  phoneE164: '+443305553333', // for tel: links
-  email: 'hugh@greasedesk.com',
+  phoneE164: '+443305553333', // for tel: links — phone is the only published non-form contact route
   // Canonical public origin — used for OG/canonical URLs, sitemap and schema. No trailing slash.
   siteUrl: 'https://greasedesk.com',
   logoPath: '/greasedesk-Logo.png',
 } as const;
 
-/** One-line registered office, e.g. "Unit 7 Tinsley Street, Great Bridge, West Midlands, DY4 7LH". */
+/** One-line registered office, verbatim: "Unit 7 Tinsley Street, Tipton, England, DY4 7LH". */
 export function officeOneLine(): string {
   const o = COMPANY.office;
-  return [o.line1, o.line2, o.locality, o.postcode].filter(Boolean).join(', ');
+  return [o.line1, o.locality, o.region, o.postcode].filter(Boolean).join(', ');
 }
 
 /** Absolute URL for a site-relative path (OG, canonical, sitemap). */

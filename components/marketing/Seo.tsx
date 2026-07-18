@@ -22,12 +22,13 @@ const organizationLd = () => ({
   legalName: COMPANY.legalName,
   url: COMPANY.siteUrl,
   logo: absoluteUrl(COMPANY.logoPath),
-  email: COMPANY.email,
+  // NO email in the schema (would be scrapable) — phone + address only.
   telephone: COMPANY.phoneE164,
   address: {
     '@type': 'PostalAddress',
-    streetAddress: [COMPANY.office.line1, COMPANY.office.line2].filter(Boolean).join(', '),
+    streetAddress: COMPANY.office.line1,
     addressLocality: COMPANY.office.locality,
+    addressRegion: COMPANY.office.region,
     postalCode: COMPANY.office.postcode,
     addressCountry: COMPANY.office.country,
   },
@@ -35,7 +36,6 @@ const organizationLd = () => ({
     '@type': 'ContactPoint',
     contactType: 'sales',
     telephone: COMPANY.phoneE164,
-    email: COMPANY.email,
   },
 });
 

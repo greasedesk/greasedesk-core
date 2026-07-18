@@ -35,7 +35,7 @@ export default function ContactPage() {
     <>
       <Seo
         title="Contact GreaseDesk — talk to us"
-        description={`Get in touch with ${COMPANY.legalName}. Call ${COMPANY.phone}, email ${COMPANY.email}, or send us a message.`}
+        description={`Get in touch with ${COMPANY.legalName}. Call ${COMPANY.phone} or send us a message through the form.`}
         path="/contact"
       />
       <SiteChrome>
@@ -49,10 +49,6 @@ export default function ContactPage() {
               <div>
                 <div className="text-xs uppercase tracking-wide text-muted mb-1">Phone</div>
                 <a href={`tel:${COMPANY.phoneE164}`} className="text-lg font-semibold text-accent hover:underline">{COMPANY.phone}</a>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted mb-1">Email</div>
-                <a href={`mailto:${COMPANY.email}`} className="text-lg font-semibold text-accent hover:underline">{COMPANY.email}</a>
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wide text-muted mb-1">Registered office</div>
@@ -92,7 +88,7 @@ export default function ContactPage() {
                   <button type="submit" disabled={state === 'sending'} className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3 text-base transition-colors disabled:opacity-60">
                     {state === 'sending' ? 'Sending…' : 'Send message'}
                   </button>
-                  <p className="text-xs text-muted">Prefer to talk? Call <a href={`tel:${COMPANY.phoneE164}`} className="text-accent hover:underline">{COMPANY.phone}</a> or email <a href={`mailto:${COMPANY.email}`} className="text-accent hover:underline">{COMPANY.email}</a>.</p>
+                  <p className="text-xs text-muted">Prefer to talk? Call <a href={`tel:${COMPANY.phoneE164}`} className="text-accent hover:underline">{COMPANY.phone}</a>.</p>
                 </form>
               )}
             </div>
