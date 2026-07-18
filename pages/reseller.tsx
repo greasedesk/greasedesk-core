@@ -64,13 +64,16 @@ export default function ResellerPage() {
                   <li className="flex items-start gap-3"><Check /><span><strong>You own the relationship.</strong> The garages you sign up are yours to look after.</span></li>
                   <li className="flex items-start gap-3"><Check /><span><strong>Onboarding &amp; first-line support</strong> are part of the role — you help your garages get set up and answer their first questions, with us behind you.</span></li>
                 </ul>
+                <p className="mt-4 text-sm text-muted">Garages are looked after by resellers, not by us. GreaseDesk is sold and supported through our reseller network, so garages in your area would normally be yours to manage.</p>
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-ink">Who it suits</h2>
                 <ul className="mt-3 space-y-3 text-sm text-ink">
-                  <li className="flex items-start gap-3"><Check /><span>Tool-van reps with an established round.</span></li>
-                  <li className="flex items-start gap-3"><Check /><span>Mobile technicians already on the road daily.</span></li>
-                  <li className="flex items-start gap-3"><Check /><span>Anyone visiting independent garages every week and trusted by them.</span></li>
+                  <li className="flex items-start gap-3"><Check /><span>Tool-van reps with an established round</span></li>
+                  <li className="flex items-start gap-3"><Check /><span>Motor factor reps and delivery drivers</span></li>
+                  <li className="flex items-start gap-3"><Check /><span>Equipment and calibration engineers — MOT kit, ramps, diagnostics</span></li>
+                  <li className="flex items-start gap-3"><Check /><span>Oil, consumables and workwear reps</span></li>
+                  <li className="flex items-start gap-3"><Check /><span>Retired garage owners and trade consultants</span></li>
                 </ul>
               </div>
               <p className="text-xs text-muted">This is an expression of interest — we’ll follow up with the detail. Prefer to talk? Call <a href={`tel:${COMPANY.phoneE164}`} className="text-accent hover:underline">{COMPANY.phone}</a>.</p>
