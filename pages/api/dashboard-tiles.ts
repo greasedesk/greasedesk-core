@@ -51,6 +51,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     siteIds = [siteId];
   }
   const base = { groupId: user.group_id as string, siteIds };
-  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
-  return res.status(200).json({ tiles, from: range.from.toISOString(), to: range.to.toISOString(), monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString() });
+  const now = new Date();
+  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months, now });
+  // In-progress SINGLE month → the strip is "N of M days, fixed costs shown in full" and the
+  // net-profit tile reframes to "£X short of covering the month". Closed / multi-month → false.
+  const monthInProgress = monthSpan.months === 1 && monthSpan.from.getTime() <= now.getTime() && now.getTime() < monthSpan.to.getTime();
+  const daysInMonth = new Date(Date.UTC(monthSpan.from.getUTCFullYear(), monthSpan.from.getUTCMonth() + 1, 0)).getUTCDate();
+  const daysElapsed = monthInProgress ? now.getUTCDate() : daysInMonth;
+  return res.status(200).json({
+    tiles, from: range.from.toISOString(), to: range.to.toISOString(),
+    monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
+    monthInProgress, daysElapsed, daysInMonth,
+  });
 }

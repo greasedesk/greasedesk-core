@@ -14,7 +14,7 @@ import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncoste
 import { getGroupUtilisation } from '@/lib/capacity';
 
 export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
-export type MonthTileContext = TileContext & { months: number };
+export type MonthTileContext = TileContext & { months: number; now: Date };
 
 // Date bases (ONE chokepoint each, lib/invoice): paid tiles bucket by effectivePaidDate
 // (date_paid ?? paid_at — cash basis); issued/warranty/P&L bucket by the effective ISSUE date
@@ -184,10 +184,53 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       breakEvenCentihours, ratesMissing, perSite, months,
     };
   },
-  // Utilisation = charged ÷ SELLABLE (factor-adjusted) over the SAME month window as the pnl.
-  // ALL maths live in lib/capacity (getGroupUtilisation: Σcharged ÷ Σsellable, never a mean of
-  // ratios) — the tile only renders. Same group-aggregate site scope as the other month tiles.
-  utilisation: async ({ groupId, siteIds, from, to }) => getGroupUtilisation(groupId, siteIds, { from, to }),
+  // Utilisation = charged ÷ SELLABLE (factor-adjusted). ALL maths in lib/capacity (getGroupUtilisation:
+  // Σcharged ÷ Σsellable, never a mean of ratios). IN-PROGRESS SINGLE MONTH (from ≤ now < to, months=1):
+  // both sides use the SAME to-date window [from, start-of-tomorrow) — sold-to-date ÷ capacity-to-date,
+  // fixing the full-month-denominator mismatch. Capacity-to-date is EXACT (day-by-day rostered days,
+  // bank holidays, booked leave — never a linear fraction). Also returns REMAINING sellable for the rest
+  // of the month, valued at each site's LABOUR_HR rate, plus diary hours already booked in that window
+  // (a DIFFERENT measure — bay occupancy, not sellable labour — surfaced side-by-side, never subtracted).
+  // CLOSED month (to ≤ now) or multi-month span → the window is [from, to] unchanged → byte-identical.
+  utilisation: async ({ groupId, siteIds, from, to, months, now }) => {
+    const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
+    const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
+    const u = await getGroupUtilisation(groupId, siteIds, { from, to: end });
+    if (!inProgress) return u; // closed month / multi-month → unchanged (goldens byte-identical)
+
+    // Remaining sellable capacity for [end, to) — the rest of the month — valued at the site rate.
+    const rem = end.getTime() < to.getTime() ? await getGroupUtilisation(groupId, siteIds, { from: end, to }) : null;
+    const rates = (await prisma.serviceCatalogue.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
+      select: { site_id: true, default_labour_rate: true },
+    })) as any[];
+    const rateOf = new Map<string, number>(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => [r.site_id, Number(r.default_labour_rate)]));
+    let remainingValuePennies = 0; const remainingNoRate: string[] = [];
+    for (const s of rem?.perSite ?? []) {
+      if (s.available <= 0) continue;
+      const rate = rateOf.get(s.siteId);
+      if (rate == null) remainingNoRate.push(s.siteName);
+      else remainingValuePennies += Math.round(s.available * rate * 100);
+    }
+    // Diary hours ALREADY BOOKED in the remaining window (a live booking, not a cancelled/declined one).
+    const booked = (await prisma.jobCard.findMany({
+      where: { site_id: { in: siteIds }, resource_id: { not: null }, status: { notIn: ['cancelled', 'declined'] as any }, start_at: { gte: end, lt: to } },
+      select: { booking_duration_minutes: true, start_at: true, end_at: true },
+    })) as any[];
+    const bookedMinutes = booked.reduce((a, b) => a + (b.booking_duration_minutes ?? (b.start_at && b.end_at ? Math.round(((b.end_at as Date).getTime() - (b.start_at as Date).getTime()) / 60000) : 0)), 0);
+
+    return {
+      ...u,
+      inProgress: true,
+      periodFromISO: from.toISOString(),
+      periodToInclusiveISO: now.toISOString(), // the elapsed period is [from, end-of-today]
+      remainingSellable: rem?.available ?? 0,
+      remainingValuePennies,
+      remainingNoRate,
+      bookedHoursRemaining: Math.round((bookedMinutes / 60) * 100) / 100,
+    };
+  },
   // The missing-hours DRILL (presentation read — the metric itself is untouched): which PRODUCTS
   // are behind linesMissingHours (fixed lines whose labour_hours is null — the definition lives
   // in lib/charged-labour). Product-backed lines collapse to distinct products (fix once in the

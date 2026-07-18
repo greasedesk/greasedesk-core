@@ -148,6 +148,12 @@ function monthLabel(w: { from: string; to: string }, locale: string): string {
   return one ? f(from, 'long') : `${f(from, 'short')} – ${f(lastIncl, 'short')}`;
 }
 
+// Elapsed-period label for an in-progress month, e.g. "1–18 July" (calendar days to date).
+function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string): string {
+  const month = new Date(w.from).toLocaleDateString(locale, { month: 'long', timeZone: 'UTC' });
+  return `1–${daysElapsed} ${month}`;
+}
+
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
@@ -187,6 +193,8 @@ export default function AdminDashboard(props: PageProps) {
   const [tiles, setTiles] = useState<Record<string, any> | null>(null);
   // The month window the SERVER resolved for the P&L (echoed back) — drives the loud label.
   const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
+  // In-progress SINGLE month meta (server-authoritative): drives the to-date labels + net-profit reframe.
+  const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
   const [loading, setLoading] = useState(true);
   // ONE period control drives BOTH strips. The P&L stays whole-calendar-months only: it follows
   // whole-month selections exactly; part-periods (to-dates / partial custom) fall back to the
@@ -212,6 +220,7 @@ export default function AdminDashboard(props: PageProps) {
         const d = await res.json();
         setTiles(d.tiles);
         setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
+        setMonthMeta({ inProgress: !!d.monthInProgress, daysElapsed: d.daysElapsed ?? 0, daysInMonth: d.daysInMonth ?? 0 });
       }
     } catch { /* tiles keep last values */ }
     setLoading(false);
@@ -292,9 +301,14 @@ export default function AdminDashboard(props: PageProps) {
           <p className="text-xs text-muted">{t('pnl.monthlyNote')}</p>
         </div>
         {monthWindow && (
-          <span className="text-base font-semibold text-ink bg-surface-muted border border-line rounded-lg px-3 py-1.5">
-            {monthLabel(monthWindow, props.locale)}
-          </span>
+          <div className="text-right">
+            <span className="text-base font-semibold text-ink bg-surface-muted border border-line rounded-lg px-3 py-1.5">
+              {monthLabel(monthWindow, props.locale)}
+            </span>
+            {monthMeta?.inProgress && (
+              <p className="text-xs text-muted mt-1">{t('pnl.inProgressStrip', { elapsed: monthMeta.daysElapsed, total: monthMeta.daysInMonth })}</p>
+            )}
+          </div>
         )}
       </div>
       {monthSel?.degraded && monthWindow && (
@@ -358,6 +372,25 @@ export default function AdminDashboard(props: PageProps) {
                       <p className="text-ink font-medium">= {h3(unsold)} {t('pnl.wfUnsold')}</p>
                       <p className="italic mt-1">{t('pnl.wfFraming')}</p>
                     </div>
+                  </details>
+                </div>
+              );
+            }
+            // IN-PROGRESS month: the 'unsold' slot becomes "Hours still to sell" — REMAINING sellable
+            // capacity for the rest of the month (not full-month-minus-sold-to-date), valued at the
+            // labour rate, with diary hours already booked shown SIDE BY SIDE (a different measure —
+            // bay occupancy, never subtracted from sellable).
+            if (u3.inProgress) {
+              return (
+                <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                  <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.stillToSell')}</h3>
+                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(u3.remainingSellable ?? 0)}</p>
+                  <p className="text-xs text-muted mt-1">{t('pnl.stillToSellValue', { money: fmt.money(u3.remainingValuePennies ?? 0) })}</p>
+                  <p className="text-xs text-muted mt-0.5">{t('pnl.stillToSellBooked', { booked: h3(u3.bookedHoursRemaining ?? 0) })}</p>
+                  {(u3.remainingNoRate?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: u3.remainingNoRate.join(', ') })}</p>}
+                  <details className="mt-2">
+                    <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                    <p className="text-xs text-muted mt-1">{t('pnl.stillToSellHelp')}</p>
                   </details>
                 </div>
               );
@@ -466,6 +499,9 @@ export default function AdminDashboard(props: PageProps) {
                           construction, so no separate target line may reappear here. */}
                       <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
                       <p className="text-xs text-ink mt-0.5">{t('pnl.utilHundred')}</p>
+                      {u.inProgress && monthWindow && (
+                        <p className="text-xs text-accent mt-0.5">{t('pnl.utilToDate', { period: elapsedLabel(monthWindow, monthMeta?.daysElapsed ?? 0, props.locale) })}</p>
+                      )}
                       <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
                       {(() => {
                         // The money floor: required share of SELLABLE capacity to cover fixed costs.
@@ -541,17 +577,28 @@ export default function AdminDashboard(props: PageProps) {
             );
           }
           const v = d?.[k];
-          const tone = v == null ? 'text-muted' : (k === 'netProfit' || k === 'labourContribution') ? (v >= 0 ? 'text-ok' : 'text-danger') : 'text-ink';
+          // Net profit for an IN-PROGRESS month: revenue-to-date is measured against a FULL month's
+          // fixed costs, so a negative figure is NOT a loss — it's "£X short of covering the month".
+          // Reframe (neutral tone), never a red danger. Positive = the month's fixed costs are covered.
+          const npInProgress = k === 'netProfit' && !!monthMeta?.inProgress && v != null;
+          const npShort = npInProgress && v < 0;
+          const tone = v == null ? 'text-muted'
+            : npInProgress ? (v >= 0 ? 'text-ok' : 'text-ink')
+            : (k === 'netProfit' || k === 'labourContribution') ? (v >= 0 ? 'text-ok' : 'text-danger') : 'text-ink';
           return (
             <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
               <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
               {v != null ? (
                 <>
-                  <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(v)}</p>
+                  <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(npShort ? -v : v)}</p>
+                  {npInProgress ? (
+                    <p className="text-xs text-muted mt-1">{npShort ? t('pnl.netProfitShort') : t('pnl.netProfitAhead')}</p>
+                  ) : (
                   <p className="text-xs text-muted mt-1">{t(`pnl.${k}Sub`, {
                     parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '', income: d ? fmt.money(d.grossMargin) : '',
                     overheads: d ? fmt.money(d.operatingCosts) : '', count: d?.invoiceCount ?? 0, months: d?.months ?? 0,
                   })}</p>
+                  )}
                   {/* Un-costed parts exposure: an un-costed part brings in revenue with no cost offset,
                       so it inflates gross margin (shown at 100%). We SURFACE it — never silently trust
                       the margin. Drill → the invoices; fix by adding the part to the catalogue. */}
