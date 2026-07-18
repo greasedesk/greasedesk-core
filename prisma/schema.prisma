@@ -564,7 +564,13 @@ model User {
 model Customer {
   id         String   @id @default(uuid())
   group_id   String
-  site_id    String
+  // ORIGIN site, not ownership. A customer belongs to the GARAGE (group_id above), not to a bay —
+  // so this is NULLABLE + SetNull, mirroring User.site_id. Previously it was required + Cascade,
+  // which meant deleting a Location would have destroyed its customers AND their VehicleOwnership
+  // edges (which cascade from Customer) — the spine of the car-first model. Only the application-
+  // level delete guard stood in the way; invoices had DB-level protection and customers did not.
+  // Null = the origin site is gone; the customer survives as a group-level record.
+  site_id    String?
   name       String
   phone      String?
   email      String?
@@ -578,7 +584,7 @@ model Customer {
 
   // --- RELATIONS ---
   group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  site       Site               @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  site       Site?              @relation(fields: [site_id], references: [id], onDelete: SetNull)
   vehicles   Vehicle[]
   ownerships VehicleOwnership[]
   bookings   Booking[]
