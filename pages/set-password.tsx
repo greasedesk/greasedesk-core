@@ -53,30 +53,30 @@ export default function SetPasswordPage({ state, email, token }: PageProps) {
   return (
     <>
       <Head><title>Set your password - GreaseDesk</title></Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-2xl shadow-xl p-8">
-          <h1 className="text-xl font-semibold text-white mb-6 text-center">Set your password</h1>
+      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-xl p-8">
+          <h1 className="text-xl font-semibold text-ink mb-6 text-center">Set your password</h1>
 
           {state !== 'valid' ? (
             <div className="text-center">
-              <div className="bg-amber-900/40 border border-amber-700 text-amber-100 rounded-lg p-3 text-sm mb-4">
+              <div className="bg-warn-soft/40 border border-warn text-warn rounded-lg p-3 text-sm mb-4">
                 {MESSAGES[state]}
               </div>
-              <Link href="/admin/login" className="text-blue-400 hover:underline text-sm">Go to sign in</Link>
+              <Link href="/admin/login" className="text-accent hover:underline text-sm">Go to sign in</Link>
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-4">
-              <p className="text-sm text-slate-400">Welcome{email ? ` (${email})` : ''} — choose a password to activate your account.</p>
-              {err && <div className="bg-red-700 text-red-100 rounded-lg p-3 text-sm">{err}</div>}
+              <p className="text-sm text-muted">Welcome{email ? ` (${email})` : ''} — choose a password to activate your account.</p>
+              {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm">{err}</div>}
               <div>
-                <label className="block text-sm text-slate-300 mb-1">New password (min 8 characters)</label>
-                <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} required className="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500" />
+                <label className="block text-sm text-muted mb-1">New password (min 8 characters)</label>
+                <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} required className="w-full p-3 bg-surface border border-line rounded-lg text-ink focus:ring-2 focus:ring-accent" />
               </div>
               <div>
-                <label className="block text-sm text-slate-300 mb-1">Confirm password</label>
-                <input type="password" value={cf} onChange={(e) => setCf(e.target.value)} required className="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500" />
+                <label className="block text-sm text-muted mb-1">Confirm password</label>
+                <input type="password" value={cf} onChange={(e) => setCf(e.target.value)} required className="w-full p-3 bg-surface border border-line rounded-lg text-ink focus:ring-2 focus:ring-accent" />
               </div>
-              <button type="submit" disabled={busy} className="w-full bg-blue-500 hover:bg-blue-400 text-slate-900 font-semibold rounded-xl px-4 py-2.5 disabled:opacity-50">
+              <button type="submit" disabled={busy} className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-xl px-4 py-2.5 disabled:opacity-50">
                 {busy ? 'Setting up…' : 'Set password & continue'}
               </button>
             </form>

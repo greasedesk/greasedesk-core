@@ -70,22 +70,22 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
   return (
     <>
       <Head>
-        <title>Staff Sign In - GreaseDesk</title>
+        <title>Sign in - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-gdPanel/80 border border-gdBorder rounded-2xl shadow-card p-8">
+      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8">
           
-          <h1 className="text-xl font-semibold text-gdText mb-6 text-center">
-            Staff Sign In
+          <h1 className="text-xl font-semibold text-ink mb-6 text-center">
+            Sign in
           </h1>
 
-          <p className="text-sm text-slate-400 text-center mb-6">
+          <p className="text-sm text-muted text-center mb-6">
             Sign in to manage your job cards and garage operations.
           </p>
 
           {/* Error/Status Message Display */}
           {getErrorMessage() && (
-            <div className={`p-3 rounded-lg text-center mb-4 ${status === 'verified' ? 'bg-green-800 text-green-200' : 'bg-red-800 text-red-200'}`}>
+            <div className={`p-3 rounded-lg text-center mb-4 ${status === 'verified' ? 'bg-green-800 text-green-200' : 'bg-danger-soft text-danger'}`}>
               <p className="text-sm">{getErrorMessage()}</p>
             </div>
           )}
@@ -96,7 +96,7 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
             {/* Phone-first fields: email keyboard + password-manager hints, no autocapitalise,
                 reveal toggle, ≥48px touch targets — this form gets used with gloves on. */}
             <div>
-              <label htmlFor="login-email" className="block text-sm font-medium text-gdSubtext mb-1">Email Address</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-muted mb-1">Email Address</label>
               <input
                 id="login-email"
                 type="email"
@@ -108,12 +108,12 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
                 required
-                className="w-full min-h-[48px] bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-base text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+                className="w-full min-h-[48px] bg-surface border border-line rounded-lg px-3 py-2 text-base text-ink focus:outline-none focus:ring-2 focus:ring-accent"
               />
             </div>
 
             <div>
-              <label htmlFor="login-password" className="block text-sm font-medium text-gdSubtext mb-1">Password</label>
+              <label htmlFor="login-password" className="block text-sm font-medium text-muted mb-1">Password</label>
               <div className="relative">
                 <input
                   id="login-password"
@@ -122,13 +122,13 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="w-full min-h-[48px] bg-slate-800 border border-gdBorder rounded-lg pl-3 pr-16 py-2 text-base text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+                  className="w-full min-h-[48px] bg-surface border border-line rounded-lg pl-3 pr-16 py-2 text-base text-ink focus:outline-none focus:ring-2 focus:ring-accent"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute inset-y-0 right-0 min-w-[56px] px-3 text-sm text-gdSubtext hover:text-gdText"
+                  className="absolute inset-y-0 right-0 min-w-[56px] px-3 text-sm text-muted hover:text-ink"
                 >
                   {showPassword ? 'Hide' : 'Show'}
                 </button>
@@ -138,15 +138,15 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
             <button
               type="submit"
               disabled={loading}
-              className="w-full min-h-[48px] bg-gdAccent text-slate-900 font-medium rounded-xl px-4 py-3 disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full min-h-[48px] bg-accent text-white font-medium rounded-xl px-4 py-3 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading && <LoadingSpinner />}
-              {loading ? 'Signing In...' : 'Sign In'}
+              {loading ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
 
           <div className="text-center mt-6">
-            <Link href="/register" className="text-sm text-gdSubtext hover:text-gdAccent">
+            <Link href="/register" className="text-sm text-muted hover:text-accent">
               Don't have a garage account? Register here.
             </Link>
           </div>

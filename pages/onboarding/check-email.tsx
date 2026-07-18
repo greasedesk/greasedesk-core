@@ -13,7 +13,7 @@ import Link from 'next/link';
 // Simple SVG icon for the email
 const EmailIcon = () => (
   <svg
-    className="w-16 h-16 text-gdAccent mx-auto"
+    className="w-16 h-16 text-accent mx-auto"
     fill="none"
     stroke="currentColor"
     viewBox="0 0 24 24"
@@ -38,25 +38,25 @@ export default function CheckEmailPage() {
       <Head>
         <title>Check Your Email - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-gdPanel/80 border border-gdBorder rounded-2xl shadow-card p-8 text-center">
+      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8 text-center">
           
           <EmailIcon />
 
-          <h1 className="text-xl font-semibold text-gdText mt-6 mb-4">
+          <h1 className="text-xl font-semibold text-ink mt-6 mb-4">
             Check your inbox
           </h1>
           
-          <p className="text-gdSubtext text-sm mb-6">
+          <p className="text-muted text-sm mb-6">
             We've sent a verification link to
-            <strong className="text-gdText block mt-1">{email || 'your email address'}</strong>
+            <strong className="text-ink block mt-1">{email || 'your email address'}</strong>
             Please click the link in the email to activate your account and continue to the next step.
           </p>
 
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-muted">
             Didn't receive it? Please check your spam folder.
             <br />
-            <Link href="/register" className="text-slate-400 hover:text-gdAccent underline mt-2 inline-block">
+            <Link href="/register" className="text-muted hover:text-accent underline mt-2 inline-block">
               Or, try registering again.
             </Link>
           </div>

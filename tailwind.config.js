@@ -36,14 +36,8 @@ module.exports = {
         danger: "var(--danger)",
         "danger-soft": "var(--danger-soft)",
 
-        // Legacy pre-auth palette (login/register/landing) — retained until those screens
-        // are migrated in a later pass. Do NOT use in admin screens.
-        gdBg: "#0f172a",
-        gdPanel: "#1e293b",
-        gdAccent: "#38bdf8",
-        gdText: "#f8fafc",
-        gdSubtext: "#94a3b8",
-        gdBorder: "#334155"
+        // (The legacy pre-auth gd* palette was RETIRED 2026-07-18 — login/register/set-password/
+        // check-email are now on the semantic tokens above. Do not reintroduce a second palette.)
       },
       borderRadius: {
         xl: "1rem",

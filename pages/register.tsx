@@ -155,19 +155,19 @@ export default function RegisterPage() {
       <Head>
         <title>Start Your Free Trial - GreaseDesk</title>
       </Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-gdPanel/80 border border-gdBorder rounded-2xl shadow-card p-8">
-          <h1 className="text-xl font-semibold text-gdText mb-6 text-center">
+      <main className="min-h-screen bg-surface-muted text-ink flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-surface border border-line rounded-2xl shadow-card p-8">
+          <h1 className="text-xl font-semibold text-ink mb-6 text-center">
             Start Your Free Trial
           </h1>
 
         {/* Error Message */}
         {error && (
-          <div className="bg-red-800 border border-red-600 text-red-200 p-3 rounded-lg text-center mb-4">
+          <div className="bg-danger-soft border border-danger text-danger p-3 rounded-lg text-center mb-4">
             <p className="font-semibold">Registration Failed</p>
             <p className="text-sm">{error}</p>
             {process.env.NODE_ENV !== 'production' && debug && (
-              <pre className="mt-2 text-[11px] text-red-100/80 whitespace-pre-wrap break-all opacity-80">
+              <pre className="mt-2 text-[11px] text-danger/80 whitespace-pre-wrap break-all opacity-80">
 {debug}
               </pre>
             )}
@@ -177,52 +177,52 @@ export default function RegisterPage() {
         {/* Signup Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gdSubtext mb-1">Full Name</label>
+            <label className="block text-sm font-medium text-muted mb-1">Full Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
               autoComplete="name"
-              className="w-full bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gdSubtext mb-1">Email Address</label>
+            <label className="block text-sm font-medium text-muted mb-1">Email Address</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="w-full bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gdSubtext mb-1">Password (min. 8 characters)</label>
+            <label className="block text-sm font-medium text-muted mb-1">Password (min. 8 characters)</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="new-password"
-              className="w-full bg-slate-800 border border-gdBorder rounded-lg px-3 py-2 text-gdText focus:outline-none focus:ring-2 focus:ring-gdAccent"
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gdAccent text-slate-900 font-medium rounded-xl px-4 py-2 disabled:opacity-50"
+            className="w-full bg-accent text-white font-medium rounded-xl px-4 py-2 disabled:opacity-50"
           >
             {loading ? 'Creating Account...' : 'Create Account'}
           </button>
         </form>
 
         <div className="text-center mt-6">
-          <Link href="/admin/login" className="text-sm text-gdSubtext hover:text-gdAccent">
+          <Link href="/admin/login" className="text-sm text-muted hover:text-accent">
             Already have an account? Sign In
           </Link>
         </div>

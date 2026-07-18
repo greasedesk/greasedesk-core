@@ -23,14 +23,22 @@ const MOBILE_LINKS = [
 
 function Header() {
   const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('scroll', onScroll); };
   }, []);
 
   return (
-    <header className="border-b border-line bg-surface">
+    // STICKY: the primary action (trial CTA) and the burger stay reachable through a long page.
+    // Safe-area aware so it clears the notch; the shadow only appears once scrolled, so it reads flat at rest.
+    <header
+      className={`sticky top-0 z-50 bg-surface border-b transition-shadow ${scrolled ? 'border-line shadow-card' : 'border-transparent'}`}
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <nav className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
         {/* Mark + wordmark — the SAME gear-and-spanner mark the product uses, so site and app match. */}
         <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
@@ -59,7 +67,7 @@ function Header() {
       </nav>
 
       {open && (
-        <div id="site-menu" className="sm:hidden border-t border-line bg-surface">
+        <div id="site-menu" className="sm:hidden border-t border-line bg-surface max-h-[calc(100vh-4rem)] overflow-y-auto">
           <div className="max-w-6xl mx-auto px-4 py-2 flex flex-col">
             {MOBILE_LINKS.map((l) => (
               <Link key={l.href} href={l.href} onClick={() => setOpen(false)}
