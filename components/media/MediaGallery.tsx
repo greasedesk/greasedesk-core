@@ -98,9 +98,13 @@ function Lightbox({ items, index, setIndex, onRotate, onDelete, canEdit }: {
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
   const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  // Rotated-video playback (native controls would rotate with the element → sideways).
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const togglePlay = useCallback(() => { const v = videoElRef.current; if (!v) return; if (v.paused) v.play().catch(() => {}); else v.pause(); }, []);
 
   const reset = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
-  useEffect(() => { reset(); }, [index, reset]);
+  useEffect(() => { reset(); setPlaying(false); }, [index, reset]);
 
   const go = useCallback((d: number) => {
     const n = index + d;
@@ -195,9 +199,25 @@ function Lightbox({ items, index, setIndex, onRotate, onDelete, canEdit }: {
           className="object-contain"
           style={{ ...fitStyle(rot), transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rot}deg)` }}
         />
+      ) : rot === 0 ? (
+        // Unrotated video: native controls, unchanged.
+        <video key={m.id} src={m.url ?? ''} controls autoPlay playsInline className="object-contain bg-black" style={fitStyle(rot)} />
       ) : (
-        // Video plays in place; the fit-box swaps at 90/270 so a rotated clip fits, not overflows.
-        <video src={m.url ?? ''} controls autoPlay playsInline className="object-contain bg-black" style={fitStyle(rot)} />
+        // Rotated video: CSS rotate() spins the native controls too (sideways), so hide them and drive
+        // playback from a MINIMAL overlay in the UNROTATED parent — tap to play/pause + a play badge
+        // when paused. No scrubber/skip (a walkaround is <90s — the upright picture is the trade).
+        <>
+          <video ref={videoElRef} key={m.id} src={m.url ?? ''} controls={false} autoPlay playsInline
+            onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+            className="object-contain bg-black" style={fitStyle(rot)} />
+          <button onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} className="absolute inset-0 z-[5] flex items-center justify-center">
+            {!playing && (
+              <span className="w-16 h-16 rounded-full bg-black/55 flex items-center justify-center">
+                <svg viewBox="0 0 24 24" className="w-8 h-8 text-white ml-1" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+              </span>
+            )}
+          </button>
+        </>
       )}
     </div>
   );
