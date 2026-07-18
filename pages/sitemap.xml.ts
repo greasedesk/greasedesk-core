@@ -6,7 +6,7 @@
 import type { GetServerSideProps } from 'next';
 import { absoluteUrl } from '@/lib/company-info';
 
-const PUBLIC_PATHS = ['/', '/pricing', '/contact', '/register'];
+const PUBLIC_PATHS = ['/', '/pricing', '/contact', '/reseller', '/register'];
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   const urls = PUBLIC_PATHS.map((p) => {

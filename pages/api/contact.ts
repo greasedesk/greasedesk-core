@@ -12,6 +12,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { sendEmail } from '@/lib/email-service';
 import { COMPANY } from '@/lib/company-info';
+import { verifyTurnstile, clientIp } from '@/lib/turnstile';
 
 const CONTACT_TO = process.env.CONTACT_FORM_TO || 'hugh@greasedesk.com';
 
@@ -21,7 +22,7 @@ const esc = (s: string) => s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ ok: false, message: 'Method Not Allowed' }); }
 
-  const { name, email, message, website } = (req.body || {}) as { name?: string; email?: string; message?: string; website?: string };
+  const { name, email, message, website, turnstileToken } = (req.body || {}) as { name?: string; email?: string; message?: string; website?: string; turnstileToken?: string };
 
   // Honeypot: a real user never fills the hidden field. Accept-and-drop so bots see success.
   if (typeof website === 'string' && website.trim() !== '') return res.status(200).json({ ok: true });
@@ -33,6 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!cleanName || cleanName.length > 100) return res.status(400).json({ ok: false, message: 'Please enter your name.' });
   if (!EMAIL_RE.test(cleanEmail) || cleanEmail.length > 200) return res.status(400).json({ ok: false, message: 'Please enter a valid email address.' });
   if (!cleanMessage || cleanMessage.length > 5000) return res.status(400).json({ ok: false, message: 'Please enter a message (up to 5000 characters).' });
+
+  // Turnstile: verify BEFORE the send. A missing/failed challenge is a CLEAR error, never a silent drop.
+  const challenge = await verifyTurnstile(turnstileToken, clientIp(req.headers));
+  if (!challenge.ok) return res.status(400).json({ ok: false, message: 'Please complete the “I’m human” check and try again.' });
 
   const html = `
     <h2>New GreaseDesk contact enquiry</h2>

@@ -8,12 +8,14 @@ import { useState } from 'react';
 import Link from 'next/link';
 import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
+import Turnstile from '@/components/marketing/Turnstile';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
 
 const inputCls = 'w-full p-3 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-2 focus:ring-accent focus:border-accent outline-none';
 
 export default function ContactPage() {
   const [form, setForm] = useState({ name: '', email: '', message: '', website: '' });
+  const [token, setToken] = useState<string | null>(null); // Turnstile
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [msg, setMsg] = useState<string | null>(null);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -22,7 +24,7 @@ export default function ContactPage() {
     e.preventDefault();
     setState('sending'); setMsg(null);
     try {
-      const res = await fetch('/api/contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const res = await fetch('/api/contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, turnstileToken: token }) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.ok) { setState('sent'); setMsg(data.message || 'Thanks — we’ll be in touch shortly.'); setForm({ name: '', email: '', message: '', website: '' }); }
       else { setState('error'); setMsg(data?.message || 'Something went wrong. Please try again, or email us directly.'); }
@@ -84,6 +86,7 @@ export default function ContactPage() {
                   </div>
                   {/* Honeypot — visually hidden; real users leave it empty */}
                   <input type="text" tabIndex={-1} autoComplete="off" aria-hidden="true" value={form.website} onChange={set('website')} className="hidden" />
+                  <Turnstile onToken={setToken} />
                   {state === 'error' && msg && <p className="text-sm text-danger">{msg}</p>}
                   <button type="submit" disabled={state === 'sending'} className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3 text-base transition-colors disabled:opacity-60">
                     {state === 'sending' ? 'Sending…' : 'Send message'}

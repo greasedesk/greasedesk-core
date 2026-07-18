@@ -42,6 +42,7 @@ function Footer() {
             <Link href="/contact" className="text-muted hover:text-ink">Contact</Link>
             <Link href="/register" className="text-muted hover:text-ink">Start free trial</Link>
             <Link href="/admin/login" className="text-muted hover:text-ink">Sign in</Link>
+            <Link href="/reseller" className="text-muted hover:text-ink">Become a reseller</Link>
           </nav>
           <div className="flex flex-col gap-2 text-sm">
             <span className="text-xs uppercase tracking-wide text-muted mb-1">Contact</span>

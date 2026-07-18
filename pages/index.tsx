@@ -26,7 +26,7 @@ export default function HomePage() {
     <>
       <Seo
         title="GreaseDesk — Garage management software that shows your real profit"
-        description="Job cards, bookings, invoicing and a live profit-and-loss view for independent garages. Start a 60-day free trial — £75/month per location, no VAT."
+        description="Job cards, bookings, invoicing and a live profit-and-loss view for independent garages. Start a 60-day free trial — £75 per site, per month."
         path="/"
         softwareApp
       />
@@ -50,7 +50,7 @@ export default function HomePage() {
                   Talk to us
                 </Link>
               </div>
-              <p className="mt-4 text-sm text-muted">{perLocationLabel()}/month per location · no VAT · payment card required · cancel anytime.</p>
+              <p className="mt-4 text-sm text-muted">{perLocationLabel()} per site, per month · payment card required · cancel anytime.</p>
             </div>
 
             {/* P&L dashboard — LABELLED PLACEHOLDER sized to the real screenshot (16:10). Demo data fills it. */}

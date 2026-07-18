@@ -7,7 +7,7 @@
 import Link from 'next/link';
 import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
-import { perLocationLabel, GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
+import { perLocationLabel } from '@/lib/billing-pricing';
 
 const Check = () => (
   <svg className="w-5 h-5 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -29,23 +29,22 @@ export default function PricingPage() {
     <>
       <Seo
         title="Pricing — GreaseDesk garage management software"
-        description="Simple, flat pricing: one price per location, per month. No tiers, no VAT while we're not registered, cancel any time. Start a 60-day free trial."
+        description="Simple, flat pricing: £75 per site, per month. No tiers, no setup fees, cancel any time. Start a 60-day free trial."
         path="/pricing"
         softwareApp
       />
       <SiteChrome>
         <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-24 pb-8 text-center">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-ink tracking-tight">Simple, flat pricing</h1>
-          <p className="mt-4 text-lg text-muted">One price per location. No tiers, no setup fees, cancel any time.</p>
+          <p className="mt-4 text-lg text-muted">One price per site. No tiers, no setup fees, cancel any time.</p>
         </section>
 
         <section className="max-w-md mx-auto px-4 sm:px-6 lg:px-8 pb-16">
           <div className="bg-surface border border-line rounded-2xl p-8 shadow-card text-center">
             <div className="flex items-baseline justify-center gap-1">
               <span className="text-5xl font-extrabold text-ink tabular-nums">{perLocationLabel()}</span>
-              <span className="text-muted text-lg">/month</span>
             </div>
-            <p className="mt-1 text-sm text-muted">per location{GARAGE_VAT_REGISTERED ? '' : ' · no VAT'}</p>
+            <p className="mt-1 text-sm text-muted">per site, per month</p>
 
             <Link href="/register" className="mt-6 inline-block w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
               Start your 60-day free trial
