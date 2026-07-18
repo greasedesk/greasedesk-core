@@ -100,9 +100,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!customerName) return res.status(400).json({ message: 'Customer name is required.' });
 
     // Target site: an explicit siteId (e.g. from the diary) the caller can access, else the session site.
-    const targetSiteId = body.siteId && vis.siteIds.includes(body.siteId) ? body.siteId : siteId;
-    if (!vis.siteIds.includes(targetSiteId)) {
-      return res.status(403).json({ message: 'You are not assigned to this location.' });
+    // OPERATIONAL — creating a job card is NEW WORK, so the target must be an ACTIVE site. Reading
+    // and editing existing cards at an archived site stays allowed (those paths use vis.siteIds).
+    const targetSiteId = body.siteId && vis.activeSiteIds.includes(body.siteId) ? body.siteId : siteId;
+    if (!vis.activeSiteIds.includes(targetSiteId)) {
+      return res.status(403).json({ message: vis.siteIds.includes(targetSiteId) ? 'That location is archived — restore it before booking new work there.' : 'You are not assigned to this location.' });
     }
 
     // Optional scheduling (create + place). Resource allocation → manager/admin only.
@@ -217,7 +219,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Diary drag-create is within-day, so working-minutes = (end - start).
         if (scheduling) {
           const workingMinutes = Math.round(((end as Date).getTime() - (start as Date).getTime()) / 60000);
-          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.siteIds });
+          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.activeSiteIds }); // placement = new work
         }
         return created;
       });

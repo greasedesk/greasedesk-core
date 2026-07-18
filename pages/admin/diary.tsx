@@ -1366,15 +1366,17 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
 
   const vis = await getVisibility(user.id as string);
-  if (vis.siteIds.length === 0) {
+  // OPERATIONAL: the diary is where new work is booked, so it resolves against ACTIVE sites only.
+  // An archived location has no bookable diary; its past job cards stay reachable via Job Cards.
+  if (vis.activeSiteIds.length === 0) {
     const today = ymd(new Date());
     return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true } };
   }
 
-  // Default to the user's PRIMARY location; a valid ?site switches. Forced out-of-scope ?site
-  // (not one of vis.siteIds) falls back to primary — never shows another location's diary.
+  // Default to the user's PRIMARY location; a valid ?site switches. An out-of-scope OR ARCHIVED
+  // ?site falls back to primary — never another location's diary, and never an archived one.
   const wanted = (ctx.query.site as string) || vis.primarySiteId || '';
-  const resolvedId = wanted && vis.siteIds.includes(wanted) ? wanted : (vis.primarySiteId ?? vis.siteIds[0]);
+  const resolvedId = wanted && vis.activeSiteIds.includes(wanted) ? wanted : (vis.primarySiteId ?? vis.activeSiteIds[0]);
   const site = (await prisma.site.findFirst({
     where: { id: resolvedId },
     select: { id: true, site_name: true, open_days: true, open_hour: true, close_hour: true, breaks: true, week_start: true, currency_code: true, locale: true },

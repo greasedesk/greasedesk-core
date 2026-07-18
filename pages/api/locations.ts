@@ -37,8 +37,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'GET') {
+    // OPERATIONAL list — this feeds the nav site picker, so archived locations must not appear.
+    // (The Settings > Locations page has its own gssp and deliberately reads ALL sites so it can
+    // show the Archived section with a Restore action.)
     const sites = await prisma.site.findMany({
-      where: { group_id: groupId, id: { in: vis.siteIds } }, // visible only
+      where: { group_id: groupId, id: { in: vis.activeSiteIds } },
       orderBy: { site_name: 'asc' },
       select: { id: true, site_name: true },
     });

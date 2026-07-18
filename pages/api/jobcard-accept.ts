@@ -62,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 1) book first — throws CLASH:<reg> / CROSS_SITE / RESOURCE_NOT_FOUND → rolls the whole thing back
-      await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.siteIds });
+      await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds }); // booking on accept = new work
       // 2) only then advance the lifecycle
       await tx.jobCard.update({ where: { id: jobCardId }, data: { status: 'accepted' } });
       // 3) record the combined event in the same tx

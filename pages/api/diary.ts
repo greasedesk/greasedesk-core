@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!card) throw new Error('CARD_NOT_FOUND');
         if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
         // Shared guard (scope + footprint-overlap + update) — the one place placement happens.
-        await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.siteIds });
+        await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds }); // placement = new work (card lookup above stays broad)
         await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { resourceId, startAt, workingMinutes } });
       });
       return res.status(200).json({ message: 'Job card placed.' });

@@ -47,7 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: `Category must be one of: ${VALID_CATEGORIES.join(', ')}.` });
     }
     // Target site: a group site the caller may access; defaults to their active site.
-    const targetSite = typeof siteId === 'string' && vis.siteIds.includes(siteId) ? siteId : (user.site_id as string);
+    // OPERATIONAL — a new profit centre belongs to a live location.
+    const targetSite = typeof siteId === 'string' && vis.activeSiteIds.includes(siteId) ? siteId : (user.site_id as string);
     const created = await prisma.profitCentre.create({
       data: { site_id: targetSite, name: cleanName, category: category as ProfitCentreCategory },
       select: { id: true },

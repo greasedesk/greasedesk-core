@@ -281,7 +281,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     : { group_id: vis.groupId, role: 'STANDARD' as Role, site_assignments: { some: { site_id: { in: vis.siteIds } } } };
   const siteWhere = isAdmin
     ? { group_id: vis.groupId }
-    : { group_id: vis.groupId, id: { in: vis.siteIds } };
+    : { group_id: vis.groupId, id: { in: vis.activeSiteIds } }; // assignable = ACTIVE locations only
   const [userRows, siteRows] = await Promise.all([
     prisma.user.findMany({
       where: userWhere,
