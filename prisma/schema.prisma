@@ -512,9 +512,18 @@ model User {
   reset_token_expires DateTime?
   // Session revocation floor. The auth strategy is JWT (self-contained, NOT revocable by deleting
   // rows — the Session table is vestigial under strategy:'jwt'), so a stolen 90-day cookie would
-  // otherwise outlive a password reset. Set to now() on reset; the jwt callback kills any token
-  // whose `iat` predates it. THE one place a session is invalidated server-side.
+  // otherwise outlive a password reset. Set to now() on reset, on a password change, on an ADMIN
+  // "sign out all devices", and on deactivation. The jwt callback kills any token whose `authAt`
+  // (our own stamp — NextAuth's `iat` is not reliably exposed there) predates it.
+  // THE one place a session is invalidated server-side.
   sessions_valid_from DateTime?
+
+  // Deactivation timestamp. SPLITS THE TWO MEANINGS of is_active=false, which otherwise conflates
+  // "invited, never accepted" with "suspended by an admin" — the roster's badge reads the first and
+  // would mislabel the second. is_active stays THE enforcement flag (login checks it, nothing else
+  // changes); this column only says WHICH kind of inactive, and when. Null + inactive = pending
+  // invite; set + inactive = deactivated. WHO did it lives in the audit trail, not here.
+  deactivated_at DateTime?
 
   // --- PROFILE FIELDS (all optional; name + email above are the existing identity fields) ---
   job_title                  String?

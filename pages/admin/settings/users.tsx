@@ -16,7 +16,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 
 type Role = 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null; canInvoice: boolean };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; deactivatedAt: string | null; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null; canInvoice: boolean };
 type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean };
 
 const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE MANAGER', STANDARD: 'STANDARD' };
@@ -132,9 +132,24 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
     if (error) return setErr(error); // 409 guard surfaced
     onChanged();
   }
+  // REVERSIBLE alternative to Remove. Deactivating blocks login AND kills live sessions, but keeps
+  // the account and every audit attribution intact — deleting nulls the trail (onDelete: SetNull).
+  async function setActive(next: boolean) {
+    const who = user.name || user.email;
+    const msg = next
+      ? `Reactivate ${who}?\n\nThey'll be able to sign in again.`
+      : `Deactivate ${who}?\n\nThey'll be signed out everywhere immediately and won't be able to sign in. Their history is kept and you can reactivate them at any time.`;
+    if (!confirm(msg)) return;
+    const error = await mutate('/api/users', 'PATCH', { id: user.id, isActive: next });
+    if (error) return setErr(error); // 409 lockout guards surfaced
+    onChanged();
+  }
 
   const removeDisabled = isSelf || user.isOwner;
   const removeTitle = user.isOwner ? 'The owner account cannot be removed' : isSelf ? 'You cannot remove yourself' : 'Remove user';
+  // Mirrors the server's lockout guards, so a disabled control never becomes a 409.
+  const deactivateDisabled = isSelf || user.isOwner;
+  const deactivateTitle = user.isOwner ? 'The owner account cannot be deactivated' : isSelf ? 'You cannot deactivate yourself' : 'Block sign-in and end all sessions';
 
   return (
     <div className="bg-surface border border-line rounded-xl p-4 mb-3">
@@ -145,7 +160,10 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
             <RoleBadge role={user.role} />
             {user.isOwner && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-ok-soft text-ok border border-line">owner</span>}
             {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-accent-soft text-accent border border-line">you</span>}
-            {!user.isActive && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-warn-soft text-warn border border-line">pending</span>}
+            {/* is_active=false means two different things; deactivated_at is what tells them apart. */}
+            {!user.isActive && (user.deactivatedAt
+              ? <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-danger-soft text-danger border border-line">deactivated</span>
+              : <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-warn-soft text-warn border border-line">pending invite</span>)}
           </div>
           <div className="text-muted text-sm">{user.email}</div>
           {!editing && (
@@ -158,6 +176,13 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
           <div className="flex items-center gap-3 shrink-0">
             <Link href={`/admin/settings/users/${user.id}`} className="text-xs text-accent hover:underline">Profile</Link>
             <button onClick={() => setEditing(true)} className="text-xs text-accent hover:underline">Edit</button>
+            {/* ADMIN-only (the server rejects managers), and offered BEFORE Remove: suspending is
+                reversible and keeps the audit trail, so it should be the easier reach of the two. */}
+            {isAdmin && (user.isActive ? (
+              <button onClick={() => setActive(false)} disabled={deactivateDisabled} title={deactivateTitle} className={`text-xs ${deactivateDisabled ? 'text-muted cursor-not-allowed' : 'text-warn hover:underline'}`}>Deactivate</button>
+            ) : user.deactivatedAt ? (
+              <button onClick={() => setActive(true)} title="Allow this user to sign in again" className="text-xs text-ok hover:underline">Reactivate</button>
+            ) : null)}
             <button onClick={remove} disabled={removeDisabled} title={removeTitle} className={`text-xs ${removeDisabled ? 'text-muted cursor-not-allowed' : 'text-danger hover:underline'}`}>Remove</button>
           </div>
         )}
@@ -249,7 +274,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
   const { vis } = gate;
   const isAdmin = vis.isAdmin;
 
-  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; role: Role; is_owner: boolean; primary_site_id: string | null; can_invoice: boolean; site_assignments: { site_id: string }[] };
+  type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; deactivated_at: Date | null; role: Role; is_owner: boolean; primary_site_id: string | null; can_invoice: boolean; site_assignments: { site_id: string }[] };
   const selfId = vis.userId;
   const userWhere = isAdmin
     ? { group_id: vis.groupId }
@@ -261,13 +286,15 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     prisma.user.findMany({
       where: userWhere,
       orderBy: { email: 'asc' },
-      select: { id: true, name: true, email: true, is_active: true, role: true, is_owner: true, primary_site_id: true, can_invoice: true, site_assignments: { select: { site_id: true } } },
+      select: { id: true, name: true, email: true, is_active: true, deactivated_at: true, role: true, is_owner: true, primary_site_id: true, can_invoice: true, site_assignments: { select: { site_id: true } } },
     }) as Promise<UserDbRow[]>,
     prisma.site.findMany({ where: siteWhere, orderBy: { site_name: 'asc' }, select: { id: true, site_name: true } }),
   ]);
 
   const users: UserRow[] = userRows.map((u: UserDbRow) => ({
-    id: u.id, name: u.name, email: u.email, isActive: u.is_active, role: u.role, isOwner: u.is_owner,
+    id: u.id, name: u.name, email: u.email, isActive: u.is_active,
+    deactivatedAt: u.deactivated_at ? u.deactivated_at.toISOString() : null,
+    role: u.role, isOwner: u.is_owner,
     siteIds: u.site_assignments.map((a) => a.site_id),
     primarySiteId: u.primary_site_id ?? null,
     canInvoice: !!u.can_invoice,

@@ -17,6 +17,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { makeInviteToken } from '@/lib/tokens';
 import { sendTeamInvitationEmail } from '@/lib/email-service';
+import { writeUserAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -114,16 +115,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, siteIds, role, primarySiteId, canInvoice } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null; canInvoice?: boolean };
+    const { id, name, siteIds, role, primarySiteId, canInvoice, isActive } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null; canInvoice?: boolean; isActive?: boolean };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     // can_invoice is an ADMIN-only grant (a ledger power) — a site manager may manage their mechanics
     // but may not hand out invoice-raising authority.
     if (canInvoice !== undefined && isManagerOnly) {
       return res.status(403).json({ message: 'Only an admin can grant invoice-raising permission.' });
     }
+    // Deactivation blocks login and kills live sessions — an account-level power, ADMIN only.
+    if (isActive !== undefined && isManagerOnly) {
+      return res.status(403).json({ message: 'Only an admin can deactivate or reactivate an account.' });
+    }
     const target = await prisma.user.findFirst({
       where: { id, group_id: groupId },
-      select: { id: true, is_owner: true, role: true, primary_site_id: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
+      select: { id: true, email: true, is_owner: true, role: true, primary_site_id: true, _count: { select: { site_assignments: true } }, site_assignments: { select: { site_id: true } } },
     });
     if (!target) return res.status(404).json({ message: 'User not found.' });
 
@@ -155,6 +160,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const effectiveSiteCount = nextSites !== null ? nextSites.length : target._count.site_assignments;
     if (effectiveRole !== 'ADMIN' && effectiveSiteCount === 0) {
       return res.status(400).json({ message: 'A standard or site-manager user must keep at least one location.' });
+    }
+
+    // Deactivation lockout guards — the same three DELETE already enforces, for the same reason:
+    // an account-disabling action must never be able to lock the tenant out of its own workspace.
+    if (isActive === false) {
+      if (sessionUserId && id === sessionUserId) {
+        return res.status(409).json({ message: 'You cannot deactivate your own account.' });
+      }
+      if (target.is_owner) {
+        return res.status(409).json({ message: 'The owner account cannot be deactivated.' });
+      }
+      const activeAdmins = await prisma.user.count({ where: { group_id: groupId, is_active: true, role: 'ADMIN' } });
+      if (target.role === 'ADMIN' && activeAdmins <= 1) {
+        return res.status(409).json({ message: 'This is the last active admin — promote another admin first.' });
+      }
     }
 
     // Primary site (admin-set landing/default) must be one of the user's (effective) assigned sites.
@@ -195,6 +215,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Per-user invoice-raising grant (ADMIN-only, guarded above).
         if (canInvoice !== undefined) {
           await tx.user.update({ where: { id }, data: { can_invoice: !!canInvoice } });
+        }
+        // Deactivate / reactivate (ADMIN-only, lockout-guarded above).
+        // Deactivating stamps the revocation floor as well as blocking login: without it a
+        // suspended mechanic's 90-day /m cookie would keep working — is_active is only read at
+        // SIGN-IN, so it does nothing to a session that already exists. Blocking the front door
+        // while leaving the window open is exactly the bug this slice exists to close.
+        if (isActive !== undefined) {
+          const now = new Date();
+          await tx.user.update({
+            where: { id },
+            data: isActive
+              ? { is_active: true, deactivated_at: null }
+              : { is_active: false, deactivated_at: now, sessions_valid_from: now },
+          });
+          await writeUserAudit(tx, {
+            groupId,
+            actorUserId: sessionUserId,
+            targetUserId: id,
+            action: isActive ? 'user.reactivated' : 'user.deactivated',
+            diff: { email: target.email },
+          });
         }
       });
       return res.status(200).json({ message: 'User updated.' });

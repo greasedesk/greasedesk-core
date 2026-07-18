@@ -48,7 +48,9 @@ export type AuditAction =
  * the entity differs — same AuditLog table, same taxonomy, different subject.
  */
 export type UserAuditAction =
-  | 'user.sessions_revoked'; // ADMIN signed this user out of every device (stolen-phone case)
+  | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
+  | 'user.deactivated'       // ADMIN suspended the account: login blocked + sessions killed
+  | 'user.reactivated';      // ADMIN restored a suspended account
 
 /**
  * Same table, same discipline, subject = a USER. Sibling of writeAudit rather than a second audit
