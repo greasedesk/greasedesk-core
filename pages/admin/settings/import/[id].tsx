@@ -138,8 +138,8 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
           ? String(c.amount)
           : ((Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100)) / 100).toFixed(2),
       })) ?? [
-        { description: line.description, qty: Number(line.qty), amount: Number(line.amount).toFixed(2), partsCost: '', labourHours: '' },
-        { description: 'Labour', qty: 1, amount: '0.00', partsCost: '', labourHours: '' },
+        { description: line.description, qty: Number(line.qty), amount: Number(line.amount).toFixed(2), kind: 'part', partsCost: '', labourHours: '' },
+        { description: 'Labour', qty: 1, amount: '0.00', kind: 'labour', partsCost: '', labourHours: '' },
       ],
     );
   }
@@ -508,26 +508,51 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                           </div>
                         ))}
 
-                        {/* FALLBACK: no catalogue counterpart — raw entry, which creates a new item. */}
-                        <details className="text-xs">
-                          <summary className="text-muted cursor-pointer">No matching product — enter cost and hours</summary>
-                          <div className="grid grid-cols-3 gap-2 mt-2">
-                            <LabelledInput label="Parts cost £" defaultValue={l.parts_cost ?? ''}
-                              onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} disabled={committed} />
-                            <LabelledInput label="Labour hours" defaultValue={l.labour_hours ?? ''}
-                              onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} disabled={committed} />
-                            <div>
-                              <label className="block text-xs text-muted mb-1">Basis</label>
-                              <select className={inputCls} defaultValue={l.cost_basis ?? ''} disabled={committed}
-                                onChange={(e) => save({ lines: [{ id: l.id, costBasis: e.target.value || null }] })}>
-                                <option value="">—</option>
-                                <option value="actual">actual</option>
-                                <option value="estimated">estimated</option>
-                              </select>
+                        {/* WHAT IS THIS LINE? Declared, never inferred — and only the field that
+                            belongs to the declaration is shown, because parts and labour never
+                            share a line. A line that is genuinely both is a bundle: split it. */}
+                        {!committed && (
+                          <div className="border border-line rounded-lg p-2">
+                            <div className="text-xs text-muted mb-1">This line is…</div>
+                            <div className="flex flex-wrap gap-1">
+                              {[{ k: 'part', label: 'Parts' }, { k: 'labour', label: 'Labour' }].map((o) => (
+                                <button key={o.k} disabled={busy}
+                                  onClick={() => save({ lines: [{ id: l.id, kind: l.kind === o.k ? null : o.k }] })}
+                                  className={`text-xs px-2.5 py-1 rounded-full border ${
+                                    l.kind === o.k ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line'}`}>
+                                  {o.label}
+                                </button>
+                              ))}
                             </div>
+
+                            {l.kind === 'labour' && (
+                              <div className="mt-2 max-w-xs">
+                                <LabelledInput label="Labour hours" defaultValue={l.labour_hours ?? ''}
+                                  onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} />
+                                <p className="text-xs text-muted mt-1">
+                                  Hours only. A labour line carries no parts cost — if this line also supplied a
+                                  part, split it instead.
+                                </p>
+                              </div>
+                            )}
+                            {(l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') && (
+                              <div className="mt-2 max-w-xs">
+                                <LabelledInput label="Parts cost £ (what it cost us)" defaultValue={l.parts_cost ?? ''}
+                                  onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} />
+                                <p className="text-xs text-muted mt-1">
+                                  Cost only. A parts line carries no hours — if fitting was charged on this line
+                                  too, split it instead.
+                                </p>
+                              </div>
+                            )}
+                            {!l.kind && (
+                              <p className="text-xs text-muted mt-1">
+                                Choose one, attach a product above, or split the line. Nothing is guessed from the
+                                wording — &ldquo;Supply and fit&rdquo; is both, and only you know which part is which.
+                              </p>
+                            )}
                           </div>
-                          <p className="text-muted mt-1">This path creates a NEW catalogue item on commit.</p>
-                        </details>
+                        )}
                       </div>
                     )}
                   </div>
@@ -734,7 +759,11 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, replacing
   const parentPennies = p2(parentAmount);
   const totalPennies = draft.reduce((a, c) => a + childP(c), 0);
   const residual = parentPennies - totalPennies;
-  const balanced = draft.length >= 2 && residual === 0 && draft.every((c) => (c.description ?? '').trim());
+  const balanced = draft.length >= 2 && residual === 0
+    && draft.every((c) => (c.description ?? '').trim())
+    // Each child must say what it IS. A split whose children are undeclared has not actually
+    // separated parts from labour — it has just made two lines.
+    && draft.every((c) => c.kind === 'part' || c.kind === 'labour' || c.kind === 'misc' || c.kind === 'fixed' || c.catalogueItemId);
 
   const set = (i: number, patch: any) => setDraft(draft.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   const add = () => setDraft([...draft, { description: '', qty: 1, amount: '', partsCost: '', labourHours: '' }]);
@@ -792,21 +821,37 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, replacing
                 take the remainder
               </button>
             </div>
-            <div>
-              {/* PER UNIT, matching how unit_price works and how the catalogue stores unit_cost —
-                  £26 against qty 2 is £52 of parts, not £26. Stated, and the total shown, because
-                  a bare "Parts cost £" left it to be guessed. */}
-              <label className="block text-xs text-muted mb-0.5">Parts cost £ / unit</label>
-              <input className={inputCls} inputMode="decimal" value={c.partsCost ?? ''}
-                onChange={(e) => set(i, { partsCost: e.target.value })} />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-0.5">Labour h / unit</label>
-              <input className={inputCls} inputMode="decimal" value={c.labourHours ?? ''}
-                onChange={(e) => set(i, { labourHours: e.target.value })} />
-            </div>
+            {/* ONE FIELD, chosen by the child's own kind — the split exists precisely so that each
+                child is parts OR labour, so offering both here would reintroduce the bundle. */}
+            {c.kind === 'labour' ? (
+              <div>
+                <label className="block text-xs text-muted mb-0.5">Labour h / unit</label>
+                <input className={inputCls} inputMode="decimal" value={c.labourHours ?? ''}
+                  onChange={(e) => set(i, { labourHours: e.target.value })} />
+              </div>
+            ) : c.kind ? (
+              <div>
+                {/* PER UNIT, matching how unit_price works and how the catalogue stores unit_cost —
+                    £26 against qty 2 is £52 of parts, not £26. */}
+                <label className="block text-xs text-muted mb-0.5">Parts cost £ / unit</label>
+                <input className={inputCls} inputMode="decimal" value={c.partsCost ?? ''}
+                  onChange={(e) => set(i, { partsCost: e.target.value })} />
+              </div>
+            ) : (
+              <div className="col-span-2 self-end text-xs text-warn pb-2">Choose parts or labour below.</div>
+            )}
           </div>
           <div className="flex items-center justify-between mt-1">
+            <div className="flex items-center gap-1">
+              {[{ k: 'part', label: 'Parts' }, { k: 'labour', label: 'Labour' }].map((o) => (
+                <button key={o.k} type="button"
+                  onClick={() => set(i, { kind: o.k, ...(o.k === 'labour' ? { partsCost: '' } : { labourHours: '' }) })}
+                  className={`text-xs px-2 py-1 rounded-full border ${
+                    c.kind === o.k ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line'}`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
             <select className="text-xs bg-surface border border-line rounded px-2 py-1 text-ink"
               value={c.catalogueItemId ?? ''}
               onChange={(e) => {

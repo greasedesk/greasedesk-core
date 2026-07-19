@@ -235,6 +235,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const l of b.lines ?? []) {
         const row = staged.lines.find((x: any) => x.id === l.id);
         if (!row) continue;
+        // PARTS AND LABOUR NEVER SHARE A LINE. Declaring the kind clears the figure that belongs to
+        // the other kind, so switching a line from parts to labour cannot leave a stale parts cost
+        // behind it — invisible in the UI (which shows one field) but still counted in the P&L.
+        const declared = (l.kind as any) ?? row.kind;
+        const wipeParts = declared === 'labour';
+        const wipeHours = declared === 'part' || declared === 'misc' || declared === 'fixed';
         await tx.stagedLine.update({
           where: { id: row.id },
           data: {
@@ -243,10 +249,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // caller happens to convert '' client-side, but the same omission on the split path
             // reached Prisma as a Decimal and crashed the request — so the boundary normalises here
             // too rather than trusting every caller to remember.
-            parts_cost: row.is_adjustment ? (0 as any) : (numOrNull(l.partsCost) as any),
-            labour_hours: numOrNull(l.labourHours) as any,
+            parts_cost: row.is_adjustment ? (0 as any)
+              : wipeParts ? null
+              : (l.partsCost !== undefined ? (numOrNull(l.partsCost) as any) : row.parts_cost),
+            labour_hours: wipeHours ? null
+              : (l.labourHours !== undefined ? (numOrNull(l.labourHours) as any) : row.labour_hours),
             cost_basis: l.costBasis ?? row.cost_basis,
-            kind: (l.kind as any) ?? row.kind,
+            kind: declared,
             catalogue_item_id: l.catalogueItemId ?? row.catalogue_item_id,
           },
         });
