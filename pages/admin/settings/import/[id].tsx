@@ -527,11 +527,11 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
 
                             {l.kind === 'labour' && (
                               <div className="mt-2 max-w-xs">
-                                <LabelledInput label="Labour hours" defaultValue={l.labour_hours ?? ''}
+                                <LabelledInput label="Labour hours (whole line)" defaultValue={l.labour_hours ?? ''}
                                   onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} />
                                 <p className="text-xs text-muted mt-1">
-                                  Hours only. A labour line carries no parts cost — if this line also supplied a
-                                  part, split it instead.
+                                  Hours for the WHOLE line, not per unit — qty does not multiply it. Hours only:
+                                  a labour line carries no parts cost, so if this line also supplied a part, split it.
                                 </p>
                               </div>
                             )}
@@ -825,7 +825,7 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, replacing
                 child is parts OR labour, so offering both here would reintroduce the bundle. */}
             {c.kind === 'labour' ? (
               <div>
-                <label className="block text-xs text-muted mb-0.5">Labour h / unit</label>
+                <label className="block text-xs text-muted mb-0.5">Labour h (whole line)</label>
                 <input className={inputCls} inputMode="decimal" value={c.labourHours ?? ''}
                   onChange={(e) => set(i, { labourHours: e.target.value })} />
               </div>

@@ -80,23 +80,50 @@ export function uncostedParts(invoices: LedgerInvoice[]): UncostedParts {
 /** Charged labour CONTENT of a set of ledger invoices (see module header for the grain):
  *  billable hours in `centihours`, warranty-rework hours in `reworkCentihours` — same grain,
  *  split by the invoice's series. Missing-hours lines flag on BOTH (either undercounts). */
+/**
+ * THE one resolution of "how many of our hours does this line represent", in centihours.
+ *
+ * LABOUR lines: `labour_hours` is AUTHORITATIVE when present and is the LINE TOTAL, not a per-unit
+ * figure; qty-as-hours is the fallback when it is null. Native ad-hoc labour is entered as
+ * qty = hours and leaves labour_hours null (verified: 0 of 25 ledger rows and 0 of 44 card rows set
+ * it), so the fallback preserves every existing figure exactly. Imported labour is the case that
+ * needs the override: an invoice line reading "Fit front wheel bearings, qty 1, £150.00" is one
+ * line, not one hour, and the operator's entered hours are the true figure.
+ *
+ * FIXED lines are unchanged: labour_hours is the PRODUCT's per-unit definition, so qty multiplies.
+ *
+ * Exported because the import wizard seeds its booking duration from the same question. Two readers
+ * computing hours differently is precisely the defect this replaces — staged.ts multiplied
+ * labour_hours by qty while this function ignored labour_hours entirely.
+ */
+export function lineLabourCentihours(it: {
+  item_type: string | null; qty: unknown; labour_hours: unknown; labour_outsourced?: boolean;
+}): { centihours: number; missingHours: boolean } {
+  const qty = Number(it.qty);
+  if (it.item_type === 'labour') {
+    if (it.labour_hours != null) return { centihours: Math.round(Number(it.labour_hours) * 100), missingHours: false };
+    return { centihours: Math.round(qty * 100), missingHours: false };
+  }
+  if (it.item_type === 'fixed') {
+    // OUTSOURCED lines are INVISIBLE here (settled model): bought-in labour is cost of sale — its
+    // labour_hours means CUSTOMER-BILLED hours (prices the job) and must never claim own payroll
+    // capacity (numerator) nor nag the amber (zero own-hours is CORRECT for an MOT).
+    if (it.labour_outsourced) return { centihours: 0, missingHours: false };
+    if (it.labour_hours == null) return { centihours: 0, missingHours: true };
+    return { centihours: Math.round(qty * Number(it.labour_hours) * 100), missingHours: false };
+  }
+  return { centihours: 0, missingHours: false };
+}
+
 export function chargedLabourCentihours(invoices: LedgerInvoice[]): ChargedLabour {
   let centihours = 0, reworkCentihours = 0, linesMissingHours = 0;
   for (const inv of invoices) {
     const rework = inv.series === 'warranty'; // spent capacity, never sold output
     const add = (c: number) => { if (rework) reworkCentihours += c; else centihours += c; };
     for (const it of inv.lines ?? []) {
-      const qty = Number(it.qty);
-      if (it.item_type === 'labour') {
-        add(Math.round(qty * 100)); // ad-hoc labour: qty IS hours
-      } else if (it.item_type === 'fixed') {
-        // OUTSOURCED lines are INVISIBLE here (settled model): bought-in labour is cost of sale —
-        // its labour_hours means CUSTOMER-BILLED hours (prices the job) and must never claim own
-        // payroll capacity (numerator) nor nag the amber (zero own-hours is CORRECT for an MOT).
-        if (it.labour_outsourced) continue;
-        if (it.labour_hours == null) linesMissingHours += 1; // a PAYROLL-time product with no hours set
-        else add(Math.round(qty * Number(it.labour_hours) * 100));
-      }
+      const r = lineLabourCentihours(it);
+      if (r.missingHours) linesMissingHours += 1; // a PAYROLL-time product with no hours set
+      else if (r.centihours) add(r.centihours);
     }
   }
   return { centihours, reworkCentihours, linesMissingHours };

@@ -15,6 +15,7 @@ import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
 import { blockingReasons } from '@/lib/import-blockers';
 import { numOrNull } from '@/lib/import-split';
+import { lineLabourCentihours } from '@/lib/charged-labour';
 import { writeImportAudit } from '@/lib/audit';
 import { durationOptions, seedDurationFromMinutes, durationToWorkingMinutes } from '@/lib/booking-slots';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
@@ -127,10 +128,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const slotMin = (site as any)?.booking_slot_minutes ?? 30;
     const workingDayMinutes = Math.max(slotMin, (closeHour - openHour) * 60);
     const splitParentIds = new Set(staged.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
+    // ONE resolution of "how many hours is this line", shared with the ledger (lib/charged-labour).
+    // This used to compute labour_hours × qty locally while chargedLabourCentihours ignored
+    // labour_hours entirely — so a "Labour" row at qty 2 with 2 hours entered suggested a 4-hour
+    // booking and was counted as 2 charged hours. Two readers, two answers, from the same row.
     const labourMinutes = Math.round(
       staged.lines
-        .filter((l: any) => !splitParentIds.has(l.id) && l.labour_hours != null)
-        .reduce((a: number, l: any) => a + Number(l.labour_hours) * Number(l.qty), 0) * 60,
+        .filter((l: any) => !splitParentIds.has(l.id))
+        .reduce((a: number, l: any) => a + lineLabourCentihours({
+          item_type: l.kind, qty: l.qty, labour_hours: l.labour_hours,
+        }).centihours, 0) / 100 * 60,
     );
     const suggestedDuration = labourMinutes > 0
       ? seedDurationFromMinutes(labourMinutes, workingDayMinutes, slotMin)
