@@ -316,9 +316,53 @@ export default function AdminDashboard(props: PageProps) {
           {t('pnl.degradedNote', { label: monthLabel(monthWindow, props.locale) })}
         </p>
       )}
+      {/* IMPORTED-PERIOD MARKER. States INCOMPLETENESS, not merely provenance: a reader must know
+          the figures are partial, not just backfilled. It changes on completion rather than
+          disappearing — an imported month keeps estimated costs and reconstructed hours forever. */}
+      {(() => {
+        const imp = (tiles?.pnl as any)?.imported;
+        if (!imp || imp.state === 'none' || !monthWindow) return null;
+        const label = monthLabel(monthWindow, props.locale);
+        const inProg = imp.state === 'in_progress';
+        return (
+          <div className={`text-sm rounded-lg px-3 py-2 mb-3 border ${inProg ? 'bg-warn-soft border-warn text-warn' : 'bg-surface-muted border-line text-muted'}`}>
+            {inProg ? (
+              <>
+                <strong>{label}: import in progress — {imp.committed} of {imp.total} invoices committed
+                {imp.skipped ? `, ${imp.skipped} skipped` : ''}.</strong>{' '}
+                These figures are partial. Profit, utilisation and break-even are withheld until the
+                import completes: the whole month&apos;s wages and overheads would otherwise be charged
+                against a fraction of the revenue.
+              </>
+            ) : (
+              <>
+                <strong>{label}: contains imported invoices.</strong>{' '}
+                Parts costs may be estimated and labour hours reconstructed from the original documents.
+              </>
+            )}
+          </div>
+        );
+      })()}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation', 'hoursWent', 'unsold'] as const).map((k) => {
           const d = tiles?.pnl as any;
+          // WITHHELD while an import is in progress. The server omits the underlying fields, so
+          // there is no wrong number to leak; this renders the reason in the tile's place rather
+          // than an em-dash that would read as "no data" when it means "not answerable yet".
+          const impSup = (d?.imported?.suppressDerived) === true;
+          const DERIVED = ['labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation'];
+          if (impSup && DERIVED.includes(k)) {
+            return (
+              <div key={k} className="bg-surface p-5 rounded-xl border border-line border-dashed opacity-80">
+                <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
+                <p className="text-sm text-warn">Withheld</p>
+                <p className="text-xs text-muted mt-1">
+                  Import {d.imported.committed}/{d.imported.total} — a full month of costs against
+                  part of the revenue would be wrong, not approximate.
+                </p>
+              </div>
+            );
+          }
           if (k === 'hoursWent' || k === 'unsold') {
             const u3 = tiles?.utilisation as any;
             const cb3 = tiles?.costBase as any;

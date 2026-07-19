@@ -8,6 +8,7 @@
  * once paid, live card items while issued). No money logic is re-implemented here.
  */
 import { prisma } from '@/lib/db';
+import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts } from '@/lib/charged-labour';
@@ -193,11 +194,21 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // (a DIFFERENT measure — bay occupancy, not sellable labour — surfaced side-by-side, never subtracted).
   // CLOSED month (to ≤ now) or multi-month span → the window is [from, to] unchanged → byte-identical.
   utilisation: async ({ groupId, siteIds, from, to, months, now }) => {
+    // Utilisation divides committed charged hours by the WHOLE period's sellable capacity, so a
+    // part-imported month reports a near-zero ratio that means nothing (May: 0.3%). Withheld.
+    const importedU = await periodImportState(groupId, siteIds, from, to);
     const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
     const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
     const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
     const u = await getGroupUtilisation(groupId, siteIds, { from, to: end });
-    if (!inProgress) return u; // closed month / multi-month → unchanged (goldens byte-identical)
+    // A part-imported period divides committed charged hours by the WHOLE period's capacity, so the
+    // ratio is meaningless (May on 1 of 42: 0.3%). Withhold it and say why; keep the raw hours,
+    // which are true as far as they go. `ratio` ABSENT is the signal, matching honest-null.
+    if (importedU.suppressDerived) {
+      const { ratio, ...rest } = u as any;
+      return { ...rest, imported: importedU, suppressed: true };
+    }
+    if (!inProgress) return { ...u, imported: importedU }; // closed month / multi-month → unchanged (goldens byte-identical)
 
     // Remaining sellable capacity for [end, to) — the rest of the month — valued at the site rate.
     const rem = end.getTime() < to.getTime() ? await getGroupUtilisation(groupId, siteIds, { from: end, to }) : null;
@@ -222,6 +233,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
 
     return {
       ...u,
+      imported: importedU,
       inProgress: true,
       periodFromISO: from.toISOString(),
       periodToInclusiveISO: now.toISOString(), // the elapsed period is [from, end-of-today]
@@ -288,6 +300,13 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const wageBillMonthly = await monthlyWageBill(groupId, siteIds);
     const overheadsMonthly = await monthlyOverheads(groupId, siteIds);
 
+    // IMPORT SUPPRESSION. A partially imported period charges the FULL month's wages and overheads
+    // against whatever fraction of revenue has been committed, so netProfit/labourContribution are
+    // not approximate — they are wrong (May 2026 on 1 of 42 read −£7,077.61). They are OMITTED
+    // server-side, not blanked client-side, so the wrong figure never leaves this process.
+    // revenueNet, partsCost and grossMargin are true as far as they go and are kept.
+    const imported = await periodImportState(groupId, siteIds, from, to);
+
     const grossMargin = revenueNet - partsCost;
     const wageBill = wageBillMonthly * months;
     const operatingCosts = overheadsMonthly * months;
@@ -296,8 +315,11 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // uses; by construction contribution − operatingCosts === netProfit.
     const labourContribution = grossMargin - wageBill;
     const netProfit = grossMargin - wageBill - operatingCosts; // wages counted ONCE, here
-    return { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, wageBill, labourContribution, operatingCosts, netProfit, months, invoiceCount: invoices.length,
-      uncostedPartsLines: uncosted.lines, uncostedPartsRetailPennies: uncosted.retailPennies, uncostedPartsInvoices: uncosted.invoices };
+    const base = { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, months, invoiceCount: invoices.length,
+      uncostedPartsLines: uncosted.lines, uncostedPartsRetailPennies: uncosted.retailPennies, uncostedPartsInvoices: uncosted.invoices,
+      imported };
+    if (imported.suppressDerived) return base; // wageBill/labourContribution/operatingCosts/netProfit WITHHELD
+    return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
   },
 };
 
