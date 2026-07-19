@@ -459,6 +459,42 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                   </div>
                 </div>
                 <div>
+                  {/* Duration: the same option list the booking form uses (durationOptions), so a
+                      whole-day choice means N WORKING days rather than 24h of clock. Seeded from
+                      the labour hours already entered in step 2, snapped to the site's slot size —
+                      overridable, because the real time came from the workshop diary. */}
+                  <label className="block text-xs text-muted mb-1">Duration</label>
+                  <select className={inputCls} disabled={committed}
+                    value={(() => {
+                      const cur = s.planned_working_minutes;
+                      if (cur == null) return d.duration?.suggested ?? '';
+                      const wdm = d.duration?.workingDayMinutes ?? 480;
+                      return cur > 0 && cur % wdm === 0 ? `d:${cur / wdm}` : `m:${cur}`;
+                    })()}
+                    onChange={(e) => save({ plannedDuration: e.target.value || null })}>
+                    <option value="">Choose…</option>
+                    {(d.duration?.options ?? []).map((o: any) => (
+                      <option key={o.value} value={o.value}>
+                        {o.kind === 'day'
+                          ? `${o.amount} working day${o.amount === 1 ? '' : 's'}`
+                          : `${(o.amount / 60).toFixed(o.amount % 60 ? 1 : 0)} h`}
+                      </option>
+                    ))}
+                  </select>
+                  {s.planned_working_minutes == null && d.duration?.labourMinutes > 0 && (
+                    <p className="text-xs text-muted mt-1">
+                      Suggested from {(d.duration.labourMinutes / 60).toFixed(2)}h of labour entered in step 2 —
+                      change it to the time the job actually took.
+                    </p>
+                  )}
+                  {s.planned_working_minutes == null && !d.duration?.labourMinutes && (
+                    <p className="text-xs text-warn mt-1">
+                      No labour hours entered yet, so there is nothing to suggest from. Set the real duration —
+                      leaving it unset would place the card as a flat hour.
+                    </p>
+                  )}
+                </div>
+                <div>
                   <label className="block text-xs text-muted mb-1">Lift</label>
                   <select className={inputCls} defaultValue={s.planned_resource_id ?? ''} disabled={committed}
                     onChange={(e) => save({ plannedResourceId: e.target.value || null })}>
@@ -492,6 +528,9 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               <Row label="GreaseDesk number" value="minted on commit — the series stays gapless" tone="muted" />
               <Row label="Invoice date" value={issue.toISOString().slice(0, 10) + ' (printed, immutable)'} />
               <Row label="Reconciled" value={s.reconciled ? 'yes' : 'NO — commit refused'} tone={s.reconciled ? 'ok' : 'danger'} />
+              <Row label="Duration"
+                value={s.planned_working_minutes == null ? 'NOT SET — required' : `${(s.planned_working_minutes / 60).toFixed(2)}h`}
+                tone={s.planned_working_minutes == null ? 'warn' : 'ok'} />
               <Row label="Lines needing a decision" value={blockers.length ? String(blockers.length) : 'none'} tone={blockers.length ? 'warn' : 'ok'} />
               {blockers.length > 0 && (
                 <ul className="text-xs text-warn bg-warn-soft border border-warn rounded-lg p-2 space-y-0.5">
@@ -503,7 +542,7 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               <Row label="Attested" value={attest ? 'yes' : 'no'} tone={attest ? 'ok' : 'warn'} />
               <button
                 onClick={commit}
-                disabled={busy || committed || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id}
+                disabled={busy || committed || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id || s.planned_working_minutes == null}
                 className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">
                 {committed ? 'Committed' : busy ? 'Committing…' : 'Commit to the ledger'}
               </button>

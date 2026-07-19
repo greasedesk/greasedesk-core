@@ -73,6 +73,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!staged.planned_start_at || !staged.planned_resource_id) {
     return res.status(400).json({ message: 'Choose a date and a lift before committing.' });
   }
+  // Duration is REQUIRED, not defaulted. Silently placing every imported card as a flat hour is
+  // what made occupancy wrong in the first place; refusing is better than guessing.
+  if (staged.planned_working_minutes == null || staged.planned_working_minutes <= 0) {
+    return res.status(400).json({ message: 'Set the job duration before committing — an imported card must carry the time the work actually took.' });
+  }
   // A split must still balance at commit: a template applied retroactively to a parent with a
   // different quantity could otherwise drift after it was saved.
   const broken = unbalancedSplits(staged.lines as any);
@@ -192,7 +197,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         jobCardId: card.id,
         resourceId: staged.planned_resource_id as string,
         start: staged.planned_start_at as Date,
-        workingMinutes: 60,
+        // The operator's own figure from step 3. Falls back to 60 only when nothing was set,
+        // which the wizard prevents — a real duration is required before commit.
+        workingMinutes: staged.planned_working_minutes ?? 60,
         siteIds: vis.activeSiteIds,
       });
 

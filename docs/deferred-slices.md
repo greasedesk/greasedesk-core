@@ -59,3 +59,27 @@ to test it against, not speculatively.
 **Related and still open:** `open_hour`/`close_hour` are not yet effective-dated (see
 `docs/undated-config-exposure.md`, item 5). If day *length* ever changes, back-dated placement
 inherits that exposure too.
+
+---
+
+## Import placement against an archived site: misleading error
+
+**The gap.** `pages/api/import/commit.ts` places the card with
+`siteIds: vis.activeSiteIds`, while the batch's site comes from `batch.site_id`. Those are the same
+set today, but they are not the same *thing*: `activeSiteIds` excludes archived locations, and
+`batch.site_id` is whatever the batch was created against. If a site were archived part-way through
+an import, `placeJobCard` would find no matching card within the caller's visible sites and throw
+**`CARD_NOT_FOUND`** — a message that says nothing about the real cause.
+
+**Why it is not urgent.** Not currently reachable: Great Bridge is active, and it is the only site
+in the tenant. The failure needs a multi-site tenant, or a site archived mid-batch.
+
+**Why it is worth fixing anyway.** The error is *misleading*, not merely unhelpful. `CARD_NOT_FOUND`
+reads as "the staged invoice is broken" and would send someone looking at the import data, when the
+actual cause is a location that was archived underneath them. The fix is small — check the batch's
+site against `activeSiteIds` up front and refuse with "that batch's location is archived; restore it
+or move the batch" — but it is a new refusal path with its own wording, so it belongs in a slice
+where it can be tested rather than bolted onto an unrelated one.
+
+**Related:** the same asymmetry exists wherever a long-lived object holds a `site_id` that outlives
+the operational set — see `docs/undated-config-exposure.md` item 5 for the general shape.

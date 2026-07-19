@@ -14,6 +14,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
 import { blockingReasons } from '@/lib/import-blockers';
+import { durationOptions, seedDurationFromMinutes, durationToWorkingMinutes } from '@/lib/booking-slots';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -70,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ── free lifts on the planned day, INCLUDING cards placed earlier in this same import run ──
     const site = await prisma.site.findUnique({
       where: { id: staged.batch.site_id },
-      select: { open_hour: true, close_hour: true, open_days: true, breaks: true },
+      select: { open_hour: true, close_hour: true, open_days: true, breaks: true, booking_slot_minutes: true },
     });
     const resources = await prisma.resource.findMany({
       where: { site_id: staged.batch.site_id, is_active: true },
@@ -83,7 +84,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const openDays = site.open_days?.length ? site.open_days : [1, 2, 3, 4, 5, 6];
       const breaks = parseBreaks(site.breaks);
       const start = staged.planned_start_at;
-      const fp = computeFootprint(start.toISOString(), 60, openHour, closeHour, openDays, breaks);
+      // Footprint from the CHOSEN duration: a 4-hour job and a 30-minute job do not collide with
+      // the same bookings, so availability computed on a fixed hour would mislead either way.
+      const mins = staged.planned_working_minutes ?? 60;
+      const fp = computeFootprint(start.toISOString(), mins, openHour, closeHour, openDays, breaks);
       const dayStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
       const dayEnd = new Date(dayStart.getTime() + 86400000);
       const placed = await prisma.jobCard.findMany({
@@ -100,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
     const footprintEmpty = !!staged.planned_start_at && !!site &&
-      computeFootprint(staged.planned_start_at.toISOString(), 60,
+      computeFootprint(staged.planned_start_at.toISOString(), staged.planned_working_minutes ?? 60,
         site.open_hour ?? 8, site.close_hour ?? 18,
         site.open_days?.length ? site.open_days : [1, 2, 3, 4, 5, 6], parseBreaks(site.breaks)).segments.length === 0;
 
@@ -114,9 +118,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       splitTemplates[`${t.description}|${Number(t.unit_price).toFixed(4)}`] = t.children_json;
     }
 
+    // DURATION. Seeded from the labour hours already entered in step 2 — the split CHILDREN where a
+    // line was split, else the line itself, so a split's hours are not double-counted with its
+    // parent. Snapped to the site's booking granularity via the same helper the booking form uses.
+    const openHour = site?.open_hour ?? 8, closeHour = site?.close_hour ?? 18;
+    const slotMin = (site as any)?.booking_slot_minutes ?? 30;
+    const workingDayMinutes = Math.max(slotMin, (closeHour - openHour) * 60);
+    const splitParentIds = new Set(staged.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
+    const labourMinutes = Math.round(
+      staged.lines
+        .filter((l: any) => !splitParentIds.has(l.id) && l.labour_hours != null)
+        .reduce((a: number, l: any) => a + Number(l.labour_hours) * Number(l.qty), 0) * 60,
+    );
+    const suggestedDuration = labourMinutes > 0
+      ? seedDurationFromMinutes(labourMinutes, workingDayMinutes, slotMin)
+      : null;
+
     return res.status(200).json({
       staged, memory, match, lifts, footprintEmpty, catalogue, splitTemplates,
       blockers: blockingReasons(staged.lines as any),
+      duration: {
+        options: durationOptions(openHour, closeHour, slotMin),
+        slotMinutes: slotMin,
+        workingDayMinutes,
+        labourMinutes,                 // 0 when no hours entered yet
+        suggested: suggestedDuration,  // null when there is nothing to seed from
+        current: staged.planned_working_minutes ?? null,
+      },
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18 },
     });
   }
@@ -124,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') {
     const b = (req.body || {}) as {
       wizardStep?: number; plannedStartAt?: string | null; plannedResourceId?: string | null;
-      customerName?: string | null;
+      customerName?: string | null; plannedDuration?: string | null;
       status?: 'pending' | 'in_progress' | 'skipped'; skipReason?: string | null;
       lines?: Array<{ id: string; kind?: string | null; partsCost?: number | null; labourHours?: number | null; costBasis?: string | null; catalogueItemId?: string | null }>;
     };
@@ -138,6 +166,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const data: any = {};
       if (b.wizardStep != null) data.wizard_step = b.wizardStep;
       if (b.customerName !== undefined) data.customer_name = (b.customerName ?? '').trim() || null;
+      if (b.plannedDuration !== undefined) {
+        // "m:90" / "d:2" → WORKING minutes, through the same helper the booking form uses, so a
+        // whole-day option means N WORKING days (footprint-aware) rather than 24h of wall clock.
+        const site2 = await tx.site.findUnique({ where: { id: staged.batch.site_id }, select: { open_hour: true, close_hour: true, booking_slot_minutes: true } });
+        const oh = site2?.open_hour ?? 8, ch = site2?.close_hour ?? 18;
+        const wdm = Math.max(site2?.booking_slot_minutes ?? 30, (ch - oh) * 60);
+        data.planned_working_minutes = b.plannedDuration ? durationToWorkingMinutes(b.plannedDuration, wdm) : null;
+      }
       if (b.plannedStartAt !== undefined) data.planned_start_at = b.plannedStartAt ? new Date(b.plannedStartAt) : null;
       if (b.plannedResourceId !== undefined) data.planned_resource_id = b.plannedResourceId || null;
       if (b.status) {

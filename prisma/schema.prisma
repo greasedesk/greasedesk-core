@@ -1502,6 +1502,10 @@ model StagedInvoice {
   // nothing is shifted automatically.
   planned_start_at DateTime?
   planned_resource_id String?
+  // WORKING minutes for the diary placement. Was hardcoded to 60 at commit, so every imported card
+  // occupied exactly one hour whatever the job — silently wrong occupancy on every commit, and a
+  // contradiction of the duration-is-source-of-truth rule. Null falls back to the seeded suggestion.
+  planned_working_minutes Int?
 
   status      StagedInvoiceStatus @default(pending)
   skip_reason String?
