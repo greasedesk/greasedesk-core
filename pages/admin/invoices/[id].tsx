@@ -24,6 +24,9 @@ import { formatMoney } from '@/lib/format-money';
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
 type PageProps = {
+  displayNumber: string;
+  secondaryNumber: string | null;
+  isImported: boolean;
   invoiceId: string;
   number: string;
   status: 'issued' | 'paid_pending' | 'paid' | 'settled';
@@ -122,7 +125,7 @@ export default function InvoicePage(props: PageProps) {
 
   return (
     <>
-      <Head><title>{t('title')} {props.number} - GreaseDesk</title></Head>
+      <Head><title>{t('title')} {props.displayNumber || props.number} - GreaseDesk</title></Head>
       <div className="max-w-3xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <Link href={`/admin/jobcards/${props.jobCardId}`} className="text-sm text-accent hover:underline">← {t('back')}</Link>
@@ -195,7 +198,10 @@ export default function InvoicePage(props: PageProps) {
             </div>
             <div className="text-right">
               <div className="text-2xl font-bold text-ink tracking-wide">{t('title').toUpperCase()}</div>
-              <div className="text-sm text-ink font-mono mt-1">{props.number}</div>
+              <div className="text-sm text-ink font-mono mt-1">{props.displayNumber || props.number}</div>
+              {props.secondaryNumber && (
+                <div className="text-xs text-muted font-mono">GreaseDesk {props.secondaryNumber}</div>
+              )}
               <div className="text-xs text-muted">{t('issued')}: {props.issuedAt}</div>
               <div className="flex justify-end gap-1 mt-2">
                 {props.series === 'warranty' && (
@@ -365,6 +371,9 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
     props: {
       invoiceId: doc.invoiceId,
       number: doc.number,
+      displayNumber: (doc as any).displayNumber ?? doc.number,
+      secondaryNumber: (doc as any).secondaryNumber ?? null,
+      isImported: (doc as any).isImported ?? false,
       status: doc.status,
       series: doc.series,
       hasFrozenLines: doc.lines.length > 0, // freeze-at-issue: empty = admin-unlocked, under correction

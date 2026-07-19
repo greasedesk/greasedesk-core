@@ -24,7 +24,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi, requireCanWrite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
 import { issueInvoiceForCard } from '@/lib/invoice-issue';
-import { writeAudit } from '@/lib/audit';
+import { writeAudit, writeImportAudit } from '@/lib/audit';
 import { SKIP_COLUMN } from '@/lib/jobcard-status';
 import { upsertMemory } from '@/lib/import-memory';
 import { getTaxProfile } from '@/lib/tenant-vat';
@@ -248,6 +248,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         where: { id: staged.id },
         data: { status: 'committed', job_card_id: card.id, invoice_id: invoiceId },
       });
+
+      const minted = await tx.invoice.findUnique({ where: { id: invoiceId }, select: { invoice_number: true } });
+      await writeImportAudit(tx, {
+        groupId: vis.groupId as string, actorUserId: vis.userId, batchId: staged.batch.id,
+        action: 'import.committed',
+        diff: { external_ref: staged.external_number, invoice_number: minted?.invoice_number, job_card_id: card.id },
+      });
+
+      // BATCH LIFECYCLE: the batch closes when nothing is outstanding — every invoice committed or
+      // deliberately skipped. Without this the status stayed 'open' forever and the states in the
+      // enum were unreachable.
+      const outstanding = await tx.stagedInvoice.count({
+        where: { batch_id: staged.batch.id, status: { in: ['pending', 'in_progress'] } },
+      });
+      if (outstanding === 0) {
+        const [c, sk, tot] = await Promise.all([
+          tx.stagedInvoice.count({ where: { batch_id: staged.batch.id, status: 'committed' } }),
+          tx.stagedInvoice.count({ where: { batch_id: staged.batch.id, status: 'skipped' } }),
+          tx.stagedInvoice.count({ where: { batch_id: staged.batch.id } }),
+        ]);
+        await tx.importBatch.update({ where: { id: staged.batch.id }, data: { status: 'committed' } });
+        await writeImportAudit(tx, {
+          groupId: vis.groupId as string, actorUserId: vis.userId, batchId: staged.batch.id,
+          action: 'import.batch_closed', diff: { committed: c, skipped: sk, total: tot },
+        });
+      }
 
       return { cardId: card.id, invoiceId };
     });

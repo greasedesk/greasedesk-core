@@ -47,6 +47,16 @@ export type AuditAction =
  * Actions recorded against a USER rather than a job card (entity: 'user'). Separate union because
  * the entity differs — same AuditLog table, same taxonomy, different subject.
  */
+/** Batch-level import events (entity: 'import_batch'). The job-card trail records what happened to
+ *  a CARD; this records what happened to the BATCH — who uploaded it, what was ingested, what was
+ *  committed or skipped and why. Without it "where did that invoice go?" has no answer. */
+export type ImportAuditAction =
+  | 'import.batch_created'
+  | 'import.ingested'      // { count, reconciled, failed }
+  | 'import.committed'     // { external_ref, invoice_number, job_card_id }
+  | 'import.skipped'       // { external_ref, reason }
+  | 'import.batch_closed'; // { committed, skipped, total }
+
 export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
   | 'user.deactivated'       // ADMIN suspended the account: login blocked + sessions killed
@@ -68,6 +78,24 @@ export async function writeUserAudit(
       user_id: args.actorUserId ?? null,
       entity: 'user',
       entity_id: args.targetUserId,
+      action: args.action,
+      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+    },
+  });
+}
+
+/** Same table, same discipline, subject = an IMPORT BATCH. Sibling of writeAudit/writeUserAudit
+ *  rather than a third audit path: everything still lands in AuditLog through lib/audit. */
+export async function writeImportAudit(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; actorUserId?: string | null; batchId: string; action: ImportAuditAction; diff?: unknown },
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      group_id: args.groupId,
+      user_id: args.actorUserId ?? null,
+      entity: 'import_batch',
+      entity_id: args.batchId,
       action: args.action,
       diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
     },

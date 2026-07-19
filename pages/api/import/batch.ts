@@ -13,9 +13,11 @@
  * the text. That keeps the proven parser server-side where the reconciliation gate lives.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { ingestOne, batchTotals } from '@/lib/import-batch';
+import { writeImportAudit } from '@/lib/audit';
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } };
 
@@ -73,9 +75,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? await prisma.importBatch.findFirst({ where: { id: wanted, group_id: vis.groupId }, select: { id: true } })
       : null;
     if (wanted && !existing) return res.status(404).json({ message: 'Batch not found.' });
-    const batch = existing ?? (await prisma.importBatch.create({
-      data: { group_id: vis.groupId, site_id: siteId, label: label.trim(), created_by: vis.userId },
-      select: { id: true },
+    const batch = existing ?? (await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const b = await tx.importBatch.create({
+        data: { group_id: vis.groupId as string, site_id: siteId, label: label.trim(), created_by: vis.userId },
+        select: { id: true },
+      });
+      await writeImportAudit(tx, { groupId: vis.groupId as string, actorUserId: vis.userId, batchId: b.id,
+        action: 'import.batch_created', diff: { label: label.trim(), siteId } });
+      return b;
     }));
 
     const results: Array<{ file?: string; ok: boolean; reason?: string; reconciled?: boolean }> = [];
@@ -85,6 +92,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       results.push(r.ok ? { file: inv.filename, ok: true, reconciled: r.reconciled } : { file: inv.filename, ok: false, reason: r.reason });
     }
 
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await writeImportAudit(tx, {
+        groupId: vis.groupId as string, actorUserId: vis.userId, batchId: batch.id,
+        action: 'import.ingested',
+        diff: {
+          count: results.length,
+          ok: results.filter((r) => r.ok).length,
+          reconciled: results.filter((r) => r.reconciled).length,
+          failed: results.filter((r) => !r.ok).map((r) => ({ file: r.file, reason: r.reason })),
+        },
+      });
+    });
     return res.status(200).json({ batchId: batch.id, results, totals: await batchTotals(batch.id) });
   }
 

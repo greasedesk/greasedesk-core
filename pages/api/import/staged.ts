@@ -14,6 +14,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
 import { blockingReasons } from '@/lib/import-blockers';
+import { writeImportAudit } from '@/lib/audit';
 import { durationOptions, seedDurationFromMinutes, durationToWorkingMinutes } from '@/lib/booking-slots';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
@@ -134,8 +135,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? seedDurationFromMinutes(labourMinutes, workingDayMinutes, slotMin)
       : null;
 
+    // PRESELECTION. Marking taken lifts but choosing none left the commonest case — one free lift —
+    // as an extra decision the operator had to make 42 times. Suggest the first free lift in display
+    // order; it is a SUGGESTION the wizard applies, not a silent server-side booking.
+    const suggestedLiftId = lifts.find((l) => l.free)?.id ?? null;
+
     return res.status(200).json({
-      staged, memory, match, lifts, footprintEmpty, catalogue, splitTemplates,
+      staged, memory, match, lifts, suggestedLiftId, footprintEmpty, catalogue, splitTemplates,
       blockers: blockingReasons(staged.lines as any),
       duration: {
         options: durationOptions(openHour, closeHour, slotMin),
@@ -162,6 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({ message: 'This invoice has been committed and can no longer be edited here.' });
     }
 
+    try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const data: any = {};
       if (b.wizardStep != null) data.wizard_step = b.wizardStep;
@@ -178,9 +185,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (b.plannedResourceId !== undefined) data.planned_resource_id = b.plannedResourceId || null;
       if (b.status) {
         data.status = b.status;
-        if (b.status === 'skipped') data.skip_reason = b.skipReason || 'skipped by operator';
+        // A skip is a RECORDED decision, so the record has to say something. Defaulting the reason
+        // to "skipped by operator" would have made the audit row worthless — the one question it
+        // exists to answer is WHY this invoice is not in the ledger.
+        if (b.status === 'skipped') {
+          const reason = (b.skipReason ?? '').trim();
+          if (reason.length < 3) throw new Error('SKIP_REASON_REQUIRED');
+          data.skip_reason = reason;
+        }
+        // Reopening clears the reason: it is no longer true, and a stale one would read as current.
+        if (b.status === 'pending' || b.status === 'in_progress') data.skip_reason = null;
       }
       if (Object.keys(data).length) await tx.stagedInvoice.update({ where: { id: staged.id }, data });
+
+      if (b.status === 'skipped') {
+        await writeImportAudit(tx, {
+          groupId: vis.groupId as string, actorUserId: vis.userId, batchId: staged.batch.id,
+          action: 'import.skipped',
+          diff: { external_ref: staged.external_number, reason: data.skip_reason },
+        });
+        // A skip can be the LAST outstanding item, so the batch can close here too.
+        const outstanding = await tx.stagedInvoice.count({
+          where: { batch_id: staged.batch.id, status: { in: ['pending', 'in_progress'] } },
+        });
+        if (outstanding === 0) {
+          const [c, sk, tot] = await Promise.all([
+            tx.stagedInvoice.count({ where: { batch_id: staged.batch.id, status: 'committed' } }),
+            tx.stagedInvoice.count({ where: { batch_id: staged.batch.id, status: 'skipped' } }),
+            tx.stagedInvoice.count({ where: { batch_id: staged.batch.id } }),
+          ]);
+          await tx.importBatch.update({ where: { id: staged.batch.id }, data: { status: 'committed' } });
+          await writeImportAudit(tx, {
+            groupId: vis.groupId as string, actorUserId: vis.userId, batchId: staged.batch.id,
+            action: 'import.batch_closed', diff: { committed: c, skipped: sk, total: tot },
+          });
+        }
+      }
+
+      // REOPENING. A batch closed because nothing was outstanding; reopening an invoice makes
+      // something outstanding again, so the batch must follow or its status would lie.
+      if (b.status === 'pending' || b.status === 'in_progress') {
+        const batch = await tx.importBatch.findUnique({ where: { id: staged.batch.id }, select: { status: true } });
+        if (batch?.status === 'committed') {
+          await tx.importBatch.update({ where: { id: staged.batch.id }, data: { status: 'open' } });
+        }
+      }
 
       for (const l of b.lines ?? []) {
         const row = staged.lines.find((x: any) => x.id === l.id);
@@ -198,6 +247,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
     });
+
+    } catch (e: any) {
+      if (e?.message === 'SKIP_REASON_REQUIRED') {
+        return res.status(400).json({ message: 'Give a reason for skipping this invoice.' });
+      }
+      throw e;
+    }
 
     return res.status(200).json({ message: 'Saved.' });
   }

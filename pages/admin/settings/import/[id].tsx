@@ -9,7 +9,7 @@
  *   4 Completion        — attestation (an audited stage skip, not a bypassed gate)
  *   5 Invoice & payment — mint via the normal series, carrying the Xero number as external_ref
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -33,6 +33,9 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const [pickFor, setPickFor] = useState<string | null>(null); // line id whose picker is open
   const [q, setQ] = useState('');
   const [splitFor, setSplitFor] = useState<string | null>(null);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipReason, setSkipReason] = useState('');
+  const liftPreselected = useRef(false);
   const [draft, setDraft] = useState<any[]>([]);
 
   async function load() {
@@ -42,6 +45,19 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
     setStep(j?.staged?.wizard_step ?? 1);
   }
   useEffect(() => { if (id) load(); /* eslint-disable-next-line */ }, [id]);
+
+  // LIFT PRESELECTION. Marking taken lifts but selecting none made the commonest case — one free
+  // lift — a decision the operator had to repeat for every invoice. The server suggests the first
+  // free lift for the planned footprint; we APPLY it once, visibly, and it stays overridable.
+  // Once per mount: a deliberate later clear must not be silently undone on the next load.
+  useEffect(() => {
+    const st = d?.staged;
+    if (!st || st.status === 'committed' || liftPreselected.current) return;
+    if (st.planned_resource_id || !d.suggestedLiftId) return;
+    liftPreselected.current = true;
+    save({ plannedResourceId: d.suggestedLiftId });
+    /* eslint-disable-next-line */
+  }, [d?.suggestedLiftId, d?.staged?.planned_resource_id, d?.staged?.status]);
 
   async function save(patch: any) {
     setBusy(true); setMsg(null);
@@ -111,6 +127,7 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
 
   const s = d.staged;
   const committed = s.status === 'committed';
+  const skipped = s.status === 'skipped';
   const issue = new Date(s.issue_date);
   const planned = s.planned_start_at ? new Date(s.planned_start_at) : null;
   const plannedWeekend = planned && (planned.getUTCDay() === 0 || planned.getUTCDay() === 6);
@@ -166,6 +183,12 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
         </Banner>
       )}
       {committed && <Banner tone="ok">Committed. Job card and invoice exist in the ledger; staging is frozen.</Banner>}
+      {skipped && (
+        <Banner tone="warn">
+          Skipped — deliberately not imported: {s.skip_reason || 'no reason recorded'}. It counts as a
+          decision, so it no longer holds the period open. Reopen it to change that.
+        </Banner>
+      )}
       {msg && <Banner tone={msg.tone === 'ok' ? 'ok' : 'danger'}>{msg.text}</Banner>}
 
       {/* Step rail */}
@@ -542,13 +565,59 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               <Row label="Attested" value={attest ? 'yes' : 'no'} tone={attest ? 'ok' : 'warn'} />
               <button
                 onClick={commit}
-                disabled={busy || committed || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id || s.planned_working_minutes == null}
+                disabled={busy || committed || skipped || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id || s.planned_working_minutes == null}
                 className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">
                 {committed ? 'Committed' : busy ? 'Committing…' : 'Commit to the ledger'}
               </button>
               <p className="text-xs text-muted">
                 Commit mints through the normal invoice series, freezes the lines, places the card, and marks it paid.
               </p>
+
+              {/* THE OTHER DECISION. Not every invoice belongs in the ledger — a duplicate, a
+                  cancelled job, one already entered by hand. Without a way to say so, such an
+                  invoice sits pending forever and holds the whole period's derived figures back.
+                  A skip is a RECORDED decision: reason required, audited, and reversible. */}
+              {!committed && (
+                <div className="pt-3 mt-3 border-t border-line">
+                  {skipped ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted">
+                        Skipped: <strong className="text-ink">{s.skip_reason}</strong>
+                      </p>
+                      <button onClick={() => save({ status: 'pending' })} disabled={busy}
+                        className="text-xs text-muted hover:text-ink underline disabled:opacity-50">
+                        Reopen this invoice
+                      </button>
+                    </div>
+                  ) : !skipOpen ? (
+                    <button onClick={() => setSkipOpen(true)} disabled={busy}
+                      className="text-xs text-muted hover:text-ink underline disabled:opacity-50">
+                      Skip this invoice instead
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="block text-xs text-muted">
+                        Why is this invoice not being imported? The reason is stored and audited.
+                      </label>
+                      <input className={inputCls} value={skipReason} placeholder="e.g. duplicate of 100002271"
+                        onChange={(e) => setSkipReason(e.target.value)} />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={async () => {
+                            await save({ status: 'skipped', skipReason: skipReason.trim() });
+                            setSkipOpen(false); setSkipReason('');
+                          }}
+                          disabled={busy || skipReason.trim().length < 3}
+                          className="text-xs bg-warn text-white rounded-lg px-3 py-1.5 disabled:opacity-50">
+                          Skip it
+                        </button>
+                        <button onClick={() => { setSkipOpen(false); setSkipReason(''); }}
+                          className="text-xs text-muted hover:text-ink px-2">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -26,6 +26,12 @@ export type InvoiceDocLine = {
 };
 
 export type InvoiceDoc = {
+  isImported: boolean;
+  externalRef: string | null;
+  /** What the document is HEADED with: the original system's number on an import, else ours. */
+  displayNumber: string;
+  /** Our own number when it is not the headline; null otherwise. */
+  secondaryNumber: string | null;
   invoiceId: string;
   jobCardId: string;
   siteId: string;
@@ -57,7 +63,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
@@ -91,6 +97,18 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     jobCardId: inv.job_card_id,
     siteId: inv.site_id,
     number: inv.invoice_number ?? '',
+    // IMPORTED INVOICES lead with the ORIGINAL system's number. The customer holds a document
+    // headed 100002292; showing GreaseDesk's 100003068 as the headline would make the two
+    // impossible to reconcile. Our own number is kept and shown secondary — the series is still
+    // gapless and still ours, it is simply not what this document was known by.
+    isImported: !!(inv as any).is_imported,
+    externalRef: (inv as any).external_ref ?? null,
+    displayNumber: ((inv as any).is_imported && (inv as any).external_ref)
+      ? String((inv as any).external_ref)
+      : (inv.invoice_number ?? ''),
+    secondaryNumber: ((inv as any).is_imported && (inv as any).external_ref)
+      ? (inv.invoice_number ?? null)
+      : null,
     status: inv.status,
     series: inv.series,
     // The PRINTED issue date = the effective DOCUMENT date (date_issued ?? issued_at) — the same

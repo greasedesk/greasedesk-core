@@ -59,8 +59,8 @@ export async function periodImportState(
       issue_date: { gte: from, lt: to },
       batch: { site_id: { in: siteIds } },
     },
-    select: { status: true, batch: { select: { label: true } } },
-  }) as Array<{ status: string; batch: { label: string } }>;
+    select: { status: true, batch: { select: { label: true, status: true } } },
+  }) as Array<{ status: string; batch: { label: string; status: string } }>;
 
   if (!staged.length) {
     // No batch covers this period — but imported invoices may still sit in it from an older run.
@@ -76,12 +76,17 @@ export async function periodImportState(
   const committed = staged.filter((s: any) => s.status === 'committed').length;
   const skipped = staged.filter((s: any) => s.status === 'skipped').length;
   const total = staged.length;
-  // Resolved = committed OR deliberately skipped. A skip is a decision, so it does not hold the
-  // period open — otherwise a month with one skipped invoice could never report normally again.
-  const outstanding = total - committed - skipped;
   const labels = Array.from(new Set(staged.map((s: any) => String(s.batch.label)))) as string[];
 
-  if (outstanding > 0) {
+  // THE BATCH DECIDES, not a headcount of its invoices. The batch advances to `committed` inside
+  // the same transaction as the last commit or skip, so it is the authoritative answer to "is this
+  // import finished?" — and it stays authoritative for a batch that legitimately covers two
+  // periods, where counting rows in ONE period could call a half-done import complete.
+  // The counts below still feed the marker's wording; they no longer decide the state.
+  const closed = staged.every((s: any) => s.batch.status === 'committed' || s.batch.status === 'abandoned');
+  const outstanding = total - committed - skipped;
+
+  if (!closed || outstanding > 0) {
     return { state: 'in_progress', committed, total, skipped, labels, suppressDerived: true };
   }
   return { state: 'complete', committed, total, skipped, labels, suppressDerived: false };

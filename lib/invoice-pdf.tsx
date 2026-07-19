@@ -18,6 +18,7 @@ const S = StyleSheet.create({
   muted: { color: '#6b7280' },
   docTitle: { fontSize: 18, fontFamily: 'Helvetica-Bold', textAlign: 'right' },
   number: { fontSize: 11, textAlign: 'right', marginTop: 2 },
+  numberSecondary: { fontSize: 8, textAlign: 'right', marginTop: 1, color: '#666' },
   badge: { fontSize: 8, textAlign: 'right', marginTop: 4, color: '#6b7280' },
   partiesRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
   label: { fontSize: 7, textTransform: 'uppercase', color: '#6b7280', marginBottom: 3, letterSpacing: 0.5 },
@@ -46,7 +47,7 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
   // before VAT would arise); totals collapse to the loud AMOUNT DUE £0.00.
   const showVat = reg && !warranty;
   return (
-    <Document title={`${t('title')} ${doc.number}`}>
+    <Document title={`${t('title')} ${(doc as any).displayNumber || doc.number}`}>
       <Page size="A4" style={S.page}>
         {logo ? (
           // Tenant logo, auto-placed top-centre (no position controls — banked with the designer).
@@ -62,7 +63,12 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
           </View>
           <View>
             <Text style={S.docTitle}>{t('title').toUpperCase()}</Text>
-            <Text style={S.number}>{doc.number}</Text>
+            {/* Imported: the customer's own document number leads; ours is printed beneath so the
+                two can be reconciled without hunting. */}
+            <Text style={S.number}>{(doc as any).displayNumber || doc.number}</Text>
+            {(doc as any).secondaryNumber && (
+              <Text style={S.numberSecondary}>GreaseDesk {(doc as any).secondaryNumber}</Text>
+            )}
             <Text style={S.badge}>{t('issued')}: {doc.issuedAt.toLocaleDateString(doc.locale)}</Text>
             {doc.series === 'warranty' ? <Text style={S.badge}>{t('warrantyBadge')}</Text> : null}
             {/* Pending NEVER wears the confirmed PAID face — settlement isn't final yet. */}
