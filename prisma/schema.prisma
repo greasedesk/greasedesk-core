@@ -1030,6 +1030,13 @@ model Invoice {
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   @@index([group_id])
   @@index([site_id])
+
+  // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
+  // checks at runtime, but two concurrent commits could both pass that check and both write;
+  // only a constraint makes it impossible. NULL external_ref is exempt (Postgres), so ordinary
+  // GreaseDesk invoices are unaffected.
+  @@unique([group_id, external_ref])
+
 }
 
 model InvoiceLine {

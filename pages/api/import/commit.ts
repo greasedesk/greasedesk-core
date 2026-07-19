@@ -21,7 +21,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireAdminApi, requireCanWrite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
 import { issueInvoiceForCard } from '@/lib/invoice-issue';
 import { writeAudit } from '@/lib/audit';
@@ -41,6 +41,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await requireAdminApi(req, res);
   if (!vis) return;
   if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  // Committing an import CREATES NEW WORK — a job card and a minted invoice — so it sits behind the
+  // same billing gate as /api/jobcard. Without this a lapsed tenant could keep writing to the
+  // ledger through the importer while every other creation path refused them.
+  if (!(await requireCanWrite(vis.groupId, res))) return; // sends 402 itself
 
   const { id, attest } = (req.body || {}) as { id?: string; attest?: boolean };
   if (!id) return res.status(400).json({ message: 'id is required.' });

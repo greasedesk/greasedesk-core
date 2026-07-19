@@ -9,6 +9,7 @@
  */
 import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
+import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts } from '@/lib/charged-labour';
@@ -77,9 +78,14 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   },
 
   // Debtors: CURRENT outstanding (unpaid chargeable) — a point-in-time AR figure, period-independent.
+  // Routed through lib/invoice-list-filters rather than repeating the predicate: this tile links to
+  // the Invoices list filtered 'unpaid', and a duplicated filter drifted once already — the imported
+  // exclusion was added to the list and NOT here, so an unpaid imported invoice would have been
+  // chased from the tile while being correctly absent from the list it opens.
   debtors: async ({ groupId, siteIds }) => {
+    const { where: unpaidWhere } = listWhere('unpaid', null);
     const rows = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, status: 'issued', series: 'chargeable' },
+      where: { group_id: groupId, site_id: { in: siteIds }, ...unpaidWhere },
       select: { lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
     return { grossPennies: rows.reduce((a, r) => a + grossOfIssued(r), 0), count: rows.length };
