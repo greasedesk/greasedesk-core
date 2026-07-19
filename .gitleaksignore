@@ -12,9 +12,23 @@
 # REMEDIATION STATUS at time of writing (2026-07-18):
 #   DATABASE_URL / Neon password ... ROTATED (endpoint also changed)
 #   NEXTAUTH_SECRET ................ ROTATED
-#   RESEND_API_KEY ................. *** NOT ROTATED — still live, still exposed ***
-# The Resend entry below is suppressed so CI is usable, NOT because it is resolved.
-# Remove that one line once the key is rotated; it should then never match again.
+#   RESEND_API_KEY ................. ROTATED 2026-07-18
+#
+# Every credential from this incident is now rotated, so nothing listed here is a live exposure.
+#
+# DO NOT "clean up" these lines by deleting them. Rotation does not alter git history: the old
+# values are still in the 6b0be09 blobs, byte for byte, and the scanner cannot know a string is
+# dead. Deleting a fingerprint therefore does NOT make future leaks fail louder — it makes EVERY
+# scan fail forever on an already-remediated incident, and a permanently-red CI is worse than none,
+# because people stop reading it and the next real finding lands in an already-failing build.
+#
+# These suppressions are safe because a fingerprint is commit:path:rule:line — bound to one blob at
+# one commit. A NEW secret, in any file or commit, produces a DIFFERENT fingerprint, matches nothing
+# here, and fails. Verified 2026-07-18: with these lines in place, a fresh re_ key committed on a
+# test branch was still caught (scan exit 1).
+#
+# The only reason to remove a line is if that blob genuinely leaves history (e.g. git filter-repo),
+# after which it should never match again anyway.
 
 # ── .env @ 6b0be09 ────────────────────────────────────────────────────────────────────────────
 6b0be09e014e19cbd735275361da1f83dd508040:.env:greasedesk-database-uri:1
