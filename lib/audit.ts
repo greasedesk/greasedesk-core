@@ -55,7 +55,13 @@ export type ImportAuditAction =
   | 'import.ingested'      // { count, reconciled, failed }
   | 'import.committed'     // { external_ref, invoice_number, job_card_id }
   | 'import.skipped'       // { external_ref, reason }
-  | 'import.batch_closed'; // { committed, skipped, total }
+  | 'import.batch_closed'   // { committed, skipped, total }
+  // SPLIT events. A split re-expresses a printed line, so losing one silently loses the operator's
+  // reasoning about what the money was. 100002293's split vanished with nothing to attribute it to
+  // because these did not exist; the child shape is recorded so a lost split can be reconstructed.
+  | 'import.split_created'  // { external_ref, line, parentAmount, children[], appliedTo }
+  | 'import.split_replaced' // as created, plus previous[]
+  | 'import.split_cleared'; // { external_ref, line, previous[], removed }
 
 export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)

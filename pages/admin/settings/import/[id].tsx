@@ -34,6 +34,8 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const [pickFor, setPickFor] = useState<string | null>(null); // line id whose picker is open
   const [q, setQ] = useState('');
   const [splitFor, setSplitFor] = useState<string | null>(null);
+  const [draftBaseIds, setDraftBaseIds] = useState<string[]>([]); // children the draft was opened against
+  const [undoFor, setUndoFor] = useState<string | null>(null);     // line awaiting undo confirmation
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
   const liftPreselected = useRef(false);
@@ -110,21 +112,61 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
     } finally { setBusy(false); }
   }
 
+  /**
+   * OPEN THE SPLIT EDITOR for a line. Source of truth order: the line's OWN SAVED CHILDREN, then a
+   * remembered template, then a fresh seed. Reading the template first is what made "edit this
+   * split" impossible — the editor could only ever compose a new split, never show the real one.
+   * draftBaseIds records what was on screen, so the save can prove it was not stale.
+   */
+  function openSplit(line: any, kids: any[]) {
+    setSplitFor(line.id); setPickFor(null); setUndoFor(null);
+    setDraftBaseIds(kids.map((k: any) => k.id));
+    if (kids.length) {
+      setDraft(kids.map((k: any) => ({
+        description: k.description, qty: Number(k.qty), amount: Number(k.amount).toFixed(2),
+        kind: k.kind ?? undefined, catalogueItemId: k.catalogue_item_id ?? null,
+        partsCost: k.parts_cost == null ? '' : String(k.parts_cost),
+        labourHours: k.labour_hours == null ? '' : String(k.labour_hours),
+      })));
+      return;
+    }
+    const tpl = d.splitTemplates?.[`${line.description}|${Number(line.unit_price).toFixed(4)}`];
+    setDraft(
+      (tpl as any[])?.map((c: any) => ({
+        ...c,
+        amount: c.amount != null
+          ? String(c.amount)
+          : ((Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100)) / 100).toFixed(2),
+      })) ?? [
+        { description: line.description, qty: Number(line.qty), amount: Number(line.amount).toFixed(2), partsCost: '', labourHours: '' },
+        { description: 'Labour', qty: 1, amount: '0.00', partsCost: '', labourHours: '' },
+      ],
+    );
+  }
+
   // A split RE-EXPRESSES a printed line and may never change it: the server refuses anything whose
   // children do not sum to the parent's printed amount to the penny.
+  /**
+   * `children` null = CLEAR. Otherwise the request states which children the operator was looking
+   * at (expectedChildIds) and whether they mean to replace them. The server refuses a save that
+   * would overwrite a split the client never saw — the failure that lost 100002293's split, where a
+   * freshly seeded editor produced a balanced, saveable payload that destroyed real children.
+   */
   async function saveSplit(lineId: string, children: any[] | null) {
     setBusy(true); setMsg(null);
     try {
       const res = await send('/api/import/split', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(children ? { lineId, children } : { lineId, clear: true }),
+        body: JSON.stringify(children
+          ? { lineId, children, expectedChildIds: draftBaseIds, replace: draftBaseIds.length > 0 }
+          : { lineId, clear: true }),
       });
       setMsg(res.ok
         ? { text: res.body?.message ?? 'Split saved.', tone: 'ok' }
         : { text: failText(res), tone: 'err' });
       // Only close the editor on success — a refused split must keep what was typed, or the work
       // is lost along with the explanation of why it was refused.
-      if (res.ok) { setSplitFor(null); setDraft([]); await load(); }
+      if (res.ok) { setSplitFor(null); setDraft([]); setDraftBaseIds([]); setUndoFor(null); await load(); }
     } catch (e: any) {
       setMsg({ text: `Split not saved: ${e?.message ?? 'the request did not complete'}.`, tone: 'err' });
     } finally { setBusy(false); }
@@ -353,6 +395,13 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
 
                     {l.is_adjustment ? (
                       <p className="text-xs text-muted">Adjustment — cost pinned to £0.00, no entry needed.</p>
+                    ) : splitFor === l.id ? (
+                      /* The editor takes precedence over the summary: while it was the other way
+                         round an existing split could not be opened at all. */
+                      <SplitEditor parentAmount={Number(l.amount)} draft={draft} setDraft={setDraft}
+                        catalogue={d.catalogue ?? []} busy={busy} replacing={draftBaseIds.length > 0}
+                        onCancel={() => { setSplitFor(null); setDraft([]); setDraftBaseIds([]); }}
+                        onSave={() => saveSplit(l.id, draft)} />
                     ) : kids.length ? (
                       /* SPLIT: the parent is re-expressed by its children, which sum to it exactly. */
                       <div className="border border-line rounded-lg p-2 bg-surface-muted">
@@ -369,16 +418,32 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                             </span>
                           </div>
                         ))}
-                        {!committed && (
-                          <button onClick={() => saveSplit(l.id, null)} disabled={busy}
-                            className="text-xs text-danger hover:underline mt-1">Undo split (and forget it)</button>
-                        )}
+                        {!committed && (undoFor === l.id ? (
+                          /* CONFIRMED, because this is not a local undo: it deletes the children of
+                             EVERY pending invoice carrying this line and forgets the template. One
+                             unconfirmed click on a bare link is how a split disappears. */
+                          <div className="mt-1 text-xs bg-danger-soft border border-danger rounded-lg p-2">
+                            <p className="text-danger mb-1">
+                              Remove this split from <strong>every pending invoice</strong> in the batch and forget
+                              it, so the next occurrence is unsplit again? The children here are deleted.
+                            </p>
+                            <div className="flex gap-2">
+                              <button onClick={() => saveSplit(l.id, null)} disabled={busy}
+                                className="text-xs bg-danger text-white rounded px-2 py-1 disabled:opacity-50">
+                                Yes, undo the split
+                              </button>
+                              <button onClick={() => setUndoFor(null)} className="text-xs text-muted hover:text-ink px-2">Keep it</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-3 mt-1">
+                            <button onClick={() => openSplit(l, kids)} disabled={busy}
+                              className="text-xs text-accent hover:underline">Edit this split</button>
+                            <button onClick={() => setUndoFor(l.id)} disabled={busy}
+                              className="text-xs text-danger hover:underline">Undo split (and forget it)</button>
+                          </div>
+                        ))}
                       </div>
-                    ) : splitFor === l.id ? (
-                      <SplitEditor parentAmount={Number(l.amount)} draft={draft} setDraft={setDraft}
-                        catalogue={d.catalogue ?? []} busy={busy}
-                        onCancel={() => { setSplitFor(null); setDraft([]); }}
-                        onSave={() => saveSplit(l.id, draft)} />
                     ) : chosen ? (
                       /* PRIMARY: an existing product is attached; cost + hours come FROM it. */
                       <div className="bg-ok-soft border border-line rounded-lg p-2">
@@ -438,27 +503,8 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                           <div className="flex gap-3">
                             <button onClick={() => { setPickFor(l.id); setQ(''); }}
                               className="text-xs text-accent hover:underline">Choose an existing product…</button>
-                            <button onClick={() => {
-                              setSplitFor(l.id); setPickFor(null);
-                              const tpl = d.splitTemplates?.[`${l.description}|${Number(l.unit_price).toFixed(4)}`];
-                              // A stored template may predate amount-first entry (qty + unitPrice
-                              // only). Derive the amount when it is missing so an old shape opens
-                              // in the new editor rather than reading as £0.
-                              setDraft(
-                                (tpl as any[])?.map((c: any) => ({
-                                  ...c,
-                                  amount: c.amount != null
-                                    ? String(c.amount)
-                                    : ((Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100)) / 100).toFixed(2),
-                                })) ?? [
-                                  // Seed: the whole line against the parts child, nothing against
-                                  // labour — so "take the remainder" on the second row is the
-                                  // natural next gesture.
-                                  { description: l.description, qty: Number(l.qty), amount: Number(l.amount).toFixed(2), partsCost: '', labourHours: '' },
-                                  { description: 'Labour', qty: 1, amount: '0.00', partsCost: '', labourHours: '' },
-                                ],
-                              );
-                            }} className="text-xs text-accent hover:underline">Split into parts + labour…</button>
+                            <button onClick={() => openSplit(l, kids)}
+                              className="text-xs text-accent hover:underline">Split into parts + labour…</button>
                           </div>
                         ))}
 
@@ -677,9 +723,9 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
  * to the penny, and this makes that reachable rather than a rejection after the fact.
  * Pennies, not pounds: two thirds of 133.33 look equal in pounds and are not.
  */
-function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel, onSave }: {
+function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, replacing, onCancel, onSave }: {
   parentAmount: number; draft: any[]; setDraft: (d: any[]) => void;
-  catalogue: any[]; busy: boolean; onCancel: () => void; onSave: () => void;
+  catalogue: any[]; busy: boolean; replacing: boolean; onCancel: () => void; onSave: () => void;
 }) {
   // The SAME arithmetic the server uses, imported rather than re-implemented — the editor showing
   // "balanced" while the server refused would be a disagreement about the same sum.
@@ -707,6 +753,12 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
 
   return (
     <div className="border border-accent rounded-lg p-3 bg-surface">
+      {replacing && (
+        <p className="text-xs text-warn mb-2">
+          Editing the split already saved on this line. Saving REPLACES it, here and on every other
+          pending invoice carrying the same line.
+        </p>
+      )}
       <p className="text-xs text-muted mb-2">
         Break this line into what it actually was. The children must total the printed
         £{(parentPennies / 100).toFixed(2)} exactly — the invoice cannot change, only be re-expressed.
@@ -802,7 +854,7 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
       <div className="flex gap-2 mt-2">
         <button onClick={onSave} disabled={busy || !balanced}
           className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5 disabled:opacity-50">
-          Save split
+          {replacing ? 'Replace split' : 'Save split'}
         </button>
         <button onClick={onCancel} className="text-sm text-muted hover:text-ink px-2">Cancel</button>
       </div>

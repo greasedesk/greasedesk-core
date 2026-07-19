@@ -3,12 +3,18 @@
  * ADMIN-only. Split a bundled staged line into constituents — or clear a split.
  *
  *   POST { lineId, children: [{ description, qty, amount, kind?, catalogueItemId?,
- *                               partsCost?, labourHours? }] }
+ *                               partsCost?, labourHours? }], expectedChildIds }
+ *   POST { lineId, children, replace: true, expectedChildIds }  → replace an existing split
+ *   POST { lineId, clear: true }
  *
  * AMOUNT-FIRST: a child is entered as a LINE TOTAL and its unit price is derived (lib/import-split).
  * The invariant is on totals, so collecting anything else forced the total to be reverse-engineered
  * — and for some parent/qty pairs no unit price lands on it at all.
- *   POST { lineId, clear: true }
+ *
+ * NO SILENT OVERWRITE. A save against a line that already has children is refused unless `replace`
+ * is set, and refused again if `expectedChildIds` does not match what is actually stored — the
+ * caller must have been looking at the split it means to replace. Every outcome is audited
+ * (created / replaced / cleared) WITH the child shape, so a lost split can be reconstructed.
  *
  * REFUSES an unbalanced split (see lib/import-split). The children must sum to the parent's printed
  * amount to the penny; a split re-expresses the invoice and may never change it.
@@ -24,6 +30,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { writeImportAudit } from '@/lib/audit';
 import {
   balanceSplit, describeImbalance, numOrNull, childAmountPennies, childUnitPrice,
   type SplitChildInput,
@@ -38,8 +45,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!vis) return;
   if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
 
-  const { lineId, children, clear } = (req.body || {}) as {
+  const { lineId, children, clear, replace, expectedChildIds } = (req.body || {}) as {
     lineId?: string; children?: SplitChildInput[]; clear?: boolean;
+    replace?: boolean; expectedChildIds?: string[];
   };
   if (!lineId) return res.status(400).json({ message: 'lineId is required.' });
 
@@ -48,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: {
       id: true, description: true, unit_price: true, amount: true, position: true,
       staged_invoice_id: true, parent_line_id: true, is_adjustment: true,
-      staged_invoice: { select: { status: true } },
+      staged_invoice: { select: { status: true, external_number: true, batch_id: true } },
     },
   });
   if (!parent) return res.status(404).json({ message: 'Line not found.' });
@@ -58,8 +66,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ message: 'This invoice is committed; its lines are frozen.' });
   }
 
+  // WHAT IS THERE NOW. Every branch below needs it: to refuse a silent overwrite, to detect a stale
+  // client, and to record in the audit what was destroyed.
+  const existing = await prisma.stagedLine.findMany({
+    where: { parent_line_id: parent.id },
+    orderBy: { position: 'asc' },
+    select: { id: true, description: true, qty: true, amount: true, kind: true, parts_cost: true, labour_hours: true },
+  });
+  type ExistingChild = (typeof existing)[number];
+  const shapeOf = (rows: ExistingChild[]) => rows.map((k: ExistingChild) => ({
+    description: k.description, qty: Number(k.qty), amount: Number(k.amount),
+    kind: k.kind, partsCost: k.parts_cost == null ? null : Number(k.parts_cost),
+    labourHours: k.labour_hours == null ? null : Number(k.labour_hours),
+  }));
+
   // ── CLEAR: drop the children here and forget the template, retroactively ─────────────────────
   if (clear) {
+    const previous = shapeOf(existing);
     const n = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.lineSplitTemplate.deleteMany({
         where: { group_id: vis.groupId as string, description: parent.description, unit_price: parent.unit_price },
@@ -72,6 +95,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         select: { id: true },
       });
       const r = await tx.stagedLine.deleteMany({ where: { parent_line_id: { in: siblings.map((s) => s.id) } } });
+      await writeImportAudit(tx, {
+        groupId: vis.groupId as string, actorUserId: vis.userId, batchId: parent.staged_invoice.batch_id,
+        action: 'import.split_cleared',
+        diff: {
+          external_ref: parent.staged_invoice.external_number, line: parent.description,
+          previous, removed: r.count, siblingsAffected: siblings.length,
+        },
+      });
       return r.count;
     });
     return res.status(200).json({ message: `Split cleared (${n} child line(s) removed).`, removed: n });
@@ -94,6 +125,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       partsCost: numOrNull(c.partsCost),
       labourHours: numOrNull(c.labourHours),
     }));
+
+  // ── NO SILENT OVERWRITE ─────────────────────────────────────────────────────────────────────
+  // The editor's fresh seed (whole parent + £0.00 labour) BALANCES, so it was saveable — and the
+  // save deleted a real split and reported success. Replacing an existing split must therefore be
+  // asked for explicitly, and the caller must prove it was looking at the split it means to replace.
+  if (existing.length && !replace) {
+    return res.status(409).json({
+      message: 'This line is already split. Reload it and choose Replace split if you mean to change it.',
+      existing: shapeOf(existing),
+    });
+  }
+  // STALENESS: the client states which children it believes exist. Omitted means "none" — so a
+  // caller unaware of the concept can never blunder over children it never saw.
+  const seen = [...(expectedChildIds ?? [])].sort().join(',');
+  const actual = existing.map((k: ExistingChild) => k.id).sort().join(',');
+  if (seen !== actual) {
+    return res.status(409).json({
+      message: existing.length
+        ? 'This split changed since you opened it. Reload before saving — the version on screen is out of date.'
+        : 'This split changed since you opened it (its children are gone). Reload before saving.',
+      existing: shapeOf(existing),
+    });
+  }
 
   // ── VALIDATE ────────────────────────────────────────────────────────────────────────────────
   const bal = balanceSplit(Number(parent.amount), kids);
@@ -152,6 +206,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       n++;
     }
+
+    await writeImportAudit(tx, {
+      groupId: vis.groupId as string, actorUserId: vis.userId, batchId: parent.staged_invoice.batch_id,
+      action: existing.length ? 'import.split_replaced' : 'import.split_created',
+      diff: {
+        external_ref: parent.staged_invoice.external_number,
+        line: parent.description,
+        parentAmount: Number(parent.amount),
+        children: kids.map((c) => ({
+          description: c.description, qty: c.qty, amount: childAmountPennies(c) / 100,
+          kind: c.kind ?? null, partsCost: c.partsCost, labourHours: c.labourHours,
+        })),
+        ...(existing.length ? { previous: shapeOf(existing) } : {}),
+        appliedTo: n,
+      },
+    });
     return n;
   });
 
