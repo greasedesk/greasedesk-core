@@ -14,7 +14,11 @@ export type ListStatusKey = typeof LIST_STATUS_KEYS[number];
 
 const STATUS_WHERE: Record<ListStatusKey, object> = {
   all: {},
-  unpaid: { status: 'issued', series: 'chargeable' }, // the debtors view (point-in-time)
+  // CHASER EXCLUSION, at the one chokepoint rather than per-surface: an IMPORTED invoice is a
+  // historical record that was already settled in the previous system, so it must never appear in
+  // the debtors view or be chased. It stays visible in `all`/`paid` — excluded from pursuit, not
+  // from the ledger.
+  unpaid: { status: 'issued', series: 'chargeable', is_imported: false }, // the debtors view (point-in-time)
   pending: { status: 'paid_pending' },                // clearance window (point-in-time)
   paid: { status: 'paid' },
   warranty: { series: 'warranty' },

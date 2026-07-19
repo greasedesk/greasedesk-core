@@ -257,6 +257,8 @@ model Group {
   publicHolidays   PublicHoliday[]
   employmentEvents EmploymentEvent[]
   siteConfigEvents SiteConfigEvent[]
+  importBatches    ImportBatch[]
+  catalogueAliases CatalogueAlias[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -402,6 +404,7 @@ model Site {
 
   @@index([group_id])
   config_events SiteConfigEvent[]
+  import_batches ImportBatch[]
 }
 
 model SiteFeature {
@@ -757,6 +760,10 @@ model Booking {
 }
 
 model JobCard {
+  // PROVENANCE: created by the Invoice Import wizard rather than lived through the workshop.
+  // Imported cards are excluded from the unpaid-invoice chaser and marked on dashboard periods.
+  is_imported     Boolean @default(false)
+  import_batch_id String?
   id                     String        @id @default(uuid())
   group_id               String
   site_id                String
@@ -860,6 +867,7 @@ model JobCardPhoto {
 }
 
 model JobCardItem {
+  cost_basis String? // 'actual' | 'estimated' — provenance of unit_cost on an imported line
   id                String   @id @default(uuid())
   job_card_id       String
   item_type         ItemType
@@ -976,6 +984,12 @@ model VerificationToken {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model Invoice {
+  // PROVENANCE. external_ref carries the ORIGINAL system's number (Xero) — the GreaseDesk series
+  // is still minted normally and stays gapless; on imported invoices the UI shows external_ref as
+  // the primary number with the GreaseDesk number secondary.
+  is_imported  Boolean @default(false)
+  external_ref String?
+  cost_basis   String? // 'actual' | 'estimated' | 'mixed' — how the parts costs behind this were obtained
   id                      String        @id @default(uuid())
   group_id                String // tenantId
   job_card_id             String        @unique // one invoice per card; sticky number on re-issue
@@ -1018,6 +1032,7 @@ model Invoice {
 }
 
 model InvoiceLine {
+  cost_basis        String? // 'actual' | 'estimated' — provenance of unit_cost on an imported line
   id                String   @id @default(uuid())
   invoice_id        String
   description       String
@@ -1129,6 +1144,7 @@ model CatalogueItem {
 
   @@unique([group_id, code])
   @@index([group_id])
+  aliases CatalogueAlias[]
 }
 
 // Tenant-DEFINED, OPTIONAL vehicle/price tiers (0 tiers = single-price world; no tier UI shown).
@@ -1408,6 +1424,132 @@ model SiteConfigEvent {
 
   @@index([site_id, kind, effective_date])
   @@index([group_id, created_at])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// INVOICE IMPORT — staging. STAGING IS NEVER THE LEDGER.
+// Uploaded PDFs parse into these tables and are edited here; only an explicit commit drives the
+// app's OWN write paths (jobcard create -> place -> stages -> issueInvoiceForCard -> mark paid).
+// There is no second write path into the ledger, and nothing here is read by any financial report.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+enum ImportBatchStatus {
+  open       // accepting uploads / in progress
+  committing // whole-month commit under way
+  committed  // every invoice resolved
+  abandoned
+}
+
+enum StagedInvoiceStatus {
+  pending     // parsed, untouched
+  in_progress // being worked in the wizard (resumable across sessions)
+  committed   // written to the ledger; job_card_id + invoice_id set
+  skipped     // deliberately not imported; skip_reason required
+}
+
+model ImportBatch {
+  id         String            @id @default(uuid())
+  group_id   String
+  site_id    String
+  label      String // e.g. "TMBS May 2026"
+  source     String            @default("xero_pdf")
+  status     ImportBatchStatus @default(open)
+  created_by String?
+  created_at DateTime          @default(now())
+  updated_at DateTime          @updatedAt
+
+  group    Group           @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site     Site            @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  invoices StagedInvoice[]
+
+  @@index([group_id, status])
+}
+
+model StagedInvoice {
+  id       String @id @default(uuid())
+  batch_id String
+  group_id String
+
+  external_number String // the Xero number, e.g. 100002292 — carried to Invoice.external_ref
+  issue_date      DateTime // the PRINTED date; immutable, never shifted
+  registration    String?
+  // RECONCILIATION IS A HARD COMMIT GATE: parsed line amounts must equal the printed Subtotal.
+  subtotal_printed Decimal  @db.Decimal(12, 2)
+  subtotal_parsed  Decimal  @db.Decimal(12, 2)
+  reconciled       Boolean  @default(false)
+  // VAT is COMPUTED through lib/tax.computeTax, never taken from the PDF. A variance is surfaced,
+  // not absorbed — at least one May invoice carries a discount entered VAT-inclusive.
+  vat_printed      Decimal? @db.Decimal(12, 2)
+  vat_computed     Decimal? @db.Decimal(12, 2)
+
+  // The diary date is EDITABLE per card and defaults to issue_date; the invoice keeps its printed
+  // date immutably. Weekend-dated invoices are placed on a working day of the operator's choosing —
+  // nothing is shifted automatically.
+  planned_start_at DateTime?
+  planned_resource_id String?
+
+  status      StagedInvoiceStatus @default(pending)
+  skip_reason String?
+  wizard_step Int                 @default(1)
+
+  job_card_id String? // set on commit
+  invoice_id  String? // set on commit
+  raw_text    String? @db.Text // the extracted layer, kept for audit of what was parsed
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  batch ImportBatch  @relation(fields: [batch_id], references: [id], onDelete: Cascade)
+  lines StagedLine[]
+
+  @@unique([group_id, external_number])
+  @@index([batch_id, status])
+}
+
+model StagedLine {
+  id                String  @id @default(uuid())
+  staged_invoice_id String
+  position          Int
+
+  description       String
+  continuation_text String? @db.Text // verbatim; describes the operations actually performed
+  qty               Decimal @db.Decimal(12, 4)
+  unit_price        Decimal @db.Decimal(12, 4) // 4dp: Xero prints 133.3333
+  vat_text          String? // "20%" | "No VAT" | blank — recorded, NOT trusted for tax
+  amount            Decimal @db.Decimal(12, 2) // negatives arrive parenthesised: (1,537.37)
+
+  // Operator-supplied, resolved from line memory where known.
+  kind              ItemType? // labour | part | misc | fixed
+  catalogue_item_id String?
+  parts_cost        Decimal?  @db.Decimal(12, 2)
+  labour_hours      Decimal?  @db.Decimal(6, 2)
+  cost_basis        String? // 'actual' | 'estimated'
+  is_adjustment     Boolean   @default(false) // negative line: cost 0.00, never prompts
+
+  staged_invoice StagedInvoice @relation(fields: [staged_invoice_id], references: [id], onDelete: Cascade)
+
+  @@index([staged_invoice_id, position])
+}
+
+// LINE MEMORY — the seed of the catalogue, not a throwaway import table.
+// Keyed on description + unit_price because the SAME description at a different price is a
+// DIFFERENT job (engine tiers: "Change Oil using 100% Synthetic engine oil" at 125 / 165 / 233.33).
+// Aliasing lets differently-typed variants resolve to one canonical CatalogueItem.
+model CatalogueAlias {
+  id                String   @id @default(uuid())
+  group_id          String
+  catalogue_item_id String
+  description       String
+  unit_price        Decimal? @db.Decimal(12, 4) // null = matches at any price
+  source            String   @default("import") // 'import' | 'manual'
+  created_at        DateTime @default(now())
+
+  group    Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  item     CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, description, unit_price])
+  @@index([catalogue_item_id])
 }
 
 model PublicHoliday {
