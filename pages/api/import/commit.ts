@@ -137,7 +137,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const emit = staged.lines.filter((l: any) => !splitParents.has(l.id));
       for (const l of emit) {
         let catalogueItemId = l.catalogue_item_id;
-        if (!l.is_adjustment && l.parts_cost != null) {
+        // NEVER mint when the line is ALREADY resolved to an existing product. The picker sets
+        // catalogue_item_id AND parts_cost together, so a `parts_cost != null` test alone would
+        // mint an IMP- duplicate and overwrite the operator's choice — which is exactly how
+        // IMP-CHANGE-OIL-USING-100-SYNTHETIC-ENGINE-OI-12500 came to sit beside Oil Service -
+        // Bronze at the same £125 and the same £27.60 cost. Minting is the FALLBACK path only:
+        // it is for a line with a hand-entered cost and no catalogue counterpart.
+        if (!l.is_adjustment && l.parts_cost != null && !catalogueItemId) {
           const timesSeen = await tx.stagedLine.count({
             where: { description: l.description, unit_price: l.unit_price, staged_invoice: { group_id: vis.groupId as string } },
           });
