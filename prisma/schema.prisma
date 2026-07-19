@@ -259,6 +259,7 @@ model Group {
   siteConfigEvents SiteConfigEvent[]
   importBatches    ImportBatch[]
   catalogueAliases CatalogueAlias[]
+  lineSplitTemplates LineSplitTemplate[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -1533,9 +1534,40 @@ model StagedLine {
   cost_basis        String? // 'actual' | 'estimated'
   is_adjustment     Boolean   @default(false) // negative line: cost 0.00, never prompts
 
+  // ── SPLIT: a bundled line broken into its constituents ─────────────────────────────────────
+  // "Supply and fit 2 x front wheel bearing" @ 2 x 133.3333 is parts AND labour in one figure.
+  // Children carry the breakdown (a parts line with its own catalogue item, a labour line with
+  // hours); the PARENT remains exactly as printed and is what reconciles to the Subtotal.
+  //
+  // HARD INVARIANT: sum(children.amount) == parent.amount, to the penny. Enforced when a split is
+  // saved AND again at commit. The invoice the customer holds is the truth; a split may re-express
+  // it but must never change it. Splitting is OPTIONAL — an unsplit line commits as itself.
+  parent_line_id String?
+  parent         StagedLine?  @relation("LineSplit", fields: [parent_line_id], references: [id], onDelete: Cascade)
+  children       StagedLine[] @relation("LineSplit")
+
   staged_invoice StagedInvoice @relation(fields: [staged_invoice_id], references: [id], onDelete: Cascade)
 
   @@index([staged_invoice_id, position])
+  @@index([parent_line_id])
+}
+
+// A split, remembered so it can be re-offered. Same key as CatalogueAlias (description +
+// unit_price), and applied RETROACTIVELY across pending staged lines exactly as an alias is:
+// deciding how to break a bundle down once settles every later occurrence in the batch.
+model LineSplitTemplate {
+  id            String   @id @default(uuid())
+  group_id      String
+  description   String
+  unit_price    Decimal? @db.Decimal(12, 4)
+  // [{ description, qty, unit_price, kind, catalogue_item_id, parts_cost, labour_hours }]
+  children_json Json
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, description, unit_price])
 }
 
 // LINE MEMORY — the seed of the catalogue, not a throwaway import table.

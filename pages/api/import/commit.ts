@@ -28,6 +28,7 @@ import { writeAudit } from '@/lib/audit';
 import { SKIP_COLUMN } from '@/lib/jobcard-status';
 import { upsertMemory } from '@/lib/import-memory';
 import { getTaxProfile } from '@/lib/tenant-vat';
+import { unbalancedSplits } from '@/lib/import-split';
 
 const ATTESTATION = 'imported: the invoice is the record; no photographic evidence exists';
 
@@ -67,7 +68,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!staged.planned_start_at || !staged.planned_resource_id) {
     return res.status(400).json({ message: 'Choose a date and a lift before committing.' });
   }
-  const undecided = staged.lines.filter((l: any) => !l.is_adjustment && l.parts_cost == null && l.cost_basis == null);
+  // A split must still balance at commit: a template applied retroactively to a parent with a
+  // different quantity could otherwise drift after it was saved.
+  const broken = unbalancedSplits(staged.lines as any);
+  if (broken.length) {
+    return res.status(409).json({ message: `Refused: ${broken[0].message} (${broken[0].description})` });
+  }
+
+  // Split PARENTS are costed through their children and must not be asked for a cost themselves.
+  const splitParents = new Set(staged.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
+  const undecided = staged.lines.filter((l: any) =>
+    !l.is_adjustment && l.parts_cost == null && l.cost_basis == null && !splitParents.has(l.id));
   if (undecided.length) {
     return res.status(400).json({ message: `${undecided.length} line(s) still need a cost decision.` });
   }
@@ -120,7 +131,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       // 3) LINES — cost goes to the CATALOGUE, the line inherits. The browser never sources cost.
-      for (const l of staged.lines) {
+      //    A SPLIT parent is replaced by its children: the children carry the breakdown and, by the
+      //    balance invariant, sum to exactly what the parent printed — so the invoice total is
+      //    identical either way. An unsplit line commits as itself.
+      const emit = staged.lines.filter((l: any) => !splitParents.has(l.id));
+      for (const l of emit) {
         let catalogueItemId = l.catalogue_item_id;
         if (!l.is_adjustment && l.parts_cost != null) {
           const timesSeen = await tx.stagedLine.count({

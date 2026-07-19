@@ -32,6 +32,8 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const [attest, setAttest] = useState(false);
   const [pickFor, setPickFor] = useState<string | null>(null); // line id whose picker is open
   const [q, setQ] = useState('');
+  const [splitFor, setSplitFor] = useState<string | null>(null);
+  const [draft, setDraft] = useState<any[]>([]);
 
   async function load() {
     const r = await fetch(`/api/import/staged?id=${id}`);
@@ -70,6 +72,21 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
     } finally { setBusy(false); }
   }
 
+  // A split RE-EXPRESSES a printed line and may never change it: the server refuses anything whose
+  // children do not sum to the parent's printed amount to the penny.
+  async function saveSplit(lineId: string, children: any[] | null) {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/import/split', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(children ? { lineId, children } : { lineId, clear: true }),
+      });
+      const j = await r.json();
+      setMsg({ text: j.message ?? 'Done.', tone: r.ok ? 'ok' : 'err' });
+      if (r.ok) { setSplitFor(null); setDraft([]); await load(); }
+    } finally { setBusy(false); }
+  }
+
   async function commit() {
     setBusy(true); setMsg(null);
     try {
@@ -100,7 +117,12 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const vatVar = s.vat_printed != null && s.vat_computed != null &&
     Math.abs(Number(s.vat_printed) - Number(s.vat_computed)) >= 0.005;
   const memOf = (lineId: string) => d.memory?.find((m: any) => m.lineId === lineId)?.hit ?? null;
-  const uncosted = s.lines.filter((l: any) => !l.is_adjustment && l.parts_cost == null && l.cost_basis == null);
+  // Split children are a re-expression of their parent; the parent is costed THROUGH them.
+  const parentIds = new Set(s.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
+  const childrenOf = (id: string) => s.lines.filter((l: any) => l.parent_line_id === id);
+  const topLines = s.lines.filter((l: any) => !l.parent_line_id);
+  const uncosted = s.lines.filter((l: any) =>
+    !l.is_adjustment && l.parts_cost == null && l.cost_basis == null && !parentIds.has(l.id));
 
   return (
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
@@ -184,10 +206,12 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
             const vehicleKnown = !!d.match?.vehicle;
             const ownerKnown = !!d.match?.customer;
             const parsed = (s.customer_name ?? '').trim();
-            const partial = parsed !== '' && parsed.split(/\s+/).length < 2;
-            // A full name is REQUIRED only where we are creating the customer. Where the ownership
-            // edge supplies one, the parsed name is a cross-check and must not overwrite it.
-            const needsName = !ownerKnown && (parsed === '' || partial);
+            const singleToken = parsed !== '' && parsed.split(/\s+/).length < 2;
+            // A single token is a COMPLETE record, not an error: where Xero printed only a first
+            // name there is no surname to recover, and 16 of the 42 May invoices are like that.
+            // It never blocks commit and is never styled as a problem — only a genuinely EMPTY
+            // name needs attention, and then only when we are creating the customer.
+            const missing = !ownerKnown && parsed === '';
             return (
               <div className="space-y-3 text-sm">
                 <Row label="Vehicle"
@@ -208,13 +232,17 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                       The owner comes from the vehicle&apos;s ownership edge; this printed name is shown so you can
                       spot a mismatch. Editing it here would not change the customer, so it is read-only.
                     </p>
-                  ) : needsName ? (
+                  ) : missing ? (
                     <p className="text-xs text-warn mt-1">
-                      {parsed === '' ? 'No name was printed.' : `Only “${parsed}” was printed — a first name, not a full identity.`}
-                      {' '}Type the full name before committing; it will create a new customer record.
+                      No name was printed on this invoice. Add one, or commit and name the customer later.
+                    </p>
+                  ) : singleToken ? (
+                    <p className="text-xs text-muted mt-1">
+                      The invoice printed a first name only. That is the whole record as billed — edit it if
+                      you know the full name.
                     </p>
                   ) : (
-                    <p className="text-xs text-ok mt-1">Full name — a new customer will be created with this.</p>
+                    <p className="text-xs text-muted mt-1">A new customer will be created with this name.</p>
                   )}
                 </div>
 
@@ -230,13 +258,14 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               {uncosted.length > 0 && (
                 <p className="text-xs text-warn">{uncosted.length} line(s) still need a cost decision.</p>
               )}
-              {s.lines.map((l: any) => {
+              {topLines.map((l: any) => {
                 const mem = d.memory?.find((m: any) => m.lineId === l.id);
                 const sugg = mem?.suggestions ?? [];
                 const chosen = l.catalogue_item_id
                   ? (d.catalogue ?? []).find((c: any) => c.id === l.catalogue_item_id)
                   : null;
                 const open = pickFor === l.id;
+                const kids = childrenOf(l.id);
                 const list = (d.catalogue ?? []).filter((c: any) => {
                   const t = (c.title || c.name || c.code).toLowerCase();
                   return !q.trim() || t.includes(q.trim().toLowerCase());
@@ -248,6 +277,32 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
 
                     {l.is_adjustment ? (
                       <p className="text-xs text-muted">Adjustment — cost pinned to £0.00, no entry needed.</p>
+                    ) : kids.length ? (
+                      /* SPLIT: the parent is re-expressed by its children, which sum to it exactly. */
+                      <div className="border border-line rounded-lg p-2 bg-surface-muted">
+                        <div className="text-xs text-ok mb-1">
+                          Split into {kids.length} lines — totals £{(kids.reduce((a: number, k: any) => a + Number(k.amount), 0)).toFixed(2)} against the printed £{Number(l.amount).toFixed(2)}
+                        </div>
+                        {kids.map((k: any) => (
+                          <div key={k.id} className="text-xs text-ink flex justify-between gap-2 py-0.5">
+                            <span>{k.description} <span className="text-muted">({Number(k.qty)} × £{Number(k.unit_price).toFixed(2)})</span></span>
+                            <span className="text-muted">
+                              {k.parts_cost != null ? `cost £${Number(k.parts_cost).toFixed(2)}` : ''}
+                              {k.labour_hours != null ? ` ${Number(k.labour_hours)}h` : ''}
+                              {' '}£{Number(k.amount).toFixed(2)}
+                            </span>
+                          </div>
+                        ))}
+                        {!committed && (
+                          <button onClick={() => saveSplit(l.id, null)} disabled={busy}
+                            className="text-xs text-danger hover:underline mt-1">Undo split (and forget it)</button>
+                        )}
+                      </div>
+                    ) : splitFor === l.id ? (
+                      <SplitEditor parentAmount={Number(l.amount)} draft={draft} setDraft={setDraft}
+                        catalogue={d.catalogue ?? []} busy={busy}
+                        onCancel={() => { setSplitFor(null); setDraft([]); }}
+                        onSave={() => saveSplit(l.id, draft)} />
                     ) : chosen ? (
                       /* PRIMARY: an existing product is attached; cost + hours come FROM it. */
                       <div className="bg-ok-soft border border-line rounded-lg p-2">
@@ -304,8 +359,18 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                             <button onClick={() => { setPickFor(null); setQ(''); }} className="text-xs text-muted hover:text-ink mt-1">Cancel</button>
                           </div>
                         ) : (
-                          <button onClick={() => { setPickFor(l.id); setQ(''); }}
-                            className="text-xs text-accent hover:underline">Choose an existing product…</button>
+                          <div className="flex gap-3">
+                            <button onClick={() => { setPickFor(l.id); setQ(''); }}
+                              className="text-xs text-accent hover:underline">Choose an existing product…</button>
+                            <button onClick={() => {
+                              setSplitFor(l.id); setPickFor(null);
+                              const tpl = d.splitTemplates?.[`${l.description}|${Number(l.unit_price).toFixed(4)}`];
+                              setDraft(tpl ?? [
+                                { description: l.description, qty: Number(l.qty), unitPrice: Number(l.unit_price), partsCost: '', labourHours: '' },
+                                { description: 'Labour', qty: 1, unitPrice: 0, partsCost: '', labourHours: '' },
+                              ]);
+                            }} className="text-xs text-accent hover:underline">Split into parts + labour…</button>
+                          </div>
                         ))}
 
                         {/* FALLBACK: no catalogue counterpart — raw entry, which creates a new item. */}
@@ -421,6 +486,112 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
         </div>
       </div>
     </SettingsLayout>
+  );
+}
+
+
+/**
+ * The split editor. Shows a RUNNING TOTAL and RESIDUAL as you type, because the whole point is to
+ * watch it balance — the server refuses anything that does not sum to the parent's printed amount
+ * to the penny, and this makes that reachable rather than a rejection after the fact.
+ * Pennies, not pounds: two thirds of 133.33 look equal in pounds and are not.
+ */
+function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel, onSave }: {
+  parentAmount: number; draft: any[]; setDraft: (d: any[]) => void;
+  catalogue: any[]; busy: boolean; onCancel: () => void; onSave: () => void;
+}) {
+  const p2 = (n: any) => Math.round((Number(n) || 0) * 100);
+  const childP = (c: any) => Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100);
+  const parentPennies = p2(parentAmount);
+  const totalPennies = draft.reduce((a, c) => a + childP(c), 0);
+  const residual = parentPennies - totalPennies;
+  const balanced = draft.length >= 2 && residual === 0 && draft.every((c) => (c.description ?? '').trim());
+
+  const set = (i: number, patch: any) => setDraft(draft.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  const add = () => setDraft([...draft, { description: '', qty: 1, unitPrice: 0, partsCost: '', labourHours: '' }]);
+  const del = (i: number) => setDraft(draft.filter((_, j) => j !== i));
+
+  return (
+    <div className="border border-accent rounded-lg p-3 bg-surface">
+      <p className="text-xs text-muted mb-2">
+        Break this line into what it actually was. The children must total the printed
+        £{(parentPennies / 100).toFixed(2)} exactly — the invoice cannot change, only be re-expressed.
+      </p>
+      {draft.map((c, i) => (
+        <div key={i} className="border border-line rounded-lg p-2 mb-2">
+          <div className="flex gap-2 mb-1">
+            <input className={inputCls} placeholder="Description" value={c.description}
+              onChange={(e) => set(i, { description: e.target.value })} />
+            <button onClick={() => del(i)} disabled={draft.length <= 2}
+              className="text-xs text-danger disabled:opacity-40 px-2">✕</button>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            <div>
+              <label className="block text-xs text-muted mb-0.5">Qty</label>
+              <input className={inputCls} inputMode="decimal" value={c.qty}
+                onChange={(e) => set(i, { qty: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-0.5">Unit £</label>
+              <input className={inputCls} inputMode="decimal" value={c.unitPrice}
+                onChange={(e) => set(i, { unitPrice: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-0.5">Parts cost £</label>
+              <input className={inputCls} inputMode="decimal" value={c.partsCost ?? ''}
+                onChange={(e) => set(i, { partsCost: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-0.5">Labour h</label>
+              <input className={inputCls} inputMode="decimal" value={c.labourHours ?? ''}
+                onChange={(e) => set(i, { labourHours: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between mt-1">
+            <select className="text-xs bg-surface border border-line rounded px-2 py-1 text-ink"
+              value={c.catalogueItemId ?? ''}
+              onChange={(e) => {
+                const item = catalogue.find((x: any) => x.id === e.target.value);
+                set(i, {
+                  catalogueItemId: e.target.value || null,
+                  kind: item?.item_type ?? c.kind,
+                  partsCost: item ? Number(item.unit_cost).toFixed(2) : c.partsCost,
+                  labourHours: item?.labour_hours != null ? String(item.labour_hours) : c.labourHours,
+                });
+              }}>
+              <option value="">No catalogue item</option>
+              {catalogue.map((x: any) => (
+                <option key={x.id} value={x.id}>{x.title || x.name} · £{Number(x.unit_price).toFixed(2)}</option>
+              ))}
+            </select>
+            <span className="text-xs text-muted">= £{(childP(c) / 100).toFixed(2)}</span>
+          </div>
+        </div>
+      ))}
+
+      <button onClick={add} className="text-xs text-accent hover:underline">+ Add another line</button>
+
+      {/* Running total + residual — the point of the exercise. */}
+      <div className={`mt-2 rounded-lg p-2 text-sm ${residual === 0 ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'}`}>
+        <div className="flex justify-between"><span>Children total</span><span>£{(totalPennies / 100).toFixed(2)}</span></div>
+        <div className="flex justify-between"><span>Printed line</span><span>£{(parentPennies / 100).toFixed(2)}</span></div>
+        <div className="flex justify-between font-semibold">
+          <span>Residual</span>
+          <span>{residual === 0 ? 'balanced' : `£${(residual / 100).toFixed(2)}`}</span>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mt-2">
+        <button onClick={onSave} disabled={busy || !balanced}
+          className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5 disabled:opacity-50">
+          Save split
+        </button>
+        <button onClick={onCancel} className="text-sm text-muted hover:text-ink px-2">Cancel</button>
+      </div>
+      {!balanced && draft.length >= 2 && residual !== 0 && (
+        <p className="text-xs text-warn mt-1">Cannot save until the residual is zero.</p>
+      )}
+    </div>
   );
 }
 

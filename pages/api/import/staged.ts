@@ -103,8 +103,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         site.open_hour ?? 8, site.close_hour ?? 18,
         site.open_days?.length ? site.open_days : [1, 2, 3, 4, 5, 6], parseBreaks(site.breaks)).segments.length === 0;
 
+    // Remembered splits, keyed description|price so the wizard can pre-fill a later occurrence.
+    const tpls = await prisma.lineSplitTemplate.findMany({
+      where: { group_id: vis.groupId },
+      select: { description: true, unit_price: true, children_json: true },
+    });
+    const splitTemplates: Record<string, any> = {};
+    for (const t of tpls) {
+      splitTemplates[`${t.description}|${Number(t.unit_price).toFixed(4)}`] = t.children_json;
+    }
+
     return res.status(200).json({
-      staged, memory, match, lifts, footprintEmpty, catalogue,
+      staged, memory, match, lifts, footprintEmpty, catalogue, splitTemplates,
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18 },
     });
   }

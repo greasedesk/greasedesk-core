@@ -91,7 +91,8 @@ export async function batchTotals(batchId: string): Promise<BatchTotals> {
     select: {
       status: true, reconciled: true, subtotal_parsed: true,
       vat_printed: true, vat_computed: true,
-      lines: { select: { parts_cost: true, is_adjustment: true, kind: true } },
+      // parent_line_id: split CHILDREN are a re-expression of their parent, never extra money.
+      lines: { select: { id: true, parts_cost: true, is_adjustment: true, kind: true, parent_line_id: true } },
     },
   });
 
@@ -106,9 +107,13 @@ export async function batchTotals(batchId: string): Promise<BatchTotals> {
       Math.abs(Number(i.vat_printed) - Number(i.vat_computed)) >= 0.005,
   ).length;
 
-  const linesUncosted = invs.reduce(
-    (a: number, i: any) => a + i.lines.filter((l: any) => !l.is_adjustment && l.parts_cost == null).length, 0,
-  );
+  // A SPLIT parent is costed through its children, so it must not itself count as uncosted; and a
+  // child is counted in its own right. Counting both would double the outstanding work.
+  const linesUncosted = invs.reduce((a: number, i: any) => {
+    const parentsWithChildren = new Set(i.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
+    return a + i.lines.filter((l: any) =>
+      !l.is_adjustment && l.parts_cost == null && !parentsWithChildren.has(l.id)).length;
+  }, 0);
 
   return {
     invoices: {
