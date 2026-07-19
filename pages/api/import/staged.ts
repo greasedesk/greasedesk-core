@@ -12,6 +12,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
+import { suggestForLine } from '@/lib/import-suggest';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,10 +31,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'GET') {
     // ── line memory: what do we already know about each description+price? ─────────────────────
+    const catalogue = (await prisma.catalogueItem.findMany({
+      where: { group_id: vis.groupId },
+      select: { id: true, code: true, title: true, name: true, item_type: true, unit_price: true, unit_cost: true, labour_hours: true, active: true },
+    })) as any[];
+
     const memory = await Promise.all(
       staged.lines.map(async (l: any) => ({
         lineId: l.id,
         hit: l.is_adjustment ? null : await resolveLine(vis.groupId as string, l.description, Number(l.unit_price)),
+        // Suggestions are RANKED, never applied. A price match with no shared words is marked weak
+        // because on the May set every such pair was a coincidence, not a match.
+        suggestions: l.is_adjustment ? [] : suggestForLine(l.description, Number(l.unit_price), catalogue),
       })),
     );
 
@@ -94,12 +103,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         site.open_hour ?? 8, site.close_hour ?? 18,
         site.open_days?.length ? site.open_days : [1, 2, 3, 4, 5, 6], parseBreaks(site.breaks)).segments.length === 0;
 
-    return res.status(200).json({ staged, memory, match, lifts, footprintEmpty });
+    return res.status(200).json({
+      staged, memory, match, lifts, footprintEmpty, catalogue,
+      siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18 },
+    });
   }
 
   if (req.method === 'PATCH') {
     const b = (req.body || {}) as {
       wizardStep?: number; plannedStartAt?: string | null; plannedResourceId?: string | null;
+      customerName?: string | null;
       status?: 'pending' | 'in_progress' | 'skipped'; skipReason?: string | null;
       lines?: Array<{ id: string; kind?: string | null; partsCost?: number | null; labourHours?: number | null; costBasis?: string | null; catalogueItemId?: string | null }>;
     };
@@ -112,6 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const data: any = {};
       if (b.wizardStep != null) data.wizard_step = b.wizardStep;
+      if (b.customerName !== undefined) data.customer_name = (b.customerName ?? '').trim() || null;
       if (b.plannedStartAt !== undefined) data.planned_start_at = b.plannedStartAt ? new Date(b.plannedStartAt) : null;
       if (b.plannedResourceId !== undefined) data.planned_resource_id = b.plannedResourceId || null;
       if (b.status) {

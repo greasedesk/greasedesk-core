@@ -34,6 +34,9 @@ export type ParsedInvoice = {
   externalNumber: string | null;
   issueDate: Date | null;
   registration: string | null;
+  /** Customer name from the address block. Often only a FIRST NAME — see parseCustomerName. */
+  customerName: string | null;
+  customerNamePartial: boolean; // true when it looks like a single token / nickname
   lines: ParsedLine[];
   subtotalPrinted: number | null;
   vatPrinted: number | null;
@@ -83,6 +86,44 @@ function valueUnderLabel(lines: string[], label: RegExp, within = 4): string | n
   return null;
 }
 
+
+/**
+ * The customer block sits in the LEFT column near "TAX INVOICE", shaped `<name> <REG>` or
+ * `<name> - <REG>`. Across TMBS May 2026 all 42 yield a name string, but 24 are a single token
+ * ("Angi - BG63APU") — a first name, not an identity. We return what is printed and FLAG the thin
+ * ones rather than inventing a surname; the wizard makes the operator complete it before commit.
+ */
+export function parseCustomerName(lines: string[], registration?: string | null): { name: string | null; partial: boolean } {
+  const SKIP = /Invoice (Date|Number)|VAT Number|Reference|TAX INVOICE|The Mini|Units |Tipton|DY4|^\s*$/;
+  // A plate-shaped token: ALL-CAPS and containing a digit. Covers current (AB12CDE), older
+  // (A123BCD) and personalised plates alike, which a single positional regex does not — the block
+  // puts the registration BEFORE the name as often as after it.
+  const PLATE = /^[A-Z0-9]{5,8}$/;
+  const isPlate = (t: string) => PLATE.test(t) && /\d/.test(t) && /[A-Z]/.test(t);
+
+  for (const l of lines.slice(0, 14)) {
+    if (SKIP.test(l)) continue;
+    const m = l.match(/^(\s{5,40})(\S.{0,58}?)(?:\s{3,}|$)/);
+    if (!m) continue;
+    let t = m[2].trim();
+    if (!t) continue;
+
+    // Remove the KNOWN registration first (most reliable), spaced or unspaced.
+    if (registration) {
+      const r = registration.toUpperCase().replace(/\s+/g, '');
+      t = t.replace(new RegExp(r.replace(/(.{4})/, '$1\\s?'), 'gi'), ' ');
+    }
+    // Then drop any remaining plate-shaped token and tidy separators.
+    const words = t.split(/\s+/).filter((w) => w && !isPlate(w) && !/^[-\u2013]$/.test(w));
+    t = words.join(' ').replace(/^[-\u2013\s]+|[-\u2013\s]+$/g, '').trim();
+    if (!t) continue;
+
+    const parts = t.split(/\s+/).filter(Boolean);
+    return { name: t, partial: parts.length < 2 };
+  }
+  return { name: null, partial: true };
+}
+
 export function parseInvoiceText(text: string): ParsedInvoice {
   const lines = text.split(/\r?\n/);
 
@@ -96,6 +137,8 @@ export function parseInvoiceText(text: string): ParsedInvoice {
 
   const regLine = lines.find((l) => /^\s*Registration:/i.test(l));
   const registration = regLine ? (regLine.split(':')[1]?.trim().split(/\s{2,}/)[0] ?? null) : null;
+
+  const cust = parseCustomerName(lines, registration);
 
   // The line table runs from the column header to the Subtotal row.
   let start = -1, end = -1;
@@ -148,6 +191,8 @@ export function parseInvoiceText(text: string): ParsedInvoice {
     externalNumber,
     issueDate,
     registration,
+    customerName: cust.name,
+    customerNamePartial: cust.partial,
     lines: out,
     subtotalPrinted: money(/\bSubtotal\b/),
     vatPrinted: money(/TOTAL VAT/i),

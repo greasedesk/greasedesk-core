@@ -16,6 +16,7 @@ import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
+import { startTimeSlots } from '@/lib/booking-slots';
 
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -29,6 +30,8 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
   const [attest, setAttest] = useState(false);
+  const [pickFor, setPickFor] = useState<string | null>(null); // line id whose picker is open
+  const [q, setQ] = useState('');
 
   async function load() {
     const r = await fetch(`/api/import/staged?id=${id}`);
@@ -48,6 +51,22 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
       const j = await r.json();
       if (!r.ok) setMsg({ text: j.message ?? 'Save failed.', tone: 'err' });
       else await load();
+    } finally { setBusy(false); }
+  }
+
+  // Selecting a catalogue item inherits its cost/hours AND applies retroactively to every pending
+  // occurrence of the same description + price across all 42 staged invoices.
+  async function selectItem(lineId: string, catalogueItemId: string | null) {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/import/select-item', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(catalogueItemId ? { lineId, catalogueItemId } : { lineId, clear: true }),
+      });
+      const j = await r.json();
+      setMsg({ text: j.message ?? 'Done.', tone: r.ok ? 'ok' : 'err' });
+      setPickFor(null); setQ('');
+      if (r.ok) await load();
     } finally { setBusy(false); }
   }
 
@@ -161,21 +180,50 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
         <div className="bg-surface border border-line rounded-xl p-4">
           <h2 className="text-sm font-semibold text-ink mb-3">{STEPS[step - 1]}</h2>
 
-          {step === 1 && (
-            <div className="space-y-3 text-sm">
-              {d.match?.vehicle ? (
-                <>
-                  <Row label="Vehicle" value={`${d.match.vehicle.registration} — EXISTING, will attach`} tone="ok" />
-                  <Row label="Customer" value={d.match.customer ? `${d.match.customer.name} — EXISTING, will attach` : 'no current owner on the edge — a customer will be created'} tone={d.match.customer ? 'ok' : 'warn'} />
-                </>
-              ) : (
-                <Row label="Vehicle" value={`${s.registration ?? '—'} — NOT FOUND, will be created`} tone="warn" />
-              )}
-              <p className="text-xs text-muted">
-                Matching is by normalised registration. Nothing is created until you commit.
-              </p>
-            </div>
-          )}
+          {step === 1 && (() => {
+            const vehicleKnown = !!d.match?.vehicle;
+            const ownerKnown = !!d.match?.customer;
+            const parsed = (s.customer_name ?? '').trim();
+            const partial = parsed !== '' && parsed.split(/\s+/).length < 2;
+            // A full name is REQUIRED only where we are creating the customer. Where the ownership
+            // edge supplies one, the parsed name is a cross-check and must not overwrite it.
+            const needsName = !ownerKnown && (parsed === '' || partial);
+            return (
+              <div className="space-y-3 text-sm">
+                <Row label="Vehicle"
+                  value={vehicleKnown ? `${d.match.vehicle.registration} — EXISTING, will attach` : `${s.registration ?? '—'} — NOT FOUND, will be created`}
+                  tone={vehicleKnown ? 'ok' : 'warn'} />
+                <Row label="Customer"
+                  value={ownerKnown ? `${d.match.customer.name} — EXISTING (from the ownership edge), will attach` : 'NOT FOUND — will be created from the name below'}
+                  tone={ownerKnown ? 'ok' : 'warn'} />
+
+                <div>
+                  <label className="block text-xs text-muted mb-1">
+                    {ownerKnown ? 'Name printed on the invoice (cross-check only)' : 'Customer name'}
+                  </label>
+                  <input className={inputCls} defaultValue={parsed} disabled={committed || ownerKnown}
+                    onBlur={(e) => save({ customerName: e.target.value })} />
+                  {ownerKnown ? (
+                    <p className="text-xs text-muted mt-1">
+                      The owner comes from the vehicle&apos;s ownership edge; this printed name is shown so you can
+                      spot a mismatch. Editing it here would not change the customer, so it is read-only.
+                    </p>
+                  ) : needsName ? (
+                    <p className="text-xs text-warn mt-1">
+                      {parsed === '' ? 'No name was printed.' : `Only “${parsed}” was printed — a first name, not a full identity.`}
+                      {' '}Type the full name before committing; it will create a new customer record.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-ok mt-1">Full name — a new customer will be created with this.</p>
+                  )}
+                </div>
+
+                <p className="text-xs text-muted">
+                  Matching is by normalised registration. Nothing is created until you commit.
+                </p>
+              </div>
+            );
+          })()}
 
           {step === 2 && (
             <div className="space-y-3">
@@ -183,31 +231,103 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                 <p className="text-xs text-warn">{uncosted.length} line(s) still need a cost decision.</p>
               )}
               {s.lines.map((l: any) => {
-                const hit = memOf(l.id);
+                const mem = d.memory?.find((m: any) => m.lineId === l.id);
+                const sugg = mem?.suggestions ?? [];
+                const chosen = l.catalogue_item_id
+                  ? (d.catalogue ?? []).find((c: any) => c.id === l.catalogue_item_id)
+                  : null;
+                const open = pickFor === l.id;
+                const list = (d.catalogue ?? []).filter((c: any) => {
+                  const t = (c.title || c.name || c.code).toLowerCase();
+                  return !q.trim() || t.includes(q.trim().toLowerCase());
+                });
                 return (
                   <div key={l.id} className="border border-line rounded-lg p-3">
                     <div className="text-sm text-ink">{l.description}</div>
-                    <div className="text-xs text-muted mb-2">
-                      £{Number(l.unit_price).toFixed(2)} × {Number(l.qty)}
-                      {hit && <span className="ml-2 text-ok">memory: {hit.title} {hit.unitCostPennies != null ? `(cost £${(hit.unitCostPennies / 100).toFixed(2)})` : ''}</span>}
-                    </div>
+                    <div className="text-xs text-muted mb-2">£{Number(l.unit_price).toFixed(2)} × {Number(l.qty)}</div>
+
                     {l.is_adjustment ? (
                       <p className="text-xs text-muted">Adjustment — cost pinned to £0.00, no entry needed.</p>
-                    ) : (
-                      <div className="grid grid-cols-3 gap-2">
-                        <LabelledInput label="Parts cost £" defaultValue={l.parts_cost ?? (hit?.unitCostPennies != null ? (hit.unitCostPennies / 100).toFixed(2) : '')}
-                          onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} disabled={committed} />
-                        <LabelledInput label="Labour hours" defaultValue={l.labour_hours ?? (hit?.labourHours ?? '')}
-                          onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} disabled={committed} />
-                        <div>
-                          <label className="block text-xs text-muted mb-1">Basis</label>
-                          <select className={inputCls} defaultValue={l.cost_basis ?? ''} disabled={committed}
-                            onChange={(e) => save({ lines: [{ id: l.id, costBasis: e.target.value || null }] })}>
-                            <option value="">—</option>
-                            <option value="actual">actual</option>
-                            <option value="estimated">estimated</option>
-                          </select>
+                    ) : chosen ? (
+                      /* PRIMARY: an existing product is attached; cost + hours come FROM it. */
+                      <div className="bg-ok-soft border border-line rounded-lg p-2">
+                        <div className="text-sm text-ok font-medium">{chosen.title || chosen.name}</div>
+                        <div className="text-xs text-muted mt-0.5">
+                          cost £{Number(chosen.unit_cost).toFixed(2)} · {chosen.labour_hours ?? '—'} h · from the catalogue, not re-entered
                         </div>
+                        {!committed && (
+                          <button onClick={() => selectItem(l.id, null)} disabled={busy}
+                            className="text-xs text-danger hover:underline mt-1">Detach (and forget this mapping)</button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {/* SUGGESTIONS — ranked, never auto-accepted. */}
+                        {sugg.length > 0 && (
+                          <div>
+                            <div className="text-xs text-muted mb-1">Suggested products</div>
+                            <div className="flex flex-wrap gap-1">
+                              {sugg.map((sg: any) => (
+                                <button key={sg.itemId} disabled={busy || committed}
+                                  onClick={() => selectItem(l.id, sg.itemId)}
+                                  title={sg.weak ? 'Price matches but no words in common — check carefully' : ''}
+                                  className={`text-xs px-2 py-1 rounded-full border ${sg.weak ? 'border-warn text-warn bg-warn-soft' : 'border-accent text-accent bg-accent-soft'}`}>
+                                  {sg.label} · £{(sg.unitPricePennies / 100).toFixed(2)}
+                                  {sg.weak ? ' · price only?' : ''}
+                                </button>
+                              ))}
+                            </div>
+                            {sugg.some((x: any) => x.weak) && (
+                              <p className="text-xs text-warn mt-1">
+                                Amber = the price matches but no words do. On this batch every such pair was a
+                                coincidence — check before accepting.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* SEARCH the full catalogue. */}
+                        {!committed && (open ? (
+                          <div className="border border-line rounded-lg p-2">
+                            <input autoFocus className={inputCls} placeholder="Search products…" value={q}
+                              onChange={(e) => setQ(e.target.value)} />
+                            <div className="max-h-48 overflow-y-auto mt-2">
+                              {list.map((c: any) => (
+                                <button key={c.id} disabled={busy} onClick={() => selectItem(l.id, c.id)}
+                                  className="block w-full text-left text-xs px-2 py-1.5 hover:bg-surface-muted rounded">
+                                  <span className="text-ink">{c.title || c.name}</span>
+                                  <span className="text-muted"> · £{Number(c.unit_price).toFixed(2)} · cost £{Number(c.unit_cost).toFixed(2)}{c.active ? '' : ' · inactive'}</span>
+                                </button>
+                              ))}
+                              {!list.length && <p className="text-xs text-muted p-2">No product matches.</p>}
+                            </div>
+                            <button onClick={() => { setPickFor(null); setQ(''); }} className="text-xs text-muted hover:text-ink mt-1">Cancel</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setPickFor(l.id); setQ(''); }}
+                            className="text-xs text-accent hover:underline">Choose an existing product…</button>
+                        ))}
+
+                        {/* FALLBACK: no catalogue counterpart — raw entry, which creates a new item. */}
+                        <details className="text-xs">
+                          <summary className="text-muted cursor-pointer">No matching product — enter cost and hours</summary>
+                          <div className="grid grid-cols-3 gap-2 mt-2">
+                            <LabelledInput label="Parts cost £" defaultValue={l.parts_cost ?? ''}
+                              onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} disabled={committed} />
+                            <LabelledInput label="Labour hours" defaultValue={l.labour_hours ?? ''}
+                              onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} disabled={committed} />
+                            <div>
+                              <label className="block text-xs text-muted mb-1">Basis</label>
+                              <select className={inputCls} defaultValue={l.cost_basis ?? ''} disabled={committed}
+                                onChange={(e) => save({ lines: [{ id: l.id, costBasis: e.target.value || null }] })}>
+                                <option value="">—</option>
+                                <option value="actual">actual</option>
+                                <option value="estimated">estimated</option>
+                              </select>
+                            </div>
+                          </div>
+                          <p className="text-muted mt-1">This path creates a NEW catalogue item on commit.</p>
+                        </details>
                       </div>
                     )}
                   </div>
@@ -216,37 +336,55 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
             </div>
           )}
 
-          {step === 3 && (
-            <div className="space-y-3 text-sm">
-              <p className="text-xs text-muted">
-                Defaults to the invoice date. The invoice keeps its printed date whatever you choose here —
-                nothing is shifted automatically.
-              </p>
-              {plannedWeekend && (
-                <p className="text-xs text-warn">
-                  {WD[planned!.getUTCDay()]} — the site is closed. Placement will be refused until you pick a working day.
+          {step === 3 && (() => {
+            // SAME controls as the booking form: a date input plus a slot select bounded by the
+            // site's opening hours. A datetime-local (the earlier control) is used nowhere else in
+            // the app and would let you pick a time the garage is shut.
+            const slots = startTimeSlots(d.siteHours?.openHour ?? 9, d.siteHours?.closeHour ?? 18, 15);
+            const dPart = planned ? planned.toISOString().slice(0, 10) : '';
+            const tPart = planned ? planned.toISOString().slice(11, 16) : (slots[0] ?? '09:00');
+            const push = (datePart: string, timePart: string) =>
+              save({ plannedStartAt: datePart ? new Date(`${datePart}T${timePart || '09:00'}:00.000Z`).toISOString() : null });
+            return (
+              <div className="space-y-3 text-sm">
+                <p className="text-xs text-muted">
+                  Defaults to the invoice date. The invoice keeps its printed date whatever you choose here —
+                  nothing is shifted automatically.
                 </p>
-              )}
-              {d.footprintEmpty && <p className="text-xs text-danger">This date/time falls outside working hours.</p>}
-              <div>
-                <label className="block text-xs text-muted mb-1">Date &amp; time</label>
-                <input type="datetime-local" className={inputCls} disabled={committed}
-                  defaultValue={planned ? planned.toISOString().slice(0, 16) : ''}
-                  onBlur={(e) => save({ plannedStartAt: e.target.value ? new Date(e.target.value + 'Z').toISOString() : null })} />
+                {plannedWeekend && (
+                  <p className="text-xs text-warn">
+                    {WD[planned!.getUTCDay()]} — the site is closed. Placement will be refused until you pick a working day.
+                  </p>
+                )}
+                {d.footprintEmpty && <p className="text-xs text-danger">That date/time falls outside working hours.</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs text-muted mb-1">Date</label>
+                    <input type="date" className={inputCls} defaultValue={dPart} disabled={committed}
+                      onChange={(e) => push(e.target.value, tPart)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted mb-1">Start time</label>
+                    <select className={inputCls} defaultValue={tPart} disabled={committed}
+                      onChange={(e) => push(dPart, e.target.value)}>
+                      {slots.map((sl) => <option key={sl} value={sl}>{sl}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-muted mb-1">Lift</label>
+                  <select className={inputCls} defaultValue={s.planned_resource_id ?? ''} disabled={committed}
+                    onChange={(e) => save({ plannedResourceId: e.target.value || null })}>
+                    <option value="">Choose…</option>
+                    {(d.lifts ?? []).map((r: any) => (
+                      <option key={r.id} value={r.id}>{r.name}{r.free ? '' : ' — taken'}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted mt-1">Availability reads the diary as it stands, including cards placed earlier in this run.</p>
+                </div>
               </div>
-              <div>
-                <label className="block text-xs text-muted mb-1">Lift</label>
-                <select className={inputCls} defaultValue={s.planned_resource_id ?? ''} disabled={committed}
-                  onChange={(e) => save({ plannedResourceId: e.target.value || null })}>
-                  <option value="">Choose…</option>
-                  {(d.lifts ?? []).map((r: any) => (
-                    <option key={r.id} value={r.id}>{r.name}{r.free ? '' : ' — taken'}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted mt-1">Availability reads the diary as it stands, including cards placed earlier in this run.</p>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {step === 4 && (
             <div className="space-y-3 text-sm">

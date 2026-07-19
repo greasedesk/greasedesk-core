@@ -1474,6 +1474,12 @@ model StagedInvoice {
   external_number String // the Xero number, e.g. 100002292 — carried to Invoice.external_ref
   issue_date      DateTime // the PRINTED date; immutable, never shifted
   registration    String?
+  // Customer name as PARSED from the invoice's address block, then EDITABLE by the operator.
+  // 24 of TMBS's 42 May invoices carry only a first name ("Angi - BG63APU"), which is too thin an
+  // identity to create a customer from — so where the vehicle is new the operator types the full
+  // name before commit. Where the registration matches an existing vehicle the customer comes from
+  // the ownership edge and this is a CROSS-CHECK only. (No phone: 0/42 PDFs contain one.)
+  customer_name   String?
   // RECONCILIATION IS A HARD COMMIT GATE: parsed line amounts must equal the printed Subtotal.
   subtotal_printed Decimal  @db.Decimal(12, 2)
   subtotal_parsed  Decimal  @db.Decimal(12, 2)

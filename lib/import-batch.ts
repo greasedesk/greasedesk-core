@@ -56,6 +56,7 @@ export async function ingestOne(args: {
       external_number: ext,
       issue_date: p.issueDate,
       registration: p.registration,
+      customer_name: p.customerName,
       subtotal_printed: (p.subtotalPrinted ?? 0) as any,
       subtotal_parsed: r.parsed as any,
       reconciled: r.ok,
