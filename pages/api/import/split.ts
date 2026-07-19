@@ -2,8 +2,12 @@
  * File: pages/api/import/split.ts
  * ADMIN-only. Split a bundled staged line into constituents — or clear a split.
  *
- *   POST { lineId, children: [{ description, qty, unitPrice, kind?, catalogueItemId?,
+ *   POST { lineId, children: [{ description, qty, amount, kind?, catalogueItemId?,
  *                               partsCost?, labourHours? }] }
+ *
+ * AMOUNT-FIRST: a child is entered as a LINE TOTAL and its unit price is derived (lib/import-split).
+ * The invariant is on totals, so collecting anything else forced the total to be reverse-engineered
+ * — and for some parent/qty pairs no unit price lands on it at all.
  *   POST { lineId, clear: true }
  *
  * REFUSES an unbalanced split (see lib/import-split). The children must sum to the parent's printed
@@ -20,7 +24,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
-import { balanceSplit, describeImbalance, type SplitChildInput } from '@/lib/import-split';
+import {
+  balanceSplit, describeImbalance, numOrNull, childAmountPennies, childUnitPrice,
+  type SplitChildInput,
+} from '@/lib/import-split';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -70,8 +77,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ message: `Split cleared (${n} child line(s) removed).`, removed: n });
   }
 
+  // ── NORMALISE AT THE BOUNDARY ───────────────────────────────────────────────────────────────
+  // Every figure arrives as a STRING from a text input, and an untouched cost/hours box arrives as
+  // ''. `?? null` does not catch '', so it previously reached Prisma as a Decimal value and threw
+  // inside the transaction — a bare 500 with no message, and the split silently never saved.
+  // Normalising here means nothing downstream has to know the wire shape.
+  const kids: SplitChildInput[] = (children ?? [])
+    .filter((c) => c && c.description?.trim())
+    .map((c) => ({
+      description: String(c.description).trim(),
+      qty: numOrNull(c.qty) ?? 0,
+      amount: numOrNull(c.amount) ?? undefined,
+      unitPrice: numOrNull(c.unitPrice) ?? undefined,
+      kind: c.kind ?? null,
+      catalogueItemId: c.catalogueItemId || null,
+      partsCost: numOrNull(c.partsCost),
+      labourHours: numOrNull(c.labourHours),
+    }));
+
   // ── VALIDATE ────────────────────────────────────────────────────────────────────────────────
-  const kids = (children ?? []).filter((c) => c && c.description?.trim());
   const bal = balanceSplit(Number(parent.amount), kids);
   const bad = describeImbalance(bal);
   if (bad) return res.status(400).json({ message: bad, balance: bal });
@@ -114,12 +138,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           position: t.position * 100 + i + 1,
           description: c.description.trim(),
           qty: c.qty as any,
-          unit_price: c.unitPrice as any,
-          amount: (Math.round(c.qty * c.unitPrice * 100) / 100) as any,
+          // The AMOUNT is what was entered and what the invariant is on; the unit price is derived
+          // from it through the chokepoint, so the stored pair can never disagree.
+          unit_price: childUnitPrice(c) as any,
+          amount: (childAmountPennies(c) / 100) as any,
           kind: (c.kind ?? null) as any,
           catalogue_item_id: c.catalogueItemId ?? null,
-          parts_cost: (c.partsCost ?? null) as any,
-          labour_hours: (c.labourHours ?? null) as any,
+          parts_cost: c.partsCost as any,
+          labour_hours: c.labourHours as any,
           cost_basis: c.partsCost != null || c.labourHours != null ? 'actual' : null,
           is_adjustment: false,
         })),

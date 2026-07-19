@@ -73,7 +73,7 @@ export function blockingReasons(
 
     if (kids.length) {
       const bal = balanceSplit(Number(l.amount), kids.map((k) => ({
-        description: k.description, qty: Number(k.qty), unitPrice: Number(k.unit_price),
+        description: k.description, qty: Number(k.qty), amount: Number(k.amount),
       })));
       if (!bal.ok) {
         out.push({

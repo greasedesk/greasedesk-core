@@ -17,6 +17,7 @@ import { GetServerSideProps } from 'next';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { startTimeSlots } from '@/lib/booking-slots';
+import { childAmountPennies, numOrNull } from '@/lib/import-split';
 
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -59,16 +60,34 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
     /* eslint-disable-next-line */
   }, [d?.suggestedLiftId, d?.staged?.planned_resource_id, d?.staged?.status]);
 
+  /**
+   * THE one way this page reads a response. A 500 from an API route does not carry a JSON body —
+   * it is the string "Internal Server Error", so `await r.json()` THROWS and, with no catch, the
+   * operator saw nothing at all: the split silently never saved. Every failure now produces a
+   * message, and a failure can never borrow success wording.
+   */
+  async function send(url: string, init: RequestInit): Promise<{ ok: boolean; body: any; text: string }> {
+    const r = await fetch(url, init);
+    const text = await r.text();
+    let body: any = null;
+    try { body = text ? JSON.parse(text) : null; } catch { /* not JSON — see failText below */ }
+    return { ok: r.ok, body, text: text.slice(0, 200) };
+  }
+  /** Never 'Done.' on an error branch: a failure must read as a failure even with no server message. */
+  const failText = (res: { body: any; text: string }) =>
+    res.body?.message ?? (res.text ? `Failed: ${res.text}` : 'Failed — the server gave no reason.');
+
   async function save(patch: any) {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/import/staged', {
+      const res = await send('/api/import/staged', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, ...patch }),
       });
-      const j = await r.json();
-      if (!r.ok) setMsg({ text: j.message ?? 'Save failed.', tone: 'err' });
+      if (!res.ok) setMsg({ text: failText(res), tone: 'err' });
       else await load();
+    } catch (e: any) {
+      setMsg({ text: `Save failed: ${e?.message ?? 'the request did not complete'}.`, tone: 'err' });
     } finally { setBusy(false); }
   }
 
@@ -77,14 +96,17 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   async function selectItem(lineId: string, catalogueItemId: string | null) {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/import/select-item', {
+      const res = await send('/api/import/select-item', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(catalogueItemId ? { lineId, catalogueItemId } : { lineId, clear: true }),
       });
-      const j = await r.json();
-      setMsg({ text: j.message ?? 'Done.', tone: r.ok ? 'ok' : 'err' });
+      setMsg(res.ok
+        ? { text: res.body?.message ?? 'Product attached.', tone: 'ok' }
+        : { text: failText(res), tone: 'err' });
       setPickFor(null); setQ('');
-      if (r.ok) await load();
+      if (res.ok) await load();
+    } catch (e: any) {
+      setMsg({ text: `Could not attach the product: ${e?.message ?? 'the request did not complete'}.`, tone: 'err' });
     } finally { setBusy(false); }
   }
 
@@ -93,26 +115,35 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   async function saveSplit(lineId: string, children: any[] | null) {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/import/split', {
+      const res = await send('/api/import/split', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(children ? { lineId, children } : { lineId, clear: true }),
       });
-      const j = await r.json();
-      setMsg({ text: j.message ?? 'Done.', tone: r.ok ? 'ok' : 'err' });
-      if (r.ok) { setSplitFor(null); setDraft([]); await load(); }
+      setMsg(res.ok
+        ? { text: res.body?.message ?? 'Split saved.', tone: 'ok' }
+        : { text: failText(res), tone: 'err' });
+      // Only close the editor on success — a refused split must keep what was typed, or the work
+      // is lost along with the explanation of why it was refused.
+      if (res.ok) { setSplitFor(null); setDraft([]); await load(); }
+    } catch (e: any) {
+      setMsg({ text: `Split not saved: ${e?.message ?? 'the request did not complete'}.`, tone: 'err' });
     } finally { setBusy(false); }
   }
 
   async function commit() {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/import/commit', {
+      const res = await send('/api/import/commit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, attest: true }),
       });
-      const j = await r.json();
-      setMsg({ text: j.message ?? (r.ok ? 'Committed.' : 'Commit failed.'), tone: r.ok ? 'ok' : 'err' });
-      if (r.ok) await load();
+      setMsg(res.ok
+        ? { text: res.body?.message ?? 'Committed.', tone: 'ok' }
+        : { text: failText(res), tone: 'err' });
+      if (res.ok) await load();
+    } catch (e: any) {
+      // The one call that mints: never leave its outcome unstated.
+      setMsg({ text: `Commit did not complete: ${e?.message ?? 'no response'}. Reload before retrying.`, tone: 'err' });
     } finally { setBusy(false); }
   }
 
@@ -410,10 +441,23 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                             <button onClick={() => {
                               setSplitFor(l.id); setPickFor(null);
                               const tpl = d.splitTemplates?.[`${l.description}|${Number(l.unit_price).toFixed(4)}`];
-                              setDraft(tpl ?? [
-                                { description: l.description, qty: Number(l.qty), unitPrice: Number(l.unit_price), partsCost: '', labourHours: '' },
-                                { description: 'Labour', qty: 1, unitPrice: 0, partsCost: '', labourHours: '' },
-                              ]);
+                              // A stored template may predate amount-first entry (qty + unitPrice
+                              // only). Derive the amount when it is missing so an old shape opens
+                              // in the new editor rather than reading as £0.
+                              setDraft(
+                                (tpl as any[])?.map((c: any) => ({
+                                  ...c,
+                                  amount: c.amount != null
+                                    ? String(c.amount)
+                                    : ((Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100)) / 100).toFixed(2),
+                                })) ?? [
+                                  // Seed: the whole line against the parts child, nothing against
+                                  // labour — so "take the remainder" on the second row is the
+                                  // natural next gesture.
+                                  { description: l.description, qty: Number(l.qty), amount: Number(l.amount).toFixed(2), partsCost: '', labourHours: '' },
+                                  { description: 'Labour', qty: 1, amount: '0.00', partsCost: '', labourHours: '' },
+                                ],
+                              );
                             }} className="text-xs text-accent hover:underline">Split into parts + labour…</button>
                           </div>
                         ))}
@@ -637,23 +681,38 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
   parentAmount: number; draft: any[]; setDraft: (d: any[]) => void;
   catalogue: any[]; busy: boolean; onCancel: () => void; onSave: () => void;
 }) {
+  // The SAME arithmetic the server uses, imported rather than re-implemented — the editor showing
+  // "balanced" while the server refused would be a disagreement about the same sum.
   const p2 = (n: any) => Math.round((Number(n) || 0) * 100);
-  const childP = (c: any) => Math.round((Number(c.qty) || 0) * (Number(c.unitPrice) || 0) * 100);
+  const childP = (c: any) => childAmountPennies({ description: c.description, qty: Number(c.qty) || 0, amount: numOrNull(c.amount) ?? undefined, unitPrice: numOrNull(c.unitPrice) ?? undefined });
   const parentPennies = p2(parentAmount);
   const totalPennies = draft.reduce((a, c) => a + childP(c), 0);
   const residual = parentPennies - totalPennies;
   const balanced = draft.length >= 2 && residual === 0 && draft.every((c) => (c.description ?? '').trim());
 
   const set = (i: number, patch: any) => setDraft(draft.map((c, j) => (j === i ? { ...c, ...patch } : c)));
-  const add = () => setDraft([...draft, { description: '', qty: 1, unitPrice: 0, partsCost: '', labourHours: '' }]);
+  const add = () => setDraft([...draft, { description: '', qty: 1, amount: '', partsCost: '', labourHours: '' }]);
   const del = (i: number) => setDraft(draft.filter((_, j) => j !== i));
+  /** Give this child whatever is left over — the invariant closes by construction, not by luck. */
+  const takeRemainder = (i: number) => {
+    const others = draft.reduce((a, c, j) => a + (j === i ? 0 : childP(c)), 0);
+    set(i, { amount: ((parentPennies - others) / 100).toFixed(2) });
+  };
+  /** Reported, never typed: 2 for £116.67 is £58.335/unit and the line total stays exact. */
+  const unitOf = (c: any) => {
+    const qty = Number(c.qty) || 0;
+    if (!qty) return null;
+    return childP(c) / 100 / qty;
+  };
 
   return (
     <div className="border border-accent rounded-lg p-3 bg-surface">
       <p className="text-xs text-muted mb-2">
         Break this line into what it actually was. The children must total the printed
         £{(parentPennies / 100).toFixed(2)} exactly — the invoice cannot change, only be re-expressed.
-        Cost and hours are <strong>per unit</strong>, like the unit price: at qty 2, £26 of parts is £52 on the line.
+        Enter each child's <strong>line total</strong>; the per-unit price is derived from it. Use
+        <strong> take the remainder</strong> on the last child and the split closes exactly, whatever
+        the parent's price. Cost and hours are <strong>per unit</strong>: at qty 2, £26 of parts is £52 on the line.
       </p>
       {draft.map((c, i) => (
         <div key={i} className="border border-line rounded-lg p-2 mb-2">
@@ -670,9 +729,16 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
                 onChange={(e) => set(i, { qty: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-muted mb-0.5">Unit £</label>
-              <input className={inputCls} inputMode="decimal" value={c.unitPrice}
-                onChange={(e) => set(i, { unitPrice: e.target.value })} />
+              {/* THE LINE TOTAL is the input, because the invariant is on line totals. Entering a
+                  unit price meant solving for it: a parent of 2 × £133.3333 needed £58.334 typed,
+                  and some parent/qty pairs have no exact unit price at all. */}
+              <label className="block text-xs text-muted mb-0.5">Line total £</label>
+              <input className={inputCls} inputMode="decimal" value={c.amount ?? ''}
+                onChange={(e) => set(i, { amount: e.target.value })} />
+              <button onClick={() => takeRemainder(i)}
+                className="text-[11px] text-accent hover:underline mt-0.5">
+                take the remainder
+              </button>
             </div>
             <div>
               {/* PER UNIT, matching how unit_price works and how the catalogue stores unit_cost —
@@ -711,6 +777,9 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
               )}
               {Number(c.labourHours) > 0 && (
                 <>{(Number(c.labourHours) * (Number(c.qty) || 0)).toFixed(2)}h · </>
+              )}
+              {unitOf(c) != null && (
+                <>£{unitOf(c)!.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}/unit derived · </>
               )}
               line £{(childP(c) / 100).toFixed(2)}
             </span>

@@ -14,6 +14,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
 import { blockingReasons } from '@/lib/import-blockers';
+import { numOrNull } from '@/lib/import-split';
 import { writeImportAudit } from '@/lib/audit';
 import { durationOptions, seedDurationFromMinutes, durationToWorkingMinutes } from '@/lib/booking-slots';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
@@ -238,8 +239,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           where: { id: row.id },
           data: {
             // Adjustments are credits: cost pinned to 0.00, never prompted for.
-            parts_cost: row.is_adjustment ? (0 as any) : (l.partsCost == null ? null : (l.partsCost as any)),
-            labour_hours: l.labourHours == null ? null : (l.labourHours as any),
+            // numOrNull, not `== null`: the line inputs are TEXT, and a cleared box sends ''. This
+            // caller happens to convert '' client-side, but the same omission on the split path
+            // reached Prisma as a Decimal and crashed the request — so the boundary normalises here
+            // too rather than trusting every caller to remember.
+            parts_cost: row.is_adjustment ? (0 as any) : (numOrNull(l.partsCost) as any),
+            labour_hours: numOrNull(l.labourHours) as any,
             cost_basis: l.costBasis ?? row.cost_basis,
             kind: (l.kind as any) ?? row.kind,
             catalogue_item_id: l.catalogueItemId ?? row.catalogue_item_id,
