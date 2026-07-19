@@ -256,6 +256,7 @@ model Group {
   leaveRecords     LeaveRecord[]
   publicHolidays   PublicHoliday[]
   employmentEvents EmploymentEvent[]
+  siteConfigEvents SiteConfigEvent[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -400,6 +401,7 @@ model Site {
   publicHolidays   PublicHoliday[]
 
   @@index([group_id])
+  config_events SiteConfigEvent[]
 }
 
 model SiteFeature {
@@ -1366,6 +1368,45 @@ model EmploymentEvent {
   cost_person CostPerson @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
 
   @@index([cost_person_id, kind, effective_date])
+  @@index([group_id, created_at])
+}
+
+enum SiteConfigEventKind {
+  open_days // { open_days: Int[] } — trading days; changing them changes HISTORICAL capacity
+  hours // { open_hour, close_hour } — reserved; no event needed while times are unchanged
+  breaks // { breaks } — reserved
+}
+
+// Effective-dated Site configuration — the EmploymentEvent pattern, applied to the site.
+//
+// WHY: open_days is a single current value, so every historical window was computed against
+// TODAY's trading pattern. Great Bridge traded Mon–Sat until 2026-04-01 and Mon–Fri after, which
+// meant any pre-April period silently understated capacity for anyone inheriting the site pattern.
+//
+// The flat Site columns REMAIN current-state truth and the resolver's final fallback (exactly as
+// CostPerson keeps its flat columns beside EmploymentEvent). This table records the CHANGES.
+// One event at the change date represents BOTH eras: value_json after, previous_json before —
+// see openDaysAtWindowEnd for the resolution rule.
+model SiteConfigEvent {
+  id              String              @id @default(uuid())
+  group_id        String
+  site_id         String
+  kind            SiteConfigEventKind
+  effective_date  DateTime
+  value_json      Json
+  previous_json   Json?
+  changed_by      String? // user id (the audit who; created_at is the when)
+  created_at      DateTime            @default(now())
+  // Corrections, mirroring EmploymentEvent: a VOID keeps the row visible but EXCLUDED from any
+  // value-at-time read; the resolver filters voided_at: null.
+  correction_json Json?
+  voided_at       DateTime?
+  voided_by       String?
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site  Site  @relation(fields: [site_id], references: [id], onDelete: Cascade)
+
+  @@index([site_id, kind, effective_date])
   @@index([group_id, created_at])
 }
 

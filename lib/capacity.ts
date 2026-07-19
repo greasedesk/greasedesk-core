@@ -61,6 +61,7 @@ export type AvailableHours = {
 // the inherited default with the same rule). Re-exported here so server importers are unchanged.
 export { dayKey, rosteredWeekdays, isRosteredOn } from '@/lib/rostered-days';
 import { dayKey, rosteredWeekdays } from '@/lib/rostered-days';
+import { openDaysAtWindowEnd } from '@/lib/site-config';
 /** The window's public-holiday day-keys for a site (group-wide rows + site-specific rows). */
 export async function phDaySet(groupId: string, siteId: string, window: CapacityWindow): Promise<Set<string>> {
   const phs = (await prisma.publicHoliday.findMany({
@@ -91,6 +92,12 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
       },
     }) as any,
   ]);
+  // OPEN DAYS AS OF THE WINDOW END, not today's flat column. The site's trading pattern is
+  // effective-dated (lib/site-config) exactly as the utilisation factor is: a historic month keeps
+  // the pattern that applied THEN, so changing trading days today never moves last month's
+  // capacity. The flat column remains the fallback when no change has ever been recorded.
+  const openDaysAtT: number[] = await openDaysAtWindowEnd(siteId, window.to, site?.open_days);
+
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
   const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
   const ids = configured.map((p: any) => p.id);
@@ -118,7 +125,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
     const contracted = Number(p.contracted_hours_per_day);
-    const rostered: number[] = rosteredWeekdays(p.working_days, site?.open_days);
+    const rostered: number[] = rosteredWeekdays(p.working_days, openDaysAtT);
     const myLeave = leaveByPerson.get(p.id);
     let grossC = 0, subC = 0, leaveC = 0, phC = 0;
     const typeC: Record<string, number> = {};
