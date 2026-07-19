@@ -13,6 +13,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
+import { blockingReasons } from '@/lib/import-blockers';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -115,6 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       staged, memory, match, lifts, footprintEmpty, catalogue, splitTemplates,
+      blockers: blockingReasons(staged.lines as any),
       siteHours: { openHour: site?.open_hour ?? 8, closeHour: site?.close_hour ?? 18 },
     });
   }

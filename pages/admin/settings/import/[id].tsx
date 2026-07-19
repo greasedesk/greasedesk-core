@@ -121,8 +121,21 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const parentIds = new Set(s.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
   const childrenOf = (id: string) => s.lines.filter((l: any) => l.parent_line_id === id);
   const topLines = s.lines.filter((l: any) => !l.parent_line_id);
-  const uncosted = s.lines.filter((l: any) =>
-    !l.is_adjustment && l.parts_cost == null && l.cost_basis == null && !parentIds.has(l.id));
+  // Reasons come from lib/import-blockers via the API, so step 2, step 5 and the commit refusal
+  // can never disagree. The ONE reason the server cannot know is an unsaved split: children exist
+  // only in this browser until Save, so the residual can read "balanced" while nothing is stored.
+  const serverBlockers: Array<{ lineId: string; description: string; reason: string }> = d.blockers ?? [];
+  const blockers = splitFor
+    ? [
+        ...serverBlockers.filter((b) => b.lineId !== splitFor),
+        {
+          lineId: splitFor,
+          description: (s.lines.find((l: any) => l.id === splitFor)?.description) ?? 'line',
+          reason: 'split not saved — the lines you have typed do not exist yet; press Save split',
+        },
+      ]
+    : serverBlockers;
+  const uncosted = blockers;
 
   return (
     <SettingsLayout isAdmin={isAdmin} isManager={isManager}>
@@ -255,8 +268,17 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
 
           {step === 2 && (
             <div className="space-y-3">
-              {uncosted.length > 0 && (
-                <p className="text-xs text-warn">{uncosted.length} line(s) still need a cost decision.</p>
+              {blockers.length > 0 && (
+                <div className="bg-warn-soft border border-warn rounded-lg p-2">
+                  <p className="text-xs text-warn font-medium mb-1">
+                    {blockers.length} line{blockers.length === 1 ? '' : 's'} still need a decision:
+                  </p>
+                  <ul className="text-xs text-warn space-y-0.5">
+                    {blockers.map((b) => (
+                      <li key={b.lineId}><strong>{b.description}</strong>: {b.reason}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {topLines.map((l: any) => {
                 const mem = d.memory?.find((m: any) => m.lineId === l.id);
@@ -470,11 +492,18 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               <Row label="GreaseDesk number" value="minted on commit — the series stays gapless" tone="muted" />
               <Row label="Invoice date" value={issue.toISOString().slice(0, 10) + ' (printed, immutable)'} />
               <Row label="Reconciled" value={s.reconciled ? 'yes' : 'NO — commit refused'} tone={s.reconciled ? 'ok' : 'danger'} />
-              <Row label="Lines needing a decision" value={String(uncosted.length)} tone={uncosted.length ? 'warn' : 'ok'} />
+              <Row label="Lines needing a decision" value={blockers.length ? String(blockers.length) : 'none'} tone={blockers.length ? 'warn' : 'ok'} />
+              {blockers.length > 0 && (
+                <ul className="text-xs text-warn bg-warn-soft border border-warn rounded-lg p-2 space-y-0.5">
+                  {blockers.map((b) => (
+                    <li key={b.lineId}><strong>{b.description}</strong>: {b.reason}</li>
+                  ))}
+                </ul>
+              )}
               <Row label="Attested" value={attest ? 'yes' : 'no'} tone={attest ? 'ok' : 'warn'} />
               <button
                 onClick={commit}
-                disabled={busy || committed || !s.reconciled || !attest || uncosted.length > 0 || !s.planned_resource_id}
+                disabled={busy || committed || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id}
                 className="w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">
                 {committed ? 'Committed' : busy ? 'Committing…' : 'Commit to the ledger'}
               </button>
@@ -516,6 +545,7 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
       <p className="text-xs text-muted mb-2">
         Break this line into what it actually was. The children must total the printed
         £{(parentPennies / 100).toFixed(2)} exactly — the invoice cannot change, only be re-expressed.
+        Cost and hours are <strong>per unit</strong>, like the unit price: at qty 2, £26 of parts is £52 on the line.
       </p>
       {draft.map((c, i) => (
         <div key={i} className="border border-line rounded-lg p-2 mb-2">
@@ -537,12 +567,15 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
                 onChange={(e) => set(i, { unitPrice: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-muted mb-0.5">Parts cost £</label>
+              {/* PER UNIT, matching how unit_price works and how the catalogue stores unit_cost —
+                  £26 against qty 2 is £52 of parts, not £26. Stated, and the total shown, because
+                  a bare "Parts cost £" left it to be guessed. */}
+              <label className="block text-xs text-muted mb-0.5">Parts cost £ / unit</label>
               <input className={inputCls} inputMode="decimal" value={c.partsCost ?? ''}
                 onChange={(e) => set(i, { partsCost: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-muted mb-0.5">Labour h</label>
+              <label className="block text-xs text-muted mb-0.5">Labour h / unit</label>
               <input className={inputCls} inputMode="decimal" value={c.labourHours ?? ''}
                 onChange={(e) => set(i, { labourHours: e.target.value })} />
             </div>
@@ -564,7 +597,15 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, onCancel,
                 <option key={x.id} value={x.id}>{x.title || x.name} · £{Number(x.unit_price).toFixed(2)}</option>
               ))}
             </select>
-            <span className="text-xs text-muted">= £{(childP(c) / 100).toFixed(2)}</span>
+            <span className="text-xs text-muted">
+              {Number(c.partsCost) > 0 && (
+                <>cost £{(Number(c.partsCost) * (Number(c.qty) || 0)).toFixed(2)} · </>
+              )}
+              {Number(c.labourHours) > 0 && (
+                <>{(Number(c.labourHours) * (Number(c.qty) || 0)).toFixed(2)}h · </>
+              )}
+              line £{(childP(c) / 100).toFixed(2)}
+            </span>
           </div>
         </div>
       ))}

@@ -29,6 +29,7 @@ import { SKIP_COLUMN } from '@/lib/jobcard-status';
 import { upsertMemory } from '@/lib/import-memory';
 import { getTaxProfile } from '@/lib/tenant-vat';
 import { unbalancedSplits } from '@/lib/import-split';
+import { blockingReasons } from '@/lib/import-blockers';
 
 const ATTESTATION = 'imported: the invoice is the record; no photographic evidence exists';
 
@@ -77,10 +78,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Split PARENTS are costed through their children and must not be asked for a cost themselves.
   const splitParents = new Set(staged.lines.filter((l: any) => l.parent_line_id).map((l: any) => l.parent_line_id));
-  const undecided = staged.lines.filter((l: any) =>
-    !l.is_adjustment && l.parts_cost == null && l.cost_basis == null && !splitParents.has(l.id));
-  if (undecided.length) {
-    return res.status(400).json({ message: `${undecided.length} line(s) still need a cost decision.` });
+
+  // ONE definition of "outstanding", shared with both wizard steps, and it names the field:
+  // a labour line is satisfied by HOURS (a parts cost on labour is meaningless), a part line by
+  // its cost or catalogue item. The refusal lists the reasons rather than a bare count, so it is
+  // actionable from where the commit was refused.
+  const blockers = blockingReasons(staged.lines as any);
+  if (blockers.length) {
+    return res.status(400).json({
+      message: `${blockers.length} line(s) still need a decision: ` +
+        blockers.map((b) => `${b.description} — ${b.reason}`).join('; '),
+      blockers,
+    });
   }
 
   const profile = await getTaxProfile(vis.groupId);
