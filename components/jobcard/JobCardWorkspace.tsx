@@ -14,6 +14,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
+import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import PhotoStage from '@/components/jobcard/PhotoStage';
@@ -603,6 +604,9 @@ function QuoteActions(props: {
 }) {
   const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
   const { openHour, closeHour, openDays, breaks } = siteHours;
+  // Read the diary context the user arrived with (?view/?date) so "back to the diary" returns to
+  // the day they were on, not merely the day this card sits on.
+  const router = useRouter();
 
   const slots = useMemo(() => startTimeSlots(openHour, closeHour, 15), [openHour, closeHour]);
   const seed = booking ? seedHours(booking.workingMinutes) : { sel: '1', free: '' };
@@ -626,7 +630,17 @@ function QuoteActions(props: {
     return `${wd} ${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
   };
   const liftName = () => resources.find((r) => r.id === liftId)?.name ?? t('booking.lift');
-  const diaryUrl = `/admin/diary?site=${encodeURIComponent(siteId)}&view=week${startDate ? `&date=${startDate}` : ''}`;
+  // Was: hardcoded view=week and keyed only on the booking form's LOCAL startDate — so it ignored
+  // the day and view the user actually came from, and landed on today whenever the card was
+  // unplaced (startDate empty). Same helper as the header link now, so both agree.
+  // startDate is still the fallback: on this tab it IS the day the card sits on, and it tracks an
+  // edit in progress, which is the useful behaviour while placing a job.
+  const diaryUrl = diaryReturnHref({
+    siteId,
+    view: router.query.view,
+    viewedDate: router.query.date,
+    cardStartAt: startDate || null,
+  });
 
   // Plain status/booking action (decline / cancel / unbook) — no estimate commit.
   async function call(key: string, url: string, method: string, body?: unknown) {

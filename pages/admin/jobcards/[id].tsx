@@ -28,6 +28,7 @@ import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
 import { buildJobCardPageProps } from '@/lib/jobcard-page-data';
 import { parseBreaks, Break } from '@/lib/occupancy';
+import { diaryReturnHref } from '@/lib/diary-return';
 
 type PageProps = {
   registration: string;
@@ -75,8 +76,20 @@ export default function JobCardDetailPage(props: PageProps) {
   const router = useRouter();
   const { t } = useTranslation('jobcard');
   const q = router.query;
+  // `date=${q.date ?? ''}` used to emit a BLANK param when the card was opened without diary
+  // context, and the diary reads a blank date as today — so the return silently lost the day.
+  // diaryReturnHref falls back to the day the card sits on before giving up. Site falls back to
+  // the card's own site for the same reason: a blank ?site= is not "the site you were on".
   const back = q.from === 'diary'
-    ? { href: `/admin/diary?site=${q.site ?? ''}&view=${q.view ?? 'week'}&date=${q.date ?? ''}`, label: t('back.diary') }
+    ? {
+        href: diaryReturnHref({
+          siteId: q.site ?? props.siteId,
+          view: q.view,
+          viewedDate: q.date,
+          cardStartAt: props.booking?.startAt ?? null,
+        }),
+        label: t('back.diary'),
+      }
     : { href: '/admin/jobcards', label: t('back.list') };
   return (
     <>
