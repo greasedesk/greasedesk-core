@@ -44,6 +44,7 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
   const liftPreselected = useRef(false);
+  const durationSeeded = useRef<string | null>(null);
   const [draft, setDraft] = useState<any[]>([]);
 
   async function load() {
@@ -66,6 +67,31 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
     save({ plannedResourceId: d.suggestedLiftId });
     /* eslint-disable-next-line */
   }, [d?.suggestedLiftId, d?.staged?.planned_resource_id, d?.staged?.status]);
+
+  /**
+   * DURATION SEED — PERSISTED, not merely rendered. The select showed the seeded value while
+   * planned_working_minutes stayed null, because a pre-filled control fires no change event: step 5
+   * then read "NOT SET" and Commit was blocked with nothing on screen explaining why.
+   *
+   * The seed is stored the moment it exists, so THE STORED VALUE IS THE TRUTH and the display can
+   * only ever reflect it. Deliberately not fixed by teaching step 5 to accept a client-side seed —
+   * that would leave two answers to "how long did this job take", and the commit path would be
+   * trusting the browser for one of them.
+   *
+   * Keyed on the invoice id rather than once-per-mount: the seed only appears once labour hours are
+   * entered in step 2, which happens DURING a mount. Re-firing is safe because the guard is that
+   * nothing is stored yet — once stored, the operator's figure stands and is never overwritten.
+   */
+  useEffect(() => {
+    const st = d?.staged;
+    if (!st || st.status === 'committed') return;
+    if (st.planned_working_minutes != null) return;      // already decided — never overwrite
+    const seed = d?.duration?.suggested;
+    if (!seed || durationSeeded.current === st.id) return;
+    durationSeeded.current = st.id;
+    save({ plannedDuration: seed });
+    /* eslint-disable-next-line */
+  }, [d?.staged?.id, d?.staged?.planned_working_minutes, d?.duration?.suggested, d?.staged?.status]);
 
   /**
    * THE one way this page reads a response. A 500 from an API route does not carry a JSON body —
