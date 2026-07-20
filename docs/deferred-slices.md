@@ -5,7 +5,7 @@ revisited on evidence rather than rediscovered from scratch.
 
 ---
 
-## Out-of-hours work
+## Out-of-hours work — including bank holidays
 
 **The gap.** Work charged outside the site's trading hours is counted in the numerator of
 utilisation but has no matching denominator. `getAvailableHours` builds capacity from rostered days
@@ -13,6 +13,34 @@ utilisation but has no matching denominator. `getAvailableHours` builds capacity
 a Mon–Fri site therefore contributes **charged hours with no sellable hours behind them**, which can
 push utilisation above 100% — a number that reads as an error rather than as the real signal
 (overtime), and which silently breaks the "100% = target by construction" property.
+
+**BANK HOLIDAYS ARE THE SAME DEFECT THROUGH A DIFFERENT DOOR**, and a worse one, because unlike a
+Saturday the day does not even *look* shut. Established 2026-07-20:
+
+- **The diary reads `Site.open_days` and nothing else.** `PublicHoliday` has exactly three consumers
+  — `lib/capacity.ts`, `pages/api/public-holidays.ts` (the Roster CRUD that writes them) and
+  `lib/tenant-purge.ts`. The grid is not one of them. `open_days` is a WEEKDAY rule, so it can close
+  every Sunday but has no date-grained concept: Monday 4 May 2026 is a bank holiday on the Roster and
+  renders as an ordinary working day, bookable, with no marker.
+- **`computeFootprint` has no holiday input and `placeJobCard` has no `HOLIDAY` refusal.** Its
+  vocabulary is `CARD_NOT_FOUND | RESOURCE_NOT_FOUND | CROSS_SITE | EMPTY_FOOTPRINT | CLASH:<reg>`,
+  and the footprint's only calendar input is the weekday list. A booking, a manual placement or an
+  import commit will all place onto a bank holiday without a word.
+- **Capacity already subtracts them, unconditionally.** `raw = max(0, gross − leave − public
+  holidays)`, reported as `phHours`. So the denominator says the day is worth zero sellable hours
+  while the numerator counts whatever was charged on it. In the limit — a month whose only work fell
+  on holidays — the ratio is charged hours over nothing.
+
+**Resolution: FLAG, NOT CLOSE.** Garages do open on bank holidays, and a hard refusal would make
+"we worked the bank holiday" unrecordable — the same mistake as forcing a Saturday callout to be
+entered as a Friday. The day should be marked in the diary and bookable with that mark visible, and
+the hours charged on it should be classified as **charged outside sellable capacity**, exactly as
+the line-level `out_of_hours` sketch below proposes. That keeps capacity's existing answer (a
+holiday sells nothing) honest instead of asking it to stop assuming.
+
+**Exposure is prospective, not historical.** No May 2026 invoice falls on either bank holiday:
+0 staged invoices dated 04/05 or 25/05, 0 planned onto them, 0 job cards placed on them. The fix can
+land before anything does, rather than after.
 
 **Why it is structurally the outsourced-labour case.** Outsourced labour is already handled by
 recognising that some charged work does not consume *our* capacity: `InvoiceLine.labour_outsourced`
@@ -31,6 +59,15 @@ the answer probably differs for planned Saturday opening versus an emergency cal
 distortion to matter, and inventing the classification before there is real data to shape it risks
 building the wrong model. Revisit when a site starts booking regular out-of-hours work — TMBS's
 five Saturday-dated May invoices are the first sign.
+
+**What a fix has to cover, and the one open question.** Four surfaces move together or the mismatch
+merely relocates: the diary grid (fetch `PublicHoliday` alongside `open_days`, remembering rows are
+date-grained and `site_id NULL` means all sites); `computeFootprint` / `placeJobCard`; the import
+commit path, which inherits whatever the guard decides; and the classification of the hours
+themselves. The open question is BACK-DATING: work genuinely done on a past bank holiday must stay
+recordable, so a refusal that is right for a new booking is wrong for an import — the same tension
+as `docs/deferred-slices.md` § Date-aware diary placement, and the reason flag-not-close is the
+safer default for both.
 
 ---
 
