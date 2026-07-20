@@ -167,7 +167,13 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
 
 // Imperative handle so the ONE unified Quote-tab Save can commit the estimate lines (the standalone
 // "Save estimate" button is gone; the parent orchestrates estimate + booking in one action).
-export type EstimateHandle = { commit: () => Promise<{ ok: boolean; message?: string }> };
+/**
+ * `terminal` = this save can NEVER succeed (409: the invoice froze at issue). The caller must not
+ * retry it and must not trap the operator on the tab. A transient failure — 500, offline — leaves
+ * `terminal` false, because there the edit is worth keeping and retrying.
+ */
+export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
+export type EstimateHandle = { commit: () => Promise<CommitResult> };
 
 const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false }: Props, ref) {
   const { t } = useTranslation('jobcard');
@@ -289,7 +295,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
 
   // Persist the estimate lines. Also updates lastSavedRef, so autosave never re-posts an unchanged
   // draft after a manual Save. The parent's unified Save uses this via the imperative handle.
-  async function commit(): Promise<{ ok: boolean; message?: string }> {
+  async function commit(): Promise<CommitResult> {
     const snap = serialize(lines, vatRate);
     try {
       const items = lines.map(({ _uid, code, ...rest }) => rest); // strip client-only id + transient code
@@ -298,10 +304,20 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) return { ok: false, message: data?.message || t('estimate.saveError') };
+      if (!res.ok) {
+        // TERMINAL: the estimate is frozen. Mark the draft CLEAN so the autosave stops re-arming —
+        // it only skips when `snap === lastSavedRef.current`, so a failed save previously left the
+        // component permanently dirty and every later keystroke queued another doomed write.
+        if (res.status === 409) {
+          lastSavedRef.current = snap;
+          return { ok: false, terminal: true, message: data?.message || t('estimate.saveError') };
+        }
+        return { ok: false, message: data?.message || t('estimate.saveError') };
+      }
       lastSavedRef.current = snap; // now on the server
       return { ok: true };
     } catch {
+      // Network failure — NOT terminal. Stay dirty so a later change retries.
       return { ok: false, message: t('estimate.saveError') };
     }
   }
@@ -312,13 +328,16 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   // JobCard is the durable store; this keeps it current. Skips the initial mount and unchanged state;
   // an in-flight write shows "Saving…", a failure keeps the local edit and the manual Save as a retry.
   const didMountRef = useRef(false);
+  const frozenRef = useRef(false); // set by a 409 — the card froze under us mid-edit
   useEffect(() => {
     const snap = serialize(lines, vatRate);
     if (!didMountRef.current) { didMountRef.current = true; lastSavedRef.current = snap; return; }
     if (!canEdit || snap === lastSavedRef.current) return; // read-only, or nothing changed
+    if (frozenRef.current) return; // a 409 already told us this card can never accept a write
     setSaveState('saving');
     const timer = setTimeout(async () => {
       const r = await commit(); // commit() reads the current lines/vatRate + updates lastSavedRef
+      if (r.terminal) frozenRef.current = true; // stop autosaving for the life of this mount
       setSaveState(r.ok ? 'saved' : 'error');
     }, 900);
     return () => clearTimeout(timer);

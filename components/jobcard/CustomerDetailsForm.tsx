@@ -74,6 +74,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   async function submit(confirmReg: boolean) {
     setBusy(true); setMsg(null);
     const body = {
+      source: 'details-form', // names the control in the audit trail
       jobCardId, confirmReg,
       owner: { name, phone: normalizePhone(phone), email, address }, // store the ONE canonical phone form
       vehicle: {

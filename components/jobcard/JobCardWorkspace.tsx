@@ -36,6 +36,7 @@ type Props = {
   canIssueInvoice: boolean; // may RAISE the invoice (in_progress→invoiced) — canManage OR the per-user grant
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
+  quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
@@ -138,15 +139,26 @@ export default function JobCardWorkspace(p: Props) {
   const urlTab = (router.query.tab as string) as TabKey | undefined;
   const active: TabKey = urlTab && TAB_KEYS.includes(urlTab) && eff.tabsState[urlTab].reachable ? urlTab : firstOpen;
 
+  // THE one test every quote-write path uses. canEditPricing is a PERMISSION; quoteFrozen is the
+  // freeze-at-issue lock. Before this the browser only had the first, so the autosave, the
+  // tab-change commit and the route-leave commit all fired at a frozen card and collected 409s —
+  // and the tab-change commit BLOCKS on failure, so the pane stopped swapping.
+  const quoteEditable = p.canEditPricing && !cancelled && !p.quoteFrozen;
+
   async function selectTab(k: TabKey) {
     // Leaving the Quote step: PERSIST the estimate first, so a financial edit is never lost when
     // moving to another step. (Bug: the quote lived in EstimateBuilder's transient local state, which
     // unmounted on step change — the entered quotation silently vanished.) Blocking on failure: keep
     // the user on the Quote rather than advance and lose the data.
-    if (active === 'quote' && k !== 'quote' && p.canEditPricing && !cancelled) {
+    if (active === 'quote' && k !== 'quote' && quoteEditable) {
       const r = await commitEstimate();
-      if (!r.ok) { setErr(r.message || t('estimate.saveError')); return; }
-      await refreshCard();
+      // A TERMINAL refusal (409: the invoice froze under us) must not trap the operator on this
+      // tab — the save will never succeed, so blocking only makes the page feel broken. Say what
+      // happened and let them move. A transient failure (500, offline) still blocks, because there
+      // the edit is worth keeping them here to retry.
+      if (!r.ok && r.terminal) { setErr(r.message || t('estimate.saveError')); }
+      else if (!r.ok) { setErr(r.message || t('estimate.saveError')); return; }
+      else await refreshCard();
     }
     router.replace({ pathname: router.pathname, query: { ...router.query, tab: k } }, undefined, { shallow: true });
   }
@@ -155,10 +167,12 @@ export default function JobCardWorkspace(p: Props) {
   // by selectTab above; skip them here to avoid a double-commit.
   const activeTabRef = useRef<TabKey>('details');
   activeTabRef.current = active;
+  const quoteEditableRef = useRef(false);
+  quoteEditableRef.current = quoteEditable;
   useEffect(() => {
     const onLeave = (_url: string, opts?: { shallow?: boolean }) => {
       if (opts?.shallow) return;
-      if (activeTabRef.current === 'quote' && p.canEditPricing) void commitEstimate();
+      if (activeTabRef.current === 'quote' && quoteEditableRef.current) void commitEstimate();
     };
     router.events.on('routeChangeStart', onLeave);
     return () => router.events.off('routeChangeStart', onLeave);
@@ -224,7 +238,7 @@ export default function JobCardWorkspace(p: Props) {
     setBusy('mint'); setErr(null);
     try {
       if (Object.keys(vehicle).length) {
-        const r = await fetch('/api/jobcard-details', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, vehicle }) });
+        const r = await fetch('/api/jobcard-details', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, vehicle, source: 'pre-mint-backstop' }) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { setErr(d?.message || t('action.error')); setBusy(null); return; }
       }
@@ -538,7 +552,15 @@ export default function JobCardWorkspace(p: Props) {
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
           />
-          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={p.canEditPricing && !cancelled} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} />
+          {/* THE UI'S OWN STATEMENT, from its own flag — not the 409 body echoed back. Before this
+              the only "frozen" wording in the app lived in the API refusal, so the page could not
+              say why the quote was read-only without first making a request that would fail. */}
+          {p.quoteFrozen && (
+            <div className="bg-warn-soft border border-warn rounded-xl p-3 mb-3 text-sm text-warn">
+              {t('estimate.frozen')}
+            </div>
+          )}
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={quoteEditable} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
               intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}

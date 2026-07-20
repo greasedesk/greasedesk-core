@@ -13,6 +13,7 @@ import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
+import { canEditInvoice } from '@/lib/invoice';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { computeTabs } from '@/lib/jobcard-tabs';
@@ -60,7 +61,12 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
 
   // Card ownership proven → NOW safe to read its invoice + audit trail (keyed on the card).
   const [invoiceRow, auditRows] = await Promise.all([
-    prisma.invoice.findUnique({ where: { job_card_id: cardId }, select: { id: true, invoice_number: true, status: true } }) as Promise<{ id: string; invoice_number: string | null; status: string } | null>,
+    prisma.invoice.findUnique({
+      where: { job_card_id: cardId },
+      // `lines: take 1` answers "are the lines FROZEN?" without loading them — the same test the
+      // quote API applies. Freeze-at-issue means their EXISTENCE is the locked state.
+      select: { id: true, invoice_number: true, status: true, lines: { select: { id: true }, take: 1 } },
+    }) as Promise<{ id: string; invoice_number: string | null; status: string; lines: Array<{ id: string }> } | null>,
     prisma.auditLog.findMany({
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
@@ -95,6 +101,16 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const canOperate = canAccessSite(vis, row.site_id);
   const canEditPricing = canEditEstimate(vis, row.site_id, perms);
   const canIssue = canIssueInvoice(vis, row.site_id); // canManage OR the per-user can_invoice grant
+
+  // QUOTE FROZEN — the state the browser never had. canEditPricing is a PERMISSION; this is the
+  // freeze-at-issue lock, and without it the client could not tell the difference: the autosave, the
+  // tab-change commit and the route-leave commit all fired at a frozen card and collected 409s, and
+  // the only "frozen" wording in the app lived in the API's refusal body. Same predicate as
+  // jobcard-quote.ts, read through the same chokepoint, so the two cannot disagree.
+  const quoteFrozen = !!invoiceRow && !canEditInvoice({
+    status: invoiceRow.status,
+    hasFrozenLines: (invoiceRow.lines?.length ?? 0) > 0,
+  });
   // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
   // a user who may not see money never RECEIVES money. Absent, not hidden.
   //   priceVisible = seeValues OR canEditPricing (edit implies see, for PRICES only)
@@ -176,7 +192,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     createdAt: row.created_at.toISOString(),
     status: row.status,
     jobCardId: row.id,
-    canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue,
+    canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
     isAdmin: vis.isAdmin,
     currency: site?.currency_code ?? 'GBP',
     locale: site?.locale ?? 'en-GB',

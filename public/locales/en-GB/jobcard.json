@@ -47,7 +47,8 @@
     "emptyLabour": "No labour lines yet.",
     "emptyParts": "No parts lines yet.",
     "discountHint": "Tip: enter a negative unit price for a discount line.",
-    "fixedHours": "Includes {{hours}}h labour (charged)"
+    "fixedHours": "Includes {{hours}}h labour (charged)",
+    "frozen": "This job is invoiced and its lines are frozen. An admin can unlock the invoice to make corrections."
   },
   "back": {
     "diary": "← Back to diary",

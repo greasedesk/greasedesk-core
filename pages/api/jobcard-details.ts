@@ -41,7 +41,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, owner, vehicle, confirmReg } = (req.body || {}) as { jobCardId?: string; owner?: OwnerIn; vehicle?: VehicleIn; confirmReg?: boolean };
+  // `source` = WHICH CONTROL sent this. The audit row records the diff but not the gesture, so
+  // "vehicle details edited seconds after opening the card" could only be answered by inference —
+  // reading the shape of the diff and guessing which form produced it. Callers name themselves.
+  const { jobCardId, owner, vehicle, confirmReg, source } = (req.body || {}) as {
+    jobCardId?: string; owner?: OwnerIn; vehicle?: VehicleIn; confirmReg?: boolean; source?: string;
+  };
+  // Server-controlled vocabulary: an unrecognised value is recorded as 'unknown' rather than
+  // trusted, so the trail cannot be written into by a hand-rolled request.
+  const KNOWN_SOURCES = ['details-form', 'pre-mint-backstop'] as const;
+  const via = KNOWN_SOURCES.includes(source as any) ? (source as string) : 'unknown';
   if (!jobCardId) return res.status(400).json({ message: 'Missing jobCardId.' });
 
   const card = (await prisma.jobCard.findFirst({
@@ -98,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (owner.address !== undefined) set('address', clean(owner.address), cur.address);
         if (Object.keys(next).length) {
           await tx.customer.update({ where: { id: ownerId }, data: next });
-          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff });
+          await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff: { ...diff, via } });
         }
       }
       if (vehicle) {
@@ -127,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (vehicle.lastMotDate !== undefined) { const nd = vdate(vehicle.lastMotDate); if (nd && curDate(cv.last_mot_date) !== nd.toISOString().slice(0, 10)) { vnext.last_mot_date = nd; vdiff.lastMotDate = { from: curDate(cv.last_mot_date), to: nd.toISOString().slice(0, 10) }; } }
         if (Object.keys(vnext).length) await tx.vehicle.update({ where: { id: card.vehicle_id }, data: vnext });
         if (mileageVal !== undefined && mileageVal !== card.odometer_in) { await tx.jobCard.update({ where: { id: jobCardId }, data: { odometer_in: mileageVal } }); vdiff.mileageIn = { from: card.odometer_in, to: mileageVal }; }
-        if (Object.keys(vdiff).length) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'vehicle.edited', diff: vdiff });
+        if (Object.keys(vdiff).length) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'vehicle.edited', diff: { ...vdiff, via } });
       }
     });
   } catch (e) {
