@@ -120,3 +120,83 @@ where it can be tested rather than bolted onto an unrelated one.
 
 **Related:** the same asymmetry exists wherever a long-lived object holds a `site_id` that outlives
 the operational set — see `docs/undated-config-exposure.md` item 5 for the general shape.
+
+---
+
+## The estimate builder drops lines absent from the client payload
+
+**The gap.** `performEstimateSave` replaces a card's lines wholesale —
+`jobCardItem.deleteMany` then `createMany` from the request body ([jobcard-quote.ts:185](../pages/api/jobcard-quote.ts)).
+A line missing from that payload therefore ceases to exist, with no diff, no warning and no audit.
+The client is trusted to send back everything it was given.
+
+**It has already cost real money.** On 2026-07-20, invoice 100002297 was minted correctly, unlocked,
+and re-saved through the estimate path; the `Paid on account −£1,537.37` credit was absent from the
+payload and vanished from the card. The invoice then re-froze at the paid transition **without** it,
+recording £2,236.33 against a printed £698.96 — more than three times the invoice's value. The
+credit was still in staging the whole time, which is how the re-commit recovered it.
+
+**What now protects what.** `lib/import-assert` re-reads the written `InvoiceLine` rows from storage
+and refuses any freeze of an IMPORTED invoice that does not equal its source document — mint,
+re-issue and snapshot-at-paid alike. That stops a dropped line reaching an imported invoice's ledger
+rows. **An ordinary job card has no such guard**, because it has no source document to be checked
+against: its estimate IS the truth, so a silently dropped line is simply a smaller invoice that
+nobody can detect after the fact.
+
+**The builder itself is unfixed.** Candidate approaches, none chosen: send a per-line operation
+(upsert/delete) rather than a whole-list replace, so a removal is explicit and auditable; or keep the
+replace but audit the diff (`quote.lines_replaced` with removed lines named), so at least the loss is
+visible; or reject a payload whose line count drops without an explicit removal flag.
+
+**Why deferred.** The replace-wholesale shape is load-bearing for the autosave and the tab-change
+commit, and changing it touches the money path on the busiest screen in the app. It wants its own
+slice with the ZZ matrix and a browser pass, not a bolt-on to an import fix.
+
+---
+
+## Import commit sets `paid` directly, so no payment audit is written
+
+**The gap.** `pages/api/import/commit.ts` writes `status: 'paid'` and `date_paid` straight onto the
+invoice — historic invoices arrive settled, so it deliberately skips the mark-paid transition. But
+that transition is what writes the `invoice.paid` audit row (date, method, clearance), so an imported
+invoice has **no payment event in its trail at all**.
+
+**What it cost.** When 100002298 was unlocked on 2026-07-20 the unlock cleared `paid_at`,
+`date_paid`, `receipt_sent_at` and both payment-method columns in one update — and there was no
+audit row to recover them from, because none had ever been written. Its payment date now exists only
+on the printed document. Every other imported invoice was captured to
+`~/Developer/import/payment-grain-capture-2026-07-20.json` before its unlock; 100002298 was already
+past that point.
+
+**The fix, when it happens.** Write `invoice.paid` from the import commit as well — same action, same
+diff shape (`{date, method, clearance}`), marked as import-sourced. It is a few lines inside the
+existing transaction. The reason to do it deliberately rather than casually is that the audit
+taxonomy is the recovery mechanism of last resort: unlock destroys the live grain, so whatever the
+trail does not record is simply gone.
+
+**Related:** the capture file exists precisely because this hole does. A future unwind should not need
+one.
+
+---
+
+## The 35 pending staged rows have no `total_printed`
+
+**The gap.** `total_printed` was added on 2026-07-20 and is captured at ingest going forward, but the
+42 May rows were ingested before it existed. The seven committed ones were backfilled by targeted
+update from their source PDFs; **the 35 still pending are NULL**.
+
+**Why it matters before they are driven.** `assertImportedInvoiceMatchesSource` skips a printed
+figure it does not have — an absent comparison is honest, an invented one is not. So a pending row
+committed today is checked on subtotal and VAT but **not on gross**: two of three. That is still far
+stronger than the reconciliation gate alone, but it is not the guarantee the seven now enjoy, and the
+gross is the figure a customer actually paid.
+
+**How to close it.** A targeted `updateMany` keyed on `external_number`, reading each printed TOTAL
+from the source PDF — exactly as the seven were done. **Not by re-ingesting**: `ingestOne` rewrites
+the staged row and its lines, which would discard the kinds, costs, splits and labour hours already
+entered across those 35 rows, including the split work on the bundled lines.
+
+**Why deferred rather than done.** It is 35 PDF reads and a write to live staging, and it belongs
+with the decision about when the rest of May gets driven — not bolted onto the unwind of the seven.
+Until it happens, anything committed from that batch carries the weaker assertion, and that should be
+a conscious choice rather than a surprise.
