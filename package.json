@@ -16,7 +16,9 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "prebuild": "node scripts/copy-pdf-worker.mjs",
+    "test:pdf-parity": "node scripts/pdf-layout-parity.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",
@@ -30,6 +32,7 @@
     "next": "^14.2.33",
     "next-auth": "^4.24.13",
     "next-i18next": "^15.4.3",
+    "pdfjs-dist": "^4.10.38",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-i18next": "^15.7.4",
