@@ -18,6 +18,7 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireImportPage, importableSiteIds } from '@/lib/admin-guard';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { childAmountPennies, numOrNull } from '@/lib/import-split';
+import { lineLabourCentihours } from '@/lib/charged-labour';
 // THE SHARED SHAPE, the same file the quote page uses: sections, Add-line control, the row card.
 // Layout only — this surface's FIELDS are its own, because it decomposes a fixed printed total
 // while quoting composes a price, and because a writable cost belongs nowhere near the quote path.
@@ -219,11 +220,17 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
   // can never disagree. The ONE reason the server cannot know is an unsaved split: children exist
   // only in this browser until Save, so the residual can read "balanced" while nothing is stored.
   const serverBlockers: Array<{ lineId: string; description: string; reason: string }> = d.blockers ?? [];
-  const blockers = splitFor
+  // THE ONE REASON THE SERVER CANNOT KNOW: children typed into the editor exist only in this
+  // browser. That is true when the editor is open on a line with NO saved children — the same
+  // signal the editor itself reads (draftBaseIds) — and false when EDITING a saved split, which is
+  // why this used to contradict the editor's own "Replace split" and block Commit for no reason.
+  // The server's real blockers for the line are kept either way; suppressing them hid genuine work.
+  const composingUnsaved = !!splitFor && childrenOf(splitFor).length === 0;
+  const blockers = composingUnsaved
     ? [
-        ...serverBlockers.filter((b) => b.lineId !== splitFor),
+        ...serverBlockers,
         {
-          lineId: splitFor,
+          lineId: splitFor as string,
           description: (s.lines.find((l: any) => l.id === splitFor)?.description) ?? 'line',
           reason: 'split not saved — the lines you have typed do not exist yet; press Save split',
         },
@@ -287,7 +294,11 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
               <tr><th className="text-left pb-2">Description</th><th className="text-right pb-2">Qty</th><th className="text-right pb-2">Unit</th><th className="text-right pb-2">Amount</th></tr>
             </thead>
             <tbody>
-              {s.lines.map((l: any) => (
+              {/* topLines, not s.lines: the API returns children in the same array as their parents,
+                  so this table was listing both and summing to more than the printed subtotal
+                  (£266.67 printed, £533.34 shown). This panel is the invoice VERBATIM — a split
+                  child is our re-expression of a line, and belongs only on the right. */}
+              {topLines.map((l: any) => (
                 <tr key={l.id} className="border-t border-line align-top">
                   <td className="py-2 pr-2 text-ink">
                     {l.description}
@@ -927,8 +938,12 @@ function SplitEditor({ parentAmount, draft, setDraft, catalogue, busy, replacing
               {Number(c.partsCost) > 0 && (
                 <>cost £{(Number(c.partsCost) * (Number(c.qty) || 0)).toFixed(2)} · </>
               )}
+              {/* Hours through lineLabourCentihours — the SAME resolver the ledger and the booking
+                  duration use. This multiplied by qty and reported 4.00h for a whole-line 2h at
+                  qty 2, disagreeing with both the summary above and what is actually counted.
+                  (The parts-cost readout beside it DOES multiply, correctly: cost is per unit.) */}
               {Number(c.labourHours) > 0 && (
-                <>{(Number(c.labourHours) * (Number(c.qty) || 0)).toFixed(2)}h · </>
+                <>{(lineLabourCentihours({ item_type: 'labour', qty: Number(c.qty) || 0, labour_hours: Number(c.labourHours) }).centihours / 100).toFixed(2)}h · </>
               )}
               {unitOf(c) != null && (
                 <>£{unitOf(c)!.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}/unit derived · </>
