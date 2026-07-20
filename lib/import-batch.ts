@@ -61,6 +61,7 @@ export async function ingestOne(args: {
       subtotal_parsed: r.parsed as any,
       reconciled: r.ok,
       vat_printed: (p.vatPrinted ?? null) as any,
+      total_printed: (p.totalPrinted ?? null) as any, // the printed GROSS — the post-commit assertion's third equality
       vat_computed: (vatComputed ?? null) as any,
       planned_start_at: p.issueDate, // defaults to the invoice date; operator may move it
       raw_text: args.text,

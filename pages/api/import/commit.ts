@@ -25,6 +25,8 @@ import { requireImportApi, importableSiteIds, requireCanWrite } from '@/lib/admi
 import { placeJobCard } from '@/lib/diary-booking';
 import { issueInvoiceForCard } from '@/lib/invoice-issue';
 import { writeAudit, writeImportAudit } from '@/lib/audit';
+import { computeQuoteTotals } from '@/lib/quote-totals';
+import { assertImportedInvoiceMatchesSource, importAssertError } from '@/lib/import-assert';
 import { SKIP_COLUMN } from '@/lib/jobcard-status';
 import { upsertMemory } from '@/lib/import-memory';
 import { getTaxProfile } from '@/lib/tenant-vat';
@@ -157,14 +159,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       //    balance invariant, sum to exactly what the parent printed — so the invoice total is
       //    identical either way. An unsplit line commits as itself.
       const emit = staged.lines.filter((l: any) => !splitParents.has(l.id));
-      for (const l of emit) {
+
+      /**
+       * ONE VAT IMPLEMENTATION. Per-line VAT comes from computeQuoteTotals — the same function the
+       * estimate path persists from (jobcard-quote writes vat_amount from totals.lines[i]) — so the
+       * import and the estimate cannot disagree about the tax on a line. This path previously wrote
+       * `vat_rate` and left `vat_amount` at its 0 default; invoice-issue freezes line_vat FROM
+       * vat_amount, so six of the seven May invoices reached the ledger carrying 20% and £0.00.
+       *
+       * `vatable` maps the printed VAT column: a line reading "No VAT" (an MOT) is not vatable, and
+       * everything else takes the tenant's rate.
+       */
+      const emitVatable = emit.map((l: any) => !/no vat/i.test(l.vat_text ?? ''));
+      /**
+       * THE PRINTED AMOUNT IS THE TRUTH, and it must survive a 2-dp column. InvoiceLine.unit_price is
+       * Decimal(12,2) and invoice-issue DERIVES line_total = qty × unit_price, so a 4-dp price loses
+       * the printed figure: 2 × 133.3333 = £266.67 printed, but 2 × 133.33 = £266.66 written, and a
+       * split child at 2 × 58.335 wrote £116.68 against £116.67. Where the 2-dp derivation cannot
+       * reproduce the printed amount, the line is emitted at QTY 1 with unit_price = the amount, so
+       * qty × unit_price lands exactly and no reader ever sees line_total ≠ qty × unit_price.
+       *
+       * The loss is COSMETIC AND ONLY ON THE GRAIN: the "2 x" is already in the description the
+       * invoice printed ("Supply and fit 2 x front wheel bearing"), the money is unchanged to the
+       * penny, and every downstream reader (margin, VAT, charged hours via labour_hours) works from
+       * amounts and item_type, not from qty.
+       */
+      const exactLine = (l: any) => {
+        const amountPennies = Math.round(Number(l.amount) * 100);
+        const qty = Number(l.qty);
+        const derived = Math.round(qty * Math.round(Number(l.unit_price) * 100)) / 1; // qty × 2dp price, in pennies
+        return derived === amountPennies
+          ? { qty: l.qty as any, unit_price: l.unit_price as any }
+          : { qty: 1 as any, unit_price: (amountPennies / 100) as any };
+      };
+      const shaped = emit.map((l: any, i: number) => ({ line: l, ...exactLine(l), vatable: emitVatable[i] }));
+
+      const totals = computeQuoteTotals(
+        // PENNIES — QuoteLineInput is an integer-penny contract (unit_price_pennies), which is why
+        // the totals must be built from it rather than from pounds.
+        shaped.map((x: any) => ({
+          item_type: ((x.line.kind ?? 'part') as any),
+          qty: Number(x.qty),
+          unit_price_pennies: Math.round(Number(x.unit_price) * 100),
+          unit_cost_pennies: null,
+          vatable: x.vatable,
+        })) as any,
+        profile.defaultRateBp / 100,
+        { vatRegistered: profile.isRegistered },
+      );
+
+      for (let i = 0; i < shaped.length; i++) {
+        const { line: l, qty, unit_price, vatable } = shaped[i];
         let catalogueItemId = l.catalogue_item_id;
         // NEVER mint when the line is ALREADY resolved to an existing product. The picker sets
         // catalogue_item_id AND parts_cost together, so a `parts_cost != null` test alone would
-        // mint an IMP- duplicate and overwrite the operator's choice — which is exactly how
-        // IMP-CHANGE-OIL-USING-100-SYNTHETIC-ENGINE-OI-12500 came to sit beside Oil Service -
-        // Bronze at the same £125 and the same £27.60 cost. Minting is the FALLBACK path only:
-        // it is for a line with a hand-entered cost and no catalogue counterpart.
+        // mint an IMP- duplicate and overwrite the operator's choice.
         if (!l.is_adjustment && l.parts_cost != null && !catalogueItemId) {
           const timesSeen = await tx.stagedLine.count({
             where: { description: l.description, unit_price: l.unit_price, staged_invoice: { group_id: vis.groupId as string } },
@@ -177,19 +226,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             unitCostPennies: Math.round(Number(l.parts_cost) * 100),
             labourHours: l.labour_hours == null ? null : Number(l.labour_hours),
             timesSeen,
-            vatRate: /no vat/i.test(l.vat_text ?? '') ? 0 : profile.defaultRateBp / 100,
+            vatRate: vatable ? profile.defaultRateBp / 100 : 0,
           });
         }
         await tx.jobCardItem.create({
           data: {
             job_card_id: card.id,
             description: l.description,
-            qty: l.qty as any,
-            unit_price: l.unit_price as any,
+            qty,
+            unit_price,
             unit_cost: (l.is_adjustment ? 0 : l.parts_cost) as any, // null stays NULL = unknown
             labour_hours: (l.labour_hours ?? null) as any,
             item_type: (l.kind ?? 'part') as any,
-            vat_rate: (/no vat/i.test(l.vat_text ?? '') ? 0 : profile.defaultRateBp / 100) as any,
+            vat_rate: (vatable ? profile.defaultRateBp / 100 : 0) as any,
+            // FROM THE SHARED CHOKEPOINT — never computed here a second time.
+            vat_amount: (totals.lines[i].vat_pennies / 100) as any,
             catalogue_item_id: catalogueItemId,
             cost_basis: l.cost_basis,
           } as any,
@@ -240,6 +291,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       });
 
+      /**
+       * 6b) THE POST-COMMIT ASSERTION — the guarantee we thought we had.
+       *
+       * Reads the InvoiceLine rows BACK FROM STORAGE and requires them to equal what the source
+       * document printed: subtotal, VAT, gross. Any mismatch throws, and because we are inside the
+       * mint transaction the invoice, its lines, the card, the placement and the sequence value all
+       * roll back — nothing is written and no number is consumed.
+       *
+       * It reads storage rather than the objects just built ON PURPOSE: the objects are what this
+       * code believes it did; the rows are what it actually did. Every defect found on 2026-07-20
+       * lived in that gap.
+       */
+      const check = await assertImportedInvoiceMatchesSource(tx, {
+        invoiceId, groupId: vis.groupId as string, externalRef: staged.external_number,
+      });
+      if (!check.ok) throw importAssertError(staged.external_number, check);
+
       // 7) PAID — historic invoices arrive settled.
       await tx.jobCard.update({ where: { id: card.id }, data: { status: 'paid' } });
       await tx.invoice.update({ where: { id: invoiceId }, data: { status: 'paid', date_paid: staged.issue_date } });
@@ -287,6 +355,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const msg = String(e?.message ?? e);
     if (msg.startsWith('CLASH:')) return res.status(409).json({ message: `That lift is already taken at that time (${msg.slice(6)}).` });
     if (msg === 'EMPTY_FOOTPRINT') return res.status(409).json({ message: 'That date/time falls outside the site\'s working hours — pick a working day.' });
+    // The post-commit assertion refused: a REFUSAL, not a crash. The operator needs the arithmetic,
+    // not "commit failed" — the message names which figure disagreed and by how much.
+    if (msg.startsWith('IMPORT_ASSERT:')) return res.status(409).json({ message: msg.slice('IMPORT_ASSERT:'.length) });
     console.error('[import commit]', msg);
     return res.status(500).json({ message: 'Commit failed; nothing was written.' });
   }

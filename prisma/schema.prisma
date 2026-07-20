@@ -1495,6 +1495,9 @@ model StagedInvoice {
   // VAT is COMPUTED through lib/tax.computeTax, never taken from the PDF. A variance is surfaced,
   // not absorbed — at least one May invoice carries a discount entered VAT-inclusive.
   vat_printed      Decimal? @db.Decimal(12, 2)
+  // The printed GROSS. Captured at ingest so the post-commit assertion can compare what was WRITTEN
+  // against all three printed figures, not just the subtotal the reconciliation gate checks.
+  total_printed    Decimal? @db.Decimal(12, 2)
   vat_computed     Decimal? @db.Decimal(12, 2)
 
   // The diary date is EDITABLE per card and defaults to issue_date; the invoice keeps its printed

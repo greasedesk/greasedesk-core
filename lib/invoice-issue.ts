@@ -19,6 +19,7 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { Prisma } from '@prisma/client';
+import { assertImportedInvoiceMatchesSource, importAssertError } from '@/lib/import-assert';
 import { assignInvoiceNumber, assignWarrantyNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
 
@@ -222,4 +223,25 @@ export async function snapshotInvoiceLines(
       };
     }),
   });
+  /**
+   * EVERY RE-FREEZE OF AN IMPORTED INVOICE MUST STILL EQUAL ITS SOURCE. 100002297 was CORRECT at
+   * mint and was broken AFTERWARDS — unlocked, the card re-saved through the estimate path (which
+   * deletes and recreates every line from the client payload, losing a £1,537.37 credit that was
+   * absent from it), then re-frozen here at the paid transition. An assertion that fired only on
+   * the first write would have watched that happen and said nothing.
+   *
+   * So the same equality is enforced on the re-freeze, keyed on external_ref. Throwing rolls back
+   * the caller's transaction — the unlock/re-issue or the mark-paid — leaving the invoice in its
+   * previous state rather than silently re-freezing a wrong one.
+   */
+  const imported = (await tx.invoice.findUnique({
+    where: { id: invoice.id },
+    select: { is_imported: true, external_ref: true, group_id: true },
+  })) as { is_imported: boolean; external_ref: string | null; group_id: string } | null;
+  if (imported?.is_imported && imported.external_ref) {
+    const check = await assertImportedInvoiceMatchesSource(tx, {
+      invoiceId: invoice.id, groupId: imported.group_id, externalRef: imported.external_ref,
+    });
+    if (!check.ok) throw importAssertError(imported.external_ref, check);
+  }
 }
