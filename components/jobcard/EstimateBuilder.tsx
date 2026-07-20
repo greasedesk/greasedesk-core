@@ -15,6 +15,9 @@ import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-
 import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
 import { PromoLite, computePromoDiscounts } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
+// THE SHARED SHAPE (sections, row card, code autocomplete). Layout only — the fields below are
+// this surface's own, because quoting composes a price while the import decomposes a fixed total.
+import { CODES_DATALIST, CodesDatalist, CodeField, LineCard, LineSection, inputCls, labelCls } from '@/components/estimate/EstimateShell';
 
 export type EstimateLine = {
   item_type: QuoteItemType; // 'labour' | 'part' | 'misc'
@@ -65,11 +68,6 @@ type Props = {
   canCatalogue?: boolean; // ADMIN — surface "Add to catalogue" on ad-hoc parts (the cost home)
 };
 
-const CODES_DATALIST = 'gd-catalogue-codes';
-
-const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
-const labelCls = 'block text-xs text-muted mb-1';
-
 const blank = (item_type: QuoteItemType): Row => ({ _uid: uid(), item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true, code: '', catalogue_item_id: null });
 
 // ---- module-scope row component (stable identity → inputs keep focus) ----
@@ -96,20 +94,23 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
   // cost — from a cost-visible user, re-validated server-side. Catalogue/fixed rows show cost read-only.
   const isAdHocPart = kind === 'part' && !row.catalogue_item_id && row.labour_hours == null && Number(row.unit_price || 0) >= 0;
   return (
-    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
-      {hasCatalogue && (
-        <div className="sm:w-28">
-          <label className={labelCls}>{t('estimate.code')}</label>
-          <input className={inputCls} placeholder={t('estimate.codePlaceholder')} value={row.code ?? ''} list={CODES_DATALIST}
-            autoCapitalize="characters" autoCorrect="off" spellCheck={false}
-            disabled={!canEdit} onChange={(e) => onCode(idx, e.target.value)} />
-        </div>
+    <LineCard
+      canEdit={canEdit}
+      onRemove={() => onRemove(idx)}
+      removeLabel={t('estimate.remove')}
+      code={hasCatalogue ? (
+        <CodeField label={t('estimate.code')} placeholder={t('estimate.codePlaceholder')}
+          value={row.code ?? ''} disabled={!canEdit} onChange={(v) => onCode(idx, v)} />
+      ) : undefined}
+      description={(
+        <>
+          <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
+          <textarea className={`${inputCls} resize-y`} rows={2} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
+            disabled={!canEdit} onChange={(e) => onChange(idx, { description: e.target.value })} />
+        </>
       )}
-      <div className="sm:flex-1">
-        <label className={`${labelCls} sm:hidden`}>{t('estimate.description')}</label>
-        <textarea className={`${inputCls} resize-y`} rows={2} placeholder={t('estimate.descriptionPlaceholder')} value={row.description}
-          disabled={!canEdit} onChange={(e) => onChange(idx, { description: e.target.value })} />
-      </div>
+      fields={(
+        <>
       {priceVisible && (
         <div className="sm:w-24">
           <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
@@ -152,17 +153,15 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
           {t('estimate.vat')}
         </label>
       )}
-      {priceVisible && (
+        </>
+      )}
+      trailing={priceVisible ? (
         <div className="sm:w-24 text-right">
           <label className={`${labelCls} sm:hidden`}>{t('estimate.lineTotal')}</label>
           <div className="text-ink font-medium tabular-nums py-2">{lineTotal}</div>
         </div>
-      )}
-      {canEdit && (
-        <button onClick={() => onRemove(idx)} aria-label={t('estimate.remove')}
-          className="text-danger hover:text-danger text-sm px-2 py-2 self-end">✕</button>
-      )}
-    </div>
+      ) : undefined}
+    />
   );
 }
 
@@ -334,11 +333,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5 mt-6">
-      {hasCatalogue && (
-        <datalist id={CODES_DATALIST}>
-          {catalogue.map((c) => <option key={c.id} value={c.code}>{c.name}</option>)}
-        </datalist>
-      )}
+      {hasCatalogue && <CodesDatalist codes={catalogue} />}
       <div className="flex items-center justify-between gap-2 mb-1">
         <h2 className="text-lg font-semibold text-ink">{t('estimate.title')}</h2>
         {/* Autosave status — the quote is saved as you build it (Option B: the draft is the store). */}
@@ -351,27 +346,23 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       {!canEdit && <p className="text-warn text-sm mb-3">{t('estimate.readOnly')}</p>}
 
       {/* Labour */}
-      <h3 className="text-sm font-semibold text-ink mt-2 mb-2">{t('estimate.labour')}</h3>
-      {labour.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyLabour')}</p>}
-      {labour.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
-          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
-      ))}
-      {canEdit && <button onClick={() => add('labour')} className="text-xs text-accent hover:underline mb-4">+ {t('estimate.addLabour')}</button>}
+      <LineSection title={t('estimate.labour')} empty={t('estimate.emptyLabour')} isEmpty={labour.length === 0}
+        addLabel={canEdit ? t('estimate.addLabour') : undefined} onAdd={canEdit ? () => add('labour') : undefined}>
+        {labour.map(({ l, idx }) => (
+          <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
+            lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+        ))}
+      </LineSection>
 
       {/* Parts */}
-      <h3 className="text-sm font-semibold text-ink mt-4 mb-2">{t('estimate.parts')}</h3>
-      {parts.length === 0 && <p className="text-muted text-sm mb-2">{t('estimate.emptyParts')}</p>}
-      {parts.map(({ l, idx }) => (
-        <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
-          lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
-      ))}
-      {canEdit && (
-        <div className="mb-4">
-          <button onClick={() => add('part')} className="text-xs text-accent hover:underline">+ {t('estimate.addParts')}</button>
-          <p className="text-xs text-muted mt-1">{t('estimate.discountHint')}</p>
-        </div>
-      )}
+      <LineSection title={t('estimate.parts')} empty={t('estimate.emptyParts')} isEmpty={parts.length === 0}
+        className="mt-4" addLabel={canEdit ? t('estimate.addParts') : undefined}
+        onAdd={canEdit ? () => add('part') : undefined} hint={canEdit ? t('estimate.discountHint') : undefined}>
+        {parts.map(({ l, idx }) => (
+          <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
+            lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+        ))}
+      </LineSection>
 
       {/* Fixed-price services — published bundles (price-led; cost optional). Shown only if in use
           or the estimate is editable, so it doesn't clutter a card that has none. */}

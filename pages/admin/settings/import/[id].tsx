@@ -18,6 +18,10 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { childAmountPennies, numOrNull } from '@/lib/import-split';
+// THE SHARED SHAPE, the same file the quote page uses: sections, Add-line control, the row card.
+// Layout only — this surface's FIELDS are its own, because it decomposes a fixed printed total
+// while quoting composes a price, and because a writable cost belongs nowhere near the quote path.
+import { LineSection, LineCard } from '@/components/estimate/EstimateShell';
 
 const inputCls = 'w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -376,7 +380,11 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                   </ul>
                 </div>
               )}
-              {topLines.map((l: any) => {
+              {(() => {
+                /* ONE line renderer, called from each section — the section a line sits in IS its
+                   declaration, so the kind selector is gone. resolutionOf reads the same field the
+                   section is derived from. */
+                const renderLine = (l: any) => {
                 const mem = d.memory?.find((m: any) => m.lineId === l.id);
                 const sugg = mem?.suggestions ?? [];
                 const chosen = l.catalogue_item_id
@@ -390,8 +398,22 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                 });
                 return (
                   <div key={l.id} className="border border-line rounded-lg p-3">
-                    <div className="text-sm text-ink">{l.description}</div>
-                    <div className="text-xs text-muted mb-2">£{Number(l.unit_price).toFixed(2)} × {Number(l.qty)}</div>
+                    {/* The ROW SHAPE, shared with the quote form. The printed figures are read-only
+                        here: an imported line's amount is the invoice's, not ours to compose. */}
+                    <LineCard
+                      canEdit={false}
+                      description={<div className="text-sm text-ink">{l.description}</div>}
+                      fields={(
+                        <div className="sm:w-40 text-xs text-muted">
+                          £{Number(l.unit_price).toFixed(2)} × {Number(l.qty)}
+                        </div>
+                      )}
+                      trailing={(
+                        <div className="sm:w-24 text-right">
+                          <div className="text-ink font-medium tabular-nums py-2">£{Number(l.amount).toFixed(2)}</div>
+                        </div>
+                      )}
+                    />
 
                     {l.is_adjustment ? (
                       <p className="text-xs text-muted">Adjustment — cost pinned to £0.00, no entry needed.</p>
@@ -508,56 +530,89 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                           </div>
                         ))}
 
-                        {/* WHAT IS THIS LINE? Declared, never inferred — and only the field that
-                            belongs to the declaration is shown, because parts and labour never
-                            share a line. A line that is genuinely both is a bundle: split it. */}
-                        {!committed && (
-                          <div className="border border-line rounded-lg p-2">
-                            <div className="text-xs text-muted mb-1">This line is…</div>
-                            <div className="flex flex-wrap gap-1">
-                              {[{ k: 'part', label: 'Parts' }, { k: 'labour', label: 'Labour' }].map((o) => (
-                                <button key={o.k} disabled={busy}
-                                  onClick={() => save({ lines: [{ id: l.id, kind: l.kind === o.k ? null : o.k }] })}
-                                  className={`text-xs px-2.5 py-1 rounded-full border ${
-                                    l.kind === o.k ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line'}`}>
-                                  {o.label}
-                                </button>
-                              ))}
-                            </div>
-
-                            {l.kind === 'labour' && (
-                              <div className="mt-2 max-w-xs">
-                                <LabelledInput label="Labour hours (whole line)" defaultValue={l.labour_hours ?? ''}
-                                  onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} />
-                                <p className="text-xs text-muted mt-1">
-                                  Hours for the WHOLE line, not per unit — qty does not multiply it. Hours only:
-                                  a labour line carries no parts cost, so if this line also supplied a part, split it.
-                                </p>
-                              </div>
-                            )}
-                            {(l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') && (
-                              <div className="mt-2 max-w-xs">
-                                <LabelledInput label="Parts cost £ (what it cost us)" defaultValue={l.parts_cost ?? ''}
-                                  onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} />
-                                <p className="text-xs text-muted mt-1">
-                                  Cost only. A parts line carries no hours — if fitting was charged on this line
-                                  too, split it instead.
-                                </p>
-                              </div>
-                            )}
-                            {!l.kind && (
-                              <p className="text-xs text-muted mt-1">
-                                Choose one, attach a product above, or split the line. Nothing is guessed from the
-                                wording — &ldquo;Supply and fit&rdquo; is both, and only you know which part is which.
-                              </p>
-                            )}
+                        {/* THE SECTION IS THE DECLARATION — a line in Labour is labour, a line in
+                            Parts is parts, exactly as on the quote form. So only the field that
+                            belongs to this section is offered; parts and labour never share a line,
+                            and a line that is genuinely both is a bundle to be split. */}
+                        {!committed && l.kind === 'labour' && (
+                          <div className="max-w-xs">
+                            <LabelledInput label="Labour hours (whole line)" defaultValue={l.labour_hours ?? ''}
+                              onBlur={(v) => save({ lines: [{ id: l.id, labourHours: v === '' ? null : Number(v) }] })} />
+                            <p className="text-xs text-muted mt-1">
+                              Hours for the WHOLE line, not per unit — qty does not multiply it.
+                            </p>
+                            <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'part' }] })}
+                              className="text-xs text-muted hover:text-ink underline mt-1">Move to Parts &amp; materials</button>
+                          </div>
+                        )}
+                        {!committed && (l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') && !l.catalogue_item_id && (
+                          <div className="max-w-xs">
+                            {/* COST is typed HERE and only here. The quoting path forbids a
+                                client-supplied unit_cost (ruling 2026-07-12, re-affirmed 2026-07-17)
+                                and discards it server-side; this field lives on the import surface,
+                                not in the shared row, so that rule cannot be switched on by a prop. */}
+                            <LabelledInput label="Parts cost £ (what it cost us)" defaultValue={l.parts_cost ?? ''}
+                              onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} />
+                            <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'labour' }] })}
+                              className="text-xs text-muted hover:text-ink underline mt-1">Move to Labour</button>
                           </div>
                         )}
                       </div>
                     )}
                   </div>
                 );
-              })}
+                };
+                const bucketOf = (l: any) => (l.catalogue_item_id ? 'part'
+                  : l.kind === 'labour' ? 'labour'
+                  : (l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') ? 'part'
+                  : 'unsorted');
+                const unsorted = topLines.filter((l: any) => bucketOf(l) === 'unsorted');
+                const labourLines = topLines.filter((l: any) => bucketOf(l) === 'labour');
+                const partLines = topLines.filter((l: any) => bucketOf(l) === 'part');
+                return (
+                  <>
+                    {/* UNSORTED — where an imported line starts, because the invoice declares
+                        nothing. Assigning one settles every pending occurrence of the same
+                        description + price across the batch, so this empties far faster than it
+                        looks: 88 lines, 54 distinct decisions. */}
+                    {unsorted.length > 0 && (
+                      <LineSection title={`Unsorted (${unsorted.length})`}
+                        empty="Nothing unsorted — every line has been placed." isEmpty={false}>
+                        <p className="text-xs text-muted mb-2">
+                          The invoice does not say what these lines are. Put each in Labour or Parts &amp; materials —
+                          or attach a product, or split it if it is genuinely both. One click settles every copy of
+                          the same line in the batch.
+                        </p>
+                        {unsorted.map((l: any) => (
+                          <div key={l.id}>
+                            {!committed && (
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <span className="text-xs text-muted">Put this in:</span>
+                                <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'labour' }] })}
+                                  className="text-xs px-2.5 py-1 rounded-full border border-accent text-accent bg-accent-soft">
+                                  Labour
+                                </button>
+                                <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'part' }] })}
+                                  className="text-xs px-2.5 py-1 rounded-full border border-accent text-accent bg-accent-soft">
+                                  Parts &amp; materials
+                                </button>
+                                <span className="text-xs text-muted">· applies to every copy in the batch</span>
+                              </div>
+                            )}
+                            {renderLine(l)}
+                          </div>
+                        ))}
+                      </LineSection>
+                    )}
+                    <LineSection title="Labour" empty="No labour lines yet." isEmpty={labourLines.length === 0}>
+                      {labourLines.map((l: any) => <div key={l.id}>{renderLine(l)}</div>)}
+                    </LineSection>
+                    <LineSection title="Parts &amp; materials" empty="No parts lines yet." isEmpty={partLines.length === 0} className="mt-4">
+                      {partLines.map((l: any) => <div key={l.id}>{renderLine(l)}</div>)}
+                    </LineSection>
+                  </>
+                );
+              })()}
             </div>
           )}
 

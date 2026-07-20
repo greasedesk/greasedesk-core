@@ -248,6 +248,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const declared = (l.kind as any) ?? row.kind;
         const wipeParts = declared === 'labour';
         const wipeHours = declared === 'part' || declared === 'misc' || declared === 'fixed';
+        // RETROACTIVE, like aliasing and splitting: declaring what "Supply Thermostat @ £108.3333"
+        // IS settles every pending occurrence of it across the batch, not just this invoice's copy.
+        // Without it the operator answers the same question 88 times instead of 54.
+        if (l.kind !== undefined && l.kind !== null && !row.parent_line_id && !row.is_adjustment) {
+          await tx.stagedLine.updateMany({
+            where: {
+              description: row.description, unit_price: row.unit_price,
+              parent_line_id: null, is_adjustment: false, id: { not: row.id },
+              staged_invoice: { group_id: vis.groupId as string, status: { in: ['pending', 'in_progress'] } },
+            },
+            data: {
+              kind: declared,
+              ...(wipeParts ? { parts_cost: null } : {}),
+              ...(wipeHours ? { labour_hours: null } : {}),
+            },
+          });
+        }
         await tx.stagedLine.update({
           where: { id: row.id },
           data: {
