@@ -702,7 +702,12 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                 </div>
                 <div>
                   <label className="block text-xs text-muted mb-1">Lift</label>
-                  <select className={inputCls} defaultValue={s.planned_resource_id ?? ''} disabled={committed}
+                  {/* CONTROLLED, not defaultValue. The preselection effect saves the suggested lift
+                      on mount, but defaultValue only applies at mount — so the lift could be STORED
+                      while the box still read "Choose…", the mirror image of the duration bug and
+                      just as misleading: step 5 would report a lift that step 3 appeared not to
+                      have. value= binds the display to the stored figure, which is the truth. */}
+                  <select className={inputCls} value={s.planned_resource_id ?? ''} disabled={committed}
                     onChange={(e) => save({ plannedResourceId: e.target.value || null })}>
                     <option value="">Choose…</option>
                     {(d.lifts ?? []).map((r: any) => (
@@ -745,7 +750,16 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                   ))}
                 </ul>
               )}
-              <Row label="Attested" value={attest ? 'yes' : 'no'} tone={attest ? 'ok' : 'warn'} />
+              {/* NOT a stored field, and this row no longer pretends otherwise. The attestation is a
+                  statement made AT COMMIT — the operator asserts it as they mint, and the audit
+                  records it there — so there is nothing on the staged invoice to read back. Saying
+                  "yes" against an unread value is how a checklist starts lying; this says what it
+                  actually knows, which is whether the box is ticked right now. */}
+              <Row label="Attestation"
+                value={attest
+                  ? 'ticked in step 4 — recorded with the commit, not stored beforehand'
+                  : 'not ticked — go back to step 4'}
+                tone={attest ? 'ok' : 'warn'} />
               <button
                 onClick={commit}
                 disabled={busy || committed || skipped || !s.reconciled || !attest || blockers.length > 0 || !s.planned_resource_id || s.planned_working_minutes == null}
