@@ -18,6 +18,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
+import { importableSiteIds } from '@/lib/admin-guard';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
@@ -43,7 +44,7 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
 }
 
-export default function InvoicesPage({ isAdmin }: { isAdmin: boolean }) {
+export default function InvoicesPage({ isAdmin, canImport }: { isAdmin: boolean; canImport: boolean }) {
   const { t } = useTranslation('invoices');
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
@@ -111,6 +112,11 @@ export default function InvoicesPage({ isAdmin }: { isAdmin: boolean }) {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
             {isAdmin && <Link href="/admin/reports/vat" className="text-sm text-accent hover:underline font-medium">VAT on sales →</Link>}
+            {/* IMPORT is a MODE, not a status filter — it does not belong in the All/Unpaid/Paid
+                row, which filters ONE list. It sits here with the other things you can go and do
+                from Invoices. Shown only to callers who may actually import (same permission as
+                issuing), so it is never a link to a 403. */}
+            {canImport && <Link href="/admin/invoices/import" className="text-sm text-accent hover:underline font-medium">Import invoices →</Link>}
           </div>
           {cur && <span className="text-sm text-muted">{t('totalShown')}: <span className="text-ink font-semibold tabular-nums">{formatMoney(totalShown, { currency: cur.currency, locale: cur.locale })}</span></span>}
         </div>
@@ -196,5 +202,7 @@ export const getServerSideProps: GetServerSideProps = withI18n(['invoices'])(asy
   const vis = await getVisibility(user.id as string);
   const perms = await getTenantPermissions(user.group_id as string);
   if (!canViewInvoices(vis, perms)) return { redirect: { destination: '/admin/dashboard', permanent: false } };
-  return { props: { isAdmin: vis.isAdmin } };
+  // The import entry point is shown on the SAME permission that governs issuing an invoice —
+  // importing mints one, so it is that act by another door, not a new privilege.
+  return { props: { isAdmin: vis.isAdmin, canImport: importableSiteIds(vis).length > 0 } };
 });

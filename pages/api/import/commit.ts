@@ -21,7 +21,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi, requireCanWrite } from '@/lib/admin-guard';
+import { requireImportApi, importableSiteIds, requireCanWrite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
 import { issueInvoiceForCard } from '@/lib/invoice-issue';
 import { writeAudit, writeImportAudit } from '@/lib/audit';
@@ -38,9 +38,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const vis = await requireAdminApi(req, res);
+  const vis = await requireImportApi(req, res);
   if (!vis) return;
-  if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  if (!vis.groupId) return res.status(403).json({ message: 'You do not have permission to import invoices.' });
   // Committing an import CREATES NEW WORK — a job card and a minted invoice — so it sits behind the
   // same billing gate as /api/jobcard. Without this a lapsed tenant could keep writing to the
   // ledger through the importer while every other creation path refused them.
@@ -102,6 +102,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const profile = await getTaxProfile(vis.groupId);
+  // SITE SCOPE before anything is minted: the batch's location must be one the caller works in.
+  if (!importableSiteIds(vis).includes(staged.batch.site_id)) {
+    return res.status(403).json({ message: 'That batch belongs to a location you do not work in.' });
+  }
   const siteId = staged.batch.site_id;
 
   try {

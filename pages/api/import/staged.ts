@@ -10,7 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireImportApi, importableSiteIds } from '@/lib/admin-guard';
 import { resolveLine } from '@/lib/import-memory';
 import { suggestForLine } from '@/lib/import-suggest';
 import { blockingReasons } from '@/lib/import-blockers';
@@ -21,9 +21,9 @@ import { durationOptions, seedDurationFromMinutes, durationToWorkingMinutes } fr
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const vis = await requireAdminApi(req, res);
+  const vis = await requireImportApi(req, res);
   if (!vis) return;
-  if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  if (!vis.groupId) return res.status(403).json({ message: 'You do not have permission to import invoices.' });
 
   const id = String(req.query.id || req.body?.id || '');
   if (!id) return res.status(400).json({ message: 'id is required.' });
@@ -33,6 +33,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     include: { lines: { orderBy: { position: 'asc' } }, batch: { select: { id: true, site_id: true, label: true } } },
   });
   if (!staged) return res.status(404).json({ message: 'Staged invoice not found.' });
+  // SITE SCOPE: this batch's location must be one the caller may work in. Group scope alone is not
+  // enough on a multi-site tenant — a manager of Site A has no business importing into Site B.
+  if (!importableSiteIds(vis).includes(staged.batch.site_id)) {
+    return res.status(403).json({ message: 'That batch belongs to a location you do not work in.' });
+  }
 
   if (req.method === 'GET') {
     // ── line memory: what do we already know about each description+price? ─────────────────────

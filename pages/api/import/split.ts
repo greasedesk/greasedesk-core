@@ -29,7 +29,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireImportApi, importableSiteIds } from '@/lib/admin-guard';
 import { writeImportAudit } from '@/lib/audit';
 import {
   balanceSplit, describeImbalance, numOrNull, childAmountPennies, childUnitPrice,
@@ -41,9 +41,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const vis = await requireAdminApi(req, res);
+  const vis = await requireImportApi(req, res);
   if (!vis) return;
-  if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  if (!vis.groupId) return res.status(403).json({ message: 'You do not have permission to import invoices.' });
 
   const { lineId, children, clear, replace, expectedChildIds } = (req.body || {}) as {
     lineId?: string; children?: SplitChildInput[]; clear?: boolean;
@@ -56,10 +56,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: {
       id: true, description: true, unit_price: true, amount: true, position: true,
       staged_invoice_id: true, parent_line_id: true, is_adjustment: true,
-      staged_invoice: { select: { status: true, external_number: true, batch_id: true } },
+      staged_invoice: { select: { status: true, external_number: true, batch_id: true, batch: { select: { site_id: true } } } },
     },
   });
   if (!parent) return res.status(404).json({ message: 'Line not found.' });
+  if (!importableSiteIds(vis).includes(parent.staged_invoice.batch.site_id)) {
+    return res.status(403).json({ message: 'That batch belongs to a location you do not work in.' });
+  }
   if (parent.parent_line_id) return res.status(400).json({ message: 'A split child cannot itself be split.' });
   if (parent.is_adjustment) return res.status(400).json({ message: 'Adjustments are not split.' });
   if (parent.staged_invoice.status === 'committed') {

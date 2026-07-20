@@ -3,6 +3,8 @@
  * ONE chokepoint for admin-only access — built on getVisibility (single source of truth).
  *   requireAdminPage(ctx) → for getServerSideProps of admin-only pages (redirects non-admins).
  *   requireAdminApi(req,res) → for admin-only API routes (sends 401/403, returns null if blocked).
+ *   requireImportPage/Api      → invoice import: the SAME permission that governs issuing an
+ *                                invoice (canIssueInvoice), scoped to vis.activeSiteIds.
  * Use these instead of scattered inline role checks so a missed page/endpoint can't recur.
  */
 import type { GetServerSidePropsContext } from 'next';
@@ -12,6 +14,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility, type Visibility } from '@/lib/site-visibility';
 import { prisma } from '@/lib/db';
 import { canWrite } from '@/lib/billing';
+import { canIssueInvoice } from '@/lib/permissions';
 import { getOnboardingState, stepPath, type OnboardingStep } from '@/lib/onboarding';
 
 type RedirectResult = { ok: false; redirect: { destination: string; permanent: boolean } };
@@ -129,5 +132,47 @@ export async function requireSiteManagerPage(
   if (!u?.id) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
   const vis = await getVisibility(u.id as string);
   if (vis.role === 'STANDARD') return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
+  return { ok: true, vis };
+}
+
+/**
+ * INVOICE IMPORT access. Importing an invoice MINTS one — it is the same act as issuing, reached by
+ * a different door — so it is governed by the SAME permission (canIssueInvoice), not a new one.
+ * That means an ADMIN, a manager of the site, or a mechanic the tenant has granted can_invoice.
+ *
+ * SITE SCOPE is not decoration: a batch may only target a site the caller may actually work in, so
+ * the check is against vis.activeSiteIds — archived locations are excluded, and another tenant's
+ * site is invisible. requireCanWrite stays on the commit path; this gate is about WHO, not billing.
+ */
+export async function requireImportApi(req: NextApiRequest, res: NextApiResponse): Promise<Visibility | null> {
+  const session = await getServerSession(req, res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) { res.status(401).json({ message: 'Not authenticated.' }); return null; }
+  const vis = await getVisibility(u.id as string);
+  if (!vis.groupId || !importableSiteIds(vis).length) {
+    res.status(403).json({ message: 'You do not have permission to import invoices.' });
+    return null;
+  }
+  return vis;
+}
+
+/** The sites this caller may import INTO: live sites where they could issue an invoice. */
+export function importableSiteIds(vis: Visibility): string[] {
+  return vis.activeSiteIds.filter((id) => canIssueInvoice(vis, id));
+}
+
+/** Page equivalent: non-importers are sent to the invoice list rather than shown an empty shell. */
+export async function requireImportPage(
+  ctx: GetServerSidePropsContext,
+): Promise<{ ok: true; vis: Visibility } | RedirectResult> {
+  const session = await getServerSession(ctx.req, ctx.res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
+  const vis = await getVisibility(u.id as string);
+  if (!vis.groupId || !importableSiteIds(vis).length) {
+    return { ok: false, redirect: { destination: '/admin/invoices', permanent: false } };
+  }
+  const onboard = await onboardingGateRedirect(vis.groupId);
+  if (onboard) return { ok: false, redirect: { destination: onboard, permanent: false } };
   return { ok: true, vis };
 }

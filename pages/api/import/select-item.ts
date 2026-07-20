@@ -15,16 +15,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireImportApi, importableSiteIds } from '@/lib/admin-guard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const vis = await requireAdminApi(req, res);
+  const vis = await requireImportApi(req, res);
   if (!vis) return;
-  if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  if (!vis.groupId) return res.status(403).json({ message: 'You do not have permission to import invoices.' });
 
   const { lineId, catalogueItemId, clear } = (req.body || {}) as {
     lineId?: string; catalogueItemId?: string; clear?: boolean;
@@ -33,10 +33,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const line = await prisma.stagedLine.findFirst({
     where: { id: lineId, staged_invoice: { group_id: vis.groupId } },
-    select: { id: true, description: true, unit_price: true, is_adjustment: true },
+    select: { id: true, description: true, unit_price: true, is_adjustment: true,
+      staged_invoice: { select: { batch: { select: { site_id: true } } } } },
   });
   if (!line) return res.status(404).json({ message: 'Line not found.' });
   if (line.is_adjustment) return res.status(400).json({ message: 'Adjustments carry no catalogue item.' });
+  if (!importableSiteIds(vis).includes(line.staged_invoice.batch.site_id)) {
+    return res.status(403).json({ message: 'That batch belongs to a location you do not work in.' });
+  }
 
   // ── CLEAR: detach and forget the alias, so a mistaken choice does not persist across the batch ──
   if (clear) {

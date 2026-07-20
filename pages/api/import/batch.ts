@@ -15,16 +15,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireImportApi, importableSiteIds } from '@/lib/admin-guard';
 import { ingestOne, batchTotals } from '@/lib/import-batch';
 import { writeImportAudit } from '@/lib/audit';
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const vis = await requireAdminApi(req, res); // sends 401/403 itself
+  const vis = await requireImportApi(req, res); // sends 401/403 itself
   if (!vis) return;
-  if (!vis.groupId) return res.status(403).json({ message: 'Admin access required.' });
+  if (!vis.groupId) return res.status(403).json({ message: 'You do not have permission to import invoices.' });
 
   if (req.method === 'GET') {
     const batchId = String(req.query.batchId || '');
@@ -61,8 +61,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
     if (!label?.trim()) return res.status(400).json({ message: 'A batch label is required.' });
     // OPERATIONAL target: a batch imports into a LIVE site.
-    if (!siteId || !vis.activeSiteIds.includes(siteId)) {
-      return res.status(400).json({ message: 'Choose an active location for this batch.' });
+    if (!siteId || !importableSiteIds(vis).includes(siteId)) {
+      return res.status(400).json({ message: 'Choose a location you can raise invoices for.' });
     }
     if (!Array.isArray(invoices) || !invoices.length) {
       return res.status(400).json({ message: 'No invoice text supplied.' });
