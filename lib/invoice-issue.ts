@@ -19,7 +19,6 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { Prisma } from '@prisma/client';
-import { assertImportedInvoiceMatchesSource, importAssertError } from '@/lib/import-assert';
 import { assignInvoiceNumber, assignWarrantyNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
 
@@ -224,24 +223,18 @@ export async function snapshotInvoiceLines(
     }),
   });
   /**
-   * EVERY RE-FREEZE OF AN IMPORTED INVOICE MUST STILL EQUAL ITS SOURCE. 100002297 was CORRECT at
-   * mint and was broken AFTERWARDS — unlocked, the card re-saved through the estimate path (which
-   * deletes and recreates every line from the client payload, losing a £1,537.37 credit that was
-   * absent from it), then re-frozen here at the paid transition. An assertion that fired only on
-   * the first write would have watched that happen and said nothing.
+   * NO IMPORT ASSERTION HERE — deliberately removed 2026-07-20 (it lived here briefly).
    *
-   * So the same equality is enforced on the re-freeze, keyed on external_ref. Throwing rolls back
-   * the caller's transaction — the unlock/re-issue or the mark-paid — leaving the invoice in its
-   * previous state rather than silently re-freezing a wrong one.
+   * The assertion belongs to the MACHINE write paths (import commit and re-commit), where it catches
+   * the importer freezing a bad parse — which is what it did this morning, on seven invoices. It does
+   * NOT belong on the re-freeze that mark-paid performs, because by then the invoice is in the
+   * ledger and an ADMIN'S EDIT IS THE SOURCE OF TRUTH, as it is in Xero. Blocking there made a
+   * corrected invoice unfreezable and would have forced a second source of truth (re-baselining the
+   * staged figures) to work around it.
+   *
+   * What still holds a correction to account is the AUDIT: unlocking a frozen invoice, re-issuing it
+   * and changing a cost are each recorded with actor and before/after, so an edit to a frozen
+   * invoice is never silent — it is simply not refused.
    */
-  const imported = (await tx.invoice.findUnique({
-    where: { id: invoice.id },
-    select: { is_imported: true, external_ref: true, group_id: true },
-  })) as { is_imported: boolean; external_ref: string | null; group_id: string } | null;
-  if (imported?.is_imported && imported.external_ref) {
-    const check = await assertImportedInvoiceMatchesSource(tx, {
-      invoiceId: invoice.id, groupId: imported.group_id, externalRef: imported.external_ref,
-    });
-    if (!check.ok) throw importAssertError(imported.external_ref, check);
-  }
+
 }

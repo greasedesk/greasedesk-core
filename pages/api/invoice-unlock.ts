@@ -61,6 +61,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       });
     } catch (e) {
+      // A REFUSAL, not a crash: surface the real reason. Swallowing this into a generic 500 is how
+      // "Failed to update status." masked a three-figure explanation of why a freeze was refused.
+      if (String((e as any)?.message ?? '').startsWith('IMPORT_ASSERT:')) {
+        return res.status(409).json({ message: String((e as any).message).slice('IMPORT_ASSERT:'.length) });
+      }
       console.error('Invoice re-issue error:', e);
       return res.status(500).json({ message: 'Could not re-issue the invoice.' });
     }

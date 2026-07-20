@@ -198,6 +198,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (e?.message === 'WARRANTY_NOT_PAYABLE') {
       return res.status(409).json({ message: 'Warranty invoices settle at issue — there is nothing to pay.' });
     }
+    // A REFUSAL, not a crash: surface the real reason. Swallowing this into a generic 500 is how
+    // "Failed to update status." masked a three-figure explanation of why a freeze was refused.
+    if (String((e as any)?.message ?? '').startsWith('IMPORT_ASSERT:')) {
+      return res.status(409).json({ message: String((e as any).message).slice('IMPORT_ASSERT:'.length) });
+    }
     console.error('Status transition error:', e);
     return res.status(500).json({ message: 'Failed to update status.' });
   }

@@ -19,10 +19,11 @@
  * intact — 100002297's £1,537.37 credit is still there, which is why rebuilding from staging
  * recovers it without anyone re-typing a figure.
  *
- * WHAT GUARANTEES IT. snapshotInvoiceLines ends in assertImportedInvoiceMatchesSource: the written
- * rows are re-read FROM STORAGE and must equal the document's printed subtotal, VAT and gross. A
- * mismatch throws and the whole transaction rolls back, leaving the invoice unlocked exactly as it
- * was. Nothing is written on a failed correction.
+ * WHAT GUARANTEES IT. assertImportedInvoiceMatchesSource, called explicitly after the re-freeze:
+ * the written rows are re-read FROM STORAGE and must equal the document's printed subtotal, VAT and
+ * gross. A mismatch throws and the whole transaction rolls back — nothing is written on a failed
+ * correction. The assertion is scoped to the MACHINE write paths (this one and the mint); it is
+ * deliberately NOT on mark-paid, where an admin's edit is the source of truth.
  *
  * PAYMENT IS RE-APPLIED FROM THE CAPTURE FILE, never inferred. invoice-unlock clears paid_at,
  * date_paid, receipt_sent_at, payment_method_id and payment_method_snapshot in one update with
@@ -43,6 +44,7 @@ import { prisma } from '@/lib/db';
 import { requireImportApi, importableSiteIds, requireCanWrite } from '@/lib/admin-guard';
 import { getTaxProfile } from '@/lib/tenant-vat';
 import { snapshotInvoiceLines } from '@/lib/invoice-issue';
+import { assertImportedInvoiceMatchesSource, importAssertError } from '@/lib/import-assert';
 import { emitCardItemsFromStaged } from '@/lib/import-emit';
 import { writeImportAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
@@ -191,12 +193,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         profile: { defaultRateBp: profile.defaultRateBp, isRegistered: profile.isRegistered },
       });
 
-      // 2) Re-freeze. snapshotInvoiceLines asserts against the source document and throws on any
-      //    mismatch, rolling this whole transaction back.
+      // 2) Re-freeze.
       await snapshotInvoiceLines(tx, invoice, {
         goodwill: tServer(invoice.site?.locale, 'invoice', 'warrantyGoodwill'),
         noCharge: tServer(invoice.site?.locale, 'invoice', 'warrantyLine'),
       });
+
+      /**
+       * 2b) THE ASSERTION, CALLED EXPLICITLY HERE.
+       *
+       * It used to live inside snapshotInvoiceLines, which meant it also fired on mark-paid — and
+       * there it was wrong: once an invoice is in the ledger an admin's edit is the source of truth,
+       * so policing a correction against the original parse made a corrected invoice unfreezable.
+       * Scoped off that path (2026-07-20), it has to be invoked HERE, because this is a MACHINE
+       * write — a rebuild from the staged parse — and this is exactly where a bad parse must still
+       * be refused. Same for the mint in commit.ts, which has always called it directly.
+       *
+       * Reads the written rows back FROM STORAGE, and throws to roll this whole transaction back.
+       */
+      const check = await assertImportedInvoiceMatchesSource(tx, {
+        invoiceId: invoice.id, groupId: vis.groupId as string, externalRef: invoice.external_ref,
+      });
+      if (!check.ok) throw importAssertError(invoice.external_ref, check);
 
       // 3) Re-apply the CAPTURED payment — only now, and only from the file.
       const paidData: any = {};
