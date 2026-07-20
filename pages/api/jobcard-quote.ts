@@ -15,6 +15,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, ItemType } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
+import { writeAudit } from '@/lib/audit';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { requireCanWrite } from '@/lib/admin-guard';
 import { canEditInvoice } from '@/lib/invoice';
@@ -67,7 +68,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   let saved;
   try {
-    saved = await performEstimateSave({ groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered });
+    // AUTHORITY IS RE-DERIVED HERE, from financeVisibility — never taken from the request. A
+    // caller who cannot see margin cannot write cost, whatever they send.
+    const finWrite = financeVisibility(vis, perms);
+    saved = await performEstimateSave({
+      groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered,
+      costWritable: finWrite.seeMargin, actorUserId: user.id as string,
+    });
   } catch (e: any) {
     if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
     console.error('quote save error:', e);
@@ -84,19 +91,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 /**
  * THE estimate save core (exported for the proof matrix — the matrix drives the REAL write path).
- * unit_cost IS NEVER CLIENT-WRITABLE (ruling 2026-07-12, re-affirmed 2026-07-17): the browser is not
- * a source of trade-cost figures for ANY role. Resolution, server-side:
- *   product-linked line → the catalogue product's unit_cost (same server-derived pattern as
- *                         labour_outsourced; frozen per line at save)
+ *
+ * COST IS ENTERABLE ON A PARTS LINE BY COST-VISIBLE USERS (ruling 2026-07-20, revising 2026-07-12
+ * and its 2026-07-17 re-affirmation). READ THIS BEFORE "restoring" the old rule: the reversal is
+ * deliberate and reasoned, not a regression.
+ *
+ *   WHY THE OLD RULE EXISTED. 2026-07-12 was a finance-LEAK fix — unit_cost was being shipped to
+ *   roles with no margin permission. Server-side prop shaping was the fix; non-writability came
+ *   along as its write-side mirror, and 2026-07-17 re-affirmed it on principle ("the browser is not
+ *   a source of trade-cost figures") when an inline input was tried and reverted.
+ *
+ *   WHY IT IS WRONG FOR PARTS. A fixed-price catalogue is the wrong model for a part: prices move
+ *   weekly and differ per supplier, so the catalogue is a cache of a stale figure and the "promote
+ *   it to a product" prompt asks the operator to invent a permanent price for a one-off purchase.
+ *   The measured consequence was worse than the risk it avoided — ad-hoc parts carried NO cost, so
+ *   parts margin was overstated or the line landed in the uncosted-exposure tally forever.
+ *
+ *   WHAT IS PRESERVED, because these were the parts of the ruling that answered real incidents:
+ *     • VISIBILITY. The input is offered only to seeMargin (ADMIN always) and the server RE-DERIVES
+ *       that authority from financeVisibility — a client claim is never trusted. The 2026-07-12 leak
+ *       stays closed.
+ *     • CATALOGUE PRECEDENCE. A product-linked line ALWAYS inherits the catalogue's cost server-side,
+ *       whoever saves and whatever they send. A stale typed figure can never override a maintained
+ *       product cost.
+ *     • THREE STATES. Blank is NOT zero. An untouched field stores NULL (cost UNKNOWN, surfaced by
+ *       uncostedParts); an explicit 0 stores 0 (known-free, e.g. a discount). Collapsing them would
+ *       silently convert "nobody has costed this" into "this was free" and the P&L would believe it.
+ *     • AUDIT. Every change is recorded (quote.cost_entered, from/to/via) because this number drives
+ *       margin and FREEZES INTO THE INVOICE at issue — it was the only freeze-bound figure with no
+ *       trail.
+ *
+ * Resolution, server-side:
+ *   product-linked line → the catalogue product's unit_cost (never the client's)
  *   ad-hoc discount line (negative price) → 0 (genuinely free — a KNOWN value)
- *   ad-hoc part         → the existing line's cost, matched by exact (item_type, description),
- *                         consumed once (number OR a preserved null); a rename resets the match
- *   genuinely new ad-hoc → NULL (cost UNKNOWN; a user cannot invent a cost).
- * The catalogue-prompt (Option A) is how an ad-hoc part acquires a real cost: promote it to a product,
- * cost lives server-side there. NULL vs 0 is deliberate: the margin readers EXCLUDE null and surface it.
+ *   ad-hoc part, cost-visible saver → the TYPED value: '' → null (unknown), a number → that number
+ *   ad-hoc part, non-cost-visible saver → the existing line's cost, matched by (item_type,
+ *                                         description), consumed once — never invented, never wiped
+ *   genuinely new ad-hoc, no cost typed → NULL (cost UNKNOWN)
+ * NULL vs 0 is deliberate: the margin readers EXCLUDE null and surface it.
  */
-export async function performEstimateSave(args: { groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean }) {
+export async function performEstimateSave(args: {
+  groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean;
+  /** seeMargin, RE-DERIVED server-side by the caller — never a client claim. */
+  costWritable?: boolean;
+  /** For the cost audit: who typed it. */
+  actorUserId?: string | null;
+}) {
   const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
+  const costWritable = args.costWritable === true;
 
   // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to
   // null (SetNull-safe) — and read the SERVER truths inherited per line: outsourced flag + cost.
@@ -141,9 +183,22 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
     //   ad-hoc discount line (negative price) → 0 (genuinely free, a KNOWN value)
     //   ad-hoc part → preserve the existing cost by type+description (number OR null); genuinely new
     //                 → NULL (cost UNKNOWN — the catalogue prompt is how it acquires a real cost).
+    // BLANK IS NOT ZERO. '' / null / undefined = the field was never filled in → cost UNKNOWN.
+    // A typed '0' is an ASSERTION that the part was free, and stays 0.
+    const typedCost: number | null | undefined = (() => {
+      if (!costWritable) return undefined;                       // not offered → fall through below
+      const v = raw.unit_cost;
+      if (v === undefined) return undefined;                     // key absent → no opinion
+      if (v === '' || v === null) return null;                   // cleared → UNKNOWN
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new Error('VALIDATION:unit_cost must be a number of 0 or more.');
+      return n;
+    })();
     const costPounds: number | null = catalogueItemId != null
-      ? (costById.get(catalogueItemId) ?? 0)
-      : (num(raw.unit_price) < 0 ? 0 : takeExisting(t, description));
+      ? (costById.get(catalogueItemId) ?? 0)                     // catalogue ALWAYS wins
+      : (num(raw.unit_price) < 0 ? 0                             // discount → known-free
+        : (typedCost !== undefined ? typedCost                   // the operator's figure
+          : takeExisting(t, description)));                      // else preserve what was there
     inputs.push({
       item_type: t,
       qty: num(raw.qty),
@@ -182,6 +237,45 @@ export async function performEstimateSave(args: { groupId: string; jobCardId: st
   }));
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    /**
+     * AUDIT THE COST BEFORE IT IS REPLACED. This number drives margin and FREEZES INTO THE INVOICE
+     * at issue — after that only an audited ADMIN unlock can revisit it — and until now it was the
+     * one freeze-bound figure on the card with no trail at all. Diffed per line against what was
+     * there, so an unchanged cost writes nothing and a real change is attributable.
+     *
+     * Matched by (item_type, description) because that is the only stable identity a card line has
+     * across a delete-and-recreate; a renamed line reads as a new one, which is honest.
+     */
+    if (costWritable) {
+      const prior = (await tx.jobCardItem.findMany({
+        where: { job_card_id: jobCardId },
+        select: { item_type: true, description: true, unit_cost: true, catalogue_item_id: true },
+        orderBy: { created_at: 'asc' },
+      })) as any[];
+      const key = (t: string, d: string) => `${t}||${String(d ?? '').trim()}`;
+      const priorCost = new Map<string, number | null>();
+      for (const p0 of prior) if (!priorCost.has(key(p0.item_type, p0.description))) {
+        priorCost.set(key(p0.item_type, p0.description), p0.unit_cost == null ? null : Number(p0.unit_cost));
+      }
+      for (let i = 0; i < rows.length; i++) {
+        if (resolved[i].catalogueItemId) continue;            // catalogue-inherited, not typed
+        if (inputs[i].item_type === 'labour') continue;       // labour carries no parts cost
+        const k = key(String(rows[i].item_type), resolved[i].description);
+        const before = priorCost.has(k) ? priorCost.get(k)! : null;
+        const after = rows[i].unit_cost == null ? null : Number(rows[i].unit_cost);
+        if (before === after) continue;                       // unchanged — nothing to say
+        await writeAudit(tx, {
+          groupId, userId: args.actorUserId ?? null, jobCardId,
+          action: 'quote.cost_entered',
+          diff: {
+            line: resolved[i].description,
+            from: before, to: after,
+            via: 'quote-form',
+            meaning: after === null ? 'cost UNKNOWN (field cleared)' : (after === 0 ? 'known-free (0 asserted)' : 'cost entered'),
+          },
+        });
+      }
+    }
     await tx.jobCardItem.deleteMany({ where: { job_card_id: jobCardId } });
     if (rows.length) await tx.jobCardItem.createMany({ data: rows });
     await tx.jobCard.update({

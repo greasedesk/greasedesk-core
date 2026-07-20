@@ -123,26 +123,30 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
           disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
       </div>
-      {/* unit_cost — the margin grain, shown only to cost-visible users, NEVER a browser input (the
-          browser is not a source of trade-cost figures). Catalogue/fixed lines inherit cost server-side
-          (read-only). An ad-hoc part has no cost home, so a cost-visible user is prompted to promote it
-          to the catalogue (cost lives there, server-owned); an ADMIN gets the one-tap link. */}
+      {/* COST — TYPED, by cost-visible users only (ruling 2026-07-20, revising 2026-07-12/07-17).
+          A fixed-price catalogue is the wrong model for a part: prices move weekly and per supplier,
+          so the old "promote it to a product" prompt asked the operator to invent a permanent price
+          for a one-off purchase — and meanwhile the line carried NO cost and overstated margin.
+          What is preserved: the field is offered only to seeMargin (the server re-derives that and
+          ignores any client claim), a catalogue-linked line still inherits its product's cost and
+          shows read-only, and BLANK IS NOT ZERO — an empty box stores null (cost unknown, surfaced
+          as exposure), a typed 0 stores 0 (known-free). */}
       {costVisible && (isAdHocPart ? (
         <div className="sm:w-28">
           <label className={labelCls}>{t('estimate.cost')}</label>
-          {row.unit_cost !== '' ? (
-            <div className="text-muted text-sm tabular-nums py-2">{row.unit_cost}</div>
-          ) : canCatalogue && canEdit && row.description.trim() !== '' ? (
+          <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0"
+            placeholder={t('estimate.costUnknown')} value={row.unit_cost}
+            disabled={!canEdit} onChange={(e) => onChange(idx, { unit_cost: e.target.value })} />
+          {canCatalogue && canEdit && row.description.trim() !== '' && (
             <a href={`/admin/products?add=part&name=${encodeURIComponent(row.description.split('\n')[0].trim())}&price=${encodeURIComponent(row.unit_price)}`}
               target="_blank" rel="noreferrer" title={t('estimate.costHint')}
-              className="block text-[11px] text-accent hover:underline py-2 whitespace-nowrap">{t('estimate.addToCatalogue')}</a>
-          ) : (
-            <div className="text-warn text-xs py-2" title={t('estimate.costHint')}>{t('estimate.noCost')}</div>
+              className="block text-[11px] text-accent hover:underline mt-0.5 whitespace-nowrap">{t('estimate.addToCatalogue')}</a>
           )}
         </div>
       ) : row.unit_cost !== '' ? (
         <div className="sm:w-24">
           <label className={labelCls}>{t('estimate.cost')}</label>
+          {/* Catalogue / fixed lines inherit server-side — read-only by design, not by omission. */}
           <div className="text-muted text-sm tabular-nums py-2">{row.unit_cost}</div>
         </div>
       ) : null)}

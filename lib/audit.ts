@@ -39,6 +39,7 @@ export type AuditAction =
   | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent'          // emailed to the customer (PDF attached)
+  | 'quote.cost_entered' // a parts cost typed on the quote line (ruling 2026-07-20): { line, from, to, via, meaning }
   | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
   // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
   // never the business audit trail. The audit trail carries business events only. Nothing technical.
