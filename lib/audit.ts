@@ -64,7 +64,11 @@ export type ImportAuditAction =
   | 'import.split_cleared'  // { external_ref, line, previous[], removed }
   // A LINE DECLARATION: which section a line sits in, i.e. whether it is asked for a cost or for
   // hours. Batch-wide and one click away, so it is recorded like any other money-shaping decision.
-  | 'import.line_declared'; // { external_ref, line, from, to, via, alsoAppliedTo }
+  | 'import.line_declared'  // { external_ref, line, from, to, via, alsoAppliedTo }
+  // THE UNWIND: an already-committed imported invoice rebuilt from staging through the fixed path
+  // and re-frozen against its source document. Records what was written vs what the document
+  // printed, and that no number was drawn.
+  | 'import.recommitted';  // { external_ref, invoice_number, sequence_value, written, printed, … }
 
 export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
