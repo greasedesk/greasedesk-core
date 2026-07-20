@@ -192,6 +192,8 @@
   "addBooking": "+ Add booking",
   "month": "Month",
   "year": "Year",
+  "monthClosed": "Closed",
+  "monthMore": "+{{count}} more",
   "revenue": {
     "placeholderTitle": "Revenue view",
     "placeholderBody": "Revenue for this period — arrives with invoicing."

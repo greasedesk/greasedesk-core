@@ -63,7 +63,7 @@ type PageProps = {
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
-  weekStart: number; today: string;
+  weekStart: number; today: string; openDays: number[];
   finance: FinanceProps;
   // All-day absence banners (Roster leave, every type) keyed by day + the tenant's type→colour map.
   leaveBanners?: Record<string, Array<{ n: string; t: string; h: boolean }>>;
@@ -139,8 +139,128 @@ function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose 
   );
 }
 
+// ---- MONTH VIEW: 7-col Mon–Sun calendar, one cell per day of the SELECTED month ----------------
+// Reuses the Week view's booking data (props.cards, already computed via the SAME server path) and
+// nothing else — it lists bookings per day; it does NOT compute any money. The Booked/Margin strip
+// above it is the shared finance panel, summed server-side over the month by the identical loop the
+// Week strip uses. Adjacent-month days are greyed and not bookable (Apple-style); closed days
+// (weekday ∉ open_days, the same rule Week uses to drop a column) are greyed with a Closed tag.
+const CELL_CAP = 3; // chips per cell before "+N more" — a stable cap standing in for cell height
+function MonthGrid({ siteId, anchor, today, weekStart, openDays, locale, cards, t }: {
+  siteId: string; anchor: string; today: string; weekStart: number; openDays: number[];
+  locale: string; cards: DiaryCard[]; t: (k: string, o?: any) => string;
+}) {
+  const router = useRouter();
+  const a = new Date(`${anchor}T00:00:00.000Z`);
+  const y = a.getUTCFullYear(), m = a.getUTCMonth();
+  const first = new Date(Date.UTC(y, m, 1));
+  const lead = (first.getUTCDay() - weekStart + 7) % 7;
+  const gridStart = new Date(first.getTime() - lead * 86400000);
+  // 6 rows fits any month; trim a trailing row that is wholly next-month (Apple omits it).
+  const rows = ((lead + new Date(Date.UTC(y, m + 1, 0)).getUTCDate()) > 35) ? 6 : 5;
+  const cells = Array.from({ length: rows * 7 }, (_, i) => new Date(gridStart.getTime() + i * 86400000));
+  const dow = Array.from({ length: 7 }, (_, i) => (weekStart + i) % 7);
+  const dowLabel = (d: number) => new Date(Date.UTC(2023, 0, 1 + d)).toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' });
+  const byDay: Record<string, DiaryCard[]> = {};
+  for (const c of cards) (byDay[c.startAt.slice(0, 10)] ??= []).push(c);
+  Object.values(byDay).forEach((l) => l.sort((x, z) => x.startAt.localeCompare(z.startAt)));
+  const goDay = (ds: string) => router.push(`/admin/diary?site=${siteId}&view=day&date=${ds}`);
+  const openCardHref = (id: string) => `/admin/jobcards/${id}?from=diary&site=${siteId}&view=month&date=${anchor}`;
+
+  return (
+    <div className="border border-line rounded-lg overflow-hidden">
+      <div className="grid grid-cols-7 bg-surface-muted border-b border-line">
+        {dow.map((d) => <div key={d} className="px-2 py-1.5 text-xs font-medium text-muted text-center">{dowLabel(d)}</div>)}
+      </div>
+      <div className="grid grid-cols-7">
+        {cells.map((c) => {
+          const ds = ymd(c);
+          const inMonth = c.getUTCMonth() === m;
+          const isToday = ds === today;
+          const isClosed = !openDays.includes(c.getUTCDay());
+          const list = inMonth ? (byDay[ds] ?? []) : [];
+          const bg = !inMonth ? 'bg-surface-muted/40' : isClosed ? 'bg-surface-muted/70' : 'bg-surface';
+          return (
+            <div key={ds} onDoubleClick={() => { if (inMonth) goDay(ds); }}
+              className={`min-h-[96px] border-b border-r border-line p-1 flex flex-col gap-0.5 ${bg} ${inMonth ? 'cursor-pointer' : ''}`}>
+              <div className="flex items-center justify-between px-0.5">
+                <span className={isToday
+                  ? 'text-xs bg-accent text-white rounded-full w-5 h-5 flex items-center justify-center font-semibold'
+                  : `text-xs ${inMonth ? 'text-ink' : 'text-muted/40'}`}>{c.getUTCDate()}</span>
+                {inMonth && isClosed && <span className="text-[9px] uppercase tracking-wide text-muted">{t('monthClosed')}</span>}
+              </div>
+              {list.slice(0, CELL_CAP).map((cd) => (
+                <button key={cd.id} onClick={(e) => { e.stopPropagation(); router.push(openCardHref(cd.id)); }}
+                  title={`${hhmm(cd.startAt)} · ${cd.reg} · ${cd.customer}`}
+                  className="text-left rounded px-1 py-0.5 text-[10px] leading-tight truncate hover:bg-surface-muted"
+                  style={{ borderLeft: `3px solid ${resolveColour(cd.resourceColour)}` }}>
+                  <span className="tabular-nums text-muted">{hhmm(cd.startAt)}</span> <span className="font-semibold text-ink">{cd.reg}</span>
+                  {cd.customer && cd.customer !== '—' && <span className="text-muted"> · {cd.customer}</span>}
+                </button>
+              ))}
+              {list.length > CELL_CAP && (
+                <button onClick={(e) => { e.stopPropagation(); goDay(ds); }} className="text-left text-[10px] text-accent px-1 hover:underline">
+                  {t('monthMore', { count: list.length - CELL_CAP })}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---- YEAR VIEW: 12 mini-months (Apple year style). No bookings at this zoom; today marked;
+// double-clicking any date opens Month view focused on it. -----------------------------------------
+function MiniMonth({ siteId, year, month, today, weekStart, locale }: {
+  siteId: string; year: number; month: number; today: string; weekStart: number; locale: string;
+}) {
+  const router = useRouter();
+  const first = new Date(Date.UTC(year, month, 1));
+  const lead = (first.getUTCDay() - weekStart + 7) % 7;
+  const gridStart = new Date(first.getTime() - lead * 86400000);
+  const cells = Array.from({ length: 42 }, (_, i) => new Date(gridStart.getTime() + i * 86400000));
+  const dow = Array.from({ length: 7 }, (_, i) => (weekStart + i) % 7);
+  const dowLabel = (d: number) => new Date(Date.UTC(2023, 0, 1 + d)).toLocaleDateString(locale, { weekday: 'narrow', timeZone: 'UTC' });
+  const monthLabel = first.toLocaleDateString(locale, { month: 'long', timeZone: 'UTC' });
+  const goMonth = (ds: string) => router.push(`/admin/diary?site=${siteId}&view=month&date=${ds}`);
+  return (
+    <div className="border border-line rounded-lg p-2 bg-surface">
+      <button onClick={() => goMonth(ymd(first))} className="block w-full text-left text-sm font-semibold text-ink mb-1 hover:text-accent">{monthLabel}</button>
+      <div className="grid grid-cols-7 gap-0.5">
+        {dow.map((d) => <div key={d} className="text-center text-[9px] text-muted">{dowLabel(d)}</div>)}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5 mt-0.5">
+        {cells.map((c) => {
+          const ds = ymd(c);
+          const inMonth = c.getUTCMonth() === month;
+          const isToday = ds === today;
+          return (
+            <button key={ds} onDoubleClick={() => goMonth(ds)}
+              className={`h-6 text-[10px] rounded-full flex items-center justify-center ${isToday ? 'bg-accent text-white font-semibold' : inMonth ? 'text-ink hover:bg-surface-muted' : 'text-muted/40 hover:bg-surface-muted'}`}>
+              {c.getUTCDate()}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function YearGrid({ siteId, year, today, weekStart, locale }: {
+  siteId: string; year: number; today: string; weekStart: number; locale: string;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+      {Array.from({ length: 12 }, (_, m) => (
+        <MiniMonth key={m} siteId={siteId} year={year} month={m} today={today} weekStart={weekStart} locale={locale} />
+      ))}
+    </div>
+  );
+}
+
 export default function DiaryPage(props: PageProps) {
-  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites } = props;
+  const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites, openDays } = props;
   const leaveBanners = props.leaveBanners ?? {};
   const leaveColours = props.leaveColours ?? {};
   const { t } = useTranslation('diary');
@@ -563,8 +683,10 @@ export default function DiaryPage(props: PageProps) {
         </div>
 
         {/* Financial glance — only rendered for users the SERVER permitted (numbers omitted otherwise).
-            The "Show values" toggle hides them at runtime ("turn the screen to the customer"). */}
-        {hasFinance && !isRevenueView && (
+            The "Show values" toggle hides them at runtime ("turn the screen to the customer").
+            Shown for day/week AND month (the month strip = the SAME server totals over the month
+            range — identical source, calc and formatting to Week); hidden only at Year zoom. */}
+        {hasFinance && view !== 'year' && (
           // hidden below the tablet breakpoint — the Booked/Margin/Show-values panel is a large-screen
           // detail (per-block values on the grid stay as-is; that call comes with the day-list redesign).
           <div className="hidden md:flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
@@ -586,15 +708,14 @@ export default function DiaryPage(props: PageProps) {
           </div>
         )}
 
-        {isRevenueView ? (
-          /* Month/Year are REVENUE views, not booking calendars: they will show the period's aggregate
-             revenue from the same paid-ledger the dashboard reads — which requires the invoice artifact
-             to exist first. Until then they render this labelled placeholder and must NOT display
-             quoted-pipeline figures as if they were revenue. */
-          <div className="bg-surface-muted border border-line rounded-xl p-12 text-center">
-            <div className="text-lg font-semibold text-ink mb-1">{t('revenue.placeholderTitle')}</div>
-            <p className="text-sm text-muted">{t('revenue.placeholderBody')}</p>
-          </div>
+        {view === 'month' ? (
+          /* MONTH: calendar grid of the selected month. Bookings come from props.cards (the same
+             server path as Week); the Booked/Margin strip above is the shared finance panel summed
+             over the month by the identical loop — no fresh margin/revenue calc lives here. */
+          <MonthGrid siteId={siteId} anchor={anchor} today={today} weekStart={weekStart} openDays={openDays} locale={locale} cards={cards} t={t} />
+        ) : view === 'year' ? (
+          /* YEAR: 12 mini-months, today marked, double-click a date → Month. No bookings at this zoom. */
+          <YearGrid siteId={siteId} year={anchorUTC.getUTCFullYear()} today={today} weekStart={weekStart} locale={locale} />
         ) : resources.length === 0 ? (
           canManage ? (
             /* EMPTY-STATE ACTION: create the first lift/bay right here — the owner is standing exactly
@@ -1371,7 +1492,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   // An archived location has no bookable diary; its past job cards stay reachable via Job Cards.
   if (vis.activeSiteIds.length === 0) {
     const today = ymd(new Date());
-    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true } };
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, openDays: [1, 2, 3, 4, 5], finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true } };
   }
 
   // Default to the user's PRIMARY location; a valid ?site switches. An out-of-scope OR ARCHIVED
@@ -1401,13 +1522,22 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   let rangeStart: Date, rangeEnd: Date, days: DayCol[], prev: string, next: string;
-  if (view === 'month' || view === 'year') {
-    // Revenue-view PLACEHOLDERS: no booking data is fetched or shown at these zooms (they will show
-    // the paid-ledger aggregate once the invoice artifact exists — never quoted-pipeline figures).
-    rangeStart = anchorObj; rangeEnd = anchorObj; days = [];
+  if (view === 'month') {
+    // MONTH range = the whole calendar month. Bookings are fetched over it and the SAME aggregation
+    // loop below (the one Week uses) sums Booked/Margin for the month — no separate calc. The client
+    // builds the Mon–Sun grid from `anchor`; `days` stays empty (it is a Week-column construct).
     const m = anchorObj.getUTCMonth(), y = anchorObj.getUTCFullYear();
-    prev = view === 'month' ? ymd(new Date(Date.UTC(y, m - 1, 1))) : ymd(new Date(Date.UTC(y - 1, m, 1)));
-    next = view === 'month' ? ymd(new Date(Date.UTC(y, m + 1, 1))) : ymd(new Date(Date.UTC(y + 1, m, 1)));
+    rangeStart = new Date(Date.UTC(y, m, 1));
+    rangeEnd = new Date(Date.UTC(y, m + 1, 1));
+    days = [];
+    prev = ymd(new Date(Date.UTC(y, m - 1, 1)));
+    next = ymd(new Date(Date.UTC(y, m + 1, 1)));
+  } else if (view === 'year') {
+    // YEAR renders 12 mini-months with NO bookings at this zoom — no data fetched, finance zeroed.
+    const m = anchorObj.getUTCMonth(), y = anchorObj.getUTCFullYear();
+    rangeStart = anchorObj; rangeEnd = anchorObj; days = [];
+    prev = ymd(new Date(Date.UTC(y - 1, m, 1)));
+    next = ymd(new Date(Date.UTC(y + 1, m, 1)));
   } else if (view === 'week') {
     const dow = anchorObj.getUTCDay();
     const offset = (dow - weekStart + 7) % 7;
@@ -1432,7 +1562,8 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
     prisma.resource.findMany({ where: { site_id: site.id, is_active: true }, orderBy: { display_order: 'asc' }, select: { id: true, name: true, type: true, colour: true } }) as Promise<ResRow[]>,
     // Bookings + notes via THE shared diary-day chokepoint (lib/diary-day) — the phone's
     // /api/pwa/day reads the SAME functions, so the office and the floor can never drift.
-    (view === 'month' || view === 'year') ? Promise.resolve([]) : fetchDayBookings(site.id, rangeStart, rangeEnd),
+    // Month fetches its bookings (cells + the shared Booked/Margin sum); only Year fetches none.
+    view === 'year' ? Promise.resolve([]) : fetchDayBookings(site.id, rangeStart, rangeEnd),
     (view === 'month' || view === 'year') ? Promise.resolve([]) : fetchDayNotes(site.id, rangeStart, rangeEnd),
     // ALL-DAY LEAVE BANNERS: every leave type surfaces at the top of its day (the Roster is the
     // write path; this is display only). A person shows on every site they're allocated to —
@@ -1513,5 +1644,5 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), finance, leaveBanners, leaveColours } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), openDays, finance, leaveBanners, leaveColours } };
 });
