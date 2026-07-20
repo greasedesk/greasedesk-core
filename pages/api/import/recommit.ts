@@ -4,6 +4,11 @@
  *
  * POST { stagedInvoiceId, discardCardEdits?: boolean }
  *
+ * ATOMIC: it performs the UNLOCK ITSELF, inside the same transaction as the rebuild and the
+ * assertion. Run as two calls, a failed re-commit strands the invoice unlocked with zero lines —
+ * silently absent from the ledger rather than visibly wrong. One transaction means any failure
+ * leaves it exactly as it was.
+ *
  * It does NOT mint. `issueInvoiceForCard` draws a number and moves InvoiceSequence.last_value;
  * re-commit deliberately never calls it. The invoice row, its sequence_value and its rendered
  * number are untouched — only its InvoiceLine rows are rebuilt — so a correction can never open a
@@ -104,11 +109,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!invoice.is_imported || !invoice.external_ref) {
     return res.status(409).json({ message: 'That invoice is not an imported one — there is no source document to check it against.' });
   }
-  if (invoice.lines.length > 0) {
-    return res.status(409).json({
-      message: 'That invoice is still frozen. Unlock it first — re-freezing over a live snapshot is exactly how 100002297 was broken.',
-    });
-  }
+  // A FROZEN invoice is the EXPECTED input: the unlock happens INSIDE our transaction (below), so
+  // there is no window in which the invoice is unlocked-and-absent from the ledger. An
+  // already-unlocked one (100002298) is accepted too — it is the same path with nothing to delete.
+  const wasFrozen = invoice.lines.length > 0;
 
   // The captured grain must EXIST. Re-applying payment from an inference is not a correction.
   const grainRead = readGrain(invoice.external_ref);
@@ -154,6 +158,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      /**
+       * 0) THE UNLOCK, INSIDE THIS TRANSACTION — the whole reason this is one call and not two.
+       *
+       * Run as separate steps, a failed re-commit left the invoice unlocked with zero lines,
+       * silently absent from the ledger until someone retried (it happened on the first attempt at
+       * 100002295, on a column that did not exist). Folded in here, ANY failure — the assertion, a
+       * bad column, a crash — rolls the delete back with everything else, and the invoice stays
+       * frozen-and-wrong rather than becoming unlocked-and-absent. Wrong is visible; absent is not.
+       */
+      const previous = await tx.invoiceLine.findMany({
+        where: { invoice_id: invoice.id },
+        select: { description: true, qty: true, unit_price: true, line_total: true, line_vat: true },
+        orderBy: { position: 'asc' },
+      });
+      if (wasFrozen) {
+        await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: { status: 'issued', paid_at: null, date_paid: null, receipt_sent_at: null, payment_method_id: null, payment_method_snapshot: null },
+        });
+        await tx.jobCard.update({ where: { id: card.id }, data: { status: 'invoiced' } });
+      }
+
       // 1) Rebuild the CARD from staging, through the one shared emitter.
       await tx.jobCardItem.deleteMany({ where: { job_card_id: card.id } });
       const emitted = await emitCardItemsFromStaged(tx, {
@@ -198,6 +225,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           invoice_number: invoice.invoice_number,
           sequence_value: invoice.sequence_value, // unchanged — no number was drawn
           cardEditedSinceImport, discardCardEdits: discardCardEdits === true,
+          unlockedInThisTransaction: wasFrozen, // no unlocked-and-absent window
+          previous: previous.map((l: any) => ({
+            description: l.description, qty: Number(l.qty), unit_price: Number(l.unit_price),
+            line_total: Number(l.line_total), line_vat: Number(l.line_vat),
+          })),
           lines: { emitted, frozen: after.length },
           written: { subtotal: (sub / 100).toFixed(2), vat: (vat / 100).toFixed(2), total: ((sub + vat) / 100).toFixed(2) },
           printed: {
