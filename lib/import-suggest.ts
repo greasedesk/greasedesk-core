@@ -38,10 +38,32 @@ const tokens = (s: string): Set<string> =>
       .filter((w) => w.length > 2 && !STOP.has(w)),
   );
 
-const overlap = (a: string, b: string): number => {
+/**
+ * DISTINCTIVENESS IS CORPUS-DERIVED, not a longer hand-written list. A token that appears in a
+ * large share of this tenant's catalogue titles carries no signal in this tenant — "front" is the
+ * case that exposed it: on a wheel-bearing line it surfaced "Brake Service - Front Pads & Sensor"
+ * at £183.33 against a printed £133.3333, on that one word. Positional and verb qualifiers
+ * (front/rear/supply/fit/replace) recur across unrelated products, and which ones do is a fact
+ * about the catalogue, so it is measured rather than guessed.
+ */
+const DF_CEILING = 0.25; // a token in >25% of items is background noise here
+const MIN_CORPUS = 8;    // below this, frequency says nothing — fall back to the stop list alone
+
+function commonTokens(labels: string[]): Set<string> {
+  if (labels.length < MIN_CORPUS) return new Set();
+  const df = new Map<string, number>();
+  for (const l of labels) tokens(l).forEach((w) => df.set(w, (df.get(w) ?? 0) + 1));
+  const ceiling = labels.length * DF_CEILING;
+  const common = new Set<string>();
+  df.forEach((n, w) => { if (n > ceiling) common.add(w); });
+  return common;
+}
+
+/** Shared tokens that actually discriminate: stop-listed and corpus-common words do not count. */
+const overlap = (a: string, b: string, common: Set<string> = new Set()): number => {
   const A = tokens(a), B = tokens(b);
   let n = 0;
-  A.forEach((w) => { if (B.has(w)) n++; });
+  A.forEach((w) => { if (B.has(w) && !common.has(w)) n++; });
   return n;
 };
 
@@ -58,11 +80,12 @@ export function suggestForLine(
   limit = 5,
 ): Suggestion[] {
   const linePennies = Math.round(unitPrice * 100);
+  const common = commonTokens(catalogue.map((c) => c.title || c.name || c.code));
 
   const scored = catalogue.map((c) => {
     const priceMatch = Math.abs(p2(c.unit_price) - linePennies) <= 1;
     const label = c.title || c.name || c.code;
-    const sharedWords = overlap(description, label);
+    const sharedWords = overlap(description, label, common);
     // Price is worth more than any single word, but words break price ties and demote coincidences.
     const score = (priceMatch ? 100 : 0) + sharedWords * 10 + (c.active ? 1 : 0);
     return {
@@ -79,7 +102,11 @@ export function suggestForLine(
   });
 
   return scored
-    .filter((s) => s.priceMatch || s.sharedWords > 0)
+    // A FLOOR on the word side, mirroring `weak` on the price side. One distinctive word in common
+    // is not evidence — it was enough to put a brake service in front of a wheel bearing. Without a
+    // price match a suggestion must agree on at least two distinctive words to be worth the
+    // operator's attention.
+    .filter((s) => (s.priceMatch ? true : s.sharedWords >= 2))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }

@@ -541,10 +541,11 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                           </div>
                         ))}
 
-                        {/* THE SECTION IS THE DECLARATION — a line in Labour is labour, a line in
-                            Parts is parts, exactly as on the quote form. So only the field that
-                            belongs to this section is offered; parts and labour never share a line,
-                            and a line that is genuinely both is a bundle to be split. */}
+                        {/* THE SECTION IS THE DECLARATION, so only that section's field is offered
+                            and the ONLY routing control is the move. An UNDECLARED line sits in
+                            Parts & materials and shows the parts field — but entering a cost is
+                            what declares it, and until then the blocker says so rather than
+                            pretending someone chose. */}
                         {!committed && l.kind === 'labour' && (
                           <div className="max-w-xs">
                             <LabelledInput label="Labour hours (whole line)" defaultValue={l.labour_hours ?? ''}
@@ -553,19 +554,25 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                               Hours for the WHOLE line, not per unit — qty does not multiply it.
                             </p>
                             <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'part' }] })}
-                              className="text-xs text-muted hover:text-ink underline mt-1">Move to Parts &amp; materials</button>
+                              className="text-xs text-accent hover:underline mt-1">Move to Parts &amp; materials</button>
                           </div>
                         )}
-                        {!committed && (l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') && !l.catalogue_item_id && (
+                        {!committed && l.kind !== 'labour' && !l.catalogue_item_id && (
                           <div className="max-w-xs">
-                            {/* COST is typed HERE and only here. The quoting path forbids a
-                                client-supplied unit_cost (ruling 2026-07-12, re-affirmed 2026-07-17)
-                                and discards it server-side; this field lives on the import surface,
-                                not in the shared row, so that rule cannot be switched on by a prop. */}
+                            {/* COST IS TYPED HERE AND ONLY HERE. The quoting path forbids a
+                                client-supplied unit_cost (ruling 2026-07-12, re-affirmed
+                                2026-07-17) and discards it server-side; this field lives on the
+                                import surface, not in the shared row, so no prop can switch it on
+                                for quoting. */}
                             <LabelledInput label="Parts cost £ (what it cost us)" defaultValue={l.parts_cost ?? ''}
                               onBlur={(v) => save({ lines: [{ id: l.id, partsCost: v === '' ? null : Number(v) }] })} />
+                            {!l.kind && (
+                              <p className="text-xs text-warn mt-1">
+                                Not yet declared. Entering a cost makes this a parts line; move it if it is labour.
+                              </p>
+                            )}
                             <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'labour' }] })}
-                              className="text-xs text-muted hover:text-ink underline mt-1">Move to Labour</button>
+                              className="text-xs text-accent hover:underline mt-1">Move to Labour</button>
                           </div>
                         )}
                       </div>
@@ -573,52 +580,21 @@ export default function ImportWizard({ isAdmin, isManager }: { isAdmin: boolean;
                   </div>
                 );
                 };
-                const bucketOf = (l: any) => (l.catalogue_item_id ? 'part'
-                  : l.kind === 'labour' ? 'labour'
-                  : (l.kind === 'part' || l.kind === 'misc' || l.kind === 'fixed') ? 'part'
-                  : 'unsorted');
-                const unsorted = topLines.filter((l: any) => bucketOf(l) === 'unsorted');
+                // TWO SECTIONS, exactly as on the quote form. A line's SECTION IS ITS DECLARATION,
+                // and moving it is the only way to change that — there is no selector and no third
+                // bucket. An UNDECLARED line renders here in Parts & materials because it must
+                // appear somewhere, but nothing is declared on the operator's behalf: resolutionOf
+                // still reports it undeclared and the blocker names the decision.
+                const bucketOf = (l: any) => (l.kind === 'labour' ? 'labour' : 'part');
                 const labourLines = topLines.filter((l: any) => bucketOf(l) === 'labour');
                 const partLines = topLines.filter((l: any) => bucketOf(l) === 'part');
                 return (
                   <>
-                    {/* UNSORTED — where an imported line starts, because the invoice declares
-                        nothing. Assigning one settles every pending occurrence of the same
-                        description + price across the batch, so this empties far faster than it
-                        looks: 88 lines, 54 distinct decisions. */}
-                    {unsorted.length > 0 && (
-                      <LineSection title={`Unsorted (${unsorted.length})`}
-                        empty="Nothing unsorted — every line has been placed." isEmpty={false}>
-                        <p className="text-xs text-muted mb-2">
-                          The invoice does not say what these lines are. Put each in Labour or Parts &amp; materials —
-                          or attach a product, or split it if it is genuinely both. One click settles every copy of
-                          the same line in the batch.
-                        </p>
-                        {unsorted.map((l: any) => (
-                          <div key={l.id}>
-                            {!committed && (
-                              <div className="flex flex-wrap items-center gap-2 mb-1">
-                                <span className="text-xs text-muted">Put this in:</span>
-                                <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'labour' }] })}
-                                  className="text-xs px-2.5 py-1 rounded-full border border-accent text-accent bg-accent-soft">
-                                  Labour
-                                </button>
-                                <button disabled={busy} onClick={() => save({ lines: [{ id: l.id, kind: 'part' }] })}
-                                  className="text-xs px-2.5 py-1 rounded-full border border-accent text-accent bg-accent-soft">
-                                  Parts &amp; materials
-                                </button>
-                                <span className="text-xs text-muted">· applies to every copy in the batch</span>
-                              </div>
-                            )}
-                            {renderLine(l)}
-                          </div>
-                        ))}
-                      </LineSection>
-                    )}
-                    <LineSection title="Labour" empty="No labour lines yet." isEmpty={labourLines.length === 0}>
+                    <LineSection title="Labour" empty="No labour lines — move a line here if it is time, not parts."
+                      isEmpty={labourLines.length === 0}>
                       {labourLines.map((l: any) => <div key={l.id}>{renderLine(l)}</div>)}
                     </LineSection>
-                    <LineSection title="Parts &amp; materials" empty="No parts lines yet." isEmpty={partLines.length === 0} className="mt-4">
+                    <LineSection title="Parts &amp; materials" empty="No parts lines." isEmpty={partLines.length === 0} className="mt-4">
                       {partLines.map((l: any) => <div key={l.id}>{renderLine(l)}</div>)}
                     </LineSection>
                   </>

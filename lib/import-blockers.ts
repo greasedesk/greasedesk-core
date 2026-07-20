@@ -10,7 +10,9 @@
  *   catalogue         → nothing to enter; the product supplies cost and hours.
  *   labour            → LABOUR HOURS. A parts cost on a labour line is meaningless.
  *   part/misc/fixed   → PARTS COST. Hours on a parts line are meaningless.
- *   undeclared        → the declaration itself is the outstanding decision.
+ *   undeclared        → the declaration itself is the outstanding decision. Such a line RENDERS in
+ *                       Parts & materials (two sections only), but resolutionOf still returns
+ *                       'undeclared', so it is never silently counted as declared parts.
  *   split parent      → its CHILDREN: they must exist, balance to the penny, and each be decided.
  *                       The parent is costed THROUGH them and is never asked for a cost itself.
  *   adjustment        → nothing; a credit costs 0.00 by definition.
@@ -77,7 +79,10 @@ function missingReason(l: StagedLineLike): string {
   switch (resolutionOf(l)) {
     case 'labour': return 'labour hours missing';
     case 'part':   return 'no parts cost';
-    default:       return 'not yet declared as parts, labour or a catalogue product';
+    // UNDECLARED lines RENDER in Parts & materials (there are only two sections, as on the quote
+    // form), but they are not DECLARED parts — nobody has said so. The blocker names the decision
+    // rather than pre-answering it: entering a cost declares parts, moving declares labour.
+    default:       return 'not yet declared — leave it here to make it a parts line, or move it to Labour';
   }
 }
 

@@ -250,14 +250,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // PARTS AND LABOUR NEVER SHARE A LINE. Declaring the kind clears the figure that belongs to
         // the other kind, so switching a line from parts to labour cannot leave a stale parts cost
         // behind it — invisible in the UI (which shows one field) but still counted in the P&L.
-        const declared = (l.kind as any) ?? row.kind;
+        // ENTERING A COST IS A DECLARATION. On the quote form a line's section is what it is; here
+        // the equivalent act is filling the section's field, so typing a parts cost on an
+        // undeclared line places it in Parts rather than leaving it in limbo with a figure.
+        const impliedByCost = l.kind === undefined && row.kind == null && numOrNull(l.partsCost) != null ? 'part' : null;
+        const declared = (l.kind as any) ?? impliedByCost ?? row.kind;
         const wipeParts = declared === 'labour';
         const wipeHours = declared === 'part' || declared === 'misc' || declared === 'fixed';
         // RETROACTIVE, like aliasing and splitting: declaring what "Supply Thermostat @ £108.3333"
         // IS settles every pending occurrence of it across the batch, not just this invoice's copy.
         // Without it the operator answers the same question 88 times instead of 54.
-        if (l.kind !== undefined && l.kind !== null && !row.parent_line_id && !row.is_adjustment) {
-          await tx.stagedLine.updateMany({
+        if (declared && declared !== row.kind && !row.parent_line_id && !row.is_adjustment) {
+          const reach = await tx.stagedLine.updateMany({
             where: {
               description: row.description, unit_price: row.unit_price,
               parent_line_id: null, is_adjustment: false, id: { not: row.id },
@@ -267,6 +271,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               kind: declared,
               ...(wipeParts ? { parts_cost: null } : {}),
               ...(wipeHours ? { labour_hours: null } : {}),
+            },
+          });
+          // A DECLARATION IS BATCH-WIDE AND ONE CLICK AWAY. It decides which figure the operator is
+          // asked for, and it reaches every pending copy of the line — yet it left no trace, so
+          // "why is this in Labour?" needed forensics three times on one invoice. Now it is audited
+          // with what it was, what it became, and how far it reached.
+          await writeImportAudit(tx, {
+            groupId: vis.groupId as string, actorUserId: vis.userId, batchId: staged.batch.id,
+            action: 'import.line_declared',
+            diff: {
+              external_ref: staged.external_number,
+              line: row.description,
+              unit_price: Number(row.unit_price),
+              from: row.kind ?? null,
+              to: declared,
+              via: l.kind !== undefined ? 'moved between sections' : 'cost entered',
+              alsoAppliedTo: reach.count, // other pending copies across the batch
             },
           });
         }

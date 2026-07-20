@@ -61,7 +61,10 @@ export type ImportAuditAction =
   // because these did not exist; the child shape is recorded so a lost split can be reconstructed.
   | 'import.split_created'  // { external_ref, line, parentAmount, children[], appliedTo }
   | 'import.split_replaced' // as created, plus previous[]
-  | 'import.split_cleared'; // { external_ref, line, previous[], removed }
+  | 'import.split_cleared'  // { external_ref, line, previous[], removed }
+  // A LINE DECLARATION: which section a line sits in, i.e. whether it is asked for a cost or for
+  // hours. Batch-wide and one click away, so it is recorded like any other money-shaping decision.
+  | 'import.line_declared'; // { external_ref, line, from, to, via, alsoAppliedTo }
 
 export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
