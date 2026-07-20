@@ -112,11 +112,9 @@ export default function InvoicesPage({ isAdmin, canImport }: { isAdmin: boolean;
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
             {isAdmin && <Link href="/admin/reports/vat" className="text-sm text-accent hover:underline font-medium">VAT on sales →</Link>}
-            {/* IMPORT is a MODE, not a status filter — it does not belong in the All/Unpaid/Paid
-                row, which filters ONE list. It sits here with the other things you can go and do
-                from Invoices. Shown only to callers who may actually import (same permission as
-                issuing), so it is never a link to a 403. */}
-            {canImport && <Link href="/admin/invoices/import" className="text-sm text-accent hover:underline font-medium">Import invoices →</Link>}
+            {/* Import entry-point link removed 2026-07-20 — the feature still lives at
+                /admin/invoices/import (and the /admin/settings/import redirect), just not surfaced
+                from here. canImport/importableSiteIds retained; re-add the Link to restore it. */}
           </div>
           {cur && <span className="text-sm text-muted">{t('totalShown')}: <span className="text-ink font-semibold tabular-nums">{formatMoney(totalShown, { currency: cur.currency, locale: cur.locale })}</span></span>}
         </div>
