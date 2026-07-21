@@ -1,7 +1,7 @@
 /**
  * File: lib/commission.ts
  * THE commission engine — the money spine (platform layer 2). ONE calculation every financial
- * surface reads: the rep's earned dashboard, the SAP retained-revenue forecast, the payout run, the
+ * surface reads: the rep's earned dashboard, the Engine Room retained-revenue forecast, the payout run, the
  * clawback. No surface computes commission independently. Divergent maths between the rep view and
  * the operator view is the failure mode this file exists to prevent.
  *
@@ -124,7 +124,7 @@ export async function linesForPayment(db: Db, tenant: Tenant, p: Payment): Promi
   }));
 }
 
-// ── FORECAST (read-only): the SAP open-month projection AND the rep dashboard read this. ──────────
+// ── FORECAST (read-only): the Engine Room open-month projection AND the rep dashboard read this. ──────────
 export type PartyKey = string; // `${party_type}:${party_id}`
 const keyOf = (l: { party_type: string; party_id: string }) => `${l.party_type}:${l.party_id}`;
 

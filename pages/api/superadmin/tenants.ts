@@ -1,7 +1,7 @@
 /**
  * File: pages/api/superadmin/tenants.ts
- * The region-scoped tenant read for the SAP (foundation callsite for layer 1; the full tenant
- * screens come with the SAP layer). Proves the boundary the operator guard exists to hold:
+ * The region-scoped tenant read for the Engine Room (foundation callsite for layer 1; the full tenant
+ * screens come with the Engine Room layer). Proves the boundary the operator guard exists to hold:
  *
  *   • GET (no id)   → tenants the operator may see, filtered by operatorTenantScope (owner: all;
  *                     country manager / support: their regions). The scope is derived from the

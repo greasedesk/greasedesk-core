@@ -67,7 +67,7 @@ export const authOptions: NextAuthOptions = {
       },
     }),
 
-    // ── OPERATOR provider (platform staff / SAP). A SEPARATE identity table — an operator is NOT a
+    // ── OPERATOR provider (platform staff / Engine Room). A SEPARATE identity table — an operator is NOT a
     // tenant User. id 'operator'; the /superadmin/login page calls signIn('operator', …). Carries
     // actorClass='operator' + role + regions so the operator guards can enforce role and region. ──
     CredentialsProvider({

@@ -1,8 +1,8 @@
 /**
  * File: pages/superadmin/login.tsx
- * Operator sign-in for the platform portal (SAP). Authenticates against the SEPARATE Operator
+ * Operator sign-in for the platform portal (Engine Room). Authenticates against the SEPARATE Operator
  * identity via the 'operator' NextAuth provider — a tenant User's credentials can never satisfy it
- * (different table). Deliberately unlinked from any tenant/marketing surface. The SAP pages behind
+ * (different table). Deliberately unlinked from any tenant/marketing surface. The Engine Room pages behind
  * it 404 for any non-operator session (lib/operator-auth), so reaching this form grants nothing on
  * its own — only an Operator record does.
  */
@@ -29,10 +29,10 @@ export default function OperatorLogin() {
 
   return (
     <>
-      <Head><title>Operator sign in</title><meta name="robots" content="noindex" /></Head>
+      <Head><title>Engine Room</title><meta name="robots" content="noindex" /></Head>
       <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
         <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-8">
-          <h1 className="text-lg font-semibold text-slate-900 mb-1 text-center">Platform operator</h1>
+          <h1 className="text-lg font-semibold text-slate-900 mb-1 text-center">Engine Room</h1>
           <p className="text-sm text-slate-500 text-center mb-6">Restricted access.</p>
           {err && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm text-center">{err}</div>}
           <form onSubmit={submit} className="space-y-4">

@@ -14,7 +14,7 @@ import { requireOperatorApi, requireOperatorPage } from '@/lib/operator-auth';
 export const TMBS_GROUP_ID = '854d38e7-6dd4-4836-af61-a0d169639a78';
 
 /**
- * REPOINTED (layer 1): the SAP gate now reads an OPERATOR SESSION (actorClass='operator', its own
+ * REPOINTED (layer 1): the Engine Room gate now reads an OPERATOR SESSION (actorClass='operator', its own
  * identity + /superadmin/login), not a tenant User on the PlatformOperator allowlist. These thin
  * wrappers keep the existing callers (tenants page, archive/purge APIs) unchanged — they still get an
  * `operatorUserId` — while the identity underneath is the new Operator. Role-gating of specific
