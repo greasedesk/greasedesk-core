@@ -46,8 +46,13 @@ async function activeOwnerIds(): Promise<string[]> {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
-  const actor = await requireOperatorApi(req, res, { minRole: 'owner' }); // 404 for non-owner (undiscoverable)
-  if (!actor) return;
+  // Operator management is MAXIMALLY undiscoverable: a valid-but-non-owner operator gets 404 here, not
+  // the 403 the generic minRole check returns. On this surface even "you are an operator but not an
+  // owner, and this exists" must not leak — so we require any operator (404 otherwise) then 404 a
+  // non-owner. Matches how the /superadmin/operators PAGE guard already hides itself.
+  const actor = await requireOperatorApi(req, res);
+  if (!actor) return; // not an operator at all → 404
+  if (actor.role !== 'owner') { res.status(404).json({ message: 'Not found.' }); return; }
 
   // ── LIST ─────────────────────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
