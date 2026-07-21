@@ -32,8 +32,11 @@ export function middleware(req: NextRequest) {
 
   if (host === ER_HOST) {
     // er. is the Engine Room and NOTHING else.
+    // The ROOT is the front door: rewrite it to /superadmin, whose getServerSideProps routes on the
+    // session principal (operator → role landing; wrong class → 404; logged out → login).
+    if (pathname === '/') return NextResponse.rewrite(new URL('/superadmin', req.url));
     if (isEngineRoom(pathname) || isAuth(pathname) || isNextInternal(pathname)) return NextResponse.next();
-    return notFound(); // "/" and every tenant route 404 on er.
+    return notFound(); // every tenant route still 404s on er.
   }
 
   // Apex / any other host: the Engine Room is not here.

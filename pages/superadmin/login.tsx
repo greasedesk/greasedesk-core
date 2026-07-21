@@ -24,7 +24,9 @@ export default function OperatorLogin() {
     const r = await signIn('operator', { redirect: false, email, password });
     setLoading(false);
     if (r?.error) setErr('Invalid email or password.');
-    else router.push('/superadmin/tenants');
+    // Return to the front door — it routes to the role's landing (owner/CM → dashboard, support →
+    // overview). Pushing straight to /superadmin/tenants would 404 a Support operator.
+    else router.push('/superadmin');
   };
 
   return (

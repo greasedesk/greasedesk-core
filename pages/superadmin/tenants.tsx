@@ -9,7 +9,8 @@ import { useState } from 'react';
 import Head from 'next/head';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
-import { requireSuperAdminPage, TMBS_GROUP_ID } from '@/lib/superadmin';
+import { TMBS_GROUP_ID } from '@/lib/superadmin';
+import { requireOperatorPage, operatorTenantScope } from '@/lib/operator-auth';
 
 type TenantRow = {
   id: string; name: string; ref: string; created: string; archivedAt: string | null;
@@ -124,11 +125,15 @@ export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps)
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  const gate = await requireSuperAdminPage(ctx);
-  if (!gate.ok) return { notFound: true }; // 404 — undiscoverable
+  // The tenants DASHBOARD (list + lifecycle actions) is Country-Manager and above. Support 404s here
+  // (undiscoverable) and lands on the read-only /superadmin/overview instead.
+  const gate = await requireOperatorPage(ctx, { minRole: 'country_manager' });
+  if (!gate.ok) return { notFound: true }; // 404 — wrong class OR insufficient role
 
-  const operator = await prisma.user.findUnique({ where: { id: gate.operatorUserId }, select: { email: true, group_id: true } });
+  // The principal is an OPERATOR (its own identity table), not a tenant User — read the email there.
+  const operator = await prisma.operator.findUnique({ where: { id: gate.op.userId }, select: { email: true } });
   const groups = await prisma.group.findMany({
+    where: operatorTenantScope(gate.op), // REGION-SCOPED from the principal — a Country Manager sees only their regions
     orderBy: { created_at: 'desc' },
     select: {
       id: true, group_name: true, ref: true, created_at: true, archived_at: true,
@@ -148,7 +153,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
         subscriptionStatus: g.billing?.subscription_status ?? null,
         siteCount: g._count.sites, userCount: g._count.users,
         lastActivity: lastByGroup.get(g.id) ? (lastByGroup.get(g.id) as Date).toISOString() : null,
-        isTmbs: g.id === TMBS_GROUP_ID, isOwn: g.id === operator?.group_id,
+        isTmbs: g.id === TMBS_GROUP_ID, isOwn: false, // an operator has no own tenant (separate identity)
       })),
     },
   };
