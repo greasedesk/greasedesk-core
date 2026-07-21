@@ -313,9 +313,15 @@ model Operator {
   // The ONLY source of region scope — operatorTenantScope() derives the query filter from here,
   // never from a request param. Empty for a non-owner = can see nothing (fails closed).
   regions      String[]     @default([])
-  status       String       @default("active") // 'active' | 'suspended'
+  status       String       @default("active") // 'active' | 'suspended' (authorize() blocks non-active)
   suspended_at DateTime?
   note         String?
+  // Set-password invite (mirrors the tenant User flow): raw token emailed, only its hash stored,
+  // single-use, 5-day expiry. A new operator is created INVITE_PENDING and cannot log in until set.
+  invite_token_hash    String?
+  invite_token_expires DateTime?
+  invite_token_used_at DateTime?
+  last_login_at        DateTime? // stamped by the operator authorize() on successful sign-in
   created_at   DateTime     @default(now())
   updated_at   DateTime     @updatedAt
 }
@@ -406,16 +412,21 @@ model CommissionEntry {
 // live in the tenant it destroys. This survives the purge — target_name/ref are SNAPSHOTS.
 model SuperAdminAudit {
   id                   String   @id @default(uuid())
-  operator_user_id     String
-  action               String // 'tenant.archived' | 'tenant.unarchived' | 'tenant.purged'
-  target_group_id      String
-  target_name_snapshot String
+  operator_user_id     String // the ACTING operator's id
+  action               String // 'tenant.archived|unarchived|purged' | 'operator.created|role_changed|regions_changed|suspended|unsuspended'
+  // EXTENDED for operator-target actions (this table was tenant-target only). One of target_group_id
+  // (tenant actions) or target_operator_id (operator-management actions) is set; the other is null.
+  target_group_id      String? // now NULLABLE
+  target_operator_id   String? // the operator acted upon
+  target_name_snapshot String // tenant name OR operator email — survives even if the row is later changed
   target_ref_snapshot  String?
-  detail               Json? // e.g. purge row counts, r2 objects deleted, stripe sub id
+  reason               String? // required on suspend; free-text where an action takes one
+  detail               Json? // before/after (role/regions), purge counts, etc.
   created_at           DateTime @default(now())
 
   @@index([created_at])
   @@index([target_group_id])
+  @@index([target_operator_id])
 }
 
 // Webhook idempotency ledger (item-12): every Stripe event.id is recorded ONCE before its effect

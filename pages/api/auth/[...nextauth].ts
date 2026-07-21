@@ -79,7 +79,9 @@ export const authOptions: NextAuthOptions = {
         const FAIL = new Error('Invalid email or password.');
         const op = await prisma.operator.findUnique({ where: { email: credentials.email } });
         if (!op || op.status !== 'active') throw FAIL;           // suspended operators cannot log in
-        if (!op.passwordHash || !(await bcrypt.compare(credentials.password, op.passwordHash))) throw FAIL;
+        // INVITE_PENDING has no valid bcrypt hash, so compare fails → a not-yet-set operator can't log in.
+        if (!op.passwordHash || op.passwordHash === 'INVITE_PENDING' || !(await bcrypt.compare(credentials.password, op.passwordHash))) throw FAIL;
+        await prisma.operator.update({ where: { id: op.id }, data: { last_login_at: new Date() } }).catch(() => {});
         return { id: op.id, email: op.email, name: op.name, actorClass: 'operator', operatorRole: op.role, regions: op.regions } as any;
       },
     }),
