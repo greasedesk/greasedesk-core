@@ -13,7 +13,7 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)** |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)**, **billing → commission wiring** (Stripe `invoice.paid`/`charge.refunded` → engine, test-mode, dormant until keys) |
 | **NEXT** | The forecast dashboard, or Reps management UI — owner's call |
 | **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module, **tenant/rep 2FA**, **mandatory-2FA enforcement policy** |
 
@@ -282,8 +282,42 @@ effective-dated, injected clock, provably correct.
   post-arrears, clawback-inside-window, clawback-after, no-attribution, effective-date boundaries,
   ledger append-only) and passes.
 
-Dormant until real payout wiring / sandbox keys — the engine is correct and gated; it simply isn't
-paying anyone yet.
+### 8a. Billing → commission wiring  — **BUILT / GATED** (test-mode; dormant until keys)
+
+`lib/commission-billing.ts` + two cases in `pages/api/stripe/webhook.ts`. The first time the money loop
+runs from a card charge to a ledger entry. The Stripe webhook (already signature-verified against
+`STRIPE_WEBHOOK_SECRET`, `event.id`-deduped) now also feeds the engine — it does **not** compute
+commission, it maps the event onto a `Payment`/`Refund` and calls `accruePayment` / `clawbackRefund`.
+
+- **Events (confirmed):** `invoice.paid` → accrual; `charge.refunded` → clawback. (`invoice.payment_succeeded`
+  is redundant; `credit_note.*` is an accounting doc — neither is used.)
+- **Join:** Stripe customer → tenant via `GroupBilling.stripe_customer_id → group_id` (never pass the
+  customer to the engine). **Attribution:** `resolveAttribution` runs on the collected payment, so a
+  tenant whose `?ref=` only now matches a rep still attributes; an unattributed tenant is a **safe
+  no-op**, not an error.
+- **Trial:** the engine trial-gates on `Group.trial_ends_at` (kept in sync from the subscription's
+  `trial_end`) — a during-trial `invoice.paid` accrues nothing; the first post-trial one is the first
+  accrual.
+- **Idempotency, two layers:** `StripeEvent.event_id` (webhook) **and** `CommissionEntry.source_ref` =
+  the Stripe **invoice id** (accrual) / **refund id** (clawback) — the payment-object identity, so a
+  re-delivered or duplicate-typed event can never double-write.
+- **No live Stripe API calls in the money path** — reads the event payload + DB only.
+- **Proven** with synthetic Stripe-signed events (valid accepted / forged rejected; £35 accrual to the
+  rep via the engine at the real GB/GBP rate; full + partial clawback netting; resend → no duplicate;
+  pre-trial → no accrual), and the engine's 9-case suite still passes unchanged. Real test-card / 3DS /
+  `stripe events resend` acceptance is `docs/billing-commission-testmode-runbook.md`.
+- **Correction to an earlier claim:** the engine does **not** gate accrual on a 30-day timer. Accrual is
+  immediate at collection (`status:'pending'`); the "arrears/payout window" lives in entry status —
+  a pending accrual becomes `paid` at a **payout run**, and clawback nets against a still-`pending`
+  accrual or carries a debt when already `paid`. **The 30-day payout-eligibility timer is the payout
+  run — designed-not-built.** This wiring drives accruals + clawbacks correctly; it does not implement
+  that timer.
+
+**Still pending:** the **live cutover** (real keys, real cards) — a separate deliberate step; the
+**payout run** (flips `pending → paid` after the arrears window, and pays).
+
+The engine + wiring are correct and gated; **dormant in prod until Stripe keys land** (`getStripe()` null
+→ the webhook 503s), so nothing pays anyone yet.
 
 ---
 

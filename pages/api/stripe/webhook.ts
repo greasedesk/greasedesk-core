@@ -12,6 +12,7 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
+import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
 
 export const config = { api: { bodyParser: false } };
 
@@ -73,6 +74,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case 'customer.subscription.paused':
       case 'customer.subscription.resumed': {
         await applyStripeSubscriptionToCache(event.data.object as Stripe.Subscription, null);
+        break;
+      }
+      // ── COMMISSION (platform layer 2). A collected subscription payment → accrual; a refund →
+      // clawback. Both go through lib/commission-billing → the commission engine (never computed here).
+      // Idempotent twice over: this event.id (StripeEvent, above) AND the ledger's source_ref
+      // (invoice/refund id), so a re-delivery or a duplicate-typed event can't double-write.
+      case 'invoice.paid': {
+        const r = await accrueFromInvoicePaid(prisma, event.data.object as Stripe.Invoice);
+        console.log('[stripe] invoice.paid →', JSON.stringify(r));
+        break;
+      }
+      case 'charge.refunded': {
+        const r = await clawbackFromChargeRefunded(prisma, event.data.object as Stripe.Charge);
+        console.log('[stripe] charge.refunded →', JSON.stringify(r));
         break;
       }
       default:
