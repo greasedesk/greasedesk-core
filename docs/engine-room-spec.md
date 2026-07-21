@@ -13,8 +13,8 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine |
-| **NEXT** | Rates |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface) |
+| **NEXT** | Attribution capture (the join that turns a rate into a payable) — owner's call |
 | **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), attribution capture, the forecast dashboard, Reps management, the rep PWA portal, the Countries module |
 
 "Built / gated" means: shipped to prod on `greasedesk.com` / `er.greasedesk.com`, served-build
@@ -254,12 +254,38 @@ paying anyone yet.
 
 ---
 
-## 9. Rates  — **NEXT**
+## 9. Rates  — **BUILT / GATED**
 
-Owner-only platform pricing/config, effective-dated (§1.3). The subscription price the tenant pays
-and the commission rates the reps earn are both Rates concerns; both open new periods rather than
-rewriting history. This is the next slice to build; it reads/writes through the effective-dated
-config discipline and audits every change.
+Owner-only, effective-dated (§1.3). The write surface over the `CommissionRate` table that the
+engine (§8) already reads — until this shipped, only fixtures wrote it.
+`pages/api/superadmin/rates.ts` + `pages/superadmin/rates.tsx`.
+
+- **Append-only-forward.** A new rate's `effective_from` must be strictly after the latest existing
+  boundary for its (country, currency, tier) key. You extend the timeline forward; you never splice
+  a rate into the past. Amending a rate = adding a new forward-dated row — the prior row is never
+  touched, so a payment stays frozen at the rate in force when it was collected.
+- **The overlap rule, made physical.** For a key the effective-dated rows form a clean,
+  non-overlapping timeline: every `effective_from` boundary is unique. Enforced at the API *and* by
+  a `@@unique([country_code, currency, tier, effective_from])` index (it replaced the non-unique
+  one; same leading columns still serve `resolveRate`). Same-date = overlap → refused; earlier date
+  = not-forward → refused.
+- **The only mutable rows are future + unreferenced.** A row whose `effective_from` is still in the
+  future AND that no `CommissionEntry` was computed against can be corrected (PATCH) or removed
+  (DELETE). Anything in force, past, or referenced is frozen; the remedy there is a new forward
+  amendment, never an edit. (The admin "in force yet?" question is the one legitimate wall-clock read
+  in the money path — the engine itself never reads the wall clock; it resolves against the payment's
+  `collected_at`.)
+- **Audited.** `rate.created` / `rate.corrected` / `rate.removed` to `SuperAdminAudit` (both target
+  ids null — rates target neither a tenant nor an operator; the key is the snapshot). No audit-schema
+  change was needed.
+- **Gated against the engine, not just the table.** Rates written through the deployed API were read
+  back by `computeCommission` on a synthetic tenant across a 2026→2027 amendment boundary: the 2026
+  payment stayed frozen at the old rate, the 2027 payment took the amendment — history did not move.
+  Overlap/back-date refusals and non-owner 404 proven on the live host; the freeze timeline
+  (in-force = frozen, future = correctable/removable) proven through the rendered page.
+
+The subscription price the tenant pays is a separate, future Rates concern; this slice is the
+commission-rate half.
 
 ---
 
@@ -404,7 +430,7 @@ Onboarding **reads** the Countries config; it is a **flow over the config, not n
 | `/superadmin/tenants` | support (region-scoped) | list built; lifecycle designed |
 | `/superadmin/operators` | owner | built |
 | `/superadmin/reps` | country_manager | designed |
-| `/superadmin/rates` | owner | next |
+| `/superadmin/rates` | owner | built |
 | `/superadmin/settings` | any operator | built |
 | `/superadmin/set-password`, `/superadmin/forgot-password` | public (token) | built |
 | Countries admin | owner | designed |
