@@ -112,7 +112,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         `<p><a href="${link}">Set your password</a></p><p>This link expires in 5 days and can be used once.</p>`);
     } catch { sent = false; }
     if (!sent) console.warn('[operators] invite email not sent (Resend unset?) — link:', link);
-    return res.status(200).json({ ok: true, id: op.id, emailSent: sent, message: sent ? 'Operator created — a set-password email has been sent.' : 'Operator created — email not sent (check server logs for the link).' });
+    // The set-password link is RETURNED to the creating owner (this endpoint is owner-only). That is
+    // deliberate: the owner initiated the invite, mailboxes may not exist yet (e.g. hugh@ before it is
+    // provisioned), so the link is surfaced on screen to share directly — a one-time token, not a
+    // password. (The public forgot-password flow does NOT surface it — that would be a takeover vector.)
+    return res.status(200).json({
+      ok: true, id: op.id, emailSent: sent, setupLink: link, operatorEmail: email,
+      message: sent ? 'Operator created — a set-password email was sent.' : 'Operator created — email not sent; use the link below.',
+    });
   }
 
   // ── MUTATE (role / regions / suspend / unsuspend) ─────────────────────────────────────────────

@@ -25,6 +25,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
   // create form
   const [email, setEmail] = useState(''); const [name, setName] = useState('');
   const [newRole, setNewRole] = useState<OperatorRoleName>('support'); const [regions, setRegions] = useState('GB');
+  const [created, setCreated] = useState<{ email: string; link: string; emailSent: boolean } | null>(null);
 
   async function refresh() { const r = await fetch('/api/superadmin/operators'); if (r.ok) setOps((await r.json()).operators); }
   async function call(method: string, body: any): Promise<boolean> {
@@ -40,7 +41,16 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
   async function create(e: React.FormEvent) {
     e.preventDefault();
     const regs = newRole === 'owner' ? [] : regions.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
-    if (await call('POST', { email, name, role: newRole, regions: regs })) { setEmail(''); setName(''); setNewRole('support'); setRegions('GB'); }
+    setBusy(true); setMsg(null); setCreated(null);
+    const r = await fetch('/api/superadmin/operators', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, name, role: newRole, regions: regs }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setMsg({ ok: false, text: d.message || 'Failed.' }); return; }
+    // Surface the set-password link on screen — the operator sets their own password from it (works
+    // even when their mailbox doesn't exist yet). Emailed too when Resend delivered.
+    setCreated({ email: d.operatorEmail || email, link: d.setupLink, emailSent: !!d.emailSent });
+    setEmail(''); setName(''); setNewRole('support'); setRegions('GB');
+    await refresh();
   }
   const changeRole = (o: Op, r: string) => call('PATCH', { id: o.id, action: 'role', role: r });
   const changeRegions = (o: Op) => { const v = prompt(`Regions for ${o.email} (comma-separated ISO-2)`, o.regions.join(',')); if (v != null) call('PATCH', { id: o.id, action: 'regions', regions: v.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) }); };
@@ -55,6 +65,19 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
       <div className="p-6 max-w-5xl">
         <h1 className="text-xl font-semibold mb-4">Operators</h1>
         {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
+        {created && (
+          <div className="mb-4 rounded-xl border border-emerald-800 bg-emerald-950/60 p-4">
+            <div className="text-sm text-emerald-200 mb-2">
+              Created <span className="font-semibold text-white">{created.email}</span>. {created.emailSent ? 'A set-password email was sent — and' : 'Email not delivered;'} share this one-time set-password link with them:
+            </div>
+            <div className="flex gap-2 items-center">
+              <input readOnly value={created.link} onClick={(e) => (e.target as HTMLInputElement).select()} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono" />
+              <button onClick={() => { navigator.clipboard?.writeText(created.link); setMsg({ ok: true, text: 'Link copied.' }); }} className="bg-slate-100 text-slate-900 rounded-lg px-3 py-2 text-xs font-medium">Copy</button>
+              <button onClick={() => setCreated(null)} className="text-slate-400 text-xs px-2">Dismiss</button>
+            </div>
+            <div className="text-[11px] text-slate-500 mt-2">Single-use · expires in 5 days. They set their own password — you never see it.</div>
+          </div>
+        )}
 
         {/* Create */}
         <form onSubmit={create} className="mb-6 rounded-xl border border-slate-800 bg-slate-900 p-4 flex flex-wrap items-end gap-3">
