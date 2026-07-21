@@ -62,10 +62,43 @@ export const authOptions: NextAuthOptions = {
           // Land on the admin-set primary site; fall back to the user's home site.
           site_id: user.primary_site_id ?? user.site_id,
           group_id: user.group_id,
+          actorClass: 'tenant',
         };
       },
     }),
-    // ...add more providers here, e.g. Google, GitHub
+
+    // ── OPERATOR provider (platform staff / SAP). A SEPARATE identity table — an operator is NOT a
+    // tenant User. id 'operator'; the /superadmin/login page calls signIn('operator', …). Carries
+    // actorClass='operator' + role + regions so the operator guards can enforce role and region. ──
+    CredentialsProvider({
+      id: 'operator',
+      name: 'Operator',
+      credentials: { email: { label: 'Email', type: 'text' }, password: { label: 'Password', type: 'password' } },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials.password) throw new Error('Please enter an email and password.');
+        const FAIL = new Error('Invalid email or password.');
+        const op = await prisma.operator.findUnique({ where: { email: credentials.email } });
+        if (!op || op.status !== 'active') throw FAIL;           // suspended operators cannot log in
+        if (!op.passwordHash || !(await bcrypt.compare(credentials.password, op.passwordHash))) throw FAIL;
+        return { id: op.id, email: op.email, name: op.name, actorClass: 'operator', operatorRole: op.role, regions: op.regions } as any;
+      },
+    }),
+
+    // ── REP provider (field sales PWA). A SEPARATE identity table — a rep belongs to no garage.
+    // id 'rep'; /rep/login calls signIn('rep', …). Carries actorClass='rep' + repId. ──
+    CredentialsProvider({
+      id: 'rep',
+      name: 'Rep',
+      credentials: { email: { label: 'Email', type: 'text' }, password: { label: 'Password', type: 'password' } },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials.password) throw new Error('Please enter an email and password.');
+        const FAIL = new Error('Invalid email or password.');
+        const rep = await prisma.rep.findUnique({ where: { email: credentials.email } });
+        if (!rep || rep.status !== 'active') throw FAIL;
+        if (!rep.passwordHash || !(await bcrypt.compare(credentials.password, rep.passwordHash))) throw FAIL;
+        return { id: rep.id, email: rep.email, name: rep.name, actorClass: 'rep', repId: rep.id } as any;
+      },
+    }),
   ],
 
   // --- Session Configuration ---
@@ -91,9 +124,19 @@ export const authOptions: NextAuthOptions = {
       // This makes `session.user.role` available in your React components.
       if (token && session.user) {
         session.user.id = token.id as string;
-        session.user.role = token.role as UserRole;
-        session.user.site_id = token.site_id as string;
-        session.user.group_id = token.group_id as string;
+        const cls = (token.actorClass ?? 'tenant') as 'tenant' | 'operator' | 'rep';
+        session.user.actorClass = cls;
+        if (cls === 'operator') {
+          (session.user as any).operatorRole = token.operatorRole;
+          (session.user as any).regions = token.regions ?? [];
+        } else if (cls === 'rep') {
+          (session.user as any).repId = token.repId;
+        } else {
+          // TENANT — unchanged shape (existing consumers read these three).
+          session.user.role = token.role as UserRole;
+          session.user.site_id = token.site_id as string;
+          session.user.group_id = token.group_id as string;
+        }
       }
       return session;
     },
@@ -102,14 +145,30 @@ export const authOptions: NextAuthOptions = {
       // We pass the user's custom data (like role) into the token.
       if (user) {
         token.id = user.id;
-        token.role = (user as any).role; // 'user' object is shaped by 'authorize'
-        token.site_id = (user as any).site_id;
-        token.group_id = (user as any).group_id;
+        // actorClass discriminates the three classes. Absent (an object shaped by an older tenant
+        // authorize) → 'tenant'. Only the matching class's claims are carried.
+        const cls = ((user as any).actorClass ?? 'tenant') as 'tenant' | 'operator' | 'rep';
+        token.actorClass = cls;
+        if (cls === 'operator') {
+          token.operatorRole = (user as any).operatorRole;
+          token.regions = (user as any).regions ?? [];
+        } else if (cls === 'rep') {
+          token.repId = (user as any).repId;
+        } else {
+          token.role = (user as any).role; // 'user' object is shaped by 'authorize'
+          token.site_id = (user as any).site_id;
+          token.group_id = (user as any).group_id;
+        }
         // OUR OWN issued-at, stamped once at sign-in and carried through every rolling re-issue.
         // Deliberately NOT NextAuth's `iat`: v4 does not reliably expose it to this callback, and a
         // silently-absent value made the revocation below a no-op (caught by the live-session probe).
         token.authAt = Date.now();
       }
+      // Everything below is TENANT-only session hygiene (revocation floor + stale-JWT site backfill).
+      // Operators and reps have neither a User row nor a group_id, so these must not run for them —
+      // absent actorClass = tenant (existing live tenant tokens carry no actorClass).
+      const tokenClass = (token.actorClass ?? 'tenant') as 'tenant' | 'operator' | 'rep';
+      if (tokenClass !== 'tenant') return token;
 
       // ── SESSION REVOCATION (the ONLY server-side kill switch) ──────────────────────────────
       // strategy:'jwt' means the cookie is SELF-CONTAINED: it cannot be revoked by deleting rows

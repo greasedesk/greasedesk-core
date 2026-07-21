@@ -293,6 +293,46 @@ model PlatformOperator {
   created_at DateTime @default(now())
 }
 
+// ── PLATFORM-TIER ACTOR IDENTITIES (layer 1). Operators and Reps are their OWN authenticated
+// classes — NOT tenant Users. A rep belongs to no garage; an operator's authority is a different
+// axis from tenant authority. Each has its own credentials and its own NextAuth provider; the JWT
+// carries actorClass to keep the three boundaries separate. See lib/operator-auth / lib/rep-auth.
+enum OperatorRole {
+  owner           // all ops; manages operators; ONLY role that purges or transfers ownership
+  country_manager // region-scoped; all support + lifecycle except operator-management and purge
+  support         // region-scoped, read-only tenant visibility + password reset / change email / extend trial
+}
+
+model Operator {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  name         String
+  role         OperatorRole @default(support)
+  // ISO-3166-1 alpha-2 country codes this operator may act in. IGNORED for `owner` (all regions).
+  // The ONLY source of region scope — operatorTenantScope() derives the query filter from here,
+  // never from a request param. Empty for a non-owner = can see nothing (fails closed).
+  regions      String[]     @default([])
+  status       String       @default("active") // 'active' | 'suspended'
+  suspended_at DateTime?
+  note         String?
+  created_at   DateTime     @default(now())
+  updated_at   DateTime     @updatedAt
+}
+
+model Rep {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  ref_code       String   @unique // the `?ref=<code>` marketing token that attributes a signup
+  country_code   String   @default("GB")
+  payout_details Json?
+  status         String   @default("active") // 'active' | 'suspended'
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+}
+
 // PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT
 // AuditLog: AuditLog is group-scoped and cascade-deleted with the tenant, so a purge record can't
 // live in the tenant it destroys. This survives the purge — target_name/ref are SNAPSHOTS.
