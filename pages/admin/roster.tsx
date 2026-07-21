@@ -161,7 +161,7 @@ export default function RosterPage() {
     try {
       const [r, h] = await Promise.all([
         fetch(`/api/roster?year=${year}`, { cache: 'no-store' }),
-        fetch('/api/public-holidays', { cache: 'no-store' }),
+        fetch(`/api/public-holidays?year=${year}`, { cache: 'no-store' }),
       ]);
       if (r.ok) setRoster(await r.json());
       if (h.ok) setHolidays((await h.json()).holidays);

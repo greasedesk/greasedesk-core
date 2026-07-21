@@ -27,8 +27,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = user.group_id as string;
 
   if (req.method === 'GET') {
+    // Year-scoped like the leave tab. A valid ?year bounds the list to that calendar year (UTC);
+    // absent/invalid → the whole list (unchanged behaviour for callers that don't pass one).
+    const yr = parseInt(String(req.query.year ?? ''), 10);
+    const yearWhere = Number.isInteger(yr)
+      ? { date: { gte: new Date(Date.UTC(yr, 0, 1)), lt: new Date(Date.UTC(yr + 1, 0, 1)) } }
+      : {};
     const rows = (await prisma.publicHoliday.findMany({
-      where: { group_id: groupId }, orderBy: { date: 'asc' },
+      where: { group_id: groupId, ...yearWhere }, orderBy: { date: 'asc' },
       select: { id: true, date: true, label: true, site_id: true },
     })) as any[];
     return res.status(200).json({ holidays: rows.map((r) => ({ id: r.id, date: r.date.toISOString().slice(0, 10), label: r.label, siteId: r.site_id })) });
