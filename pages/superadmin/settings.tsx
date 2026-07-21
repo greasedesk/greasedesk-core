@@ -10,6 +10,7 @@ import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOperatorPage, type OperatorRoleName } from '@/lib/operator-auth';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
+import TwoFactorCard from '@/components/engine-room/TwoFactorCard';
 
 type Props = { role: OperatorRoleName; email: string; name: string };
 const input = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-slate-500 focus:outline-none';
@@ -65,6 +66,8 @@ export default function OperatorSettings({ role, email, name }: Props) {
             <button className={btn} disabled={busy}>Change password</button>
           </form>
         </Card>
+
+        <TwoFactorCard />
       </div>
     </EngineRoomLayout>
   );

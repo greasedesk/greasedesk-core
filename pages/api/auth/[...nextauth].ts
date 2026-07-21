@@ -8,6 +8,7 @@ import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from '../../../lib/db';
 import * as bcrypt from 'bcryptjs';
 import { UserRole } from '@prisma/client'; // Import the Role enum
+import { isEnabled, verifySecondFactor } from '@/lib/two-factor'; // Engine Room operator 2FA (server-side gate)
 
 export const authOptions: NextAuthOptions = {
   // Use the Prisma Adapter
@@ -73,7 +74,7 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       id: 'operator',
       name: 'Operator',
-      credentials: { email: { label: 'Email', type: 'text' }, password: { label: 'Password', type: 'password' } },
+      credentials: { email: { label: 'Email', type: 'text' }, password: { label: 'Password', type: 'password' }, totp: { label: 'Authenticator code', type: 'text' } },
       async authorize(credentials) {
         if (!credentials?.email || !credentials.password) throw new Error('Please enter an email and password.');
         const FAIL = new Error('Invalid email or password.');
@@ -81,6 +82,21 @@ export const authOptions: NextAuthOptions = {
         if (!op || op.status !== 'active') throw FAIL;           // suspended operators cannot log in
         // INVITE_PENDING has no valid bcrypt hash, so compare fails → a not-yet-set operator can't log in.
         if (!op.passwordHash || op.passwordHash === 'INVITE_PENDING' || !(await bcrypt.compare(credentials.password, op.passwordHash))) throw FAIL;
+        // ── SECOND FACTOR (Engine Room 2FA) — enforced HERE, server-side, before any session is minted.
+        // If this operator has 2FA enabled, password alone is NOT enough: a valid TOTP or an unused
+        // recovery code is required. The UI's job is only to collect the code; this is the gate.
+        const subject = { type: 'operator' as const, id: op.id };
+        if (await isEnabled(subject)) {
+          const code = String((credentials as any).totp ?? '').trim();
+          const res = code ? await verifySecondFactor(subject, code) : { ok: false as const, method: null };
+          if (!res.ok) {
+            await prisma.superAdminAudit.create({ data: {
+              operator_user_id: op.id, action: 'operator.2fa_failed', target_group_id: null,
+              target_operator_id: null, target_name_snapshot: op.email, reason: code ? 'invalid code' : 'no code',
+            } }).catch(() => {});
+            throw new Error('TWO_FACTOR_REQUIRED'); // password ok, code missing/invalid → no session
+          }
+        }
         await prisma.operator.update({ where: { id: op.id }, data: { last_login_at: new Date() } }).catch(() => {});
         return { id: op.id, email: op.email, name: op.name, actorClass: 'operator', operatorRole: op.role, regions: op.regions } as any;
       },

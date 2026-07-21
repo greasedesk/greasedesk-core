@@ -13,9 +13,9 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`) |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)** |
 | **NEXT** | The forecast dashboard, or Reps management UI — owner's call |
-| **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module |
+| **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module, **tenant/rep 2FA**, **mandatory-2FA enforcement policy** |
 
 "Built / gated" means: shipped to prod on `greasedesk.com` / `er.greasedesk.com`, served-build
 verified after a buildId flip, and **proven by behaviour through the rendered page** — not just
@@ -196,6 +196,39 @@ Role / region / suspend stay owner-only on the Operators screen, deliberately no
   version (change directly + notify the old address) ships, and the screen says so honestly.
 - Operators have **no `sessions_valid_from` floor**, so a password change does **not** revoke other
   operator sessions; the JWT is id-based, so the caller stays signed in.
+
+---
+
+## 6a. Two-factor authentication (operator)  — **BUILT / GATED**
+
+TOTP 2FA on the Engine Room login — hardening the platform master key (the one credential that can
+touch every tenant). Google Authenticator / any RFC-6238 app. Operators only this slice; the mechanism
+is actor-agnostic so tenant/rep 2FA extend it without a rebuild.
+
+- **Crypto in-house** (`lib/totp.ts`, RFC 6238 over `node:crypto`, SHA1/6-digit/30s) — no dependency in
+  the verification path; validated against the RFC test vectors. Only `qrcode` (render-only) was added.
+- **Storage is generic** — `TwoFactorSecret` + `TwoFactorRecoveryCode` keyed by `(subject_type,
+  subject_id)`, **not** FK'd to one identity table. Extending to `subject_type='tenant'|'rep'` needs no
+  schema change. `lib/two-factor.ts` is the sole chokepoint (enrol / confirm / verify / disable / reset).
+- **The five pieces.** (1) *Enrolment* in Settings: QR + secret text; **`enabled` flips true only after a
+  confirming code round-trips** — never enable a secret the operator can't prove. (2) *Recovery codes*:
+  10 one-time codes, shown once, stored sha256-hashed. (3) *Verification at login*: enforced **server-side
+  in the operator `authorize()`** — once enrolled, password alone yields no session; a valid TOTP **or** an
+  unused recovery code is required (a login preflight only decides whether to show the code field). (4)
+  *Disable / reset*: self-disable needs password + a code; an **Owner resets another operator's 2FA** from
+  the Operators screen (the lost-device recovery path). (5) *Policy*: available and self-enrolled, **not yet
+  mandatory** — see designed-not-built.
+- **Audited**: enrolment, disable, owner-reset, and every failed-2FA-at-login write `SuperAdminAudit`.
+- **Lockout guards (proven)**: enrol-without-confirm leaves 2FA off; a recovery code logs in once then is
+  consumed and rejected on reuse; owner-reset restores password-alone login. **Sole-owner recovery story**
+  (there is no higher tier to rescue the sole owner): the escape hatches are, in order — (a) the recovery
+  codes, (b) if those are also lost, a **direct-DB delete of the `TwoFactorSecret` row** (the operator holds
+  the database credentials, which is the higher tier for the sole owner). Both proven on throwaways.
+
+**Designed — not built:** tenant/rep 2FA (same `lib/two-factor` with a different `subject_type`); a
+**mandatory-2FA enforcement policy** (forcing all operators to enrol) — a deliberate later decision, not
+built while there is one real operator. Also noted: encryption-at-rest of the TOTP secret (stored base32
+as-is today; a DB leak yields the secret but not the bcrypt password, so 2FA still holds unless both leak).
 
 ---
 

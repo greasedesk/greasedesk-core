@@ -63,11 +63,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         suspended_at: true, created_at: true, last_login_at: true, passwordHash: true, invite_token_used_at: true,
       },
     });
+    // Which operators have 2FA on (so the screen can show a lock + a Reset action).
+    const twoFA = new Set(
+      (await prisma.twoFactorSecret.findMany({ where: { subject_type: 'operator', enabled: true }, select: { subject_id: true } })).map((r: { subject_id: string }) => r.subject_id),
+    );
     return res.status(200).json({
       operators: ops.map((o: (typeof ops)[number]) => ({
         id: o.id, email: o.email, name: o.name, role: o.role, regions: o.regions, status: o.status,
         suspendedAt: o.suspended_at, createdAt: o.created_at, lastLoginAt: o.last_login_at,
         pending: o.passwordHash === 'INVITE_PENDING' && !o.invite_token_used_at, // hasn't set a password yet
+        twoFactorEnabled: twoFA.has(o.id),
         isSelf: o.id === actor.userId,
       })),
     });
@@ -171,6 +176,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await prisma.operator.update({ where: { id }, data: { status: 'active', suspended_at: null } });
       await audit(actor.userId, 'operator.unsuspended', { id, name: target.email });
       return res.status(200).json({ ok: true, message: 'Operator un-suspended.' });
+    }
+
+    // OWNER RESET of another operator's 2FA — the account-recovery path for a lost device + lost
+    // recovery codes. Turns 2FA off so they can sign in with their password again and re-enrol.
+    // (An operator disables their OWN 2FA via Settings, which requires a code; this owner path does
+    // not — it exists precisely for when the operator can no longer produce one.)
+    if (b.action === 'reset_2fa') {
+      const { disable } = await import('@/lib/two-factor');
+      await disable({ type: 'operator', id });
+      await audit(actor.userId, 'operator.2fa_reset', { id, name: target.email });
+      return res.status(200).json({ ok: true, message: `Two-factor authentication reset for ${target.email}. They can now sign in with their password alone and re-enrol.` });
     }
 
     return res.status(400).json({ message: 'Unknown action.' });

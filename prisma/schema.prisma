@@ -435,6 +435,38 @@ model SuperAdminAudit {
   @@index([target_operator_id])
 }
 
+// ── TWO-FACTOR (TOTP). Generic store keyed by (subject_type, subject_id) — deliberately NOT FK'd to
+// one identity table, so the SAME mechanism extends to tenant Users and Reps later with NO schema
+// change (just a new subject_type). Wired to operators ONLY in this slice. lib/two-factor is the sole
+// reader/writer; the TOTP crypto is lib/totp. The secret is a shared secret (base32) stored as-is —
+// a DB leak yields the secret but not the password (bcrypt), so 2FA still holds unless BOTH leak;
+// encryption-at-rest of the secret is a noted hardening follow-up.
+model TwoFactorSecret {
+  id           String    @id @default(uuid())
+  subject_type String // 'operator' | 'tenant' | 'rep'
+  subject_id   String
+  secret       String // base32 TOTP secret
+  enabled      Boolean   @default(false) // false during enrolment; true ONLY after a confirming code round-trips
+  confirmed_at DateTime?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  @@unique([subject_type, subject_id])
+}
+
+// One-time recovery codes — the escape hatch when the authenticator device is lost. Raw shown ONCE at
+// enrolment; only the sha256 hash is stored (like invite/reset tokens). used_at makes each single-use.
+model TwoFactorRecoveryCode {
+  id           String    @id @default(uuid())
+  subject_type String
+  subject_id   String
+  code_hash    String // sha256(raw recovery code)
+  used_at      DateTime? // set when consumed at login — a used code can never be reused
+  created_at   DateTime  @default(now())
+
+  @@index([subject_type, subject_id])
+}
+
 // Webhook idempotency ledger (item-12): every Stripe event.id is recorded ONCE before its effect
 // is applied; a replay finds the row and is skipped. "A replayed queue that double-logs an hour is
 // bad; a replayed charge is worse" — the outbox discipline, higher stakes.

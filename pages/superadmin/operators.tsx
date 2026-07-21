@@ -15,6 +15,7 @@ import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 type Op = {
   id: string; email: string; name: string; role: OperatorRoleName; regions: string[]; status: string;
   suspendedAt: string | null; createdAt: string; lastLoginAt: string | null; pending: boolean; isSelf: boolean;
+  twoFactorEnabled: boolean;
 };
 const ROLE_LABEL: Record<string, string> = { owner: 'Owner', country_manager: 'Country manager', support: 'Support' };
 
@@ -56,6 +57,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
   const changeRegions = (o: Op) => { const v = prompt(`Regions for ${o.email} (comma-separated ISO-2)`, o.regions.join(',')); if (v != null) call('PATCH', { id: o.id, action: 'regions', regions: v.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) }); };
   const suspend = (o: Op) => { const reason = prompt(`Reason for suspending ${o.email}?`); if (reason) call('PATCH', { id: o.id, action: 'suspend', reason }); };
   const unsuspend = (o: Op) => call('PATCH', { id: o.id, action: 'unsuspend' });
+  const reset2fa = (o: Op) => { if (confirm(`Reset two-factor authentication for ${o.email}?\n\nThey will sign in with their password alone and must re-enrol. Use this ONLY for a lost device + lost recovery codes — it lowers their account to single-factor until they re-enrol.`)) call('PATCH', { id: o.id, action: 'reset_2fa' }); };
 
   const input = 'bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-slate-500 focus:outline-none';
 
@@ -105,7 +107,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
               {ops.map((o) => (
                 <tr key={o.id} className={`border-t border-slate-800 ${o.status === 'suspended' ? 'bg-red-950/30' : ''}`}>
                   <td className="px-3 py-2">
-                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-slate-500">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}</div>
+                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-slate-500">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}{o.twoFactorEnabled && <span className="ml-1 text-[10px] text-emerald-400" title="Two-factor authentication is on">🔒 2FA</span>}</div>
                     <div className="text-xs text-slate-400">{o.email}</div>
                   </td>
                   <td className="px-3 py-2">
@@ -125,9 +127,12 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
                   </td>
                   <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">{o.lastLoginAt ? new Date(o.lastLoginAt).toLocaleString('en-GB') : '—'}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    {o.status === 'suspended'
-                      ? <button disabled={busy} onClick={() => unsuspend(o)} className="rounded-lg border border-emerald-700 text-emerald-200 hover:bg-emerald-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Un-suspend</button>
-                      : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} title={o.isSelf ? 'You cannot suspend yourself' : 'Suspend this operator'} className="rounded-lg border border-red-800 text-red-200 hover:bg-red-900/40 px-3 py-1 text-xs font-medium disabled:opacity-30">Suspend</button>}
+                    <span className="flex gap-2">
+                      {o.status === 'suspended'
+                        ? <button disabled={busy} onClick={() => unsuspend(o)} className="rounded-lg border border-emerald-700 text-emerald-200 hover:bg-emerald-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Un-suspend</button>
+                        : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} title={o.isSelf ? 'You cannot suspend yourself' : 'Suspend this operator'} className="rounded-lg border border-red-800 text-red-200 hover:bg-red-900/40 px-3 py-1 text-xs font-medium disabled:opacity-30">Suspend</button>}
+                      {o.twoFactorEnabled && <button disabled={busy} onClick={() => reset2fa(o)} title="Reset 2FA (lost-device recovery)" className="rounded-lg border border-amber-700 text-amber-200 hover:bg-amber-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Reset&nbsp;2FA</button>}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -148,6 +153,9 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
     orderBy: { created_at: 'asc' },
     select: { id: true, email: true, name: true, role: true, regions: true, status: true, suspended_at: true, created_at: true, last_login_at: true, passwordHash: true, invite_token_used_at: true },
   });
+  const twoFA = new Set(
+    (await prisma.twoFactorSecret.findMany({ where: { subject_type: 'operator', enabled: true }, select: { subject_id: true } })).map((r: { subject_id: string }) => r.subject_id),
+  );
   return {
     props: {
       role: gate.op.role,
@@ -156,6 +164,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
         suspendedAt: o.suspended_at ? o.suspended_at.toISOString() : null,
         createdAt: o.created_at.toISOString(), lastLoginAt: o.last_login_at ? o.last_login_at.toISOString() : null,
         pending: o.passwordHash === 'INVITE_PENDING' && !o.invite_token_used_at, isSelf: o.id === gate.op.userId,
+        twoFactorEnabled: twoFA.has(o.id),
       })),
     },
   };
