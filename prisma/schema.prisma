@@ -357,7 +357,13 @@ model CommissionRate {
   created_by     String? // operator id (audit)
   created_at     DateTime @default(now())
 
-  @@index([country_code, currency, tier, effective_from])
+  // THE TIMELINE INVARIANT, at the database. For a (country, currency, tier) the effective-dated
+  // rows form a step function; the engine reads "latest effective_from ≤ collected_at". Two rows
+  // sharing an effective_from would make that lookup ambiguous (which rate wins on the boundary
+  // day?) — so the boundary point must be unique. This UNIQUE index is that rule made physical:
+  // a clean, non-overlapping timeline per key. It also serves the engine's resolveRate lookup
+  // (same leading columns), so it replaces the old non-unique index rather than adding to it.
+  @@unique([country_code, currency, tier, effective_from])
 }
 
 // A JOIN, not a field on the tenant — a garage can attribute to a rep AND a regional manager at
