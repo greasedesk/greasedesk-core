@@ -112,6 +112,16 @@ export const authOptions: NextAuthOptions = {
     maxAge: 90 * 24 * 60 * 60,
   },
 
+  // ⚠️ COOKIE ISOLATION GUARDRAIL — DO NOT set a `cookies` block with a parent-domain
+  // `Domain` attribute (e.g. `.greasedesk.com`). The three actor classes are kept apart by ORIGIN:
+  // the Engine Room lives at er.greasedesk.com and the tenant app at greasedesk.com, and the whole
+  // separation rests on NextAuth's DEFAULT host-only cookies (no Domain; __Host-/__Secure- prefixes).
+  // A parent-domain Domain would make the operator session cookie travel to greasedesk.com and the
+  // tenant cookie travel to er. — silently collapsing the boundary the subdomain exists to create.
+  // v4 has no `trustHost`; it needs none here — the login pages sign in with `redirect:false`
+  // (a relative, on-origin POST), so each Set-Cookie is issued by the response host and the browser
+  // attributes it host-only to that exact host. Keep the defaults; never add a Domain.
+
   // --- Callbacks ---
   // Callbacks are used to control what happens when an action is performed.
   callbacks: {
