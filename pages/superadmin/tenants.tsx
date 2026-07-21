@@ -1,24 +1,27 @@
 /**
  * File: pages/superadmin/tenants.tsx
- * SuperAdmin operator console — the tenant list + Archive/Purge. STANDALONE: not under /admin, so
- * _app never wraps it in AdminLayout; it shares no code path with tenant authority. Operator-only
- * (requireSuperAdminPage → 404 for everyone else, so a tenant admin can't discover it exists).
- * Read-only table; every tenant shows ref AND id (two groups share a name — never identify by name).
+ * Engine Room — the tenant list, inside the EngineRoomLayout shell. All roles (nav item, minRole
+ * support); Support sees it read-only, Country-Manager+ get the Archive/Purge actions (canAct), which
+ * the archive/purge APIs also enforce server-side. Region-scoped from the principal. requireOperatorPage
+ * → 404 for the wrong actor class. Every tenant shows ref AND id (two groups share a name — never by name).
  */
 import { useState } from 'react';
 import Head from 'next/head';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
-import { requireOperatorPage, operatorTenantScope } from '@/lib/operator-auth';
+import { requireOperatorPage, operatorTenantScope, roleAtLeast, type OperatorRoleName } from '@/lib/operator-auth';
+import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type TenantRow = {
   id: string; name: string; ref: string; created: string; archivedAt: string | null;
   subscriptionStatus: string | null; siteCount: number; userCount: number; lastActivity: string | null; isTmbs: boolean; isOwn: boolean;
 };
-type PageProps = { tenants: TenantRow[]; operatorEmail: string };
+// canAct = the lifecycle actions (Archive/Purge) are shown — Country Manager and above. Support gets a
+// read-only view; the buttons are absent AND the archive/purge APIs enforce the same role server-side.
+type PageProps = { tenants: TenantRow[]; operatorEmail: string; role: OperatorRoleName; canAct: boolean };
 
-export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps) {
+export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct }: PageProps) {
   const [rows, setRows] = useState(tenants);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -59,12 +62,12 @@ export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps)
   }
 
   return (
-    <>
-      <Head><title>SuperAdmin · Tenants</title></Head>
-      <main className="min-h-screen p-6" style={{ background: '#0B1E3B', color: '#C7D2E1' }}>
-        <div className="max-w-6xl mx-auto">
+    <EngineRoomLayout role={role}>
+      <Head><title>Engine Room — tenants</title><meta name="robots" content="noindex" /></Head>
+      <div className="p-6" style={{ color: '#C7D2E1' }}>
+        <div className="max-w-6xl">
           <div className="flex items-baseline justify-between mb-6">
-            <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: '#7C8AA3' }}>· operator {operatorEmail}</span></h1>
+            <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: '#7C8AA3' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
             <span className="text-xs" style={{ color: '#7C8AA3' }}>{rows.length} tenants</span>
           </div>
           {msg && <div className="mb-4 text-sm rounded-lg px-3 py-2" style={{ background: '#12294a', border: '1px solid #1C3257' }}>{msg}</div>}
@@ -87,12 +90,12 @@ export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps)
                     <td className="px-3 py-2 tabular-nums">{t.userCount}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-xs">{t.lastActivity ? new Date(t.lastActivity).toLocaleString('en-GB') : '—'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      {t.isOwn ? <span className="text-xs" style={{ color: '#7C8AA3' }}>your tenant</span> : (
+                      {canAct ? (
                         <span className="flex gap-2">
                           <button disabled={busy === t.id} onClick={() => archive(t, !!t.archivedAt)} className="text-xs underline" style={{ color: '#8AB4F8' }}>{t.archivedAt ? 'Un-archive' : 'Archive'}</button>
                           <button disabled={busy === t.id} onClick={() => { setPurgeFor(t); setTyped(''); }} className="text-xs underline" style={{ color: '#FCA5A5' }}>Purge</button>
                         </span>
-                      )}
+                      ) : <span className="text-xs" style={{ color: '#7C8AA3' }}>—</span>}
                     </td>
                   </tr>
                 ))}
@@ -101,7 +104,7 @@ export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps)
           </div>
         </div>
 
-        {purgeFor && (
+        {canAct && purgeFor && (
           <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setPurgeFor(null)}>
             <div className="max-w-md w-full rounded-xl p-6" style={{ background: '#12294a', border: '1px solid #1C3257' }} onClick={(e) => e.stopPropagation()}>
               <h2 className="text-lg font-semibold text-white mb-2">Purge {purgeFor.name}</h2>
@@ -119,16 +122,17 @@ export default function SuperAdminTenants({ tenants, operatorEmail }: PageProps)
             </div>
           </div>
         )}
-      </main>
-    </>
+      </div>
+    </EngineRoomLayout>
   );
 }
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
-  // The tenants DASHBOARD (list + lifecycle actions) is Country-Manager and above. Support 404s here
-  // (undiscoverable) and lands on the read-only /superadmin/overview instead.
-  const gate = await requireOperatorPage(ctx, { minRole: 'country_manager' });
-  if (!gate.ok) return { notFound: true }; // 404 — wrong class OR insufficient role
+  // The Tenants LIST is all-roles (nav item, minRole support). Support sees it read-only; the
+  // lifecycle actions (Archive/Purge) render only for Country-Manager+ (canAct) AND the archive/purge
+  // APIs enforce the same role server-side, so a Support operator can't act by other means either.
+  const gate = await requireOperatorPage(ctx);
+  if (!gate.ok) return { notFound: true }; // 404 — wrong actor class
 
   // The principal is an OPERATOR (its own identity table), not a tenant User — read the email there.
   const operator = await prisma.operator.findUnique({ where: { id: gate.op.userId }, select: { email: true } });
@@ -147,6 +151,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   return {
     props: {
       operatorEmail: operator?.email ?? '—',
+      role: gate.op.role,
+      canAct: roleAtLeast(gate.op.role, 'country_manager'), // Archive/Purge = Country Manager and above
       tenants: groups.map((g: any) => ({
         id: g.id, name: g.group_name, ref: g.ref, created: (g.created_at as Date).toISOString(),
         archivedAt: g.archived_at ? (g.archived_at as Date).toISOString() : null,

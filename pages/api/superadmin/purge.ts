@@ -7,7 +7,8 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-import { requireSuperAdminApi, TMBS_GROUP_ID } from '@/lib/superadmin';
+import { TMBS_GROUP_ID } from '@/lib/superadmin';
+import { requireOperatorApi } from '@/lib/operator-auth';
 import { purgeTenant } from '@/lib/tenant-purge';
 
 export const config = { maxDuration: 60 };
@@ -15,17 +16,16 @@ export const config = { maxDuration: 60 };
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
-  const operatorUserId = await requireSuperAdminApi(req, res); if (!operatorUserId) return; // 404 if not operator
 
   const { groupId, confirmName, confirmTmbs } = (req.body || {}) as { groupId?: string; confirmName?: string; confirmTmbs?: boolean };
   if (!groupId || !confirmName) return res.status(400).json({ message: 'groupId and confirmName are required.' });
 
+  // Purge is OWNER-ONLY and region-scoped (out-of-region → 404). CM and Support 404 here.
+  const op = await requireOperatorApi(req, res, { minRole: 'owner', tenantId: groupId });
+  if (!op) return;
+
   const target = await prisma.group.findUnique({ where: { id: groupId }, select: { id: true, group_name: true } });
   if (!target) return res.status(404).json({ message: 'Tenant not found.' });
-
-  // Guard: never the operator's OWN tenant.
-  const operator = await prisma.user.findUnique({ where: { id: operatorUserId }, select: { group_id: true } });
-  if (operator?.group_id === groupId) return res.status(409).json({ message: 'You cannot purge your own tenant.' });
 
   // Guard: typed name must match EXACTLY (we still target by id).
   if (confirmName.trim() !== target.group_name) return res.status(409).json({ code: 'name_mismatch', message: 'The typed name does not match this tenant.' });
@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (groupId === TMBS_GROUP_ID && confirmTmbs !== true) return res.status(409).json({ code: 'tmbs_confirm', message: 'This is the live TMBS tenant — confirm again to proceed.' });
 
   try {
-    const result = await purgeTenant(operatorUserId, groupId);
+    const result = await purgeTenant(op.userId, groupId);
     return res.status(200).json({ ok: true, ...result });
   } catch (e: any) {
     console.error('[superadmin] purge error', e?.message);
