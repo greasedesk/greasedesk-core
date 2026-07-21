@@ -93,16 +93,21 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
           <button disabled={busy} className="bg-slate-100 text-slate-900 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">Invite operator</button>
         </form>
 
+        {/* Compact 6-column layout so the ACTION is always visible without horizontal scroll — the
+            Suspend/Un-suspend control lives in its own right-hand column as a real button, not a
+            far-right link that scrolled off the old 8-column table. */}
         <div className="overflow-x-auto rounded-xl border border-slate-800">
           <table className="w-full text-sm">
             <thead className="bg-slate-900 text-slate-400"><tr className="text-left">
-              {['Name', 'Email', 'Role', 'Regions', 'Status', 'Last login', 'Created', ''].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}
+              {['Operator', 'Role', 'Regions', 'Status', 'Last login', 'Action'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}
             </tr></thead>
             <tbody>
               {ops.map((o) => (
-                <tr key={o.id} className="border-t border-slate-800">
-                  <td className="px-3 py-2 text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-slate-500">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}</td>
-                  <td className="px-3 py-2 text-slate-300">{o.email}</td>
+                <tr key={o.id} className={`border-t border-slate-800 ${o.status === 'suspended' ? 'bg-red-950/30' : ''}`}>
+                  <td className="px-3 py-2">
+                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-slate-500">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}</div>
+                    <div className="text-xs text-slate-400">{o.email}</div>
+                  </td>
                   <td className="px-3 py-2">
                     <select value={o.role} disabled={busy} onChange={(e) => changeRole(o, e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100">
                       <option value="support">Support</option><option value="country_manager">Country manager</option><option value="owner">Owner</option>
@@ -113,20 +118,23 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
                       <button onClick={() => changeRegions(o)} className="underline decoration-dotted text-slate-300 hover:text-white">{o.regions.join(', ') || '—'}</button>
                     )}
                   </td>
-                  <td className="px-3 py-2">{o.status === 'suspended' ? <span className="text-red-400">suspended</span> : <span className="text-emerald-400">active</span>}</td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${o.status === 'suspended' ? 'bg-red-900/60 text-red-200 border border-red-700' : 'bg-emerald-900/50 text-emerald-200 border border-emerald-800'}`}>
+                      {o.status === 'suspended' ? 'Suspended' : 'Active'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">{o.lastLoginAt ? new Date(o.lastLoginAt).toLocaleString('en-GB') : '—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">{new Date(o.createdAt).toLocaleDateString('en-GB')}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     {o.status === 'suspended'
-                      ? <button disabled={busy} onClick={() => unsuspend(o)} className="text-xs underline text-emerald-300">Un-suspend</button>
-                      : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} className="text-xs underline text-red-300 disabled:opacity-30">Suspend</button>}
+                      ? <button disabled={busy} onClick={() => unsuspend(o)} className="rounded-lg border border-emerald-700 text-emerald-200 hover:bg-emerald-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Un-suspend</button>
+                      : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} title={o.isSelf ? 'You cannot suspend yourself' : 'Suspend this operator'} className="rounded-lg border border-red-800 text-red-200 hover:bg-red-900/40 px-3 py-1 text-xs font-medium disabled:opacity-30">Suspend</button>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="mt-3 text-xs text-slate-500">No delete — operators are suspended, never removed, so the audit trail of what they did survives.</p>
+        <p className="mt-3 text-xs text-slate-500">No delete — operators are suspended, never removed, so the audit trail of what they did survives. Suspending the last active owner is refused.</p>
       </div>
     </EngineRoomLayout>
   );
