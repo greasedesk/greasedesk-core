@@ -83,6 +83,47 @@ function ChangePassword({ email }: { email: string }) {
 }
 
 /**
+ * Self-service LOGIN EMAIL change (self mirror-image of ChangePassword). Guarded like the
+ * account-takeover-shaped action it is: current password required; the old address is notified and
+ * the change is audited server-side. The current session stays live (a mistyped new address can't
+ * lock you out); we silently re-mint it onto the new identity so the app reflects it at once.
+ */
+function ChangeEmail({ currentEmail }: { currentEmail: string }) {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true); setMsg(null);
+    const err = await post('/api/account/change-email', 'POST', { newEmail: email, currentPassword: pw });
+    if (err) { setBusy(false); return setMsg({ text: err, type: 'error' }); }
+    const re = await signIn('credentials', { redirect: false, email: email.trim().toLowerCase(), password: pw });
+    setBusy(false); setPw('');
+    if (re?.error) {
+      // Change landed; the silent re-mint didn't. The OLD session is still live as a backstop.
+      setMsg({ text: 'Login email changed. Use your new address next time you sign in.', type: 'success' });
+      return;
+    }
+    setEmail('');
+    setMsg({ text: 'Login email changed — this is now your login.', type: 'success' });
+    router.replace(router.asPath); // refetch gSSP so the header + read-only field show the new email
+  }
+  return (
+    <div className="bg-surface border border-line rounded-xl p-6 max-w-md mb-6">
+      <h2 className="text-lg font-semibold text-ink mb-1">Change login email</h2>
+      <p className="text-xs text-muted mb-4">Current: <strong className="text-ink">{currentEmail}</strong>. The old address is notified. Your other sessions stay signed in.</p>
+      {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>{msg.text}</div>}
+      <form onSubmit={submit} className="space-y-3">
+        <div><label className={labelClass}>New email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={inputClass} /></div>
+        <div><label className={labelClass}>Current password (to confirm)</label><input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} required className={inputClass} /></div>
+        <button type="submit" disabled={busy} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? 'Saving…' : 'Change email'}</button>
+      </form>
+    </div>
+  );
+}
+
+/**
  * ADMIN-only, on someone else's record (the self mirror-image of ChangePassword above).
  * THE STOLEN-PHONE ACTION: the handset holds a live 90-day /m session, and whoever holds the phone
  * holds the access — no password required. Revocation closes that completely. It does NOT lock out
@@ -225,6 +266,7 @@ export default function UserDetail({ selfId, isSelf, canSeeEmergency, isAdmin, i
       </p>
 
       {isSelf && <ChangePassword email={profile.email} />}
+      {isSelf && <ChangeEmail currentEmail={profile.email} />}
       {/* ADMIN only — mirrors requireAdminApi on the endpoint, so the button can never 403. Covers
           an admin acting on a group member AND on themselves (your own phone can be the stolen one).
           A STANDARD/manager user viewing their own record does not get this. */}
