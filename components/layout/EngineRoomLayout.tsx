@@ -46,6 +46,9 @@ export default function EngineRoomLayout({ role, children }: { role: OperatorRol
           >
             Sign out
           </button>
+          {/* Disclosure only — the Engine Room runs strictly-necessary session cookies (no banner).
+              Absolute apex URL: the policy page lives on greasedesk.com, not this (er.) origin. */}
+          <a href="https://greasedesk.com/cookies" className="block px-3 pt-1 text-[11px] text-slate-500 hover:text-slate-300">Cookies</a>
         </div>
       </aside>
 

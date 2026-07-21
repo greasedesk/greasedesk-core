@@ -141,6 +141,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           >
             {t('nav.signOut')}
           </button>
+          {/* Disclosure only — the app runs strictly-necessary session cookies (no banner here). */}
+          <Link href="/cookies" className="block px-3 text-[11px] text-sidebar-muted/70 hover:text-sidebar-active">Cookies</Link>
         </div>
       </aside>
 

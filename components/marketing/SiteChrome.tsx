@@ -7,8 +7,15 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
+import { useConsent } from '@/components/consent/ConsentProvider';
 
 const YEAR = 2026; // © year — bump per release (Date.now is avoided; this is a deliberate constant)
+
+/** Footer "Cookie settings" — re-opens the consent banner in Manage mode so a choice is changeable. */
+function CookieSettingsLink() {
+  const { openManage } = useConsent();
+  return <button type="button" onClick={openManage} className="text-left text-muted hover:text-ink">Cookie settings</button>;
+}
 
 // The mobile panel carries the FULL nav — nothing is dropped on a phone (the old header silently
 // lost Features + Contact). Reseller lives here and in the footer, but deliberately NOT in the
@@ -100,6 +107,8 @@ function Footer() {
             <Link href="/register" className="text-muted hover:text-ink">Start free trial</Link>
             <Link href="/admin/login" className="text-muted hover:text-ink">Sign in</Link>
             <Link href="/reseller" className="text-muted hover:text-ink">Become a reseller</Link>
+            <Link href="/cookies" className="text-muted hover:text-ink">Cookie policy</Link>
+            <CookieSettingsLink />
           </nav>
           <div className="flex flex-col gap-2 text-sm">
             <span className="text-xs uppercase tracking-wide text-muted mb-1">Contact</span>

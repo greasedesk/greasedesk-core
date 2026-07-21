@@ -11,6 +11,10 @@ import '@/styles/globals.css';
 import { SessionProvider } from 'next-auth/react';
 import { appWithTranslation } from 'next-i18next';
 import AdminLayout from '@/components/layout/AdminLayout';
+import { ConsentProvider, useConsent } from '@/components/consent/ConsentProvider';
+import ConsentBanner from '@/components/consent/ConsentBanner';
+import { parseConsentCookie, sanitiseRef, type ConsentRecord } from '@/lib/consent';
+import { resolveConsentRegion } from '@/lib/consent-config';
 // NOTE: serverSideTranslations (server-only, uses `fs`) is dynamically imported inside the
 // server branch of getInitialProps below — importing it at top level would pull `fs` into the
 // client bundle (_app ships to the client).
@@ -43,23 +47,35 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
 // keeps the same AdminLayout instance mounted — it never remounts, so the locations bar doesn't
 // refetch/flicker and tab switches don't do a full-shell teardown (fast INP, no layout shift).
 // Login renders bare; the settings redirect shims return null and redirect server-side (harmless).
+// REFERRAL CAPTURE — now CONSENT-GATED. A public ?ref= is routed through the consent manager, which
+// writes gd_ref only if functional consent is (or becomes) granted; refuse → no attribution cookie.
+// Runs inside ConsentProvider so it can read the choice.
+function RefCapture({ refValue, ready }: { refValue: unknown; ready: boolean }) {
+  const { noteRef } = useConsent();
+  useEffect(() => {
+    if (!ready) return;
+    const clean = sanitiseRef(refValue);
+    if (clean) noteRef(clean);
+  }, [ready, refValue, noteRef]);
+  return null;
+}
+
 function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   const useAdminShell = router.pathname.startsWith('/admin') && router.pathname !== '/admin/login';
-  // REFERRAL CAPTURE (dormant): stash a public ?ref= into a first-party cookie the moment it lands,
-  // on ANY page, so the attribution survives navigation to /register even if the link drops the query.
-  // No rep system yet — we simply never lose it (expensive to retrofit). Sanitised + capped here too.
-  useEffect(() => {
-    if (!router.isReady) return;
-    const raw = router.query.ref;
-    const ref = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-    if (!ref) return;
-    const clean = ref.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
-    if (clean) document.cookie = `gd_ref=${encodeURIComponent(clean)}; path=/; max-age=${60 * 60 * 24 * 90}; SameSite=Lax`;
-  }, [router.isReady, router.query.ref]);
+  // The consent banner shows ONLY on the public marketing site — never a wall in front of the tenant app
+  // or the Engine Room login (those run strictly-necessary session cookies only). Excludes /admin, /m,
+  // and /superadmin (the last covers er.greasedesk.com, whose routes are all /superadmin/*).
+  const isAppRoute = router.pathname.startsWith('/admin') || router.pathname.startsWith('/m') || router.pathname.startsWith('/superadmin');
+  const initialConsent = ((pageProps as any).__consent ?? null) as ConsentRecord | null;
+  const region = ((pageProps as any).__consentRegion ?? 'GB') as string;
   const page = <Component {...pageProps} />;
   return (
     <SessionProvider session={pageProps.session}>
-      {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
+      <ConsentProvider initialRecord={initialConsent} region={region}>
+        <RefCapture refValue={router.query.ref} ready={router.isReady} />
+        {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
+        {!isAppRoute && <ConsentBanner />}
+      </ConsentProvider>
     </SessionProvider>
   );
 }
@@ -76,7 +92,11 @@ const GreaseDeskAppWithI18n = appWithTranslation(GreaseDeskApp, nextI18NextConfi
     const { serverSideTranslations } = await import('next-i18next/serverSideTranslations');
     const locale = appCtx.ctx.locale || nextI18NextConfig.i18n.defaultLocale;
     const i18nProps = await serverSideTranslations(locale, ['common'], nextI18NextConfig as any);
-    return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps } };
+    // Seed consent from the request cookie so the banner never flashes for a returning visitor, and
+    // resolve the region for its copy/defaults (GB today; /ie → IE when that region ships).
+    const __consent = parseConsentCookie(appCtx.ctx.req?.headers?.cookie);
+    const __consentRegion = resolveConsentRegion(appCtx.ctx.asPath || appCtx.router?.asPath);
+    return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps, __consent, __consentRegion } };
   }
   return appProps;
 };

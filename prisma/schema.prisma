@@ -476,6 +476,25 @@ model StripeEvent {
   processed_at DateTime @default(now())
 }
 
+// Versioned, auditable record of a cookie-consent choice — because a regulator or user may later ask
+// "what did they consent to, and when". Anonymous (pre-login, public site): no PII, just the browser's
+// stable consent_id (also carried in the gd_consent cookie), the policy version + region in force, and
+// the per-category choice. A changed choice writes a NEW row with the same consent_id → the trail is
+// the history. Same discipline as the operator audit / rep agreement.
+model ConsentEvent {
+  id             String   @id @default(uuid())
+  consent_id     String // the browser's stable consent uuid (mirrors the gd_consent cookie)
+  policy_version String
+  region         String
+  functional     Boolean
+  analytics      Boolean
+  marketing      Boolean
+  created_at     DateTime @default(now())
+
+  @@index([consent_id])
+  @@index([created_at])
+}
+
 model GroupBilling {
   id               String        @id @default(uuid())
   group_id         String        @unique

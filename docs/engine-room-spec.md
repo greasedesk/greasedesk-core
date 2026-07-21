@@ -43,6 +43,14 @@ These hold across every area. A slice that violates one is not done.
 5. **Guards proven by behaviour through the rendered page.** A gate is proven when the wrong
    actor gets a 404 on the live host and the right actor gets the function — demonstrated on the
    served build, not asserted in a unit test alone. Hidden nav link ≠ guard.
+6. **Consent gates loading, not just setting.** Categorised cookie consent (`lib/consent`,
+   `ConsentProvider`) governs the public marketing site: strictly-necessary always on; functional
+   (`gd_ref` referral attribution) / analytics / marketing are opt-in, region-shaped
+   (`lib/consent-config`, GB live, IE prepared), and **nothing in a category fires until consented** —
+   a future tracker registers with the manager and injects only on consent. Choices are recorded as
+   versioned `ConsentEvent` rows. The banner is marketing-only; the tenant app and Engine Room run
+   strictly-necessary session cookies (disclosure link, **no consent wall on login**). The cookie
+   *policy* prose is a separate legal job — `/cookies` is a factual-disclosure stub until then.
 
 ---
 
