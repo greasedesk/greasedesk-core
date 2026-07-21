@@ -333,6 +333,74 @@ model Rep {
   updated_at     DateTime @updatedAt
 }
 
+// ── COMMISSION ENGINE (layer 2). The money spine: ONE calculation (lib/commission) every surface
+// reads. Built entirely dormant (no live payments); every rule is proven synthetically against a
+// fixed clock. See lib/commission for the invariants; the fixed-clock plan is the spec.
+
+// Effective-dated rate table. A rate at time T = the LATEST row for (country,currency,tier) with
+// effective_from ≤ T (the EmploymentEvent "value-at-T" rule). An amendment is a NEW forward row;
+// existing rows are NEVER updated, so historical commission is frozen at the rate in force when the
+// payment was collected. Amendable by Platform Owner in the SAP.
+model CommissionRate {
+  id             String   @id @default(uuid())
+  country_code   String // ISO-2 (the tenant's tax_country_code)
+  currency       String // ISO-4217 (the collected payment's currency)
+  tier           String // 'first_12m' | 'thereafter'
+  effective_from DateTime
+  amount_pennies Int // flat commission per collected month at this tier, in `currency`
+  created_by     String? // operator id (audit)
+  created_at     DateTime @default(now())
+
+  @@index([country_code, currency, tier, effective_from])
+}
+
+// A JOIN, not a field on the tenant — a garage can attribute to a rep AND a regional manager at
+// once, share_bp splitting one payment's commission (active shares sum to 10000). Effective-dated +
+// ended_at so a territory hand-over applies the right split per period.
+model TenantAttribution {
+  id             String    @id @default(uuid())
+  group_id       String
+  party_type     String // 'rep' | 'operator'
+  party_id       String
+  role           String // 'referrer' | 'regional'
+  share_bp       Int
+  effective_from DateTime
+  ended_at       DateTime? // null = active; a hand-over sets this (exclusive) as the next takes over (inclusive)
+  source         String // 'ref_param' | 'manual' | 'import'
+  created_by     String?
+  created_at     DateTime  @default(now())
+
+  @@index([group_id])
+  @@index([party_type, party_id])
+}
+
+// The MATERIALISED ledger — written by the accrual/clawback path on Stripe paid/refund events. Every
+// row freezes rate_id + share_bp + tier + currency, so a recompute cross-checks and never moves.
+// Idempotency: source_ref = the payment ref (accrual) or refund ref (clawback); unique per party+kind.
+model CommissionEntry {
+  id             String   @id @default(uuid())
+  group_id       String
+  party_type     String
+  party_id       String
+  period         String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
+  kind           String // 'accrual' | 'clawback'
+  tier           String
+  rate_id        String // FROZEN link to the CommissionRate applied
+  share_bp       Int
+  amount_pennies Int // + accrual, − clawback
+  currency       String
+  source_ref     String // idempotency key: payment ref (accrual) or refund ref (clawback)
+  payment_ref    String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
+  status         String   @default("pending") // 'pending' | 'paid' | 'void'
+  payout_id      String? // set when a payout run pays it; a paid accrual is never mutated by a later clawback
+  created_at     DateTime @default(now())
+
+  @@unique([source_ref, party_id, kind]) // a re-delivered webhook is a no-op
+  @@index([group_id, period])
+  @@index([party_id, status])
+  @@index([payment_ref])
+}
+
 // PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT
 // AuditLog: AuditLog is group-scoped and cascade-deleted with the tenant, so a purge record can't
 // live in the tenant it destroys. This survives the purge — target_name/ref are SNAPSHOTS.

@@ -34,3 +34,4 @@ yarn-error.log*
 *.log
 .DS_Store # Added Mac OS cache files (important for Mac users like you).DS_Store
 public/pdfjs/
+.commission-gate-tmp/
