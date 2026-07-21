@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const passwordHash = await bcrypt.hash(password, 12);
     // ... (Prisma transaction logic remains unchanged) ...
-    const { user } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const { user, group } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
         // ref is auto-assigned by the DB sequence default; status defaults to 'trial'.
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
@@ -89,8 +89,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         select: { id: true, email: true, name: true },
       });
 
-      return { user };
+      return { user, group };
     });
+
+    // ATTRIBUTION (trigger 1 of 2): resolve the captured ?ref= NOW if a Rep already exists for it.
+    // Best-effort and non-fatal — a resolution error must never fail a signup, and if no Rep matches
+    // yet the raw signup_ref stays intact for the deferred path (resolveAttributionsForRep) to pick up
+    // when that Rep is created. See lib/attribution.
+    try {
+      const { resolveAttribution } = await import('@/lib/attribution');
+      await resolveAttribution(prisma, group.id);
+    } catch (attrErr) {
+      console.error('resolveAttribution at signup failed (non-fatal):', attrErr);
+    }
 
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);

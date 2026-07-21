@@ -13,9 +13,9 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface) |
-| **NEXT** | Attribution capture (the join that turns a rate into a payable) — owner's call |
-| **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), attribution capture, the forecast dashboard, Reps management, the rep PWA portal, the Countries module |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`) |
+| **NEXT** | The forecast dashboard, or Reps management UI — owner's call |
+| **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module |
 
 "Built / gated" means: shipped to prod on `greasedesk.com` / `er.greasedesk.com`, served-build
 verified after a buildId flip, and **proven by behaviour through the rendered page** — not just
@@ -289,17 +289,43 @@ commission-rate half.
 
 ---
 
-## 10. Attribution capture  — **DESIGNED — NOT BUILT**
+## 10. Attribution capture & resolution  — **BUILT / GATED**
 
 How a tenant becomes attributed to a rep, feeding `TenantAttribution` and therefore the commission
-engine.
+engine. The spine now runs end to end: `?ref=code → gd_ref cookie → Group.signup_ref → resolve →
+TenantAttribution → computeCommission`.
 
-- A rep's `?ref=<rep>` link is stashed at first touch (the marketing-site `?ref=` stash already
-  exists on the apex).
-- When that visitor onboards as a tenant, the stashed ref resolves to a rep and writes a
-  `TenantAttribution` row — the durable join the commission engine reads.
-- Attribution is captured **once, at onboarding**, and is itself audited/effective-dated so a later
-  correction opens a new attribution period rather than silently rewriting who earned what.
+**Capture (built 18 Jul, live).** `?ref=code` is stashed into a first-party `gd_ref` cookie at first
+touch (`pages/_app.tsx`, sanitised + capped) and persisted to `Group.signup_ref` at signup
+(`register-garage.ts`). Dormant until this slice.
+
+**Resolution (`lib/attribution.ts` — the chokepoint).** `resolveAttribution(group)` matches a `Rep`
+by exact `ref_code = signup_ref`; on a match with no existing active attribution it writes the rep as
+party (`party_type='rep'`, `role='referrer'`, `share_bp=10000`, `source='ref_param'`,
+`effective_from` = the group's signup date). The brief's "role rep" maps to `party_type='rep'` — the
+schema's `role` vocabulary is `referrer|regional`, and the engine keys commission off
+`party_type:party_id`, not `role`.
+
+- **The ref is the source; attribution is derived.** `Group.signup_ref` is the captured truth of who
+  referred, and resolution **never drops or overwrites it** — even after a `TenantAttribution` row is
+  written. A signup that arrives before its Rep loses nothing.
+- **Two triggers.** (1) *At signup* — `register-garage.ts` calls `resolveAttribution` best-effort
+  after the group is created (never fails a signup; no Rep yet → deferred). (2) *Deferred* —
+  `resolveAttributionsForRep(repId)` resolves every group that was waiting on that ref_code, called
+  when a Rep is created; plus an owner-gated sweep, `resolveAllPending`, exposed at
+  `POST /api/superadmin/resolve-attributions` (any non-owner → 404, audited `attribution.resolved`).
+- **Idempotent.** Re-running never duplicates — an existing active rep-attribution for the same
+  (group, rep) is a no-op. A 100% ref attribution is refused when the group already carries a
+  *different* active attribution (would break the engine's Σ=10000 invariant).
+- **No wall-clock.** `effective_from` is the group's signup date, not `now`.
+- **Gated against the engine.** A throwaway Rep `TESTREP` + Group `signup_ref=TESTREP` resolved to a
+  `TenantAttribution` that `computeCommission` then paid at the GB/GBP rate — the first end-to-end run
+  of ref → attribution → commission. Deferred path (ref before Rep) and idempotency proven; `signup_ref`
+  intact throughout.
+
+**Still to come:** a later "correction opens a new attribution period" flow (effective-dated
+hand-over via `ended_at`) for when an operator re-attributes a tenant; today resolution writes the
+first attribution, and the conflict guard refuses to silently stack a second.
 
 ---
 
@@ -317,11 +343,19 @@ The operator landing for owners/CMs: the platform's own financial glance, region
 
 ---
 
-## 12. Reps management  — **DESIGNED — NOT BUILT**
+## 12. Reps management  — **DESIGNED — NOT BUILT** (minimal Rep identity exists)
+
+The **`Rep` model already exists** — `id, email @unique, passwordHash, name, ref_code @unique,
+country_code, payout_details, status, timestamps` — enough for §10's `resolveAttribution` to match a
+captured ref against. What's **not** built is the management *UI/API*: no owner surface creates,
+invites, edits, or suspends a Rep yet, so Rep rows are made by fixtures/scripts for now. When that
+surface lands, its Rep-create path must call `resolveAttributionsForRep(newRepId)` so signups that
+arrived first resolve immediately.
 
 Owner + Country-manager surface (region-scoped). The rep equivalent of Operators:
 
-- Create / invite a rep (invite-token flow, mirror of the operator one).
+- Create / invite a rep (invite-token flow, mirror of the operator one) — **must** trigger deferred
+  attribution resolution on create (§10).
 - Assign region(s) and the applicable `CommissionRate` (effective-dated).
 - Suspend / un-suspend (a suspended rep cannot log in to the portal; attribution and past
   commission survive — no delete, same discipline as operators).
@@ -429,8 +463,9 @@ Onboarding **reads** the Countries config; it is a **flow over the config, not n
 | `/superadmin/dashboard` | support | shell built; forecast content designed |
 | `/superadmin/tenants` | support (region-scoped) | list built; lifecycle designed |
 | `/superadmin/operators` | owner | built |
-| `/superadmin/reps` | country_manager | designed |
+| `/superadmin/reps` | country_manager | designed (Rep *model* built) |
 | `/superadmin/rates` | owner | built |
+| `POST /api/superadmin/resolve-attributions` | owner | built |
 | `/superadmin/settings` | any operator | built |
 | `/superadmin/set-password`, `/superadmin/forgot-password` | public (token) | built |
 | Countries admin | owner | designed |
