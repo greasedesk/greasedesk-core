@@ -204,7 +204,7 @@ You have the right to complain to the **Information Commissioner's Office** (ico
 
 ## 10. Cookies
 
-We use a limited set of cookies. Strictly-necessary cookies keep the service running and secure and do not require consent. Functional, analytics and marketing cookies are used only with your consent. Full details, and the controls to change your choices, are in our **[Cookie Policy](/cookie-policy)**.
+We use a limited set of cookies. Strictly-necessary cookies keep the service running and secure and do not require consent. Functional, analytics and marketing cookies are used only with your consent. Full details, and the controls to change your choices, are in our **[Cookie Policy](/cookies)**.
 
 ---
 
