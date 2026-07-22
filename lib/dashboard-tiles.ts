@@ -10,13 +10,16 @@
 import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
-import { invoiceTotals, computeInvoiceLinePennies, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
+import { invoiceTotals, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
-import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts } from '@/lib/charged-labour';
+import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation } from '@/lib/capacity';
 
-export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date };
-export type MonthTileContext = TileContext & { months: number; now: Date };
+// `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
+// it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
+// so a tile's output is a pure function of its context (goldens are reproducible).
+export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date; now: Date };
+export type MonthTileContext = TileContext & { months: number };
 
 // Date bases (ONE chokepoint each, lib/invoice): paid tiles bucket by effectivePaidDate
 // (date_paid ?? paid_at — cash basis); issued/warranty/P&L bucket by the effective ISSUE date
@@ -127,6 +130,28 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
       return { invoiceId: r.id, number: r.invoice_number ?? '', partsCostPennies: parts, centihours: hours, labourValuePennies: value };
     });
     return { count: rows.length, partsCostPennies: partsCost, centihours, labourValuePennies, linesMissingHours, ratesMissing: [...ratesMissing], jobs };
+  },
+
+  // Work in progress, NOT invoiced: accepted or in-progress cards with no invoice raised — a
+  // point-in-time snapshot of unbilled work (period-independent, like Debtors). The lifecycle
+  // already excludes drafts/quotes (pre-acceptance) and invoiced/paid/done (an invoice only exists
+  // from `invoiced` on); `invoice: null` is belt-and-braces. Ex-VAT value = the card's OWN working
+  // draft (labour_bill_numeric + parts_bill_numeric — persisted straight from computeQuoteTotals on
+  // every save, so it IS the quote chokepoint's output). A COMEBACK bills at £0 (zero-revenue
+  // policy) so it counts as open work but adds £0 value. Ageing: cards open (created) > 14 days.
+  wip: async ({ groupId, siteIds, now }) => {
+    const cards = (await prisma.jobCard.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, status: { in: ['accepted', 'in_progress'] as any }, invoice: { is: null } },
+      select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true, created_at: true },
+    })) as any[];
+    const AGE_DAYS = 14;
+    const cutoff = new Date(now.getTime() - AGE_DAYS * 86_400_000);
+    let exVatPennies = 0, agedCount = 0;
+    for (const c of cards) {
+      if (!c.is_comeback) exVatPennies += poundsToPennies(Number(c.labour_bill_numeric ?? 0)) + poundsToPennies(Number(c.parts_bill_numeric ?? 0));
+      if (c.created_at < cutoff) agedCount += 1;
+    }
+    return { count: cards.length, exVatPennies, agedCount, ageDays: AGE_DAYS };
   },
 };
 
@@ -282,20 +307,11 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // The HONEST chain (ruling 2026-07-10 — replaces the parts/labour margin split, which
     // pretended a decomposition the fixed-price model doesn't make: fixed lines bake labour into
     // the margin): Revenue − Parts cost = Gross margin; Net = margin − wages − overheads.
-    let revenueNet = 0;
-    for (const inv of invoices) {
-      const warranty = inv.series === 'warranty';
-      for (const it of inv.lines ?? []) {
-        const qty = Number(it.qty);
-        const net = computeInvoiceLinePennies(qty, poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
-        if (!warranty) revenueNet += net;
-      }
-    }
-    // Parts cost via THE extracted read (lib/charged-labour.partsCostPennies — also the warranty
-    // tile's read; comeback drag preserved by construction). GENUINELY un-costed parts (no cost
-    // recorded) bring in revenue with no cost offset, so they INFLATE gross margin — surfaced HERE
-    // (uncostedParts) so the owner sees it, never silently trusts a 100%-margin part.
-    const partsCost = partsCostPennies(invoices);
+    // Revenue − Parts cost = Gross margin via THE extracted read (lib/charged-labour.labourGrossMargin
+    // — now ALSO the effective-hourly-rate tile's numerator; goldens prove the extraction is inert).
+    // GENUINELY un-costed parts (no cost recorded) bring in revenue with no cost offset, so they
+    // INFLATE gross margin — surfaced HERE (uncostedParts), never silently trusted at 100% margin.
+    const { revenueNet, partsCost, grossMargin } = labourGrossMargin(invoices);
     const uncosted = uncostedParts(invoices);
     // Hours charged — the EXTRACTED numerator (lib/charged-labour), reused verbatim by
     // getUtilisation. Grain + comeback behaviour documented at the helper.
@@ -313,7 +329,6 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // revenueNet, partsCost and grossMargin are true as far as they go and are kept.
     const imported = await periodImportState(groupId, siteIds, from, to);
 
-    const grossMargin = revenueNet - partsCost;
     const wageBill = wageBillMonthly * months;
     const operatingCosts = overheadsMonthly * months;
     // Labour contribution: on the fixed-price model the margin IS the labour income (parts are
@@ -326,6 +341,57 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       imported };
     if (imported.suppressDerived) return base; // wageBill/labourContribution/operatingCosts/netProfit WITHHELD
     return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
+  },
+
+  // Effective hourly rate — THREE contrast figures, NO new financial calculation: it reads the same
+  // chokepoints the strip already renders and divides.
+  //   • headline: the site LABOUR_HR rate (what an hour is CHARGED at) — from serviceCatalogue.
+  //   • per charged hour = gross margin ÷ charged hours — what a SOLD hour actually earned (fixed
+  //     services priced above the hourly rate lift this above headline).
+  //   • per sellable hour = gross margin ÷ sellable hours — what every hour of realistic CAPACITY
+  //     earned once unsold time is counted (the gap to per-charged is unsold hours, not underpricing).
+  // Numerator = labourGrossMargin (THE strip's "income" figure). Denominators = the SAME hours the
+  // "Hours charged" and utilisation tiles show — charged from chargedLabourCentihours, sellable from
+  // getGroupUtilisation.available over the SAME in-progress-to-date window utilisation uses (so a live
+  // month divides margin-to-date by capacity-to-date, not by the whole month). Derived £/hr are
+  // WITHHELD under import suppression (partial revenue ÷ full capacity would mislead, like utilisation).
+  effectiveRate: async ({ groupId, siteIds, from, to, months, now }) => {
+    const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // same ledger read as pnl/utilisation
+    const { grossMargin } = labourGrossMargin(invoices);
+    const { centihours: chargedCentihours } = chargedLabourCentihours(invoices);
+
+    // Sellable capacity over the utilisation tile's window: to-date for an in-progress single month
+    // (charged-to-date ÷ capacity-to-date), full [from,to] for a closed / multi-month period.
+    const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
+    const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+    const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
+    const util = await getGroupUtilisation(groupId, siteIds, { from, to: end });
+    const sellableHours = util.available;
+
+    // Headline: the site LABOUR_HR rate (same read as cost-base / warranty). One rate → show it;
+    // sites with differing rates → flagged as mixed (never a fabricated blended figure).
+    const rates = (await prisma.serviceCatalogue.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
+      select: { default_labour_rate: true },
+    })) as any[];
+    const distinct = [...new Set(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => Number(r.default_labour_rate)))];
+    const headlineRatePennies = distinct.length === 1 ? Math.round(distinct[0] * 100) : null;
+
+    const imported = await periodImportState(groupId, siteIds, from, to);
+    const chargedHours = chargedCentihours / 100;
+    // Guarded divisions (honest-null: no hours → no rate, never NaN/Infinity). Rounded to the penny.
+    const perChargedPennies = chargedHours > 0 ? Math.round(grossMargin / chargedHours) : null;
+    const perSellablePennies = sellableHours > 0 ? Math.round(grossMargin / sellableHours) : null;
+    const withheld = imported.suppressDerived === true;
+    return {
+      grossMarginPennies: grossMargin,
+      chargedCentihours,
+      sellableHours,
+      headlineRatePennies, headlineRateMixed: distinct.length > 1,
+      perChargedPennies: withheld ? null : perChargedPennies,
+      perSellablePennies: withheld ? null : perSellablePennies,
+      imported, months,
+    };
   },
 };
 

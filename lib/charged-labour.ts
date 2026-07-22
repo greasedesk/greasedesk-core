@@ -13,7 +13,7 @@
  * sold / rework / absent / unsold. Parts cost still drags the P&L; revenue stays £0.
  */
 import { prisma } from '@/lib/db';
-import { effectiveIssueDateWhere } from '@/lib/invoice';
+import { effectiveIssueDateWhere, computeInvoiceLinePennies } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 
 export type LedgerInvoice = {
@@ -50,6 +50,23 @@ export function partsCostPennies(invoices: LedgerInvoice[]): number {
     }
   }
   return partsCost;
+}
+
+/** THE labour gross-margin read — Revenue (ex-VAT, non-warranty) − Parts cost — extracted VERBATIM
+ *  from MONTH_TILE_COMPUTES.pnl so the P&L strip's "income" figure and any other reader (the
+ *  effective-hourly-rate tile) share ONE definition; goldens prove the extraction changed nothing.
+ *  revenueNet: every non-warranty line's ex-VAT net (freeze-at-issue lines). partsCost via the same
+ *  partsCostPennies read (un-costed parts EXCLUDED from cost by construction — surfaced elsewhere). */
+export function labourGrossMargin(invoices: LedgerInvoice[]): { revenueNet: number; partsCost: number; grossMargin: number } {
+  let revenueNet = 0;
+  for (const inv of invoices) {
+    if (inv.series === 'warranty') continue; // £0-revenue rework — never counts as income
+    for (const it of inv.lines ?? []) {
+      revenueNet += computeInvoiceLinePennies(Number(it.qty), poundsToPennies(Number(it.unit_price)), 0, false).netPennies;
+    }
+  }
+  const partsCost = partsCostPennies(invoices);
+  return { revenueNet, partsCost, grossMargin: revenueNet - partsCost };
 }
 
 export type UncostedParts = { lines: number; retailPennies: number; invoices: Array<{ id: string; number: string; lines: number }> };

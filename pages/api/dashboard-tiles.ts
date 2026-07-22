@@ -50,9 +50,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!canAccessSite(vis, siteId)) return res.status(403).json({ message: 'You don’t have access to that site.' });
     siteIds = [siteId];
   }
-  const base = { groupId: user.group_id as string, siteIds };
   const now = new Date();
-  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months, now });
+  const base = { groupId: user.group_id as string, siteIds, now }; // now reaches every compute (point-in-time ageing + in-progress-month window)
+  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
   // In-progress SINGLE month → the strip is "N of M days, fixed costs shown in full" and the
   // net-profit tile reframes to "£X short of covering the month". Closed / multi-month → false.
   const monthInProgress = monthSpan.months === 1 && monthSpan.from.getTime() <= now.getTime() && now.getTime() < monthSpan.to.getTime();
