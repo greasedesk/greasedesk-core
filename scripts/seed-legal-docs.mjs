@@ -57,13 +57,13 @@ try {
   console.log('Seeding legal documents…');
   await seed({ slug: 'cookies', title: 'Cookie policy', version: '2026-07-21', effective: '2026-07-21', body: COOKIES_BODY });
 
-  const privacy = findDraft('privacy-policy-v3.md', 'privacy-policy.md');
+  const privacy = findDraft('privacy.md', 'privacy-policy-v3.md', 'privacy-policy.md');
   if (privacy) await seed({ slug: 'privacy', title: 'Privacy policy', version: 'v1', effective: TODAY, body: privacy.body });
-  else console.log('  SKIP privacy — privacy-policy-v3.md not found (drop it at repo root or ./legal-drafts/ and re-run)');
+  else console.log('  SKIP privacy — privacy.md not found (drop it in ./legal-drafts/ and re-run)');
 
-  const terms = findDraft('terms-of-service-DRAFT.md', 'terms-of-service.md', 'terms.md');
+  const terms = findDraft('terms.md', 'terms-of-service-DRAFT.md', 'terms-of-service.md');
   if (terms) await seed({ slug: 'terms', title: 'Terms of Service', version: 'v1', effective: TODAY, body: terms.body });
-  else console.log('  SKIP terms — terms-of-service-DRAFT.md not found (drop it at repo root or ./legal-drafts/ and re-run)');
+  else console.log('  SKIP terms — terms.md not found (drop it in ./legal-drafts/ and re-run)');
 
   const total = await prisma.document.count({ where: { status: 'published' } });
   console.log(`Done. Published documents now: ${total}`);
