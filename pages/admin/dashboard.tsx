@@ -37,7 +37,7 @@ type PageProps = {
 // entry here + one compute in lib/dashboard-tiles.ts. Order here is display order.
 // qs = the CURRENT cash-period querystring (preset=… or from=…&to=…) — period-scoped tiles append
 // it to their Invoices link so the list opens on the same calendar; point-in-time tiles ignore it.
-type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string; qs: string | null };
+type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string; qs: string | null; site: string };
 // pointInTime marks tiles that DELIBERATELY ignore the period selector (locked rule: pending
 // clearance + debtors are current-state). The grid gives them an unmistakable "As of today"
 // badge + dashed card treatment and groups them AFTER the period tiles — the footnote is no
@@ -140,14 +140,16 @@ const TILE_RENDERERS: TileRenderer[] = [
   {
     key: 'wip',
     pointInTime: true, // unbilled open work RIGHT NOW — period-independent, like Debtors
+    // Leads to the SAME cards it counts: the Job Cards list filtered to WIP, carrying the dashboard's
+    // site scope so the list total reconciles with this tile (lib/wip is the shared definition).
     render: (d, f) => (
-      <div>
+      <Link href={`/admin/jobcards?filter=wip&site=${encodeURIComponent(f.site)}`} className={tileLink}>
         <p className="text-3xl font-bold text-ink tabular-nums">{f.money(d.exVatPennies)}</p>
         <p className="text-xs text-muted mt-1">{f.t('tiles.wipSub', { count: d.count })}</p>
         {d.agedCount > 0
           ? <p className="text-xs text-warn mt-2">{f.t('tiles.wipAged', { count: d.agedCount, days: d.ageDays })}</p>
           : d.count > 0 && <p className="text-xs text-muted mt-2">{f.t('tiles.wipFresh', { days: d.ageDays })}</p>}
-      </div>
+      </Link>
     ),
   },
 ];
@@ -240,7 +242,7 @@ export default function AdminDashboard(props: PageProps) {
   }, [cashQS, monthQS, siteQS]);
   useEffect(() => { load(); }, [load]);
 
-  const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS };
+  const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS, site: siteId };
 
   return (
     <>

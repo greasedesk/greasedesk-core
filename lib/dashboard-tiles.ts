@@ -11,9 +11,9 @@ import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
-import { poundsToPennies } from '@/lib/quote-totals';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation } from '@/lib/capacity';
+import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
@@ -132,26 +132,22 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     return { count: rows.length, partsCostPennies: partsCost, centihours, labourValuePennies, linesMissingHours, ratesMissing: [...ratesMissing], jobs };
   },
 
-  // Work in progress, NOT invoiced: accepted or in-progress cards with no invoice raised — a
-  // point-in-time snapshot of unbilled work (period-independent, like Debtors). The lifecycle
-  // already excludes drafts/quotes (pre-acceptance) and invoiced/paid/done (an invoice only exists
-  // from `invoiced` on); `invoice: null` is belt-and-braces. Ex-VAT value = the card's OWN working
-  // draft (labour_bill_numeric + parts_bill_numeric — persisted straight from computeQuoteTotals on
-  // every save, so it IS the quote chokepoint's output). A COMEBACK bills at £0 (zero-revenue
-  // policy) so it counts as open work but adds £0 value. Ageing: cards open (created) > 14 days.
-  wip: async ({ groupId, siteIds, now }) => {
+  // Work in progress, NOT invoiced: a point-in-time snapshot of unbilled work (period-independent,
+  // like Debtors). Filter + per-card ex-VAT value come from THE shared chokepoint (lib/wip) that the
+  // list this tile links to also reads — so the tile total and the list total can never drift. A
+  // comeback counts as open work but adds £0. Ageing: cards open (created) > WIP_AGE_DAYS.
+  wip: async ({ siteIds, now }) => {
     const cards = (await prisma.jobCard.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, status: { in: ['accepted', 'in_progress'] as any }, invoice: { is: null } },
+      where: wipCardsWhere(siteIds),
       select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true, created_at: true },
     })) as any[];
-    const AGE_DAYS = 14;
-    const cutoff = new Date(now.getTime() - AGE_DAYS * 86_400_000);
+    const cutoff = new Date(now.getTime() - WIP_AGE_DAYS * 86_400_000);
     let exVatPennies = 0, agedCount = 0;
     for (const c of cards) {
-      if (!c.is_comeback) exVatPennies += poundsToPennies(Number(c.labour_bill_numeric ?? 0)) + poundsToPennies(Number(c.parts_bill_numeric ?? 0));
+      exVatPennies += wipCardValuePennies(c);
       if (c.created_at < cutoff) agedCount += 1;
     }
-    return { count: cards.length, exVatPennies, agedCount, ageDays: AGE_DAYS };
+    return { count: cards.length, exVatPennies, agedCount, ageDays: WIP_AGE_DAYS };
   },
 };
 
