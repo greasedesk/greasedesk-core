@@ -13,7 +13,7 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)**, **billing → commission wiring** (Stripe `invoice.paid`/`charge.refunded` → engine, test-mode, dormant until keys) |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)**, **billing → commission wiring** (Stripe `invoice.paid`/`charge.refunded` → engine, test-mode, dormant until keys), **Content system** (`Document`: legal freeze / page latest-wins, country axis, markdown; cookies seeded) |
 | **NEXT** | The forecast dashboard, or Reps management UI — owner's call |
 | **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module, **tenant/rep 2FA**, **mandatory-2FA enforcement policy** |
 
@@ -237,6 +237,36 @@ is actor-agnostic so tenant/rep 2FA extend it without a rebuild.
 **mandatory-2FA enforcement policy** (forcing all operators to enrol) — a deliberate later decision, not
 built while there is one real operator. Also noted: encryption-at-rest of the TOTP secret (stored base32
 as-is today; a DB leak yields the secret but not the bcrypt password, so 2FA still holds unless both leak).
+
+---
+
+## 6b. Content system  — **BUILT / GATED**
+
+One table, two behaviours, legal-grade versioning + a country axis — the foundation both legal documents
+and marketing pages live in. `Document` (`lib/content.ts` chokepoint, `pages/api/superadmin/content.ts`,
+`pages/superadmin/content.tsx`).
+
+- **`legal`** — publishing FREEZES an immutable version (acceptance/consent records reference a specific
+  version, so a version someone agreed to must never change underneath them — the `CommissionRate` freeze
+  discipline). A published legal version can never be edited or deleted (refused **server-side**, not just
+  hidden); corrections publish a NEW version, prior intact. Publish requires an effective date.
+- **`page`** — latest published version wins; priors kept for undo. History never moves either — you never
+  mutate a published row, you publish a new version.
+- **Country axis** keyed on `(slug, country, version)`; resolution is exact-country → GB fallback (latest
+  `published_at`). GB live, `/ie` a config away. **`version` is a String stamp** (e.g. `'2026-07-21'`) so an
+  existing consent record resolves to a real version; a `'draft'` sentinel + the unique index enforce one
+  work-in-progress draft per doc.
+- **Roles**: the Content screen is Owner + Country Manager (Support 404s, undiscoverable); `legal` actions
+  are Owner-only, CM edits `page`, region-scoped by country. Audited: `document.created` / `draft_saved` /
+  `published` (version + effective date).
+- **Public rendering**: `/cookies`, `/privacy`, `/terms` render from the system by slug+country; **markdown
+  is rendered safely** (react-markdown, no raw HTML) so the editor can't inject HTML; **no published
+  version → 404** (a draft is never public). Visible gap markers (`[YOU SUPPLY: …]`) render as literal text.
+- **Seeded**: the cookie policy as `version='2026-07-21'` (the stamp consent already records → consent
+  resolves to a real version). Privacy + Terms seed from owner-supplied drafts (published v1, effective
+  today, gaps + draft banner preserved verbatim).
+
+Later additions (not this build): media library, scheduling, SEO fields, generic dynamic page routes.
 
 ---
 

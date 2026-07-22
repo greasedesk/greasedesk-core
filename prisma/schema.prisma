@@ -495,6 +495,35 @@ model ConsentEvent {
   @@index([created_at])
 }
 
+// THE Content system — one table, two behaviours, legal-grade versioning + a country axis. `legal`
+// documents FREEZE an immutable version at publish (acceptance/consent records reference a specific
+// version, so a version someone agreed to must never change underneath them — the CommissionRate freeze
+// discipline). `page` documents let the LATEST published version win; priors are kept only for undo.
+// The types differ by RULE at publish time, not by architecture: history never moves for either — you
+// never mutate a published row, you publish a NEW version. Keyed on (slug, country, version): the same
+// slug can have GB and IE variants; resolution is exact-country → GB fallback, latest published_at wins.
+// `version` is a STRING stamp (e.g. '2026-07-21') so an existing consent record resolves to a real
+// version; the sentinel 'draft' marks the single work-in-progress row (the unique index enforces one
+// draft per slug+country). Body is markdown, rendered SAFELY (no raw HTML). Media/scheduling/SEO later.
+model Document {
+  id             String    @id @default(uuid())
+  slug           String
+  title          String
+  type           String // 'legal' | 'page'
+  country_code   String    @default("GB")
+  body           String // markdown
+  version        String // published: a stamp like '2026-07-21'; WIP draft: the sentinel 'draft'
+  status         String    @default("draft") // 'draft' | 'published'
+  effective_from DateTime?
+  published_at   DateTime?
+  created_by     String? // operator id
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  @@unique([slug, country_code, version])
+  @@index([slug, country_code, status])
+}
+
 model GroupBilling {
   id               String        @id @default(uuid())
   group_id         String        @unique
