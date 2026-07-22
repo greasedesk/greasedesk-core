@@ -524,6 +524,26 @@ model Document {
   @@index([slug, country_code, status])
 }
 
+// Navigation management for the marketing site — footer + main-nav links defined in the Content system
+// instead of hardcoded in SiteChrome, so a legal/marketing document can be linked without a code change.
+// A link points at an internal DOCUMENT (by slug → /slug), an internal ROUTE (a path), or an EXTERNAL
+// URL. Ordered, region-shaped (country_code, like documents), toggleable. Owner + Country Manager manage.
+model NavLink {
+  id           String   @id @default(uuid())
+  placement    String // 'footer' | 'main'
+  label        String
+  kind         String // 'document' | 'route' | 'external'
+  target       String // document slug | internal path (/pricing) | external URL (https://…)
+  sort_order   Int      @default(0)
+  country_code String   @default("GB")
+  enabled      Boolean  @default(true)
+  created_by   String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([placement, country_code, sort_order])
+}
+
 model GroupBilling {
   id               String        @id @default(uuid())
   group_id         String        @unique

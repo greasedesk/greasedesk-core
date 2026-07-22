@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
 import { useConsent } from '@/components/consent/ConsentProvider';
+import { useNav } from '@/components/marketing/NavProvider';
+import type { PublicNavLink } from '@/lib/nav';
 
 const YEAR = 2026; // © year — bump per release (Date.now is avoided; this is a deliberate constant)
 
@@ -17,18 +19,28 @@ function CookieSettingsLink() {
   return <button type="button" onClick={openManage} className="text-left text-muted hover:text-ink">Cookie settings</button>;
 }
 
-// The mobile panel carries the FULL nav — nothing is dropped on a phone (the old header silently
-// lost Features + Contact). Reseller lives here and in the footer, but deliberately NOT in the
-// desktop nav bar: it's a secondary audience, and the bar stays for garages.
-const MOBILE_LINKS = [
-  { href: '/#features', label: 'Features' },
-  { href: '/pricing', label: 'Pricing' },
-  { href: '/contact', label: 'Contact' },
-  { href: '/reseller', label: 'Become a reseller' },
-  { href: '/admin/login', label: 'Sign in' },
-];
+/** Footer link column — rendered from the Content-system nav config, plus the Cookie-settings action. */
+function FooterNav() {
+  const { footer } = useNav();
+  return (
+    <nav className="flex flex-col gap-2 text-sm" aria-label="Footer">
+      <span className="text-xs uppercase tracking-wide text-muted mb-1">GreaseDesk</span>
+      {footer.map((l) => navLink(l, 'text-muted hover:text-ink'))}
+      <CookieSettingsLink />
+    </nav>
+  );
+}
+
+// Render a config nav link — internal (next/link) or external (plain <a>, safe rel). Nav content comes
+// from the Content system (NavProvider); the auth CTAs (Sign in / Start free trial) stay structural.
+function navLink(l: PublicNavLink, className: string, onClick?: () => void) {
+  return l.external
+    ? <a key={l.label + l.href} href={l.href} target="_blank" rel="noopener noreferrer" onClick={onClick} className={className}>{l.label}</a>
+    : <Link key={l.label + l.href} href={l.href} onClick={onClick} className={className}>{l.label}</Link>;
+}
 
 function Header() {
+  const { main } = useNav();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -53,11 +65,9 @@ function Header() {
           <span className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</span>
         </Link>
 
-        {/* Desktop nav (sm+) — Reseller intentionally absent (footer + mobile panel only). */}
+        {/* Desktop nav (sm+) — content links from the Content-system nav config; auth CTAs structural. */}
         <div className="hidden sm:flex items-center gap-5 text-sm">
-          <Link href="/#features" className="text-muted hover:text-ink transition-colors">Features</Link>
-          <Link href="/pricing" className="text-muted hover:text-ink transition-colors">Pricing</Link>
-          <Link href="/contact" className="text-muted hover:text-ink transition-colors">Contact</Link>
+          {main.map((l) => navLink(l, 'text-muted hover:text-ink transition-colors'))}
           <span className="w-px h-5 bg-line" aria-hidden="true" />
           <Link href="/admin/login" className="text-muted hover:text-ink transition-colors">Sign in</Link>
           <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2 transition-colors">Start free trial</Link>
@@ -76,10 +86,8 @@ function Header() {
       {open && (
         <div id="site-menu" className="sm:hidden border-t border-line bg-surface max-h-[calc(100vh-4rem)] overflow-y-auto">
           <div className="max-w-6xl mx-auto px-4 py-2 flex flex-col">
-            {MOBILE_LINKS.map((l) => (
-              <Link key={l.href} href={l.href} onClick={() => setOpen(false)}
-                className="py-3.5 text-base text-ink border-b border-line last:border-b-0">{l.label}</Link>
-            ))}
+            {main.map((l) => navLink(l, 'py-3.5 text-base text-ink border-b border-line', () => setOpen(false)))}
+            <Link href="/admin/login" onClick={() => setOpen(false)} className="py-3.5 text-base text-ink border-b border-line">Sign in</Link>
             <Link href="/register" onClick={() => setOpen(false)}
               className="my-3 bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-3 text-center transition-colors">
               Start free trial
@@ -100,16 +108,7 @@ function Footer() {
             <div className="text-lg font-extrabold text-ink">{COMPANY.trademark}</div>
             <p className="mt-2 text-sm text-muted">Garage management software — job cards, bookings, invoicing and a live view of your real profit.</p>
           </div>
-          <nav className="flex flex-col gap-2 text-sm" aria-label="Footer">
-            <span className="text-xs uppercase tracking-wide text-muted mb-1">GreaseDesk</span>
-            <Link href="/pricing" className="text-muted hover:text-ink">Pricing</Link>
-            <Link href="/contact" className="text-muted hover:text-ink">Contact</Link>
-            <Link href="/register" className="text-muted hover:text-ink">Start free trial</Link>
-            <Link href="/admin/login" className="text-muted hover:text-ink">Sign in</Link>
-            <Link href="/reseller" className="text-muted hover:text-ink">Become a reseller</Link>
-            <Link href="/cookies" className="text-muted hover:text-ink">Cookie policy</Link>
-            <CookieSettingsLink />
-          </nav>
+          <FooterNav />
           <div className="flex flex-col gap-2 text-sm">
             <span className="text-xs uppercase tracking-wide text-muted mb-1">Contact</span>
             <a href={`tel:${COMPANY.phoneE164}`} className="text-muted hover:text-ink">{COMPANY.phone}</a>

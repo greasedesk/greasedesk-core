@@ -15,6 +15,7 @@ import { ConsentProvider, useConsent } from '@/components/consent/ConsentProvide
 import ConsentBanner from '@/components/consent/ConsentBanner';
 import { parseConsentCookie, sanitiseRef, type ConsentRecord } from '@/lib/consent';
 import { resolveConsentRegion } from '@/lib/consent-config';
+import { NavProvider, type ResolvedNav } from '@/components/marketing/NavProvider';
 // NOTE: serverSideTranslations (server-only, uses `fs`) is dynamically imported inside the
 // server branch of getInitialProps below — importing it at top level would pull `fs` into the
 // client bundle (_app ships to the client).
@@ -68,13 +69,16 @@ function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   const isAppRoute = router.pathname.startsWith('/admin') || router.pathname.startsWith('/m') || router.pathname.startsWith('/superadmin');
   const initialConsent = ((pageProps as any).__consent ?? null) as ConsentRecord | null;
   const region = ((pageProps as any).__consentRegion ?? 'GB') as string;
+  const nav = ((pageProps as any).__nav ?? null) as ResolvedNav | null;
   const page = <Component {...pageProps} />;
   return (
     <SessionProvider session={pageProps.session}>
       <ConsentProvider initialRecord={initialConsent} region={region}>
-        <RefCapture refValue={router.query.ref} ready={router.isReady} />
-        {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
-        {!isAppRoute && <ConsentBanner />}
+        <NavProvider value={nav}>
+          <RefCapture refValue={router.query.ref} ready={router.isReady} />
+          {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
+          {!isAppRoute && <ConsentBanner />}
+        </NavProvider>
       </ConsentProvider>
     </SessionProvider>
   );
@@ -95,8 +99,17 @@ const GreaseDeskAppWithI18n = appWithTranslation(GreaseDeskApp, nextI18NextConfi
     // Seed consent from the request cookie so the banner never flashes for a returning visitor, and
     // resolve the region for its copy/defaults (GB today; /ie → IE when that region ships).
     const __consent = parseConsentCookie(appCtx.ctx.req?.headers?.cookie);
-    const __consentRegion = resolveConsentRegion(appCtx.ctx.asPath || appCtx.router?.asPath);
-    return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps, __consent, __consentRegion } };
+    const asPath = appCtx.ctx.asPath || appCtx.router?.asPath || '';
+    const __consentRegion = resolveConsentRegion(asPath);
+    // Resolve the marketing nav server-side (SSR footer/nav, no flash, search-visible) — only for public
+    // routes; the tenant app + Engine Room don't render SiteChrome, so skip the query there.
+    let __nav = null as any;
+    if (!/^\/(admin|m|superadmin|api|_next)(\/|$)/.test(asPath)) {
+      const { prisma } = await import('@/lib/db');
+      const { resolvePublicNav } = await import('@/lib/nav');
+      __nav = await resolvePublicNav(prisma, /^\/ie(\/|$)/.test(asPath) ? 'IE' : 'GB').catch(() => null);
+    }
+    return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps, __consent, __consentRegion, __nav } };
   }
   return appProps;
 };

@@ -259,9 +259,15 @@ and marketing pages live in. `Document` (`lib/content.ts` chokepoint, `pages/api
 - **Roles**: the Content screen is Owner + Country Manager (Support 404s, undiscoverable); `legal` actions
   are Owner-only, CM edits `page`, region-scoped by country. Audited: `document.created` / `draft_saved` /
   `published` (version + effective date).
-- **Public rendering**: `/cookies`, `/privacy`, `/terms` render from the system by slug+country; **markdown
-  is rendered safely** (react-markdown, no raw HTML) so the editor can't inject HTML; **no published
-  version → 404** (a draft is never public). Visible gap markers (`[YOU SUPPLY: …]`) render as literal text.
+- **Public rendering**: a single dynamic route `pages/[slug]` renders ANY published document at `/<slug>`,
+  so a new document gets a working URL with **no deploy** (explicit marketing pages still take precedence);
+  **markdown is rendered safely** (react-markdown, no raw HTML) so the editor can't inject HTML; **no
+  published version → 404** (a draft is never public). Visible gap markers (`[YOU SUPPLY: …]`) render as text.
+- **Navigation management** (`NavLink`, `lib/nav`, `pages/api/superadmin/nav`): footer + main-nav links
+  defined in the Content system — label + target (a document slug, an internal route, or an external URL),
+  ordered, region-shaped, Owner + CM. `SiteChrome` renders footer/nav from it (SSR via `NavProvider`, with
+  a hardcoded fallback so it never renders empty). Privacy + Terms + Cookie policy are in the footer.
+  Signup states account creation accepts the Terms + Privacy, with working links.
 - **Seeded**: the cookie policy as `version='2026-07-21'` (the stamp consent already records → consent
   resolves to a real version). Privacy + Terms seed from owner-supplied drafts (published v1, effective
   today, gaps + draft banner preserved verbatim).

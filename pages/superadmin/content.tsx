@@ -12,9 +12,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/operator-auth';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
+import NavManager from '@/components/engine-room/NavManager';
+
+const PUBLIC_ORIGIN = 'https://greasedesk.com';
+const publicUrl = (slug: string) => `${PUBLIC_ORIGIN}/${slug}`;
 
 type DocRow = { slug: string; country: string; type: 'legal' | 'page'; title: string; publishedVersion: string | null; effectiveFrom: string | null; hasDraft: boolean };
-type Version = { id: string; version: string; effective_from: string | null; published_at: string | null; created_by: string | null; title: string };
+type Version = { id: string; version: string; effective_from: string | null; published_at: string | null; created_by: string | null; title: string; body: string };
 type Draft = { id: string; title: string; body: string; type: 'legal' | 'page'; country_code: string } | null;
 
 const input = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-slate-500 focus:outline-none';
@@ -30,6 +34,7 @@ function Preview({ body }: { body: string }) {
 }
 
 export default function ContentScreen({ role }: { role: OperatorRoleName }) {
+  const [mode, setMode] = useState<'docs' | 'nav'>('docs');
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,14 +103,25 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
       <Head><title>Engine Room — content</title><meta name="robots" content="noindex" /></Head>
       <div className="p-6 max-w-4xl">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold">{sel ? `${sel.slug} · ${sel.country}` : 'Content'}</h1>
-          {sel ? <button onClick={backToList} className="text-sm text-slate-400 hover:text-white">← All documents</button>
-            : <button onClick={() => setNc({ slug: '', title: '', type: canLegal(role) ? 'legal' : 'page', country: 'GB' })} className={btn}>New document</button>}
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-semibold">{sel ? `${sel.slug} · ${sel.country}` : 'Content'}</h1>
+            {!sel && (
+              <div className="flex gap-1 text-sm">
+                <button onClick={() => setMode('docs')} className={`px-3 py-1 rounded-lg ${mode === 'docs' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}>Documents</button>
+                <button onClick={() => setMode('nav')} className={`px-3 py-1 rounded-lg ${mode === 'nav' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}>Navigation</button>
+              </div>
+            )}
+          </div>
+          {sel ? <a href={publicUrl(sel.slug)} target="_blank" rel="noopener noreferrer" className="text-xs text-sky-400 hover:underline">↗ {publicUrl(sel.slug)}</a>
+            : mode === 'docs' ? <button onClick={() => setNc({ slug: '', title: '', type: canLegal(role) ? 'legal' : 'page', country: 'GB' })} className={btn}>New document</button> : null}
         </div>
+        {sel && <button onClick={backToList} className="text-sm text-slate-400 hover:text-white mb-3 inline-block">← All documents</button>}
         {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
 
+        {!sel && mode === 'nav' && <NavManager />}
+
         {/* CREATE FORM */}
-        {!sel && nc && (
+        {!sel && mode === 'docs' && nc && (
           <div className="mb-5 rounded-xl border border-slate-800 bg-slate-900 p-4 grid grid-cols-2 gap-3">
             <div><label className="block text-xs text-slate-400 mb-1">Slug</label><input value={nc.slug} onChange={(e) => setNc({ ...nc, slug: e.target.value })} className={input} placeholder="about-us" /></div>
             <div><label className="block text-xs text-slate-400 mb-1">Title</label><input value={nc.title} onChange={(e) => setNc({ ...nc, title: e.target.value })} className={input} /></div>
@@ -121,16 +137,17 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
         )}
 
         {/* LIST */}
-        {!sel && (
+        {!sel && mode === 'docs' && (
           <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-sm">
-              <thead className="bg-slate-900 text-slate-400 text-left"><tr>{['Document', 'Type', 'Country', 'Published', 'Effective', ''].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-900 text-slate-400 text-left"><tr>{['Document', 'Type', 'Country', 'Public URL', 'Published', 'Effective', ''].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
               <tbody>
-                {docs.length === 0 ? <tr><td colSpan={6} className="px-3 py-6 text-slate-500 text-center">No documents yet.</td></tr> : docs.map((r) => (
+                {docs.length === 0 ? <tr><td colSpan={7} className="px-3 py-6 text-slate-500 text-center">No documents yet.</td></tr> : docs.map((r) => (
                   <tr key={`${r.slug}/${r.country}`} className="border-t border-slate-800 hover:bg-slate-900/50 cursor-pointer" onClick={() => openDoc(r.slug, r.country)}>
-                    <td className="px-3 py-2"><div className="text-white">{r.title}</div><div className="text-xs text-slate-500">{r.slug}</div></td>
+                    <td className="px-3 py-2"><div className="text-white">{r.title} <span className="text-slate-600">→ open</span></div><div className="text-xs text-slate-500">{r.slug}</div></td>
                     <td className="px-3 py-2"><span className={`text-xs rounded-full px-2 py-0.5 border ${r.type === 'legal' ? 'border-amber-800 text-amber-300' : 'border-slate-700 text-slate-300'}`}>{r.type}</span></td>
                     <td className="px-3 py-2 text-slate-300">{r.country}</td>
+                    <td className="px-3 py-2">{r.publishedVersion ? <a href={publicUrl(r.slug)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-xs text-sky-400 hover:underline font-mono">/{r.slug} ↗</a> : <span className="text-xs text-slate-600">unpublished</span>}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-300">{r.publishedVersion ?? <span className="text-slate-600">—</span>}</td>
                     <td className="px-3 py-2 text-xs text-slate-400">{r.effectiveFrom ?? '—'}</td>
                     <td className="px-3 py-2 text-right">{r.hasDraft && <span className="text-[10px] text-amber-400">draft in progress</span>}</td>
@@ -160,9 +177,17 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
                 {draft.type === 'legal' && <p className="text-xs text-amber-300/80">⚠ Publishing a legal version freezes it forever — it can never be edited or deleted. Corrections mean publishing a new version.</p>}
               </>
             ) : (
-              <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 flex items-center justify-between">
-                <div className="text-sm text-slate-300">{published.length ? `Current published: version ${published[0].version}. No draft in progress.` : 'No draft and nothing published.'}</div>
-                {published.length > 0 && <button onClick={newVersion} disabled={busy} className={btn}>New version</button>}
+              <div className="space-y-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 flex items-center justify-between">
+                  <div className="text-sm text-slate-300">{published.length ? `Current published: version ${published[0].version}${published[0].effective_from ? `, effective ${published[0].effective_from.slice(0, 10)}` : ''}. No draft in progress.` : 'No draft and nothing published.'}</div>
+                  {published.length > 0 && <button onClick={newVersion} disabled={busy} className={btn}>New version</button>}
+                </div>
+                {published.length > 0 && (
+                  <div>
+                    <div className="text-xs text-slate-400 mb-1">Current published content (read-only — this version is frozen):</div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 p-4 max-h-[28rem] overflow-auto"><Preview body={published[0].body} /></div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -176,7 +201,7 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
                     {published.map((v, i) => (
                       <tr key={v.id} className="border-t border-slate-800">
                         <td className="px-4 py-2 font-mono text-xs text-slate-200">{v.version}{i === 0 && <span className="ml-2 text-[10px] text-emerald-400">current</span>}</td>
-                        <td className="px-4 py-2 text-xs text-slate-400">{v.effective_from ?? '—'}</td>
+                        <td className="px-4 py-2 text-xs text-slate-400">{v.effective_from ? v.effective_from.slice(0, 10) : '—'}</td>
                         <td className="px-4 py-2 text-xs text-slate-400">{v.published_at ? new Date(v.published_at).toLocaleString('en-GB') : '—'}</td>
                         <td className="px-4 py-2 text-xs text-slate-500 font-mono">{v.created_by?.slice(0, 8) ?? '—'}</td>
                       </tr>
