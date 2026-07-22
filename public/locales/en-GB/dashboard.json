@@ -44,16 +44,11 @@
   },
   "effRate": {
     "title": "Effective hourly rate",
-    "note": "Gross margin ÷ hours, three ways — over the same month as the P&L above. No new figures: it divides what the strip already shows.",
-    "headline": "Headline labour rate",
-    "headlineSub": "what you charge for an hour sold",
-    "perCharged": "Per charged hour",
-    "perChargedSub": "gross margin ÷ {{hours}} sold — what a sold hour actually earned",
-    "perSellable": "Per sellable hour",
-    "perSellableSub": "gross margin ÷ {{hours}} of capacity — what every hour earned",
+    "note": "What every hour of sellable capacity actually returned, at your labour rate — over the same month and capacity as labour utilisation.",
+    "contrast": "{{headline}} charged · {{realised}} realised",
     "mixed": "Varies by site",
     "withheld": "Withheld",
-    "explainer": "The headline rate is what you charge for an hour sold. Per-charged-hour is what you actually realise on sold work, including fixed-price services priced above the hourly rate. Per-sellable-hour is what every hour of realistic capacity earned once unsold hours are counted — the gap between the two is unsold time, not underpricing."
+    "explainer": "Your headline rate is what you charge for an hour sold. The effective rate is what every hour of sellable capacity actually returned, at your labour rate — hours that went unsold or on warranty rework earn nothing, so they pull the rate down. Same capacity figure as labour utilisation."
   },
   "pnl": {
     "title": "Profit & loss",

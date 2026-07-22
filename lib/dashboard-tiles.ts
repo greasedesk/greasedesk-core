@@ -339,55 +339,51 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
   },
 
-  // Effective hourly rate — THREE contrast figures, NO new financial calculation: it reads the same
-  // chokepoints the strip already renders and divides.
-  //   • headline: the site LABOUR_HR rate (what an hour is CHARGED at) — from serviceCatalogue.
-  //   • per charged hour = gross margin ÷ charged hours — what a SOLD hour actually earned (fixed
-  //     services priced above the hourly rate lift this above headline).
-  //   • per sellable hour = gross margin ÷ sellable hours — what every hour of realistic CAPACITY
-  //     earned once unsold time is counted (the gap to per-charged is unsold hours, not underpricing).
-  // Numerator = labourGrossMargin (THE strip's "income" figure). Denominators = the SAME hours the
-  // "Hours charged" and utilisation tiles show — charged from chargedLabourCentihours, sellable from
-  // getGroupUtilisation.available over the SAME in-progress-to-date window utilisation uses (so a live
-  // month divides margin-to-date by capacity-to-date, not by the whole month). Derived £/hr are
-  // WITHHELD under import suppression (partial revenue ÷ full capacity would mislead, like utilisation).
+  // Effective hourly rate — ONE figure, NO new financial calculation: (charged hours × headline
+  // labour rate) ÷ TOTAL sellable hours. Every input is read as the utilisation tile reads it —
+  //   • charged + sellable from getGroupUtilisation (the SAME window: to-date for a live single
+  //     month, full [from,to] otherwise). `charged` EXCLUDES warranty rework (it earns nothing);
+  //     `available` (the denominator) is total sellable capacity, INCLUDING the hours spent on
+  //     rework — capacity that existed and produced no sale, so it drags the rate down exactly as
+  //     unsold time does. This is the same denominator labour utilisation divides by.
+  //   • headline rate from ServiceCatalogue.LABOUR_HR (same read as cost-base / warranty).
+  // Numerator is valued PER SITE (charged_site × rate_site) so a mixed-rate group stays honest; for
+  // a single-rate group this is exactly charged × rate. WITHHELD under import suppression (a partly
+  // imported month's charged is partial while capacity is full — the rate would mislead).
   effectiveRate: async ({ groupId, siteIds, from, to, months, now }) => {
-    const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // same ledger read as pnl/utilisation
-    const { grossMargin } = labourGrossMargin(invoices);
-    const { centihours: chargedCentihours } = chargedLabourCentihours(invoices);
-
-    // Sellable capacity over the utilisation tile's window: to-date for an in-progress single month
-    // (charged-to-date ÷ capacity-to-date), full [from,to] for a closed / multi-month period.
+    // Charged + sellable over the utilisation tile's window (to-date for an in-progress single month).
     const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
     const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
     const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
     const util = await getGroupUtilisation(groupId, siteIds, { from, to: end });
-    const sellableHours = util.available;
+    const sellableHours = util.available; // total sellable capacity — the utilisation denominator (incl. rework)
+    const chargedHours = util.charged;    // sold hours (warranty rework excluded — it earned nothing)
 
     // Headline: the site LABOUR_HR rate (same read as cost-base / warranty). One rate → show it;
-    // sites with differing rates → flagged as mixed (never a fabricated blended figure).
+    // differing rates → shown as mixed (never a fabricated blended figure).
     const rates = (await prisma.serviceCatalogue.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
-      select: { default_labour_rate: true },
+      select: { site_id: true, default_labour_rate: true },
     })) as any[];
-    const distinct = [...new Set(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => Number(r.default_labour_rate)))];
+    const rateBySite = new Map<string, number>(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => [r.site_id, Number(r.default_labour_rate)]));
+    const distinct = [...new Set(rateBySite.values())];
     const headlineRatePennies = distinct.length === 1 ? Math.round(distinct[0] * 100) : null;
 
+    // Numerator = charged hours valued at the labour rate, per site (single-rate group → charged × rate).
+    let numeratorPennies = 0; let anyRate = false; const ratesMissing: string[] = [];
+    for (const s of util.perSite) {
+      const rate = rateBySite.get(s.siteId);
+      if (rate == null) { if (s.available > 0) ratesMissing.push(s.siteName); continue; }
+      anyRate = true;
+      numeratorPennies += Math.round(s.charged * rate * 100);
+    }
+
     const imported = await periodImportState(groupId, siteIds, from, to);
-    const chargedHours = chargedCentihours / 100;
-    // Guarded divisions (honest-null: no hours → no rate, never NaN/Infinity). Rounded to the penny.
-    const perChargedPennies = chargedHours > 0 ? Math.round(grossMargin / chargedHours) : null;
-    const perSellablePennies = sellableHours > 0 ? Math.round(grossMargin / sellableHours) : null;
     const withheld = imported.suppressDerived === true;
-    return {
-      grossMarginPennies: grossMargin,
-      chargedCentihours,
-      sellableHours,
-      headlineRatePennies, headlineRateMixed: distinct.length > 1,
-      perChargedPennies: withheld ? null : perChargedPennies,
-      perSellablePennies: withheld ? null : perSellablePennies,
-      imported, months,
-    };
+    // (charged × rate) ÷ total sellable. Guarded (no rate / no capacity → honest-null, never NaN).
+    const effectiveRatePennies = (!withheld && anyRate && sellableHours > 0) ? Math.round(numeratorPennies / sellableHours) : null;
+
+    return { effectiveRatePennies, headlineRatePennies, headlineRateMixed: distinct.length > 1, chargedHours, sellableHours, ratesMissing, imported, months };
   },
 };
 

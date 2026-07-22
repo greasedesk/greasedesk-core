@@ -683,39 +683,24 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-xs text-muted mt-3">{t('pnl.honesty')}</p>
 
-      {/* ---- Effective hourly rate: three contrast figures over the SAME month window as the P&L
-           strip. NO new financial calculation — gross margin (the strip's "income") ÷ charged hours
-           and ÷ sellable hours (the same denominators the "Hours charged" and utilisation tiles
-           show). The gap between per-charged and per-sellable is UNSOLD TIME, not underpricing. ---- */}
+      {/* ---- Effective hourly rate: ONE figure — (charged hours × headline rate) ÷ total sellable
+           hours — over the SAME month + capacity as labour utilisation. Headline shown alongside for
+           contrast. NO new financial calculation (charged, sellable, rate all read from chokepoints). ---- */}
       {(() => {
         const er = tiles?.effectiveRate as any;
         if (er == null) return null;
         const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
-        const h = (c: number) => `${(c / 100).toLocaleString(props.locale, { maximumFractionDigits: 2 })}h`;
-        const hd = (n: number) => `${n.toLocaleString(props.locale, { maximumFractionDigits: 2 })}h`;
         const withheld = er.imported?.suppressDerived === true;
+        const headline = er.headlineRateMixed ? t('effRate.mixed') : money(er.headlineRatePennies);
+        const realised = withheld ? t('effRate.withheld') : money(er.effectiveRatePennies);
         return (
           <div className="mt-8">
             <h2 className="text-lg font-bold text-ink mb-1">{t('effRate.title')}</h2>
             <p className="text-xs text-muted mb-3">{t('effRate.note')}</p>
             <div className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <p className="text-xs text-muted mb-1">{t('effRate.headline')}</p>
-                  <p className="text-2xl font-bold tabular-nums text-ink">{er.headlineRateMixed ? t('effRate.mixed') : money(er.headlineRatePennies)}</p>
-                  <p className="text-xs text-muted mt-1">{t('effRate.headlineSub')}</p>
-                </div>
-                <div className="sm:border-l sm:border-line sm:pl-4">
-                  <p className="text-xs text-muted mb-1">{t('effRate.perCharged')}</p>
-                  <p className="text-2xl font-bold tabular-nums text-ink">{withheld ? t('effRate.withheld') : money(er.perChargedPennies)}</p>
-                  <p className="text-xs text-muted mt-1">{t('effRate.perChargedSub', { hours: h(er.chargedCentihours) })}</p>
-                </div>
-                <div className="sm:border-l sm:border-line sm:pl-4">
-                  <p className="text-xs text-muted mb-1">{t('effRate.perSellable')}</p>
-                  <p className="text-2xl font-bold tabular-nums text-accent">{withheld ? t('effRate.withheld') : money(er.perSellablePennies)}</p>
-                  <p className="text-xs text-muted mt-1">{t('effRate.perSellableSub', { hours: hd(er.sellableHours ?? 0) })}</p>
-                </div>
-              </div>
+              <p className="text-3xl font-bold tabular-nums text-accent">{realised}</p>
+              <p className="text-sm text-muted mt-1">{t('effRate.contrast', { headline, realised })}</p>
+              {(er.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: er.ratesMissing.join(', ') })}</p>}
               <details className="mt-3">
                 <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                 <p className="text-xs text-muted mt-2 leading-relaxed">{t('effRate.explainer')}</p>
