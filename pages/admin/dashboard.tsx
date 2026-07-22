@@ -23,6 +23,7 @@ import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
 import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/dashboard-periods';
+import CapacityChart from '@/components/dashboard/CapacityChart';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
@@ -292,6 +293,55 @@ export default function AdminDashboard(props: PageProps) {
           {t('notTrading', { site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
         </div>
       )}
+
+      {/* ---- CAPACITY — the headline metric (hero, above the invoice-ledger strip). A month-long
+           burn-up of Capacity pace (target) vs Committed (WIP hours taken on) vs Billed (hours
+           charged), with the realised-rate and potential-vs-actual figures. Every input is a
+           chokepoint read — no new financial calculation. ---- */}
+      {(() => {
+        const cap = tiles?.capacity as any;
+        const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
+        const daysInMonth = monthMeta?.daysInMonth || (cap?.series?.length ?? 0);
+        const elapsed = monthMeta?.inProgress ? (monthMeta?.daysElapsed ?? daysInMonth) : daysInMonth;
+        const withheld = cap?.imported?.suppressDerived === true;
+        const maxVal = cap ? Math.max(cap.sellableHours ?? 0, ...cap.series.map((s: any) => Math.max(s.committed, s.billed)), 1) : 1;
+        const maxY = Math.max(10, Math.ceil(maxVal / 10) * 10);
+        return (
+          <div className={`bg-surface p-5 rounded-xl border border-line mb-6 ${loading ? 'opacity-60' : ''}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+              <h2 className="text-lg font-bold text-ink">{t('capacity.title')}</h2>
+              {monthWindow && (
+                <span className="text-sm text-muted">
+                  {monthLabel(monthWindow, props.locale)}
+                  {monthMeta?.inProgress && ` · ${t('capacity.progress', { elapsed: monthMeta.daysElapsed, total: monthMeta.daysInMonth })}`}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted mb-3">{t('capacity.note')}</p>
+            {cap == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : (
+              <>
+                <CapacityChart series={cap.series} daysInMonth={daysInMonth} elapsed={elapsed} maxY={maxY} locale={props.locale}
+                  labels={{ capacity: t('capacity.lineCapacity'), committed: t('capacity.lineCommitted'), billed: t('capacity.lineBilled'), hours: t('capacity.hours') }} />
+                <div className="flex flex-wrap gap-x-8 gap-y-3 mt-4">
+                  <div>
+                    <p className="text-3xl font-bold tabular-nums text-accent">{withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies)}</p>
+                    <p className="text-xs text-muted mt-0.5">{t('effRate.contrast', { headline: cap.headlineRateMixed ? t('effRate.mixed') : money(cap.headlineRatePennies), realised: money(cap.effectiveRatePennies) })}</p>
+                  </div>
+                  <div className="sm:border-l sm:border-line sm:pl-8">
+                    <p className="text-3xl font-bold tabular-nums text-ink">{money(cap.potentialPennies)}</p>
+                    <p className="text-xs text-muted mt-0.5">{t('capacity.potentialVsActual', { actual: money(cap.actualPennies) })}</p>
+                  </div>
+                </div>
+                {(cap.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-2">{t('pnl.breakEvenNoRate', { sites: cap.ratesMissing.join(', ') })}</p>}
+                <details className="mt-3">
+                  <summary className="text-xs text-accent cursor-pointer">{t('capacity.howTitle')}</summary>
+                  <p className="text-xs text-muted mt-2 leading-relaxed">{t('capacity.explainer')}</p>
+                </details>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {TILE_RENDERERS.map(({ key, render, pointInTime }) => (
@@ -683,32 +733,6 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-xs text-muted mt-3">{t('pnl.honesty')}</p>
 
-      {/* ---- Effective hourly rate: ONE figure — (charged hours × headline rate) ÷ total sellable
-           hours — over the SAME month + capacity as labour utilisation. Headline shown alongside for
-           contrast. NO new financial calculation (charged, sellable, rate all read from chokepoints). ---- */}
-      {(() => {
-        const er = tiles?.effectiveRate as any;
-        if (er == null) return null;
-        const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
-        const withheld = er.imported?.suppressDerived === true;
-        const headline = er.headlineRateMixed ? t('effRate.mixed') : money(er.headlineRatePennies);
-        const realised = withheld ? t('effRate.withheld') : money(er.effectiveRatePennies);
-        return (
-          <div className="mt-8">
-            <h2 className="text-lg font-bold text-ink mb-1">{t('effRate.title')}</h2>
-            <p className="text-xs text-muted mb-3">{t('effRate.note')}</p>
-            <div className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
-              <p className="text-3xl font-bold tabular-nums text-accent">{realised}</p>
-              <p className="text-sm text-muted mt-1">{t('effRate.contrast', { headline, realised })}</p>
-              {(er.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: er.ratesMissing.join(', ') })}</p>}
-              <details className="mt-3">
-                <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
-                <p className="text-xs text-muted mt-2 leading-relaxed">{t('effRate.explainer')}</p>
-              </details>
-            </div>
-          </div>
-        );
-      })()}
     </>
   );
 }

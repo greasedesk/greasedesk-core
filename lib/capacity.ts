@@ -174,6 +174,80 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   };
 }
 
+export type DailyCapacityPoint = { dayKey: string; cumulativeSellable: number };
+export type DailyCapacity = { days: DailyCapacityPoint[]; total: number; perSite: Array<{ siteId: string; sellable: number }> };
+
+/** CAPACITY ACCRUAL, day by day — the burn-up "capacity pace" line. Sellable hours accrue ONLY on
+ *  rostered working days (flat across weekends / bank holidays / closed days / leave), reaching the
+ *  month's full sellable total on the last working day. Reuses THE capacity math VERBATIM (same
+ *  per-person nested rounding as getAvailableHours), so the final cumulative === getAvailableHours.hours
+ *  by construction (gated). Single pass over sites × people × days — no per-day re-query. */
+export async function getDailyCapacity(groupId: string, siteIds: string[], window: CapacityWindow): Promise<DailyCapacity> {
+  const days = windowDays(window); // ordered [dayKey, weekday] across the whole window
+  const groupCumulCenti = new Array<number>(days.length).fill(0);
+  const perSite: Array<{ siteId: string; sellable: number }> = [];
+
+  for (const siteId of siteIds) {
+    const [site, people] = await Promise.all([
+      prisma.site.findFirst({ where: { id: siteId, group_id: groupId }, select: { open_days: true } }) as any,
+      prisma.costPerson.findMany({
+        where: { group_id: groupId, is_active: true, is_chargeable: true },
+        select: { id: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true, allocations: { where: { site_id: siteId }, select: { percent: true } } },
+      }) as any,
+    ]);
+    const openDaysAtT: number[] = await openDaysAtWindowEnd(siteId, window.to, site?.open_days);
+    const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
+    const ids = configured.map((p: any) => p.id);
+    const [factorAt, leave, phDays] = await Promise.all([
+      factorsAtWindowEnd(ids, window.to),
+      ids.length ? prisma.leaveRecord.findMany({
+        where: { group_id: groupId, cost_person_id: { in: ids }, status: 'approved', date: { gte: window.from, lt: window.to } },
+        select: { cost_person_id: true, date: true, hours: true },
+      }) as any : [],
+      phDaySet(groupId, siteId, window),
+    ]);
+    const leaveByPerson = new Map<string, Map<string, number | null>>();
+    for (const l of leave) {
+      const m = leaveByPerson.get(l.cost_person_id) ?? new Map();
+      m.set(dayKey(l.date), l.hours == null ? null : Number(l.hours));
+      leaveByPerson.set(l.cost_person_id, m);
+    }
+
+    for (const p of configured) {
+      const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
+      if (alloc <= 0) continue;
+      const contracted = Number(p.contracted_hours_per_day);
+      const rostered: number[] = rosteredWeekdays(p.working_days, openDaysAtT);
+      const factorPct = factorAt.get(p.id) ?? Number(p.utilisation_factor ?? 70);
+      const myLeave = leaveByPerson.get(p.id);
+      // Running gross/leave/PH in centihours; at each day the person's cumulative sellable is
+      // round(round(netC × alloc) × factor) — the SAME nesting getAvailableHours applies at month end.
+      let grossC = 0, leaveC = 0, phC = 0;
+      for (let i = 0; i < days.length; i++) {
+        const [key, weekday] = days[i];
+        if (rostered.includes(weekday)) {
+          grossC += Math.round(contracted * 100);
+          if (phDays.has(key)) phC += Math.round(contracted * 100);
+          else if (myLeave?.has(key)) { const h = myLeave.get(key); leaveC += Math.round(Math.min(h ?? contracted, contracted) * 100); }
+        }
+        const netC = Math.max(0, grossC - leaveC - phC);
+        const personSellableC = Math.round(Math.round(netC * alloc) * (factorPct / 100));
+        groupCumulCenti[i] += personSellableC;
+      }
+    }
+    // Per-site full-month sellable (last cumulative point for THIS site) — recomputed compactly for
+    // the potential-revenue valuation; equals getAvailableHours(site).hours by construction.
+    const sh = await getAvailableHours(groupId, siteId, window);
+    perSite.push({ siteId, sellable: sh.hours });
+  }
+
+  return {
+    days: days.map(([dk], i) => ({ dayKey: dk, cumulativeSellable: Math.round(groupCumulCenti[i]) / 100 })),
+    total: Math.round(groupCumulCenti[days.length - 1] ?? 0) / 100,
+    perSite,
+  };
+}
+
 /** The factor value AS OF window end, per person — the system's first value-true-at-time read.
  *  Resolution: latest non-voided `factor` event with effective_date < T → its value; else, if a
  *  LATER event exists, the EARLIEST later event's previous_json (the value that applied before

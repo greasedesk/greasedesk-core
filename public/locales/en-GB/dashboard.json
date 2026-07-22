@@ -43,12 +43,22 @@
     "warrantyHonesty": "Rework invoices at £0 by design — this is what it cost to do the work again: parts at cost, labour at your rate."
   },
   "effRate": {
-    "title": "Effective hourly rate",
-    "note": "What every hour of sellable capacity actually returned, at your labour rate — over the same month and capacity as labour utilisation.",
     "contrast": "{{headline}} charged · {{realised}} realised",
     "mixed": "Varies by site",
-    "withheld": "Withheld",
-    "explainer": "Your headline rate is what you charge for an hour sold. The effective rate is what every hour of sellable capacity actually returned, at your labour rate — hours that went unsold or on warranty rework earn nothing, so they pull the rate down. Same capacity figure as labour utilisation."
+    "withheld": "Withheld"
+  },
+  "capacity": {
+    "title": "Capacity",
+    "note": "Cumulative labour hours across the month — where your capacity is versus what you've taken on and billed.",
+    "progress": "{{elapsed}} of {{total}} days",
+    "hours": "Hours",
+    "lineCapacity": "Capacity pace (target)",
+    "lineCommitted": "Committed",
+    "lineBilled": "Billed",
+    "potential": "potential",
+    "potentialVsActual": "potential revenue at capacity · {{actual}} actual",
+    "howTitle": "How to read this",
+    "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Committed is labour hours taken on — job cards accepted or in progress, dated by their diary date; it is hours taken on, not hours worked (there is no time clocking). Billed is hours actually charged, dated by invoice date. Capacity pace above Committed means the diary isn't full. Committed above Billed means work is done but not yet invoiced. Billed lagging Committed in a sawtooth (work Monday, invoice Friday) is normal — a gap that never closes is the signal."
   },
   "pnl": {
     "title": "Profit & loss",

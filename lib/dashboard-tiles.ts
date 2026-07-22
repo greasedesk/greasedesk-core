@@ -10,9 +10,9 @@
 import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
-import { invoiceTotals, effectivePaidDate, effectiveIssueDateWhere } from '@/lib/invoice';
-import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
-import { getGroupUtilisation } from '@/lib/capacity';
+import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
+import { fetchLedgerInvoices, chargedLabourCentihours, lineLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
+import { getGroupUtilisation, getDailyCapacity, dayKey } from '@/lib/capacity';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
@@ -339,28 +339,27 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
   },
 
-  // Effective hourly rate — ONE figure, NO new financial calculation: (charged hours × headline
-  // labour rate) ÷ TOTAL sellable hours. Every input is read as the utilisation tile reads it —
-  //   • charged + sellable from getGroupUtilisation (the SAME window: to-date for a live single
-  //     month, full [from,to] otherwise). `charged` EXCLUDES warranty rework (it earns nothing);
-  //     `available` (the denominator) is total sellable capacity, INCLUDING the hours spent on
-  //     rework — capacity that existed and produced no sale, so it drags the rate down exactly as
-  //     unsold time does. This is the same denominator labour utilisation divides by.
-  //   • headline rate from ServiceCatalogue.LABOUR_HR (same read as cost-base / warranty).
-  // Numerator is valued PER SITE (charged_site × rate_site) so a mixed-rate group stays honest; for
-  // a single-rate group this is exactly charged × rate. WITHHELD under import suppression (a partly
-  // imported month's charged is partial while capacity is full — the rate would mislead).
-  effectiveRate: async ({ groupId, siteIds, from, to, months, now }) => {
-    // Charged + sellable over the utilisation tile's window (to-date for an in-progress single month).
+  // Capacity — THE headline metric: a month-long burn-up of three CUMULATIVE labour-hour lines, plus
+  // the realised-rate + potential-vs-actual figures. NO new financial calculation — every input is a
+  // chokepoint read:
+  //   1) Capacity pace (target) = getDailyCapacity — sellable hours accruing per working day, flat on
+  //      weekends/BH/closed days, reaching the utilisation tile's sellable total on the last working day.
+  //   2) Committed = labour hours on WIP cards (THE wip chokepoint: accepted/in_progress, no invoice),
+  //      dated by DIARY date (start_at ?? created_at). Hours TAKEN ON, not worked — there is no clocking.
+  //   3) Billed = charged labour hours (lib/charged-labour, warranty excluded), dated by invoice date.
+  // Figures below: headline rate (LABOUR_HR) vs realised (charged×rate ÷ sellable); potential
+  // (sellable×rate) vs actual (charged×rate). All valued PER SITE so mixed-rate groups stay honest.
+  capacity: async ({ groupId, siteIds, from, to, months, now }) => {
+    // To-date window for the ACTUALS (charged / effective): to-date for a live single month, else full.
     const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
     const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
     const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
-    const util = await getGroupUtilisation(groupId, siteIds, { from, to: end });
-    const sellableHours = util.available; // total sellable capacity — the utilisation denominator (incl. rework)
-    const chargedHours = util.charged;    // sold hours (warranty rework excluded — it earned nothing)
 
-    // Headline: the site LABOUR_HR rate (same read as cost-base / warranty). One rate → show it;
-    // differing rates → shown as mixed (never a fabricated blended figure).
+    // 1) Capacity pace — FULL-month daily accrual (the target reaches full sellable on the last working day).
+    const daily = await getDailyCapacity(groupId, siteIds, { from, to });
+    const sellableHours = daily.total; // === utilisation's sellable by construction
+
+    // Headline labour rate(s) — LABOUR_HR (same read as cost-base / warranty).
     const rates = (await prisma.serviceCatalogue.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
       select: { site_id: true, default_labour_rate: true },
@@ -369,21 +368,76 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const distinct = [...new Set(rateBySite.values())];
     const headlineRatePennies = distinct.length === 1 ? Math.round(distinct[0] * 100) : null;
 
-    // Numerator = charged hours valued at the labour rate, per site (single-rate group → charged × rate).
-    let numeratorPennies = 0; let anyRate = false; const ratesMissing: string[] = [];
-    for (const s of util.perSite) {
+    // 2) Committed — WIP cards' labour hours (THE wip chokepoint), dated by diary date, this month only.
+    const wipCards = (await prisma.jobCard.findMany({
+      where: wipCardsWhere(siteIds),
+      select: { start_at: true, created_at: true, items: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
+    })) as any[];
+    const committedByDay = new Map<string, number>(); // dayKey → centihours
+    let committedTotalCenti = 0;
+    for (const c of wipCards) {
+      const d: Date = c.start_at ?? c.created_at; // when capacity was consumed (diary date; created as fallback)
+      if (!(d >= from && d < to)) continue;
+      let centi = 0;
+      for (const it of c.items ?? []) centi += lineLabourCentihours(it).centihours;
+      if (centi === 0) continue;
+      const k = dayKey(d);
+      committedByDay.set(k, (committedByDay.get(k) ?? 0) + centi);
+      committedTotalCenti += centi;
+    }
+
+    // 3) Billed — charged labour hours dated by effective issue date; total === the "Hours charged" tile.
+    const invs = (await prisma.invoice.findMany({
+      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
+      select: { date_issued: true, issued_at: true, series: true, lines: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
+    })) as any[];
+    const billedByDay = new Map<string, number>();
+    let billedTotalCenti = 0;
+    for (const inv of invs) {
+      const centi = chargedLabourCentihours([{ series: inv.series, lines: inv.lines }]).centihours; // billable only (rework excluded)
+      if (centi === 0) continue;
+      const k = dayKey(effectiveIssueDate(inv));
+      billedByDay.set(k, (billedByDay.get(k) ?? 0) + centi);
+      billedTotalCenti += centi;
+    }
+
+    // Three cumulative series over the full month's day list. Committed/Billed carry NO future data,
+    // so on a live month they naturally stop at today — the client draws them only to daysElapsed.
+    let cc = 0, bb = 0;
+    const series = daily.days.map((pt) => {
+      cc += committedByDay.get(pt.dayKey) ?? 0;
+      bb += billedByDay.get(pt.dayKey) ?? 0;
+      return { day: Number(pt.dayKey.slice(8, 10)), capacity: pt.cumulativeSellable, committed: Math.round(cc) / 100, billed: Math.round(bb) / 100 };
+    });
+
+    // To-date charged (for realised rate + actual revenue) via the utilisation window, valued per site.
+    const windowUtil = await getGroupUtilisation(groupId, siteIds, { from, to: end });
+    const chargedHours = windowUtil.charged;
+    let actualPennies = 0; const ratesMissing: string[] = [];
+    for (const s of windowUtil.perSite) {
       const rate = rateBySite.get(s.siteId);
       if (rate == null) { if (s.available > 0) ratesMissing.push(s.siteName); continue; }
-      anyRate = true;
-      numeratorPennies += Math.round(s.charged * rate * 100);
+      actualPennies += Math.round(s.charged * rate * 100);
     }
+    // Potential = FULL-month sellable × rate, per site.
+    let potentialPennies = 0;
+    for (const s of daily.perSite) { const rate = rateBySite.get(s.siteId); if (rate != null) potentialPennies += Math.round(s.sellable * rate * 100); }
 
     const imported = await periodImportState(groupId, siteIds, from, to);
     const withheld = imported.suppressDerived === true;
-    // (charged × rate) ÷ total sellable. Guarded (no rate / no capacity → honest-null, never NaN).
-    const effectiveRatePennies = (!withheld && anyRate && sellableHours > 0) ? Math.round(numeratorPennies / sellableHours) : null;
+    const sellableToDate = windowUtil.available; // effective divides by the to-date sellable (== full for a closed month)
+    const effectiveRatePennies = (!withheld && actualPennies > 0 && sellableToDate > 0) ? Math.round(actualPennies / sellableToDate) : null;
 
-    return { effectiveRatePennies, headlineRatePennies, headlineRateMixed: distinct.length > 1, chargedHours, sellableHours, ratesMissing, imported, months };
+    return {
+      series, sellableHours, chargedHours,
+      headlineRatePennies, headlineRateMixed: distinct.length > 1,
+      potentialPennies: withheld ? null : potentialPennies,
+      actualPennies: withheld ? null : actualPennies,
+      effectiveRatePennies,
+      committedTotalCentihours: committedTotalCenti,
+      billedTotalCentihours: billedTotalCenti,
+      ratesMissing, imported, months,
+    };
   },
 };
 
