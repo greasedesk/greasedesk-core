@@ -237,3 +237,32 @@ render/aggregation change, not a rebuild.
 multi-select was removed on 2026-07-23 — nothing read it, and it implied multi-currency invoicing that
 doesn't exist). It must **not** gain readers: a mixed-currency capability, if ever built, belongs on
 the aggregation decision above, not on resurrecting that dead field.
+
+---
+
+## Vehicle-sales margin stream — the prep double-count
+
+**The gap.** The dashboard gross-profit composition is already built to take more streams (a `streams`
+array, no-cost vs has-cost — adding one is a data line, not a layout change), so the *display* side is
+ready for a vehicle-sales line. What is NOT settled is what vehicle margin *means* when a car is
+prepared in-house before sale.
+
+**Why it double-counts.** Labour and parts consumed preparing a vehicle for sale are already counted
+in the **labour** and **parts** streams — they flowed through the workshop as charged hours and parts
+cost. If a vehicle-sales stream then books its margin as (sale price − purchase − *prep*), that prep
+is counted twice: once in the workshop figures, once against the vehicle. Gross profit would no longer
+reconcile to a single honest total.
+
+**The decision to settle FIRST.** One of:
+- **Purchase-to-sale only** — vehicle margin = sale price − purchase price, and prep stays entirely in
+  the workshop streams (labour + parts). Simplest; the vehicle line is pure trading margin and the
+  workshop keeps its prep. Reconciliation stays clean by construction.
+- **Attribute prep to the vehicle** — prep labour and parts are moved OUT of the workshop streams and
+  INTO the vehicle's cost, so vehicle margin = sale − purchase − prep and the workshop figures exclude
+  that work. Truer per-vehicle economics, but needs prep jobs tagged to the vehicle and removed from
+  the labour/parts totals — a real attribution mechanism, not a display tweak.
+
+**Why deferred.** This is a modelling choice about the meaning of the number, to be made before the
+stream is built, not discovered while wiring it. The display is ready; the definition is the open
+question. Do not add a vehicle stream that books prep-inclusive margin without first deciding which of
+the above holds — a stream that double-counts prep is worse than no stream.
