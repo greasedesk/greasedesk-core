@@ -138,7 +138,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // only (this payload previously re-shipped requireAdminApi-grade grain to every card visitor).
   const catalogue: CatalogueLite[] = !canEditPricing ? [] : catalogueRows.filter((c) => c.item_type !== 'fixed').map((c) => ({
     id: c.id, code: c.code, name: c.name, item_type: c.item_type,
-    unit_cost: costVisible ? Number(c.unit_cost) : 0, unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate),
+    unit_cost: costVisible ? (c.unit_cost == null ? null : Number(c.unit_cost)) : 0, unit_price: Number(c.unit_price), vat_rate: Number(c.vat_rate), // null = UNKNOWN (not 0) so it freezes as uncosted
   }));
   const codeById = new Map(catalogueRows.map((c) => [c.id, c.code]));
   const fixedServices: FixedServiceLite[] = !canEditPricing ? [] : catalogueRows.filter((c) => c.item_type === 'fixed').map((c) => ({

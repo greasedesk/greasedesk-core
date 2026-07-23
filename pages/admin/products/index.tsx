@@ -20,7 +20,7 @@ type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Comp = { description: string; qty: number; unitCostExVat: number };
 type TierPrice = { tierId: string; priceExVat: number | null };
 type Item = {
-  id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number; unitPrice: number; vatRate: number; active: boolean;
+  id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number | null; unitPrice: number; vatRate: number; active: boolean;
   basePriceExVat: number | null; labourHours: number | null; labourOutsourced?: boolean; components: Comp[]; tierPrices: TierPrice[];
 };
 type Tier = { id: string; name: string; position: number; active: boolean };
@@ -37,6 +37,10 @@ const inc = (exPounds: number, rate: number) => exPounds * (1 + (rate || 0) / 10
 // Margin ON PRICE (not markup on cost). Divide-by-zero (price 0) → null → shown as "—", never NaN/∞.
 const marginPct = (price: number, cost: number): number | null => (price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : null);
 const pctLabel = (price: number, cost: number): string => { const m = marginPct(price, cost); return m === null ? '—' : `${m}%`; };
+// UNCOSTED = priced item with NO cost recorded (unit_cost null). Labour items never flag (no parts
+// cost). A £0 cost is NOT uncosted (legitimately free). Its margin reads as 100% and must NOT show.
+const isUncosted = (i: Item): boolean =>
+  i.itemType !== 'labour' && i.unitCost == null && (i.unitPrice > 0 || (i.basePriceExVat ?? 0) > 0);
 const inputCls = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink';
 const labelCls = 'text-sm font-medium text-ink';
 
@@ -48,6 +52,7 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
   const [defaultVatRate, setDefaultVatRate] = useState('20');
   const [vatRegistered, setVatRegistered] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
+  const [showUncostedOnly, setShowUncostedOnly] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const [newTier, setNewTier] = useState('');
   const [editTier, setEditTier] = useState<{ id: string; name: string } | null>(null);
@@ -112,7 +117,7 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
     }
     setForm({
       id: i.id, code: i.code, title: i.title ?? '', name: i.name, itemType: i.itemType, active: i.active, vatRate: String(i.vatRate),
-      cost: String(i.unitCost), price: String(i.unitPrice),
+      cost: i.unitCost == null ? '' : String(i.unitCost), price: String(i.unitPrice),
       basePrice: i.basePriceExVat == null ? '' : String(i.basePriceExVat),
       labourHours: i.labourHours == null ? '' : String(i.labourHours),
       labourOutsourced: !!i.labourOutsourced,
@@ -146,7 +151,8 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
       });
       body = { ...common, basePriceExVat: Number(form.basePrice || 0), labourHours: form.labourHours.trim() === '' ? null : Number(form.labourHours), labourOutsourced: form.labourOutsourced, components: form.components.map((c) => ({ description: c.description.trim(), qty: Number(c.qty || 0), unitCostExVat: Number(c.cost || 0) })), tierPrices };
     } else {
-      body = { ...common, unitCost: Number(form.cost), unitPrice: Number(form.price) };
+      // BLANK cost → null (NOT ENTERED, flagged uncosted); an explicit 0 → 0 (legitimately free).
+      body = { ...common, unitCost: form.cost.trim() === '' ? null : Number(form.cost), unitPrice: Number(form.price) };
     }
     try {
       const res = await fetch('/api/catalogue', { method: form.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -194,7 +200,8 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
   }
 
   const typeLabel = (ty: ItemType) => t(ty);
-  const shown = items.filter((i) => showArchived || i.active);
+  const uncostedCount = items.filter((i) => i.active && isUncosted(i)).length; // active items only
+  const shown = items.filter((i) => (showArchived || i.active) && (!showUncostedOnly || isUncosted(i)));
   const rate = form ? Number(form.vatRate || 0) : Number(defaultVatRate);
 
   return (
@@ -357,6 +364,13 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
           </div>
         )}
 
+        {uncostedCount > 0 && (
+          <button type="button" onClick={() => setShowUncostedOnly((v) => !v)}
+            className={`w-full text-left rounded-xl border px-4 py-3 mb-3 text-sm ${showUncostedOnly ? 'bg-warn-soft border-warn text-warn' : 'bg-warn-soft/60 border-warn/50 text-warn hover:brightness-95'}`}>
+            <span className="font-semibold">⚠ {t('uncosted.banner', { count: uncostedCount })}</span>
+            <span className="ml-1 underline">{showUncostedOnly ? t('uncosted.showAll') : t('uncosted.showThese')}</span>
+          </button>
+        )}
         <label className="flex items-center gap-2 text-sm text-muted mb-3"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> {t('showArchived')}</label>
 
         {shown.length === 0 ? (
@@ -366,18 +380,23 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
             {shown.map((i) => {
               const isFx = i.itemType === 'fixed';
               const base = i.basePriceExVat ?? 0;
-              const cost = isFx ? i.components.reduce((s, c) => s + c.qty * c.unitCostExVat, 0) : i.unitCost;
               const price = isFx ? base : i.unitPrice;
+              const uncosted = isUncosted(i);
+              const cost = i.unitCost; // number | null (fixed: mirror of Σ components; null = none recorded)
               return (
-                <li key={i.id} className={`flex flex-wrap items-center gap-3 p-3 bg-surface ${i.active ? '' : 'opacity-60'}`}>
+                <li key={i.id} className={`flex flex-wrap items-center gap-3 p-3 bg-surface ${i.active ? '' : 'opacity-60'} ${uncosted ? 'ring-1 ring-inset ring-warn/40' : ''}`}>
                   <div className="min-w-0 flex-1">
                     <div className="text-ink font-medium truncate">
                       <span className="font-mono text-xs bg-surface-muted border border-line rounded px-1.5 py-0.5 mr-2">{i.code}</span>{i.name}
+                      {uncosted && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-warn-soft text-warn">{t('uncosted.badge')}</span>}
                       {i.labourOutsourced && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent-soft text-accent">{t('outsourcedBadge')}</span>}
                       {!i.active && <span className="ml-2 text-[10px] uppercase tracking-wide text-muted">{t('archived')}</span>}
                     </div>
                     <div className="text-xs text-muted mt-0.5">
-                      {typeLabel(i.itemType)} · {isFx ? t('basePrice') : t('price')} {money(price)} {t('exVat')} · {t('cost')} {money(cost)} · {t('margin')} {money(price - cost)} · {pctLabel(price, cost)}
+                      {typeLabel(i.itemType)} · {isFx ? t('basePrice') : t('price')} {money(price)} {t('exVat')}
+                      {uncosted
+                        ? <> · <span className="text-warn font-medium">{t('uncosted.noCost')}</span></>
+                        : <> · {t('cost')} {money(cost ?? 0)} · {t('margin')} {money(price - (cost ?? 0))} · {pctLabel(price, cost ?? 0)}</>}
                       {isFx && ` · ${i.components.length} ${t('componentsShort')}${i.tierPrices.length ? ` · ${i.tierPrices.length} ${t('tierPricesShort')}` : ''}`}
                     </div>
                   </div>

@@ -73,5 +73,12 @@
   "outsourced": "Outsourced / bought-in",
   "outsourcedHint": "Bought in per job from a third party (e.g. an MOT station or a specialist), marked up and sold — doesn’t use your own mechanics’ time, so it never counts toward labour utilisation.",
   "outsourcedBadge": "Outsourced",
-  "labourHoursHintOutsourced": "Hours billed to the customer (prices the job). Outsourced — never counted as your own mechanics’ time."
+  "labourHoursHintOutsourced": "Hours billed to the customer (prices the job). Outsourced — never counted as your own mechanics’ time.",
+  "uncosted": {
+    "banner": "{{count}} priced item(s) have no cost recorded — margin and parts profit read too high until fixed.",
+    "showThese": "Show these",
+    "showAll": "Show all",
+    "badge": "No cost",
+    "noCost": "No cost recorded — set a cost so margin is real"
+  }
 }

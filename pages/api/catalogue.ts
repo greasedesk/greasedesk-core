@@ -50,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tiers: tiers.map((t) => ({ id: t.id, name: t.name, position: t.position, active: t.active })),
       items: items.map((i) => ({
         id: i.id, code: i.code, title: i.title, name: i.name, itemType: i.item_type,
-        unitCost: Number(i.unit_cost), unitPrice: Number(i.unit_price), vatRate: Number(i.vat_rate), active: i.active,
+        unitCost: i.unit_cost == null ? null : Number(i.unit_cost), unitPrice: Number(i.unit_price), vatRate: Number(i.vat_rate), active: i.active,
         basePriceExVat: i.base_price_ex_vat == null ? null : Number(i.base_price_ex_vat),
         labourHours: i.labour_hours == null ? null : Number(i.labour_hours),
         labourOutsourced: !!i.labour_outsourced,
@@ -161,14 +161,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const mirror = fixedMirror(effectiveBase ?? 0, components);
       if (base !== null) data.base_price_ex_vat = new Prisma.Decimal(base.toFixed(2));
       data.unit_price = new Prisma.Decimal(mirror.unitPricePounds.toFixed(2));
-      data.unit_cost = new Prisma.Decimal(mirror.unitCostPounds.toFixed(2));
+      // null (no components) = parts cost NOT ENTERED → flagged uncosted; a number = known (incl £0).
+      data.unit_cost = mirror.unitCostPounds == null ? null : new Prisma.Decimal(mirror.unitCostPounds.toFixed(2));
     } else {
-      // Simple items: flat cost + price; clear any fixed-only data.
-      if (body.unitCost !== undefined && body.unitCost !== null && body.unitCost !== '') {
+      // Simple items: flat cost + price; clear any fixed-only data. BLANK IS NOT ZERO — a cleared cost
+      // stores null (NOT ENTERED, flagged uncosted); an explicit 0 stores 0 (legitimately free).
+      if (body.unitCost === undefined) {
+        if (!isPatch) data.unit_cost = null; // create with no cost field → not entered
+      } else if (body.unitCost === null || String(body.unitCost).trim() === '') {
+        data.unit_cost = null;
+      } else {
         const c = dec(body.unitCost);
         if (c === null || c < 0) return res.status(400).json({ message: 'Cost must be a non-negative number.' });
         data.unit_cost = new Prisma.Decimal(c.toFixed(2));
-      } else if (!isPatch) return res.status(400).json({ message: 'Cost is required.' });
+      }
       if (body.unitPrice !== undefined || !isPatch) {
         const pr = dec(body.unitPrice);
         if (pr === null) return res.status(400).json({ message: 'Price must be a number.' });

@@ -439,13 +439,13 @@ export default function AdminDashboard(props: PageProps) {
         );
       })()}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {(['revenueNet', 'partsCost', 'grossMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation', 'hoursWent', 'unsold'] as const).map((k) => {
+        {(['revenueNet', 'partsCost', 'grossMargin', 'partsMargin', 'hoursCharged', 'labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation', 'hoursWent', 'unsold'] as const).map((k) => {
           const d = tiles?.pnl as any;
           // WITHHELD while an import is in progress. The server omits the underlying fields, so
           // there is no wrong number to leak; this renders the reason in the tile's place rather
           // than an em-dash that would read as "no data" when it means "not answerable yet".
           const impSup = (d?.imported?.suppressDerived) === true;
-          const DERIVED = ['labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation'];
+          const DERIVED = ['labourContribution', 'netProfit', 'costBase', 'breakEven', 'utilisation', 'partsMargin'];
           if (impSup && DERIVED.includes(k)) {
             return (
               <div key={k} className="bg-surface p-5 rounded-xl border border-line border-dashed opacity-80">
@@ -455,6 +455,49 @@ export default function AdminDashboard(props: PageProps) {
                   Import {d.imported.committed}/{d.imported.total} — a full month of costs against
                   part of the revenue would be wrong, not approximate.
                 </p>
+              </div>
+            );
+          }
+          if (k === 'partsMargin') {
+            // Parts profit = gross margin − labour valued at list (charged × rate = the capacity
+            // chart's "actual"). Reconciles with gross margin exactly (labour margin + parts profit =
+            // gross margin). Every input is an existing chokepoint — no new calculation.
+            const cap = tiles?.capacity as any;
+            const labourAtList = cap?.actualPennies; // charged × rate, per site
+            const ready = d != null && labourAtList != null;
+            const partsRevenue = ready ? d.revenueNet - labourAtList : null;
+            const partsProfit = ready ? d.grossMargin - labourAtList : null;
+            const pmPct = (partsRevenue != null && partsRevenue > 0) ? (partsProfit! / partsRevenue) * 100 : null;
+            return (
+              <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.partsMargin')}</h3>
+                {!ready ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{pmPct == null ? '—' : `${pmPct.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`}</p>
+                    <p className="text-xs text-muted mt-1">{t('pnl.partsMarginSub')}</p>
+                    <div className="text-xs mt-2 space-y-0.5">
+                      <div className="flex justify-between"><span className="text-muted">{t('pnl.partsRevenue')}</span><span className="tabular-nums text-ink">{fmt.money(partsRevenue!)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted">{t('pnl.partsCostLabel')}</span><span className="tabular-nums text-ink">{fmt.money(d.partsCost)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted">{t('pnl.partsProfit')}</span><span className={`tabular-nums font-medium ${partsProfit! >= 0 ? 'text-ok' : 'text-danger'}`}>{fmt.money(partsProfit!)}</span></div>
+                    </div>
+                    {/* The uncosted-parts distortion — SAME count/retail/link as the P&L strip. */}
+                    {d.uncostedPartsLines > 0 && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-warn cursor-pointer">{t('pnl.uncostedParts', { count: d.uncostedPartsLines, retail: fmt.money(d.uncostedPartsRetailPennies) })} →</summary>
+                        <div className="text-xs mt-1 space-y-0.5">
+                          <p className="text-muted">{t('pnl.uncostedPartsHelp')}</p>
+                          {(d.uncostedPartsInvoices ?? []).map((iv: any) => (
+                            <p key={iv.id}><Link href={`/admin/invoices/${iv.id}`} className="text-accent underline">{iv.number}</Link><span className="text-muted"> — {t('pnl.uncostedPartsLine', { count: iv.lines })}</span></p>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    <details className="mt-2">
+                      <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
+                      <p className="text-xs text-muted mt-1 leading-relaxed">{t('pnl.partsMarginHow')}</p>
+                    </details>
+                  </>
+                )}
               </div>
             );
           }

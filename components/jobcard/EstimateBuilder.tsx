@@ -32,7 +32,7 @@ export type EstimateLine = {
 };
 
 // Catalogue item (active, tenant-scoped) loaded once for client-side code matching. SIMPLE items only.
-export type CatalogueLite = { id: string; code: string; name: string; item_type: QuoteItemType; unit_cost: number; unit_price: number; vat_rate: number };
+export type CatalogueLite = { id: string; code: string; name: string; item_type: QuoteItemType; unit_cost: number | null; unit_price: number; vat_rate: number };
 
 // Fixed-price services are added via a tier picker (not typed codes). Carries components (spec + cost)
 // and per-tier price rows so the explosion resolves the price + spec entirely client-side.
@@ -231,7 +231,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         item_type: hit.item_type,
         description: hit.name,
         unit_price: String(hit.unit_price),
-        unit_cost: String(hit.unit_cost),
+        unit_cost: hit.unit_cost == null ? '' : String(hit.unit_cost), // null = UNKNOWN → blank (uncosted), never '0'
         vatable: Number(hit.vat_rate) > 0, // per-line rate maps to the vatable flag; charged at the card rate
         catalogue_item_id: hit.id,
       };

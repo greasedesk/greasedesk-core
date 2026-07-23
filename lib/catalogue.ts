@@ -21,13 +21,15 @@ export function componentCostPennies(components: ComponentInput[]): number {
 
 /**
  * The mirror for a fixed item: unit_price = base price (anchor), unit_cost = component cost sum.
- * Returned in POUNDS (2dp) for the Decimal columns.
+ * Returned in POUNDS (2dp) for the Decimal columns. unit_cost is NULL when the service has NO
+ * components — the parts cost is NOT ENTERED (uncosted, flagged), distinct from a service whose
+ * components sum to £0 (known-free). A number where genuinely known; null where not.
  */
-export function fixedMirror(basePriceExVat: number, components: ComponentInput[]): { unitPricePounds: number; unitCostPounds: number } {
+export function fixedMirror(basePriceExVat: number, components: ComponentInput[]): { unitPricePounds: number; unitCostPounds: number | null } {
   const base = Number.isFinite(basePriceExVat) ? basePriceExVat : 0;
   return {
     unitPricePounds: Number(base.toFixed(2)),
-    unitCostPounds: penniesToPounds(componentCostPennies(components)),
+    unitCostPounds: (components && components.length) ? penniesToPounds(componentCostPennies(components)) : null,
   };
 }
 
