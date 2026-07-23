@@ -296,16 +296,18 @@ export default function AdminDashboard(props: PageProps) {
       )}
 
       {/* ---- CAPACITY — the headline metric (hero, above the invoice-ledger strip). A month-long
-           burn-up of Capacity pace (target) vs Committed (WIP hours taken on) vs Billed (hours
-           charged), with the realised-rate and potential-vs-actual figures. Every input is a
-           chokepoint read — no new financial calculation. ---- */}
+           burn-up of Capacity pace (target) vs Billed (hours charged), with each total labelled at its
+           line end, and the labour-rate + effective-rate statements below. Every input is a chokepoint
+           read — no new financial calculation. ---- */}
       {(() => {
         const cap = tiles?.capacity as any;
         const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
+        // Whole-pound (no pence) figure for the on-chart end labels — floored, currency-aware.
+        const whole = (p: number | null) => (p == null ? '—' : formatMoney(Math.floor(p / 100) * 100, { currency: props.currency, locale: props.locale, maximumFractionDigits: 0 }));
         const daysInMonth = monthMeta?.daysInMonth || (cap?.series?.length ?? 0);
         const elapsed = monthMeta?.inProgress ? (monthMeta?.daysElapsed ?? daysInMonth) : daysInMonth;
         const withheld = cap?.imported?.suppressDerived === true;
-        const maxVal = cap ? Math.max(cap.sellableHours ?? 0, ...cap.series.map((s: any) => Math.max(s.committed, s.billed)), 1) : 1;
+        const maxVal = cap ? Math.max(cap.sellableHours ?? 0, ...cap.series.map((s: any) => s.billed), 1) : 1;
         const maxY = Math.max(10, Math.ceil(maxVal / 10) * 10);
         return (
           <div className={`bg-surface p-5 rounded-xl border border-line mb-6 ${loading ? 'opacity-60' : ''}`}>
@@ -322,16 +324,14 @@ export default function AdminDashboard(props: PageProps) {
             {cap == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : (
               <>
                 <CapacityChart series={cap.series} daysInMonth={daysInMonth} elapsed={elapsed} maxY={maxY} locale={props.locale}
-                  labels={{ capacity: t('capacity.lineCapacity'), committed: t('capacity.lineCommitted'), billed: t('capacity.lineBilled'), hours: t('capacity.hours') }} />
-                <div className="flex flex-wrap gap-x-8 gap-y-3 mt-4">
-                  <div>
-                    <p className="text-3xl font-bold tabular-nums text-accent">{withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies)}</p>
-                    <p className="text-xs text-muted mt-0.5">{t('effRate.contrast', { headline: cap.headlineRateMixed ? t('effRate.mixed') : money(cap.headlineRatePennies), realised: money(cap.effectiveRatePennies) })}</p>
-                  </div>
-                  <div className="sm:border-l sm:border-line sm:pl-8">
-                    <p className="text-3xl font-bold tabular-nums text-ink">{money(cap.potentialPennies)}</p>
-                    <p className="text-xs text-muted mt-0.5">{t('capacity.potentialVsActual', { actual: money(cap.actualPennies) })}</p>
-                  </div>
+                  hoursLabel={t('capacity.hours')}
+                  ends={{
+                    capacity: { title: t('capacity.totalSellable'), value: withheld ? '—' : whole(cap.potentialPennies) },
+                    billed: { title: t('capacity.totalSold'), value: withheld ? '—' : whole(cap.actualPennies) },
+                  }} />
+                <div className="flex flex-wrap gap-x-10 gap-y-2 mt-4 text-sm">
+                  <p className="text-ink">{t('capacity.rateCharged', { rate: cap.headlineRateMixed ? t('effRate.mixed') : money(cap.headlineRatePennies) })}</p>
+                  <p className="text-ink">{t('capacity.rateEffective', { rate: withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies) })}</p>
                 </div>
                 {(cap.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-2">{t('pnl.breakEvenNoRate', { sites: cap.ratesMissing.join(', ') })}</p>}
                 <details className="mt-3">

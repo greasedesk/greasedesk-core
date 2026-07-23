@@ -43,22 +43,20 @@
     "warrantyHonesty": "Rework invoices at £0 by design — this is what it cost to do the work again: parts at cost, labour at your rate."
   },
   "effRate": {
-    "contrast": "{{headline}} charged · {{realised}} realised",
     "mixed": "Varies by site",
     "withheld": "Withheld"
   },
   "capacity": {
     "title": "Capacity",
-    "note": "Cumulative labour hours across the month — where your capacity is versus what you've taken on and billed.",
+    "note": "Cumulative labour hours across the month — sellable capacity versus what you actually billed.",
     "progress": "{{elapsed}} of {{total}} days",
     "hours": "Hours",
-    "lineCapacity": "Capacity pace (target)",
-    "lineCommitted": "Committed",
-    "lineBilled": "Billed",
-    "potential": "potential",
-    "potentialVsActual": "potential revenue at capacity · {{actual}} actual",
+    "totalSellable": "Total Sellable Hours",
+    "totalSold": "Total Hours Sold",
+    "rateCharged": "Labour rate = {{rate}} as charged",
+    "rateEffective": "Effective Labour rate over period = {{rate}}",
     "howTitle": "How to read this",
-    "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Committed is labour hours taken on — job cards accepted or in progress, dated by their diary date; it is hours taken on, not hours worked (there is no time clocking). Billed is hours actually charged, dated by invoice date. Capacity pace above Committed means the diary isn't full. Committed above Billed means work is done but not yet invoiced. Billed lagging Committed in a sawtooth (work Monday, invoice Friday) is normal — a gap that never closes is the signal."
+    "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Billed is the hours actually charged, dated by invoice date. The gap between the two is capacity that didn't turn into billed work — hours that went unsold or aren't yet invoiced."
   },
   "pnl": {
     "title": "Profit & loss",

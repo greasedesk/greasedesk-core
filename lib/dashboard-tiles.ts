@@ -11,7 +11,7 @@ import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
-import { fetchLedgerInvoices, chargedLabourCentihours, lineLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
+import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation, getDailyCapacity, dayKey } from '@/lib/capacity';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
@@ -339,16 +339,15 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
   },
 
-  // Capacity — THE headline metric: a month-long burn-up of three CUMULATIVE labour-hour lines, plus
-  // the realised-rate + potential-vs-actual figures. NO new financial calculation — every input is a
+  // Capacity — THE headline metric: a month-long burn-up of TWO CUMULATIVE labour-hour lines, plus
+  // the labour-rate + effective-rate statements. NO new financial calculation — every input is a
   // chokepoint read:
   //   1) Capacity pace (target) = getDailyCapacity — sellable hours accruing per working day, flat on
   //      weekends/BH/closed days, reaching the utilisation tile's sellable total on the last working day.
-  //   2) Committed = labour hours on WIP cards (THE wip chokepoint: accepted/in_progress, no invoice),
-  //      dated by DIARY date (start_at ?? created_at). Hours TAKEN ON, not worked — there is no clocking.
-  //   3) Billed = charged labour hours (lib/charged-labour, warranty excluded), dated by invoice date.
-  // Figures below: headline rate (LABOUR_HR) vs realised (charged×rate ÷ sellable); potential
-  // (sellable×rate) vs actual (charged×rate). All valued PER SITE so mixed-rate groups stay honest.
+  //   2) Billed = charged labour hours (lib/charged-labour, warranty excluded), dated by invoice date.
+  // On-chart end labels: Total Sellable Hours → potential (sellable×rate); Total Hours Sold → actual
+  // (charged×rate). Statements below: headline rate (LABOUR_HR) and effective rate (charged×rate ÷
+  // sellable). All valued PER SITE so mixed-rate groups stay honest.
   capacity: async ({ groupId, siteIds, from, to, months, now }) => {
     // To-date window for the ACTUALS (charged / effective): to-date for a live single month, else full.
     const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
@@ -368,25 +367,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const distinct = [...new Set(rateBySite.values())];
     const headlineRatePennies = distinct.length === 1 ? Math.round(distinct[0] * 100) : null;
 
-    // 2) Committed — WIP cards' labour hours (THE wip chokepoint), dated by diary date, this month only.
-    const wipCards = (await prisma.jobCard.findMany({
-      where: wipCardsWhere(siteIds),
-      select: { start_at: true, created_at: true, items: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
-    })) as any[];
-    const committedByDay = new Map<string, number>(); // dayKey → centihours
-    let committedTotalCenti = 0;
-    for (const c of wipCards) {
-      const d: Date = c.start_at ?? c.created_at; // when capacity was consumed (diary date; created as fallback)
-      if (!(d >= from && d < to)) continue;
-      let centi = 0;
-      for (const it of c.items ?? []) centi += lineLabourCentihours(it).centihours;
-      if (centi === 0) continue;
-      const k = dayKey(d);
-      committedByDay.set(k, (committedByDay.get(k) ?? 0) + centi);
-      committedTotalCenti += centi;
-    }
-
-    // 3) Billed — charged labour hours dated by effective issue date; total === the "Hours charged" tile.
+    // 2) Billed — charged labour hours dated by effective issue date; total === the "Hours charged" tile.
     const invs = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
       select: { date_issued: true, issued_at: true, series: true, lines: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
@@ -401,13 +382,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       billedTotalCenti += centi;
     }
 
-    // Three cumulative series over the full month's day list. Committed/Billed carry NO future data,
-    // so on a live month they naturally stop at today — the client draws them only to daysElapsed.
-    let cc = 0, bb = 0;
+    // Two cumulative series over the full month's day list. Billed carries NO future data, so on a
+    // live month it naturally stops at today — the client draws it only to daysElapsed.
+    let bb = 0;
     const series = daily.days.map((pt) => {
-      cc += committedByDay.get(pt.dayKey) ?? 0;
       bb += billedByDay.get(pt.dayKey) ?? 0;
-      return { day: Number(pt.dayKey.slice(8, 10)), capacity: pt.cumulativeSellable, committed: Math.round(cc) / 100, billed: Math.round(bb) / 100 };
+      return { day: Number(pt.dayKey.slice(8, 10)), capacity: pt.cumulativeSellable, billed: Math.round(bb) / 100 };
     });
 
     // To-date charged (for realised rate + actual revenue) via the utilisation window, valued per site.
@@ -434,7 +414,6 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       potentialPennies: withheld ? null : potentialPennies,
       actualPennies: withheld ? null : actualPennies,
       effectiveRatePennies,
-      committedTotalCentihours: committedTotalCenti,
       billedTotalCentihours: billedTotalCenti,
       ratesMissing, imported, months,
     };

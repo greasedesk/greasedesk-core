@@ -10,6 +10,7 @@
 export type MoneyFormatOpts = {
   currency?: string; // ISO 4217, e.g. 'GBP'
   locale?: string;   // BCP-47, e.g. 'en-GB'
+  maximumFractionDigits?: number; // default 2; pass 0 for whole-unit display (e.g. chart labels)
 };
 
 const DEFAULT_CURRENCY = 'GBP';
@@ -25,7 +26,9 @@ export function formatMoney(pennies: number | null | undefined, opts: MoneyForma
   const currency = opts.currency || DEFAULT_CURRENCY;
   const locale = opts.locale || DEFAULT_LOCALE;
   const value = Number.isFinite(pennies as number) ? (pennies as number) / 100 : 0;
-  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value);
+  const fmt: Intl.NumberFormatOptions = { style: 'currency', currency };
+  if (opts.maximumFractionDigits != null) { fmt.maximumFractionDigits = opts.maximumFractionDigits; fmt.minimumFractionDigits = opts.maximumFractionDigits; }
+  return new Intl.NumberFormat(locale, fmt).format(value);
 }
 
 /**
