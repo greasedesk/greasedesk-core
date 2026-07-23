@@ -7,7 +7,7 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { normalizeReg } from '@/lib/vehicle-identity';
+import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 
 type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
@@ -47,23 +47,25 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null } | null>(null);
   const [lookBusy, setLookBusy] = useState(false);
   async function dvsaLookup() {
-    const r = normalizeReg(registration) || '';
-    if (!r) return;
     setLookBusy(true); setMsg(null);
-    try {
-      const res = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' });
-      const d = res.ok ? await res.json() : { found: false };
-      if (!d.found) { setMsg({ text: t('detailsEdit.dvsaNone'), ok: false }); return; }
-      if (!make.trim() && d.make) setMake(d.make);
-      if (!model.trim() && d.model) setModel(d.model);
-      if (!colour.trim() && d.colour) setColour(d.colour);
-      if (!fuel.trim() && d.fuel) setFuel(d.fuel);
-      if (!vyear.trim() && d.year != null) setVYear(String(d.year));
-      if (!engineCc.trim() && d.engineCc != null) setEngineCc(String(d.engineCc));
-      setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
-      setMsg({ text: t('detailsEdit.dvsaDone'), ok: true });
-    } catch { setMsg({ text: t('detailsEdit.dvsaError'), ok: false }); }
-    finally { setLookBusy(false); }
+    // The record already exists → DVSA only (internal: false), through the ONE shared client path.
+    const r = await lookupVehicleByReg(registration, { internal: false });
+    setLookBusy(false);
+    if (!r.ok) {
+      if (r.reason === 'empty-reg') return;
+      setMsg({ text: t(r.reason === 'error' ? 'detailsEdit.dvsaError' : 'detailsEdit.dvsaNone'), ok: false });
+      return;
+    }
+    // FILL-BLANKS-ONLY on the editable fields — a manual correction is never clobbered. The MOT trio
+    // has no manual input, so a lookup always refreshes it (a returning car's MOT data HAS changed).
+    if (!make.trim() && r.vehicle.make) setMake(r.vehicle.make);
+    if (!model.trim() && r.vehicle.model) setModel(r.vehicle.model);
+    if (!colour.trim() && r.vehicle.colour) setColour(r.vehicle.colour);
+    if (!fuel.trim() && r.vehicle.fuel) setFuel(r.vehicle.fuel);
+    if (!vyear.trim() && r.vehicle.year) setVYear(r.vehicle.year);
+    if (!engineCc.trim() && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    if (r.mot) setMot(r.mot);
+    setMsg({ text: t('detailsEdit.dvsaDone'), ok: true });
   }
   const motShow = {
     motExpiry: mot ? mot.motExpiry : vehicle.motExpiry,

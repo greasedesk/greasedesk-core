@@ -43,6 +43,7 @@ type PageProps = {
   priceVisible: boolean;
   costVisible: boolean;
   canOperate: boolean;
+  labourRate: number | null; // per-site default labour rate → pre-fills new labour lines (forwarded to EstimateBuilder)
   currency: string;
   locale: string;
   vatRate: number;
@@ -121,6 +122,7 @@ export default function JobCardDetailPage(props: PageProps) {
         priceVisible={props.priceVisible}
         costVisible={props.costVisible}
         canOperate={props.canOperate}
+        labourRate={props.labourRate}
         canEditPricing={props.canEditPricing}
         quoteFrozen={props.quoteFrozen}
         isAdmin={props.isAdmin}

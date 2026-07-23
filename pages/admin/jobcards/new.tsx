@@ -6,7 +6,7 @@
  * JobCard (and find-or-creates Customer + Vehicle) scoped to the session's group_id/site_id.
  * Auth-guarded in getServerSideProps, mirroring the Settings page.
  */
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -15,6 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
+import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 
 const inputClass =
@@ -72,47 +73,38 @@ export default function NewJobCardPage() {
     setFlags((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  // Reg auto-fill: on blur, canonicalise the reg then look it up — OUR records first (returning car →
-  // fill owner + vehicle), else DVSA MOT History (make/model/colour/fuel/engine). Best-effort; a failure
-  // never blocks manual entry. lastLookedRef guards repeat calls; motMetaRef carries MOT metadata to save.
-  const lastLookedRef = useRef('');
-  // MOT reference (DVSA) — distinct from the current mileage the mechanic enters. Display + sent on create.
+  // EXPLICIT reg lookup — a deliberate button press (or Enter in the field), NEVER auto-fire on blur:
+  // a half-typed reg is a wrong reg → misses or the wrong vehicle. Goes through the ONE shared client
+  // path (lib/vehicle-lookup-client): OUR records first (returning car → owner + vehicle), else DVSA.
+  // FILL-BLANKS-ONLY so a manual correction is never clobbered by pressing Look up again; any miss or
+  // failure just shows "enter manually" and never blocks the form.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
   const [looking, setLooking] = useState(false);
-  async function onRegBlur() {
-    const r = normalizeReg(form.registration) || '';
-    if (r !== form.registration) setForm((p) => ({ ...p, registration: r }));
-    if (!r || r === lastLookedRef.current) return;
-    lastLookedRef.current = r;
-    setLooking(true);
-    try {
-      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' });
-      const data = res.ok ? await res.json() : { found: false };
-      if (data.found) {
-        const v = data.vehicle || {}, o = data.owner || {};
-        setForm((p) => ({
-          ...p, registration: r,
-          customerName: o.name || '', phone: o.phone || '', email: o.email || '',
-          vin: v.vin || '', mileage: v.mileage != null ? String(v.mileage) : '',
-          make: v.make || '', model: v.model || '', colour: v.colour || '',
-          year: v.year != null ? String(v.year) : '', fuel: v.fuel || '', engineCc: v.engineCc != null ? String(v.engineCc) : '',
-        }));
-        setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
-        return;
-      }
-      // New car → DVSA MOT History (make AND model + MOT metadata).
-      setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
-      const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
-      const d = sres?.ok ? await sres.json() : { found: false };
-      if (d.found) {
-        setForm((p) => ({
-          ...p,
-          make: d.make || p.make, model: d.model || p.model, colour: d.colour || p.colour,
-          fuel: d.fuel || p.fuel, year: d.year != null ? String(d.year) : p.year, engineCc: d.engineCc != null ? String(d.engineCc) : p.engineCc,
-        }));
-        setMot({ motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null });
-      }
-    } catch { /* best-effort — never blocks manual entry */ } finally { setLooking(false); }
+  const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  async function runLookup() {
+    setLooking(true); setLookMsg(null);
+    const r = await lookupVehicleByReg(form.registration);
+    setLooking(false);
+    if (r.reg && r.reg !== form.registration) setForm((p) => ({ ...p, registration: r.reg }));
+    if (!r.ok) {
+      setLookMsg({
+        ok: false,
+        text: r.reason === 'empty-reg' ? 'Enter a registration to look up.'
+          : r.reason === 'not-found' ? 'No details found for that registration — enter them manually.'
+          : 'Lookup unavailable right now — enter the details manually.',
+      });
+      return;
+    }
+    const keep = (cur: string, inc: string) => (cur.trim() ? cur : inc); // fill blanks only
+    setForm((p) => ({
+      ...p, registration: r.reg,
+      customerName: keep(p.customerName, r.owner?.name ?? ''), phone: keep(p.phone, r.owner?.phone ?? ''), email: keep(p.email, r.owner?.email ?? ''),
+      vin: keep(p.vin, r.vehicle.vin), mileage: keep(p.mileage, r.vehicle.mileage),
+      make: keep(p.make, r.vehicle.make), model: keep(p.model, r.vehicle.model), colour: keep(p.colour, r.vehicle.colour),
+      year: keep(p.year, r.vehicle.year), fuel: keep(p.fuel, r.vehicle.fuel), engineCc: keep(p.engineCc, r.vehicle.engineCc),
+    }));
+    if (r.mot) setMot(r.mot);
+    setLookMsg({ ok: true, text: r.source === 'records' ? 'Filled from your records.' : 'Filled from DVSA.' });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -163,18 +155,29 @@ export default function NewJobCardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={labelClass}>Registration *</label>
-              {/* Plate-sized + live-normalised via the same normalizeReg the blur/submit path uses. */}
-              <input
-                name="registration"
-                value={form.registration}
-                maxLength={8}
-                onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
-                onBlur={onRegBlur}
-                required
-                placeholder="e.g. AB12CDE"
-                className={`${inputClass} uppercase max-w-[12rem] tracking-wider`}
-              />
-              {looking && <p className="text-xs text-muted mt-1">Looking up vehicle…</p>}
+              {/* Reg + explicit "Look up" button — the trade convention, and NEVER auto-fire on typing/
+                  blur (a part-typed reg is a wrong reg). Enter in the field triggers it too. */}
+              <div className="flex items-center gap-2">
+                <input
+                  name="registration"
+                  value={form.registration}
+                  maxLength={8}
+                  onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runLookup(); } }}
+                  required
+                  placeholder="e.g. AB12CDE"
+                  className={`${inputClass} uppercase max-w-[9rem] tracking-wider`}
+                />
+                <button
+                  type="button"
+                  onClick={runLookup}
+                  disabled={looking || !form.registration.trim()}
+                  className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50"
+                >
+                  {looking ? 'Looking up…' : 'Look up'}
+                </button>
+              </div>
+              {lookMsg && <p className={`text-xs mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
             </div>
             <div>
               <label className={labelClass}>Customer name *</label>

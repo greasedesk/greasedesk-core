@@ -26,6 +26,7 @@ import { formatMoney } from '@/lib/format-money';
 import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
+import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
@@ -941,6 +942,7 @@ export default function DiaryPage(props: PageProps) {
                     canIssueInvoice={pane.data.canIssueInvoice}
                     isAdmin={pane.data.isAdmin}
                     priceVisible={pane.data.priceVisible} costVisible={pane.data.costVisible}
+                    labourRate={pane.data.labourRate}
                     owner={pane.data.owner} vehicle={pane.data.vehicle} flags={pane.data.flags} isComeback={pane.data.isComeback}
                     garageNotes={pane.data.garageNotes} currency={pane.data.currency} locale={pane.data.locale}
                     vatRate={pane.data.vatRate} vatRegistered={pane.data.vatRegistered} lines={pane.data.lines}
@@ -1063,50 +1065,29 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
   const [lookBusy, setLookBusy] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
   async function lookupVehicle() {
-    const r = normalizeReg(reg) || '';
-    if (r !== reg) setReg(r);
-    if (!r) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; }
     setLookBusy(true); setLookMsg(null);
-    try {
-      // 1) OUR record first (returning car) — owner + full vehicle incl. model. Fill blanks only.
-      const res = await fetch(`/api/vehicle-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
-      const data = res?.ok ? await res.json() : { found: false };
-      if (data.found) {
-        const v = data.vehicle || {};
-        if (!cust.trim() && data.owner?.name) setCust(data.owner.name);
-        if (!phone.trim() && data.owner?.phone) setPhone(data.owner.phone);
-        if (!email.trim() && data.owner?.email) setEmail(data.owner.email);
-        if (!vin.trim() && v.vin) setVin(v.vin);
-        if (!mileage.trim() && v.mileage != null) setMileage(String(v.mileage));
-        if (!make.trim() && v.make) setMake(v.make);
-        if (!model.trim() && v.model) setModel(v.model);
-        if (!vColour.trim() && v.colour) setVColour(v.colour);
-        if (!fuel.trim() && v.fuel) setFuel(v.fuel);
-        if (!year.trim() && v.year != null) setYear(String(v.year));
-        if (!engineCc.trim() && v.engineCc != null) setEngineCc(String(v.engineCc));
-        setLookMsg({ text: t('create.lookupRecord'), ok: true });
-        return;
-      }
-      // 2) New car → DVSA MOT History — the SAME provider the job card uses (one genuinely shared
-      //    path; DVLA VES is not configured in prod, which is why the VES call always missed). DVSA
-      //    returns make + MODEL + colour/year/fuel/engine. MOT is still NOT captured here — it's the
-      //    job card's separate explicit action — so a booking stays off the MOT hot path.
-      const vres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(r)}`, { cache: 'no-store' }).catch(() => null);
-      const d = vres?.ok ? await vres.json() : { found: false };
-      if (d.found) {
-        if (!make.trim() && d.make) setMake(d.make);
-        if (!model.trim() && d.model) setModel(d.model);
-        if (!vColour.trim() && d.colour) setVColour(d.colour);
-        if (!fuel.trim() && d.fuel) setFuel(d.fuel);
-        if (!year.trim() && d.year != null) setYear(String(d.year));
-        if (!engineCc.trim() && d.engineCc != null) setEngineCc(String(d.engineCc));
-        setLookMsg({ text: t('create.lookupDvsa'), ok: true });
-      } else {
-        setLookMsg({ text: t('create.lookupNone'), ok: false }); // personal/trade/import/very new — manual
-      }
-    } catch {
-      setLookMsg({ text: t('create.lookupNone'), ok: false }); // never blocks the booking
-    } finally { setLookBusy(false); }
+    // ONE shared client path (lib/vehicle-lookup-client): OUR records first (returning car → owner +
+    // full vehicle), else DVSA MOT History. MOT metadata is NOT applied here — a booking stays off the
+    // MOT hot path (the job card captures MOT as its own explicit action).
+    const r = await lookupVehicleByReg(reg);
+    setLookBusy(false);
+    if (r.reg && r.reg !== reg) setReg(r.reg);
+    if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
+    // Fill BLANKS ONLY — a manual correction is never clobbered.
+    if (r.owner) {
+      if (!cust.trim() && r.owner.name) setCust(r.owner.name);
+      if (!phone.trim() && r.owner.phone) setPhone(r.owner.phone);
+      if (!email.trim() && r.owner.email) setEmail(r.owner.email);
+    }
+    if (!vin.trim() && r.vehicle.vin) setVin(r.vehicle.vin);
+    if (!mileage.trim() && r.vehicle.mileage) setMileage(r.vehicle.mileage);
+    if (!make.trim() && r.vehicle.make) setMake(r.vehicle.make);
+    if (!model.trim() && r.vehicle.model) setModel(r.vehicle.model);
+    if (!vColour.trim() && r.vehicle.colour) setVColour(r.vehicle.colour);
+    if (!fuel.trim() && r.vehicle.fuel) setFuel(r.vehicle.fuel);
+    if (!year.trim() && r.vehicle.year) setYear(r.vehicle.year);
+    if (!engineCc.trim() && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    setLookMsg({ text: t(r.source === 'records' ? 'create.lookupRecord' : 'create.lookupDvsa'), ok: true });
   }
   // Start: seeded from the clicked cell, or user-picked (pickWhen). End is naive start + hours (the
   // /api/jobcard bridge → workingMinutes = end-start = hours*60; the footprint re-expands correctly
