@@ -200,3 +200,40 @@ entered across those 35 rows, including the split work on the bundled lines.
 with the decision about when the rest of May gets driven — not bolted onto the unwind of the seven.
 Until it happens, anything committed from that batch carries the weaker assertion, and that should be
 a conscious choice rather than a surprise.
+
+---
+
+## Cross-site dashboard aggregates for a mixed-currency tenant
+
+**The gap.** Currency is **per-site** (`Site.currency_code`), so a multi-site tenant whose sites trade
+in *different* currencies has no defined behaviour for cross-site dashboard aggregates. The dashboard
+sums money across all visible sites (P&L, capacity potential/actual, revenue tiles) and formats the
+total in the **primary site's** currency — which is meaningless when the underlying figures are in
+different currencies. Adding €4,000 to £3,000 and printing "£7,000" (or "€7,000") is wrong in both
+directions: the sum itself has no meaning, and the symbol misrepresents whichever sites aren't the
+primary's currency.
+
+**Why it doesn't bite today.** Every live tenant is single-currency (TMBS is GBP throughout), so every
+aggregate is same-currency and the primary-site currency is the correct symbol by construction. The
+defect is latent — it only becomes real with a genuinely mixed-currency tenant (an Irish or overseas
+branch trading in EUR alongside a GBP site).
+
+**How to close it, when it matters.** Three defensible options, to be chosen deliberately rather than
+defaulted into:
+- **Restrict aggregates to same-currency sites** — the "all sites" view only sums sites sharing a
+  currency; mixed selections show per-site figures, not a total. Simplest and always correct.
+- **Per-currency subtotals** — the aggregate breaks down by currency (e.g. "£3,000 · €4,000") with no
+  single blended number.
+- **Convert at a stated rate** — fold everything to one reporting currency at an explicit,
+  shown FX rate. The most work and the most assumptions; only worth it if the owner genuinely wants a
+  single consolidated figure.
+
+**Why deferred.** Picking among these is a product decision that needs a real mixed-currency tenant to
+frame it — building it now would be guessing at a workflow no one has yet. The formatting chokepoint
+(`formatMoney` / `displayCurrency`) is already currency-aware, so whichever option is chosen is a
+render/aggregation change, not a rebuild.
+
+**Related.** `Site.supported_currencies` is retained in the schema but **unused** (the Financial
+multi-select was removed on 2026-07-23 — nothing read it, and it implied multi-currency invoicing that
+doesn't exist). It must **not** gain readers: a mixed-currency capability, if ever built, belongs on
+the aggregation decision above, not on resurrecting that dead field.
