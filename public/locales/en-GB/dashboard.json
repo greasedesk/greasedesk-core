@@ -14,9 +14,14 @@
     "last_month": "Last month",
     "last_quarter": "Last quarter",
     "last_fy": "Last financial year",
-    "mtd": "Month to date",
-    "qtd": "Quarter to date",
-    "ytd": "Year to date",
+    "thisMonthNamed": "This month ({{month}})",
+    "lastMonthNamed": "Last month ({{month}})",
+    "thisFyRange": "This financial year ({{range}})",
+    "lastFyRange": "Last financial year ({{range}})",
+    "groupMonths": "Months",
+    "groupQuarters": "Quarters",
+    "groupFy": "Financial year",
+    "groupOther": "Other",
     "custom": "Custom range…"
   },
   "tiles": {

@@ -349,8 +349,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // (charged×rate). Statements below: headline rate (LABOUR_HR) and effective rate (charged×rate ÷
   // sellable). All valued PER SITE so mixed-rate groups stay honest.
   capacity: async ({ groupId, siteIds, from, to, months, now }) => {
-    // To-date window for the ACTUALS (charged / effective): to-date for a live single month, else full.
-    const inProgress = months === 1 && from.getTime() <= now.getTime() && now.getTime() < to.getTime();
+    // To-date window for the ACTUALS (charged / effective): elapsed portion for a live period (month,
+    // quarter OR financial year — any span containing `now`), else the full period. This is what makes
+    // "sellable to date" and the effective rate compute against the elapsed part of a partial quarter/FY.
+    const inProgress = from.getTime() <= now.getTime() && now.getTime() < to.getTime();
     const startOfTomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
     const end = inProgress && startOfTomorrow.getTime() < to.getTime() ? startOfTomorrow : to;
 
@@ -382,12 +384,13 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       billedTotalCenti += centi;
     }
 
-    // Two cumulative series over the full month's day list. Billed carries NO future data, so on a
-    // live month it naturally stops at today — the client draws it only to daysElapsed.
+    // Two cumulative series over the PERIOD's day list. `day` is a 1-based index across the whole
+    // period (not day-of-month) so a multi-month quarter/FY doesn't collide on repeated dates. Billed
+    // carries NO future data, so on a live period it naturally stops at today (client draws to daysElapsed).
     let bb = 0;
-    const series = daily.days.map((pt) => {
+    const series = daily.days.map((pt, i) => {
       bb += billedByDay.get(pt.dayKey) ?? 0;
-      return { day: Number(pt.dayKey.slice(8, 10)), capacity: pt.cumulativeSellable, billed: Math.round(bb) / 100 };
+      return { day: i + 1, capacity: pt.cumulativeSellable, billed: Math.round(bb) / 100 };
     });
 
     // To-date charged (for realised rate + actual revenue) via the utilisation window, valued per site.
@@ -406,13 +409,13 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const imported = await periodImportState(groupId, siteIds, from, to);
     const withheld = imported.suppressDerived === true;
 
-    // Sellable capacity accrued TO DATE = the capacity line's value at TODAY (in-progress) or the
-    // full-month total (closed). This is BOTH the effective-rate denominator and the "Sellable to
-    // date" chart marker — so mid-month reads like-for-like (sold-to-date ÷ sellable-TO-DATE), not
-    // sold-to-date ÷ a full month not yet elapsed. Taken from the series so it reconciles with the
-    // plotted capacity line exactly.
-    const todayDom = now.getUTCDate();
-    const paceToday = inProgress ? (series.find((p) => p.day === todayDom) ?? series[series.length - 1]) : series[series.length - 1];
+    // Sellable capacity accrued TO DATE = the capacity line's value at TODAY (in-progress) or the full
+    // period total (closed). BOTH the effective-rate denominator and the "Sellable to date" marker, so a
+    // partial period reads like-for-like (sold-to-date ÷ sellable-TO-DATE), never ÷ a period not yet
+    // elapsed. Today's index = elapsed days into the period ([from, start-of-tomorrow)); taken from the
+    // series so it reconciles with the plotted capacity line exactly, for a month, quarter or FY.
+    const todayIndex = inProgress ? Math.max(1, Math.min(series.length, Math.round((end.getTime() - from.getTime()) / 86_400_000))) : series.length;
+    const paceToday = series[todayIndex - 1] ?? series[series.length - 1];
     const sellableToDateHours = paceToday?.capacity ?? sellableHours;
     // Value it at the rate: single-rate → the line point × rate (exact); mixed-rate → per-site to-date.
     let sellableToDatePennies = 0;

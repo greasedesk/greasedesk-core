@@ -128,12 +128,13 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial }: PageProps & { taxLabelInitial?: string }) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const rateSym = currencySymbol({ currency: settings.currencyCode, locale }); // labour-rate unit label, from the tenant currency
   const [isSaving, setIsSaving] = useState(false);
   const [taxLabel, setTaxLabel] = useState(taxLabelInitial ?? 'VAT');
+  const [fyStartMonth, setFyStartMonth] = useState(String(fyStartMonthInitial ?? 4)); // business-wide (Group), like the tax label
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
 
   // Switching location reloads SSR with that site's settings (?site=<id>).
@@ -176,8 +177,8 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to save settings.');
-      // Tax LABEL is business-wide (Group) — saved via the admin company API alongside site settings.
-      await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tax_label: taxLabel }) }).catch(() => {});
+      // Tax LABEL + FY start are business-wide (Group) — saved via the admin company API alongside site settings.
+      await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth) }) }).catch(() => {});
       setMessage({ text: 'Settings saved successfully!', type: 'success' });
     } catch (err: any) {
       setMessage({ text: err?.message || 'Failed to save settings.', type: 'error' });
@@ -230,6 +231,15 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                 <label htmlFor="taxLabel" className={labelClass}>Tax Label</label>
                 <input id="taxLabel" value={taxLabel} maxLength={20} onChange={(e) => setTaxLabel(e.target.value)} className={inputClass} placeholder="VAT" />
                 <p className="text-xs text-muted mt-1">What your sales tax is called on invoices — e.g. VAT, GST, Sales Tax. You set it; GreaseDesk never derives it from country.</p>
+              </div>
+              <div>
+                <label htmlFor="fyStartMonth" className={labelClass}>Financial year starts</label>
+                <select id="fyStartMonth" value={fyStartMonth} onChange={(e) => setFyStartMonth(e.target.value)} className={inputClass}>
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString(locale, { month: 'long' })}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted mt-1">What your accounting year runs from — used for financial-year reporting. Business-wide (every location). Most UK businesses run April to March.</p>
               </div>
             </div>
           </div>
@@ -307,6 +317,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true } })) as any;
-  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, locale: (site as any)?.locale ?? 'en-GB', taxLabelInitial: grpTax?.tax_label ?? 'VAT' } };
+  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true } })) as any;
+  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, locale: (site as any)?.locale ?? 'en-GB', taxLabelInitial: grpTax?.tax_label ?? 'VAT', fyStartMonthInitial: grpTax?.fy_start_month ?? 4 } };
 };

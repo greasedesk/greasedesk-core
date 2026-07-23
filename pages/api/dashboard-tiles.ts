@@ -53,11 +53,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const now = new Date();
   const base = { groupId: user.group_id as string, siteIds, now }; // now reaches every compute (point-in-time ageing + in-progress-month window)
   const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
-  // In-progress SINGLE month → the strip is "N of M days, fixed costs shown in full" and the
-  // net-profit tile reframes to "£X short of covering the month". Closed / multi-month → false.
-  const monthInProgress = monthSpan.months === 1 && monthSpan.from.getTime() <= now.getTime() && now.getTime() < monthSpan.to.getTime();
-  const daysInMonth = new Date(Date.UTC(monthSpan.from.getUTCFullYear(), monthSpan.from.getUTCMonth() + 1, 0)).getUTCDate();
-  const daysElapsed = monthInProgress ? now.getUTCDate() : daysInMonth;
+  // In-progress period (month, quarter OR financial year — any span containing `now`) → "N of M days,
+  // fixed costs shown in full", net-profit reframes to "£X short of covering the period", and the
+  // to-date treatment (sellable-to-date / effective rate) computes against the ELAPSED portion. Closed
+  // period → false. daysInMonth/daysElapsed are the PERIOD's day counts (kept names for client compat).
+  const monthInProgress = monthSpan.from.getTime() <= now.getTime() && now.getTime() < monthSpan.to.getTime();
+  const daysInMonth = Math.round((monthSpan.to.getTime() - monthSpan.from.getTime()) / 86_400_000);
+  const startOfTomorrow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const elapsedEnd = monthInProgress ? Math.min(startOfTomorrow, monthSpan.to.getTime()) : monthSpan.to.getTime();
+  const daysElapsed = Math.round((elapsedEnd - monthSpan.from.getTime()) / 86_400_000);
   return res.status(200).json({
     tiles, from: range.from.toISOString(), to: range.to.toISOString(),
     monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),

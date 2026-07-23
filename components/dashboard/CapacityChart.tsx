@@ -37,7 +37,12 @@ export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hour
   const capEnd = series[series.length - 1];
   const billEnd = billedPts[billedPts.length - 1] ?? series[0];
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxY * f));
-  const xTicks = Array.from(new Set([1, 8, 15, 22, 29, daysInMonth].filter((d) => d >= 1 && d <= daysInMonth)));
+  // Day-of-month ticks for a single month; evenly-spaced day-of-PERIOD ticks for a quarter / FY.
+  const xTicks = Array.from(new Set(
+    daysInMonth <= 40
+      ? [1, 8, 15, 22, 29, daysInMonth].filter((d) => d >= 1 && d <= daysInMonth)
+      : [1, 0.2, 0.4, 0.6, 0.8].map((f, i) => (i === 0 ? 1 : Math.round(daysInMonth * f))).concat(daysInMonth),
+  ));
   const fmtH = (n: number) => n.toLocaleString(locale, { maximumFractionDigits: 0 });
 
   // End-label vertical centres, separated when the two line ends converge. Order preserved.

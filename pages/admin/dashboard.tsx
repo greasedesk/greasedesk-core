@@ -22,13 +22,14 @@ import { daysLeft } from '@/lib/trial';
 import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/dashboard-periods';
+import { monthParamsForSelection } from '@/lib/dashboard-periods';
 import CapacityChart from '@/components/dashboard/CapacityChart';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
   subscriptionStatus: string | null; siteCount: number;
   currency: string; locale: string;
+  fyStartMonth: number; // Group.fy_start_month (1–12) — drives the FY period labels
   sites: Array<{ id: string; name: string }>; // the caller's VISIBLE sites (server-resolved)
   setup: { done: number; total: number; outstanding: number }; // setup-signals summary (derived)
 };
@@ -170,6 +171,30 @@ function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string):
   return `1–${daysElapsed} ${month}`;
 }
 
+// ---- Period-picker labels (client clock; the SERVER resolves the actual windows — these are text only) ----
+const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
+  new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
+// month−2 … month−5 as named-month options (This month = 0 and Last month = −1 are separate presets) —
+// a rolling six-month window that regenerates each month.
+function rollingMonths(now: Date, locale: string): Array<{ value: string; label: string }> {
+  const out: Array<{ value: string; label: string }> = [];
+  for (let i = 2; i <= 5; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    out.push({ value: `m:${ym}`, label: monthNameOf(d.getUTCFullYear(), d.getUTCMonth(), locale) });
+  }
+  return out;
+}
+// FY range label from Group.fy_start_month, e.g. "Apr 2026 – Mar 2027". offset 0 = this FY, −1 = last.
+function fyRangeLabel(now: Date, fyStartMonth: number, offset: number, locale: string): string {
+  const fy0 = Math.min(12, Math.max(1, Math.trunc(fyStartMonth) || 1)) - 1;
+  const m0 = now.getUTCMonth(), y = now.getUTCFullYear();
+  const startYear = (m0 >= fy0 ? y : y - 1) + offset;
+  const from = new Date(Date.UTC(startYear, fy0, 1));
+  const toIncl = new Date(Date.UTC(startYear + 1, fy0, 0)); // last day of the FY
+  return `${monthNameOf(from.getUTCFullYear(), from.getUTCMonth(), locale, 'short')} – ${monthNameOf(toIncl.getUTCFullYear(), toIncl.getUTCMonth(), locale, 'short')}`;
+}
+
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
@@ -199,7 +224,9 @@ function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount }: { s
 
 export default function AdminDashboard(props: PageProps) {
   const { t } = useTranslation('dashboard');
-  const [preset, setPreset] = useState<PeriodPreset | 'custom'>('this_month');
+  const pickerNow = new Date(); // labels only (rolling months / FY ranges); the server resolves windows
+  // A selection is a preset ('this_month' … 'last_fy'), 'custom', or a named month 'm:YYYY-MM'.
+  const [preset, setPreset] = useState<string>('this_month');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   // Site scope — sibling of the period control, scopes the ENTIRE dashboard (both strips).
@@ -216,16 +243,25 @@ export default function AdminDashboard(props: PageProps) {
   // whole-month selections exactly; part-periods (to-dates / partial custom) fall back to the
   // CONTAINING calendar month with a plain on-screen notice — never a silent mismatch, and
   // never pro-rated wages to fake a part-period (see lib/dashboard-periods).
-  const monthSel = monthParamsForSelection(preset, customFrom, customTo);
-
-  // The cash strip's period as a querystring — ONE builder shared by the tiles fetch and the
-  // tile links, so a click lands on exactly the period the tile displayed.
-  const cashQS = preset === 'custom'
-    ? (customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null)
-    : `preset=${preset}`;
-  const monthQS = monthSel
-    ? (monthSel.mpreset ? `mpreset=${monthSel.mpreset}` : `mfrom=${monthSel.mfrom}&mto=${monthSel.mto}`)
-    : null;
+  // Resolve the selection → cash range + month span querystrings (ONE builder, shared by the tiles
+  // fetch and the tile links). A named month 'm:YYYY-MM' is a whole single month; presets and custom
+  // go through the period engine. `degraded` drives the containing-month notice (custom part-periods).
+  const isNamedMonth = preset.startsWith('m:');
+  const monthSel = isNamedMonth ? null : monthParamsForSelection(preset as any, customFrom, customTo);
+  let cashQS: string | null = null, monthQS: string | null = null, degraded = false;
+  if (isNamedMonth) {
+    const ym = preset.slice(2); const [y, mo] = ym.split('-').map(Number);
+    const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    cashQS = `from=${ym}-01&to=${ym}-${String(last).padStart(2, '0')}`;
+    monthQS = `mfrom=${ym}&mto=${ym}`;
+  } else if (preset === 'custom') {
+    cashQS = customFrom && customTo ? `from=${customFrom}&to=${customTo}` : null;
+    monthQS = monthSel ? (monthSel.mpreset ? `mpreset=${monthSel.mpreset}` : `mfrom=${monthSel.mfrom}&mto=${monthSel.mto}`) : null;
+    degraded = monthSel?.degraded ?? false;
+  } else {
+    cashQS = `preset=${preset}`;
+    monthQS = monthSel?.mpreset ? `mpreset=${monthSel.mpreset}` : null;
+  }
   const siteQS = siteId === 'all' ? '' : `&site=${siteId}`;
   const load = useCallback(async () => {
     if (!cashQS || !monthQS) return; // custom picked but incomplete — wait for both ends
@@ -259,10 +295,24 @@ export default function AdminDashboard(props: PageProps) {
               {props.sites.map((s2) => <option key={s2.id} value={s2.id}>{s2.name}</option>)}
             </select>
           )}
-          <select value={preset} onChange={(e) => setPreset(e.target.value as any)}
+          <select value={preset} onChange={(e) => setPreset(e.target.value)}
             className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
-            {PERIOD_PRESETS.map((p) => <option key={p} value={p}>{t(`period.${p}`)}</option>)}
-            <option value="custom">{t('period.custom')}</option>
+            <optgroup label={t('period.groupMonths')}>
+              <option value="this_month">{t('period.thisMonthNamed', { month: monthNameOf(pickerNow.getUTCFullYear(), pickerNow.getUTCMonth(), props.locale) })}</option>
+              <option value="last_month">{t('period.lastMonthNamed', { month: monthNameOf(pickerNow.getUTCFullYear(), pickerNow.getUTCMonth() - 1, props.locale) })}</option>
+              {rollingMonths(pickerNow, props.locale).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </optgroup>
+            <optgroup label={t('period.groupQuarters')}>
+              <option value="this_quarter">{t('period.this_quarter')}</option>
+              <option value="last_quarter">{t('period.last_quarter')}</option>
+            </optgroup>
+            <optgroup label={t('period.groupFy')}>
+              <option value="this_fy">{t('period.thisFyRange', { range: fyRangeLabel(pickerNow, props.fyStartMonth, 0, props.locale) })}</option>
+              <option value="last_fy">{t('period.lastFyRange', { range: fyRangeLabel(pickerNow, props.fyStartMonth, -1, props.locale) })}</option>
+            </optgroup>
+            <optgroup label={t('period.groupOther')}>
+              <option value="custom">{t('period.custom')}</option>
+            </optgroup>
           </select>
           {preset === 'custom' && (
             <>
@@ -442,7 +492,7 @@ export default function AdminDashboard(props: PageProps) {
           </div>
         )}
       </div>
-      {monthSel?.degraded && monthWindow && (
+      {degraded && monthWindow && (
         <p className="text-sm text-warn bg-warn-soft border border-warn rounded-lg px-3 py-2 mb-3">
           {t('pnl.degradedNote', { label: monthLabel(monthWindow, props.locale) })}
         </p>
@@ -865,8 +915,8 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
   }
   const group = (await prisma.group.findUnique({
     where: { id: user.group_id },
-    select: { group_name: true, ref: true, status: true, trial_ends_at: true },
-  })) as { group_name: string; ref: string; status: string; trial_ends_at: Date | null } | null;
+    select: { group_name: true, ref: true, status: true, trial_ends_at: true, fy_start_month: true },
+  })) as { group_name: string; ref: string; status: string; trial_ends_at: Date | null; fy_start_month: number } | null;
   const billing = (await prisma.groupBilling.findUnique({ where: { group_id: user.group_id }, select: { subscription_status: true } })) as { subscription_status: string | null } | null;
   const siteCount = await prisma.site.count({ where: { group_id: user.group_id } });
   const site = vis.primarySiteId
@@ -890,6 +940,7 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
       sites: visibleSites.map((s2) => ({ id: s2.id, name: s2.site_name })),
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',
+      fyStartMonth: group?.fy_start_month ?? 4,
       setup: { done: setupSummary.doneCount, total: setupSummary.applicableCount, outstanding: setupSummary.outstanding.length },
     },
   };
