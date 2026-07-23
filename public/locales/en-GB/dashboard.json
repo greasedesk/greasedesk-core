@@ -47,8 +47,13 @@
     "withheld": "Withheld"
   },
   "marginStrip": {
-    "label": "Gross margin",
-    "sub": "of {{revenue}} revenue"
+    "hoursSold": "Hours sold",
+    "partsSold": "Parts sold",
+    "partsBase": "parts revenue",
+    "profit": "profit",
+    "ofBase": "of {{base}}",
+    "grossProfit": "Gross profit",
+    "ofRevenue": "of {{revenue}} revenue"
   },
   "capacity": {
     "title": "Capacity",

@@ -277,25 +277,61 @@ export default function AdminDashboard(props: PageProps) {
 
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} />
 
-      {/* ---- Headline margin strip: overall gross margin (£ and % of revenue) for the selected
-           period, read STRAIGHT from the P&L chokepoint (pnl.grossMargin / pnl.revenueNet) — no new
-           calculation. Currency-aware. Sits above the Capacity chart (a labour story of its own). ---- */}
+      {/* ---- Headline gross-profit COMPOSITION: a list of contributing streams + the total, above the
+           Capacity chart. Read STRAIGHT from existing chokepoints (pnl + capacity) — no new calculation.
+           Each stream contributes to gross profit; a stream WITHOUT a cost (labour) contributes its full
+           value, a stream WITH a cost (parts) contributes its profit — the arrow makes that explicit, so
+           the sold figures are context, not addends. Both percentages name their base on screen. Streams
+           are DATA: add vehicle sales / outsourced here and the generic layout renders it. Reconciles to
+           gross margin by construction (Σ contribution === pnl.grossMargin). Currency-aware. ---- */}
       {(() => {
         const d = tiles?.pnl as any;
+        const cap = tiles?.capacity as any;
         if (d == null) return null;
+        const money = (p: number) => fmt.money(p);
+        const pctStr = (v: number | null) => (v == null ? '—' : `${v.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`);
         const rev = d.revenueNet as number, gm = d.grossMargin as number;
-        const pct = rev > 0 ? (gm / rev) * 100 : null;
+        const hoursSold = cap?.actualPennies as number | null | undefined;
+        // Without the labour valuation (import-suppressed month) → the total only, no breakdown.
+        const canCompose = hoursSold != null;
+        // Contributing streams. hasCost=false → contributes the full "sold" (labour, no COGS);
+        // hasCost=true → contributes profit (sold − cost) and shows its own margin. Add streams here.
+        const streams = canCompose ? [
+          { label: t('marginStrip.hoursSold'), sold: hoursSold as number, cost: 0, hasCost: false, base: '' },
+          { label: t('marginStrip.partsSold'), sold: rev - (hoursSold as number), cost: d.partsCost as number, hasCost: true, base: t('marginStrip.partsBase') },
+        ] : [];
+        const totalRevenue = canCompose ? streams.reduce((a, s) => a + s.sold, 0) : rev; // === revenueNet
+        const grossProfit = canCompose ? streams.reduce((a, s) => a + (s.hasCost ? s.sold - s.cost : s.sold), 0) : gm; // === grossMargin
+        const grossPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : null;
         return (
-          <div className="bg-surface border border-line rounded-xl px-5 py-4 mb-6 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="text-sm font-semibold text-muted">{t('marginStrip.label')}</span>
-              <span className="text-3xl font-bold tabular-nums text-ink">{fmt.money(gm)}</span>
-              <span className="text-xl font-semibold tabular-nums text-ok">· {pct == null ? '—' : `${pct.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`}</span>
+          <div className="bg-surface border border-line rounded-xl px-5 py-4 mb-6">
+            {canCompose && (
+              <div className="space-y-1 text-sm mb-2">
+                {streams.map((s, i) => {
+                  const profit = s.sold - s.cost;
+                  const mPct = s.hasCost && s.sold > 0 ? (profit / s.sold) * 100 : null;
+                  return (
+                    <div key={i} className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="w-28 shrink-0 text-muted">{s.label}</span>
+                      <span className="tabular-nums font-semibold text-ink">{money(s.sold)}</span>
+                      {s.hasCost && (
+                        <span className="text-muted">
+                          → {t('marginStrip.profit')} <span className="tabular-nums font-semibold text-ink">{money(profit)}</span>
+                          {mPct != null && ` (${pctStr(mPct)} ${t('marginStrip.ofBase', { base: s.base })})`}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {canCompose && <div className="border-t border-line mb-2" />}
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="w-28 shrink-0 text-sm font-semibold text-ink">{t('marginStrip.grossProfit')}</span>
+              <span className="text-2xl font-bold tabular-nums text-ink">{money(grossProfit)}</span>
+              <span className="text-sm text-muted">· {pctStr(grossPct)} {t('marginStrip.ofRevenue', { revenue: money(totalRevenue) })}</span>
+              {monthWindow && <span className="ml-auto text-xs text-muted">{monthLabel(monthWindow, props.locale)}</span>}
             </div>
-            <span className="text-xs text-muted">
-              {t('marginStrip.sub', { revenue: fmt.money(rev) })}
-              {monthWindow ? ` · ${monthLabel(monthWindow, props.locale)}` : ''}
-            </span>
           </div>
         );
       })()}
