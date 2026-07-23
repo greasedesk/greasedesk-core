@@ -328,10 +328,16 @@ export default function AdminDashboard(props: PageProps) {
                   ends={{
                     capacity: { title: t('capacity.totalSellable'), value: withheld ? '—' : whole(cap.potentialPennies) },
                     billed: { title: t('capacity.totalSold'), value: withheld ? '—' : whole(cap.actualPennies) },
-                  }} />
+                  }}
+                  todayLabel={monthMeta?.inProgress && !withheld ? {
+                    day: elapsed,
+                    capacityHours: cap.series.find((s: any) => s.day === elapsed)?.capacity ?? 0,
+                    title: t('capacity.sellableToDate'),
+                    value: whole(cap.sellableToDatePennies),
+                  } : undefined} />
                 <div className="flex flex-wrap gap-x-10 gap-y-2 mt-4 text-sm">
                   <p className="text-ink">{t('capacity.rateCharged', { rate: cap.headlineRateMixed ? t('effRate.mixed') : money(cap.headlineRatePennies) })}</p>
-                  <p className="text-ink">{t('capacity.rateEffective', { rate: withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies) })}</p>
+                  <p className="text-ink">{t(monthMeta?.inProgress ? 'capacity.rateEffectiveToDate' : 'capacity.rateEffective', { rate: withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies) })}</p>
                 </div>
                 {(cap.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-2">{t('pnl.breakEvenNoRate', { sites: cap.ratesMissing.join(', ') })}</p>}
                 <details className="mt-3">

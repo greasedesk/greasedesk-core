@@ -53,8 +53,10 @@
     "hours": "Hours",
     "totalSellable": "Total Sellable Hours",
     "totalSold": "Total Hours Sold",
+    "sellableToDate": "Sellable to date",
     "rateCharged": "Labour rate = {{rate}} as charged",
     "rateEffective": "Effective Labour rate over period = {{rate}}",
+    "rateEffectiveToDate": "Effective Labour rate to date = {{rate}}",
     "howTitle": "How to read this",
     "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Billed is the hours actually charged, dated by invoice date. The gap between the two is capacity that didn't turn into billed work — hours that went unsold or aren't yet invoiced."
   },

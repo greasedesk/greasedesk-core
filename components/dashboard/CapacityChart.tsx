@@ -18,6 +18,8 @@ type Props = {
   maxY: number;    // Y-axis top, in hours
   hoursLabel: string;
   ends: { capacity: EndLabel; billed: EndLabel };
+  // In-month only: a muted reference label at the capacity line's TODAY point (sellable accrued so far).
+  todayLabel?: { day: number; capacityHours: number; title: string; value: string };
   locale: string;
 };
 
@@ -25,7 +27,7 @@ const W = 720, H = 260, padL = 44, padR = 140, padT = 14, padB = 28;
 const plotW = W - padL - padR, plotH = H - padT - padB;
 const plotRight = padL + plotW;
 
-export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hoursLabel, ends, locale }: Props) {
+export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hoursLabel, ends, todayLabel, locale }: Props) {
   if (!series.length || maxY <= 0) return null;
   const x = (day: number) => padL + (daysInMonth <= 1 ? 0 : ((day - 1) / (daysInMonth - 1)) * plotW);
   const y = (v: number) => padT + plotH - (Math.max(0, Math.min(v, maxY)) / maxY) * plotH;
@@ -73,6 +75,14 @@ export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hour
         {/* today marker (in-progress only) */}
         {elapsed < daysInMonth && (
           <line x1={x(elapsed)} y1={padT} x2={x(elapsed)} y2={padT + plotH} className="text-accent" stroke="currentColor" strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+        )}
+        {/* SELLABLE TO DATE — muted reference at the capacity line's today point (in-month only) */}
+        {todayLabel && (
+          <g>
+            <circle cx={x(todayLabel.day)} cy={y(todayLabel.capacityHours)} r={2.5} className="text-muted fill-current" />
+            <text x={x(todayLabel.day) - 7} y={y(todayLabel.capacityHours) - 8} textAnchor="end" className="text-muted fill-current text-[8px] uppercase tracking-wide">{todayLabel.title}</text>
+            <text x={x(todayLabel.day) - 7} y={y(todayLabel.capacityHours) + 4} textAnchor="end" className="text-muted fill-current text-[11px] font-semibold">{todayLabel.value}</text>
+          </g>
         )}
         {/* Capacity pace (target) — dashed, muted */}
         <polyline points={poly(series, 'capacity')} fill="none" className="text-muted" stroke="currentColor" strokeWidth={2} strokeDasharray="5 4" />

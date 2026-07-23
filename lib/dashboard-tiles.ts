@@ -405,14 +405,30 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
 
     const imported = await periodImportState(groupId, siteIds, from, to);
     const withheld = imported.suppressDerived === true;
-    const sellableToDate = windowUtil.available; // effective divides by the to-date sellable (== full for a closed month)
-    const effectiveRatePennies = (!withheld && actualPennies > 0 && sellableToDate > 0) ? Math.round(actualPennies / sellableToDate) : null;
+
+    // Sellable capacity accrued TO DATE = the capacity line's value at TODAY (in-progress) or the
+    // full-month total (closed). This is BOTH the effective-rate denominator and the "Sellable to
+    // date" chart marker — so mid-month reads like-for-like (sold-to-date ÷ sellable-TO-DATE), not
+    // sold-to-date ÷ a full month not yet elapsed. Taken from the series so it reconciles with the
+    // plotted capacity line exactly.
+    const todayDom = now.getUTCDate();
+    const paceToday = inProgress ? (series.find((p) => p.day === todayDom) ?? series[series.length - 1]) : series[series.length - 1];
+    const sellableToDateHours = paceToday?.capacity ?? sellableHours;
+    // Value it at the rate: single-rate → the line point × rate (exact); mixed-rate → per-site to-date.
+    let sellableToDatePennies = 0;
+    if (distinct.length === 1) sellableToDatePennies = Math.round(sellableToDateHours * distinct[0] * 100);
+    else for (const s of windowUtil.perSite) { const rate = rateBySite.get(s.siteId); if (rate != null) sellableToDatePennies += Math.round(s.available * rate * 100); }
+
+    // Effective rate = sold-to-date value ÷ sellable-TO-DATE hours. On a CLOSED month to-date == full
+    // month, so the figure and calculation are unchanged (June: £6,543.75 ÷ 168.40 = £38.86).
+    const effectiveRatePennies = (!withheld && actualPennies > 0 && sellableToDateHours > 0) ? Math.round(actualPennies / sellableToDateHours) : null;
 
     return {
       series, sellableHours, chargedHours,
       headlineRatePennies, headlineRateMixed: distinct.length > 1,
       potentialPennies: withheld ? null : potentialPennies,
       actualPennies: withheld ? null : actualPennies,
+      sellableToDatePennies: withheld ? null : sellableToDatePennies,
       effectiveRatePennies,
       billedTotalCentihours: billedTotalCenti,
       ratesMissing, imported, months,
