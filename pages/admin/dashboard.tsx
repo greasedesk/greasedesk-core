@@ -277,6 +277,29 @@ export default function AdminDashboard(props: PageProps) {
 
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} />
 
+      {/* ---- Headline margin strip: overall gross margin (£ and % of revenue) for the selected
+           period, read STRAIGHT from the P&L chokepoint (pnl.grossMargin / pnl.revenueNet) — no new
+           calculation. Currency-aware. Sits above the Capacity chart (a labour story of its own). ---- */}
+      {(() => {
+        const d = tiles?.pnl as any;
+        if (d == null) return null;
+        const rev = d.revenueNet as number, gm = d.grossMargin as number;
+        const pct = rev > 0 ? (gm / rev) * 100 : null;
+        return (
+          <div className="bg-surface border border-line rounded-xl px-5 py-4 mb-6 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="text-sm font-semibold text-muted">{t('marginStrip.label')}</span>
+              <span className="text-3xl font-bold tabular-nums text-ink">{fmt.money(gm)}</span>
+              <span className="text-xl font-semibold tabular-nums text-ok">· {pct == null ? '—' : `${pct.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`}</span>
+            </div>
+            <span className="text-xs text-muted">
+              {t('marginStrip.sub', { revenue: fmt.money(rev) })}
+              {monthWindow ? ` · ${monthLabel(monthWindow, props.locale)}` : ''}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* OPTIONAL post-signup setup (item-13): a compact progress nudge to the full /admin/setup panel
           + guided walkthrough. NOT in the required gate; vanishes once everything applicable is done.
           Derived from setup-signals — no stored "done" flag. */}

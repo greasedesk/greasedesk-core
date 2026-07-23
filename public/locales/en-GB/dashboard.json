@@ -46,6 +46,10 @@
     "mixed": "Varies by site",
     "withheld": "Withheld"
   },
+  "marginStrip": {
+    "label": "Gross margin",
+    "sub": "of {{revenue}} revenue"
+  },
   "capacity": {
     "title": "Capacity",
     "note": "Cumulative labour hours across the month — sellable capacity versus what you actually billed.",
