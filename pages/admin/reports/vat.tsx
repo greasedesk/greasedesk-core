@@ -12,7 +12,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { getVatSummary, type VatSummary } from '@/lib/vat-summary';
-import { formatMoney } from '@/lib/format-money';
+import { formatMoney, currencySymbol } from '@/lib/format-money';
 
 type PageProps = {
   summary: VatSummary; periodLabel: string; preset: string; from: string; to: string;
@@ -60,7 +60,7 @@ export default function VatReport(props: PageProps) {
 
         {!vatRegistered && (
           <div className="bg-surface-muted border border-line rounded-lg p-3 mb-4 text-sm text-muted">
-            Your account is set to <span className="font-medium">not VAT-registered</span>, so output VAT is £0. Change this in Settings if you are registered.
+            Your account is set to <span className="font-medium">not VAT-registered</span>, so output VAT is {currencySymbol({ currency, locale })}0. Change this in Settings if you are registered.
           </div>
         )}
 

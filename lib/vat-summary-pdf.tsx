@@ -6,6 +6,7 @@
 import React from 'react';
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
 import type { VatSummary } from '@/lib/vat-summary';
+import { formatMoney } from '@/lib/format-money';
 
 const S = StyleSheet.create({
   page: { padding: 48, fontSize: 10, fontFamily: 'Helvetica', color: '#111827' },
@@ -22,11 +23,10 @@ const S = StyleSheet.create({
   footer: { position: 'absolute', bottom: 32, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
 });
 
-const gbp = (p: number) => '£' + (p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-export type VatPdfInput = VatSummary & { businessName: string; vatNumber: string | null; periodLabel: string };
+export type VatPdfInput = VatSummary & { businessName: string; vatNumber: string | null; periodLabel: string; currency: string; locale: string };
 
 function VatSummaryPdf({ d }: { d: VatPdfInput }) {
+  const gbp = (p: number) => formatMoney(p, { currency: d.currency, locale: d.locale }); // tenant currency, not hardcoded £
   return (
     <Document>
       <Page size="A4" style={S.page}>

@@ -9,6 +9,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { getVatSummary } from '@/lib/vat-summary';
 import { renderVatSummaryPdf } from '@/lib/vat-summary-pdf';
+import { displayCurrency } from '@/lib/display-currency';
 
 const dateOnly = (iso: string) => iso.slice(0, 10);
 
@@ -24,7 +25,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const summary = await getVatSummary(groupId, vis.siteIds, range.from, range.to);
   const periodLabel = `${dateOnly(summary.fromISO)} to ${dateOnly(new Date(range.to.getTime() - 1).toISOString())}`;
-  const pdf = await renderVatSummaryPdf({ ...summary, businessName: group?.group_name ?? 'Your business', vatNumber: group?.vat_number ?? null, periodLabel });
+  const { currency, locale } = await displayCurrency(vis.primarySiteId);
+  const pdf = await renderVatSummaryPdf({ ...summary, businessName: group?.group_name ?? 'Your business', vatNumber: group?.vat_number ?? null, periodLabel, currency, locale });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="vat-on-sales_${dateOnly(summary.fromISO)}_${dateOnly(new Date(range.to.getTime() - 1).toISOString())}.pdf"`);

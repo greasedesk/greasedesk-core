@@ -598,7 +598,7 @@ model Site {
   // --- NEW CONFIGURATION FIELDS ---
   pricing_display_mode String @default("ex_vat") // Ex VAT/Inc VAT display
   supported_countries  Json?
-  supported_currencies Json?
+  supported_currencies Json? // UNUSED (2026-07-23): the Financial multi-select was removed — nothing read this; it implied multi-currency invoicing that doesn't exist. Column kept to avoid a migration; do not add readers.
   // --- DIARY DISPLAY (per-site) ---
   open_days            Int[]  @default([1, 2, 3, 4, 5, 6]) // weekdays open (0=Sun..6=Sat); default Mon–Sat
   open_hour            Int    @default(8) // diary window start hour

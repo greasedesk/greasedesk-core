@@ -20,7 +20,7 @@ import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { getSetupSignals } from '@/lib/setup-signals';
 import { daysLeft } from '@/lib/trial';
 import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
-import { formatMoney } from '@/lib/format-money';
+import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
 import { PERIOD_PRESETS, PeriodPreset, monthParamsForSelection } from '@/lib/dashboard-periods';
 import CapacityChart from '@/components/dashboard/CapacityChart';
@@ -244,6 +244,7 @@ export default function AdminDashboard(props: PageProps) {
   useEffect(() => { load(); }, [load]);
 
   const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS, site: siteId };
+  const rateSym = currencySymbol({ currency: props.currency, locale: props.locale }); // for "/h" rate labels
 
   return (
     <>
@@ -564,7 +565,7 @@ export default function AdminDashboard(props: PageProps) {
                           <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                           <div className="text-xs text-muted mt-1 space-y-1">
                             {cb.perSite.filter((s2: any) => s2.costBasePennies > 0).map((s2: any) => (
-                              <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `£${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
+                              <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `${rateSym}${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
                             ))}
                             <p>{t('pnl.breakEvenRevenue', { value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
                             {/* Expressed against SELLABLE capacity (factor-adjusted) — the same

@@ -14,14 +14,14 @@ type Promo = { id: string; code: string; label: string; type: PromoType; amount:
 type ProductLite = { id: string; code: string; title: string | null; name: string };
 type FormState = { id: string | null; code: string; label: string; type: PromoType; amount: string; active: boolean; targetIds: string[] };
 
-const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100));
 const inputCls = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink';
 const labelCls = 'text-sm font-medium text-ink';
 
-export default function PromotionsSection({ products, defaultVatRate, vatRegistered }: {
-  products: ProductLite[]; defaultVatRate: number; vatRegistered: boolean;
+export default function PromotionsSection({ products, defaultVatRate, vatRegistered, currency, locale }: {
+  products: ProductLite[]; defaultVatRate: number; vatRegistered: boolean; currency: string; locale: string;
 }) {
   const { t } = useTranslation('promos');
+  const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100), { currency, locale });
   const [promos, setPromos] = useState<Promo[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
   const [busy, setBusy] = useState(false);

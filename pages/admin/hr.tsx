@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import { displayCurrency } from '@/lib/display-currency';
 import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/AllocationEditor';
 import { rosteredWeekdays } from '@/lib/rostered-days';
 
@@ -49,7 +50,7 @@ const penniesToInput = (p: number): string => (p / 100).toFixed(2);
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const inputClass = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink';
 
-export default function HrPage() {
+export default function HrPage({ currency, locale }: { currency: string; locale: string }) {
   const { t } = useTranslation('headcount');
   const { t: th } = useTranslation('hr');
   const router = useRouter();
@@ -171,13 +172,13 @@ export default function HrPage() {
     finally { setBusy(false); }
   }
 
-  const payLabel = (p: Person) => `${formatMoney(p.amountPennies)} ${p.costType === 'salary' ? t('perYear') : t('perHour')}`;
+  const payLabel = (p: Person) => `${formatMoney(p.amountPennies, { currency, locale })} ${p.costType === 'salary' ? t('perYear') : t('perHour')}`;
   const dayNames = (ds: number[]) => WEEKDAY_ORDER.filter((d) => ds.includes(d)).map((d) => t(`shape.dow.${d}`)).join(' ');
   // One readable line per event kind (old → new).
   const evText = (e: Ev): string => {
     const v = e.value || {}; const p = e.previous || {};
     switch (e.kind) {
-      case 'wage': return `${p.amount_pennies != null ? formatMoney(p.amount_pennies) : '—'} → ${formatMoney(v.amount_pennies)} (${v.cost_type === 'salary' ? t('perYear') : t('perHour')})`;
+      case 'wage': return `${p.amount_pennies != null ? formatMoney(p.amount_pennies, { currency, locale }) : '—'} → ${formatMoney(v.amount_pennies, { currency, locale })} (${v.cost_type === 'salary' ? t('perYear') : t('perHour')})`;
       case 'hours': return `${p.contracted_hours_per_day ?? '—'}h → ${v.contracted_hours_per_day ?? '—'}h`;
       case 'pattern': return `${p.working_days?.length ? dayNames(p.working_days) : th('inherited')} → ${v.working_days?.length ? dayNames(v.working_days) : th('inherited')}`;
       case 'chargeable': return `${p.is_chargeable ? th('yes') : th('no')} → ${v.is_chargeable ? th('yes') : th('no')}`;
@@ -409,5 +410,5 @@ export default function HrPage() {
 export const getServerSideProps = withI18n(['hr', 'headcount'])(async (ctx) => {
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
-  return { props: {} };
+  return { props: { ...(await displayCurrency(gate.vis.primarySiteId)) } };
 });

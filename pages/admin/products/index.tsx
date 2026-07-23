@@ -13,6 +13,7 @@ import { useTranslation } from 'next-i18next';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import { displayCurrency } from '@/lib/display-currency';
 import PromotionsSection from '@/components/products/PromotionsSection';
 
 type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
@@ -32,7 +33,6 @@ type FormState = {
   basePrice: string; labourHours: string; labourOutsourced: boolean; components: FormComp[]; tierCells: Record<string, TierCell>; // fixed
 };
 
-const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100));
 const inc = (exPounds: number, rate: number) => exPounds * (1 + (rate || 0) / 100);
 // Margin ON PRICE (not markup on cost). Divide-by-zero (price 0) → null → shown as "—", never NaN/∞.
 const marginPct = (price: number, cost: number): number | null => (price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : null);
@@ -40,8 +40,9 @@ const pctLabel = (price: number, cost: number): string => { const m = marginPct(
 const inputCls = 'mt-1 w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink';
 const labelCls = 'text-sm font-medium text-ink';
 
-export default function ProductsPage() {
+export default function ProductsPage({ currency, locale }: { currency: string; locale: string }) {
   const { t } = useTranslation('products');
+  const money = (pounds: number) => formatMoney(Math.round((pounds || 0) * 100), { currency, locale });
   const [items, setItems] = useState<Item[]>([]);
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [defaultVatRate, setDefaultVatRate] = useState('20');
@@ -249,6 +250,7 @@ export default function ProductsPage() {
         <PromotionsSection
           products={items.filter((i) => i.active).map((i) => ({ id: i.id, code: i.code, title: i.title, name: i.name }))}
           defaultVatRate={Number(defaultVatRate || 0)} vatRegistered={vatRegistered}
+          currency={currency} locale={locale}
         />
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
@@ -396,5 +398,5 @@ export default function ProductsPage() {
 export const getServerSideProps = withI18n(['products', 'promos'])(async (ctx) => {
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
-  return { props: {} };
+  return { props: { ...(await displayCurrency(gate.vis.primarySiteId)) } };
 });

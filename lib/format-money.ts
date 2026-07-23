@@ -27,3 +27,19 @@ export function formatMoney(pennies: number | null | undefined, opts: MoneyForma
   const value = Number.isFinite(pennies as number) ? (pennies as number) / 100 : 0;
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value);
 }
+
+/**
+ * The tenant currency's bare SYMBOL — for field labels/units where a full amount would be wrong
+ * (e.g. "Default Labour Rate (£/hr)" → "(€/hr)" for a EUR tenant). Same chokepoint, same source
+ * (Site.currency_code / locale). GBP→£, EUR→€, USD/AUD→$ (narrow). Falls back to the code.
+ */
+export function currencySymbol(opts: MoneyFormatOpts = {}): string {
+  const currency = opts.currency || DEFAULT_CURRENCY;
+  const locale = opts.locale || DEFAULT_LOCALE;
+  try {
+    const parts = new Intl.NumberFormat(locale, { style: 'currency', currency, currencyDisplay: 'narrowSymbol' }).formatToParts(0);
+    return parts.find((p) => p.type === 'currency')?.value ?? currency;
+  } catch {
+    return currency;
+  }
+}

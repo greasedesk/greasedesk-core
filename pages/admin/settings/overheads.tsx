@@ -13,6 +13,7 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import { displayCurrency } from '@/lib/display-currency';
 import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/AllocationEditor';
 
 type SiteOpt = { id: string; name: string; isActive: boolean };
@@ -26,7 +27,8 @@ const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100
 const penniesToInput = (p: number): string => (p / 100).toFixed(2);
 const clampRate = (r: number) => Math.min(100, Math.max(0, Number.isFinite(r) ? r : 0));
 
-export default function OverheadsSettings() {
+export default function OverheadsSettings({ currency, locale }: { currency: string; locale: string }) {
+  const money = (p: number) => formatMoney(p, { currency, locale });
   const { t } = useTranslation('overheads');
   const router = useRouter();
   const [sites, setSites] = useState<SiteOpt[]>([]);
@@ -104,9 +106,9 @@ export default function OverheadsSettings() {
   const amountLabel = (o: Overhead) => {
     // Ex-VAT is the true cost. When registered with a rate, also show VAT + gross.
     if (vatRegistered && o.vatPennies > 0) {
-      return `${formatMoney(o.exVatPennies)} ${t('exVat')} + ${formatMoney(o.vatPennies)} ${t('vatAt', { rate: o.vatRate })} = ${formatMoney(o.grossPennies)} · ${t(o.period)}`;
+      return `${money(o.exVatPennies)} ${t('exVat')} + ${money(o.vatPennies)} ${t('vatAt', { rate: o.vatRate })} = ${money(o.grossPennies)} · ${t(o.period)}`;
     }
-    return `${formatMoney(o.exVatPennies)} · ${t(o.period)}`;
+    return `${money(o.exVatPennies)} · ${t(o.period)}`;
   };
 
   return (
@@ -167,7 +169,7 @@ export default function OverheadsSettings() {
               const vatP = Math.round((exP * clampRate(Number(form.vatRate))) / 100);
               return (
                 <p className="text-xs text-muted mt-2">
-                  {t('vatCalc', { vat: formatMoney(vatP), gross: formatMoney(exP + vatP) })}
+                  {t('vatCalc', { vat: money(vatP), gross: money(exP + vatP) })}
                 </p>
               );
             })()}
@@ -230,5 +232,5 @@ export default function OverheadsSettings() {
 export const getServerSideProps = withI18n(['overheads'])(async (ctx) => {
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
-  return { props: {} };
+  return { props: { ...(await displayCurrency(gate.vis.primarySiteId)) } };
 });

@@ -27,7 +27,6 @@ type SaveSettingsBody = {
   currencyCode?: string;
   pricingDisplayMode: 'ex_vat' | 'inc_vat';
   supportedCountries: string[];
-  supportedCurrencies: string[];
 };
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
@@ -56,7 +55,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     currencyCode,
     pricingDisplayMode,
     supportedCountries,
-    supportedCurrencies,
   } = req.body as SaveSettingsBody;
 
   // All-locations Financial: target any site the caller's group owns (validated below). Defaults
@@ -97,7 +95,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
           ...(currencyCode && { currency_code: currencyCode }),
           pricing_display_mode: pricingDisplayMode,
           supported_countries: supportedCountries ?? [],
-          supported_currencies: supportedCurrencies ?? [],
+          // supported_currencies intentionally NOT written — the multi-select was removed (nothing
+          // consumed it; it implied multi-currency invoicing that doesn't exist). Column left in place.
         },
       });
 

@@ -12,6 +12,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
+import { currencySymbol } from '@/lib/format-money';
 
 type SiteSettings = {
   siteName: string;
@@ -20,14 +21,12 @@ type SiteSettings = {
   currencyCode: string;
   pricingDisplayMode: 'ex_vat' | 'inc_vat';
   supportedCountries: string[];
-  supportedCurrencies: string[];
 };
 type PcTag = { id: string; name: string; category: string | null };
 type SiteOpt = { id: string; name: string };
-type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; sites: SiteOpt[]; selectedSiteId: string; isAdmin: boolean };
+type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; sites: SiteOpt[]; selectedSiteId: string; isAdmin: boolean; locale: string };
 
 const ALL_COUNTRIES = ['United Kingdom', 'Ireland', 'Germany', 'France', 'Spain', 'Australia', 'United States'];
-const ALL_CURRENCIES = ['GBP', 'EUR', 'USD', 'AUD'];
 const CATEGORY_OPTIONS = [
   { value: 'repairs', label: 'Repairs' },
   { value: 'mot', label: 'MOT' },
@@ -129,9 +128,10 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, taxLabelInitial }: PageProps & { taxLabelInitial?: string }) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial }: PageProps & { taxLabelInitial?: string }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
+  const rateSym = currencySymbol({ currency: settings.currencyCode, locale }); // labour-rate unit label, from the tenant currency
   const [isSaving, setIsSaving] = useState(false);
   const [taxLabel, setTaxLabel] = useState(taxLabelInitial ?? 'VAT');
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
@@ -172,7 +172,6 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
           currencyCode: settings.currencyCode,
           pricingDisplayMode: settings.pricingDisplayMode,
           supportedCountries: settings.supportedCountries,
-          supportedCurrencies: settings.supportedCurrencies,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -220,13 +219,6 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                 <p className="text-xs text-muted mt-1">Hold Ctrl/Cmd to select multiple.</p>
               </div>
               <div>
-                <label htmlFor="supportedCurrencies" className={labelClass}>Supported Currencies</label>
-                <select id="supportedCurrencies" name="supportedCurrencies" multiple value={settings.supportedCurrencies} onChange={handleChange} className={selectMultipleClass}>
-                  {ALL_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <p className="text-xs text-muted mt-1">Hold Ctrl/Cmd to select multiple.</p>
-              </div>
-              <div>
                 <label htmlFor="timezone" className={labelClass}>Timezone</label>
                 <input id="timezone" name="timezone" value={settings.timezone} onChange={handleChange} className={inputClass} />
               </div>
@@ -256,7 +248,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                 <p className="text-xs text-muted mt-1">The default VAT rate lives in Company Profile → Company Details.</p>
               </div>
               <div>
-                <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate (£/hr, Ex. VAT)</label>
+                <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. VAT)</label>
                 <input type="number" step="0.01" id="defaultLabourRate" name="defaultLabourRate" value={settings.defaultLabourRate} onChange={handleChange} className={inputClass} required />
               </div>
             </div>
@@ -297,7 +289,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const [site, labourSvc, pcs] = await Promise.all([
     prisma.site.findUnique({
       where: { id: selectedSiteId },
-      select: { site_name: true, timezone: true, currency_code: true, pricing_display_mode: true, supported_countries: true, supported_currencies: true },
+      select: { site_name: true, timezone: true, currency_code: true, locale: true, pricing_display_mode: true, supported_countries: true },
     }),
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
     prisma.profitCentre.findMany({ where: { site_id: selectedSiteId }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
@@ -309,7 +301,6 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     currencyCode: site?.currency_code ?? 'GBP',
     pricingDisplayMode: (site?.pricing_display_mode as 'ex_vat' | 'inc_vat') ?? 'ex_vat',
     supportedCountries: (site?.supported_countries as string[]) ?? ['United Kingdom'],
-    supportedCurrencies: (site?.supported_currencies as string[]) ?? ['GBP'],
     defaultLabourRate: labourSvc ? Number(labourSvc.default_labour_rate) : 0, // never pre-fill TMBS's £75
   };
 
@@ -317,5 +308,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
   const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true } })) as any;
-  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, taxLabelInitial: grpTax?.tax_label ?? 'VAT' } };
+  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, locale: (site as any)?.locale ?? 'en-GB', taxLabelInitial: grpTax?.tax_label ?? 'VAT' } };
 };

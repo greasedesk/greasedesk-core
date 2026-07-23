@@ -9,6 +9,7 @@ import Head from 'next/head';
 import { useSession, signIn } from 'next-auth/react';
 import { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
+import { currencySymbol } from '@/lib/format-money';
 
 const TIMEZONES = [
   { value: 'Europe/London', label: 'London (GMT)' },
@@ -39,6 +40,7 @@ export default function RatesSettingsPage() {
   const [data, setData] = useState<FormData>(initialData);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rateSym = currencySymbol({ currency: data.currencyCode }); // reflects the currency they're entering
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -133,7 +135,7 @@ export default function RatesSettingsPage() {
           <h2 className="text-xl font-semibold mt-8 mb-2">Default Labour Rate</h2>
           <hr className="border-slate-700 mb-4" />
 
-          <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate (£/hr, Ex. VAT)</label>
+          <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. VAT)</label>
           <input
             type="number"
             step="0.01"

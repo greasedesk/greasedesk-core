@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
+import { currencySymbol } from '@/lib/format-money';
 
 // Data Types
 type SiteRates = {
@@ -40,6 +41,7 @@ const labelClass = 'block text-sm font-medium text-muted mb-1 mt-3';
 
 export default function AdminRatesSettingsPage({ initial }: PageProps) {
   const [data, setData] = useState<SiteRates>(initial);
+  const rateSym = currencySymbol({ currency: data.currencyCode });
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({
     text: '',
@@ -137,7 +139,7 @@ export default function AdminRatesSettingsPage({ initial }: PageProps) {
             required
           />
 
-          <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate (£/hr, Ex. VAT)</label>
+          <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. VAT)</label>
           <input
             type="number"
             step="0.01"
