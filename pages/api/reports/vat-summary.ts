@@ -19,7 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = vis.groupId as string;
   if (!groupId) return res.status(400).json({ message: 'No group in scope.' });
 
-  const group = (await prisma.group.findUnique({ where: { id: groupId }, select: { fy_start_month: true, group_name: true, vat_number: true, vat_registered: true } })) as { fy_start_month: number; group_name: string; vat_number: string | null; vat_registered: boolean } | null;
+  const group = (await prisma.group.findUnique({ where: { id: groupId }, select: { fy_start_month: true, group_name: true, vat_number: true, vat_registered: true , tax_label: true} })) as { fy_start_month: number; group_name: string; vat_number: string | null; vat_registered: boolean; tax_label: string } | null;
+  const T = group?.tax_label || 'VAT';
   const range = resolveRange({ preset: req.query.preset as string, from: req.query.from as string, to: req.query.to as string }, group?.fy_start_month ?? 4);
   if (!range) return res.status(400).json({ message: 'Invalid or missing period.' });
 
@@ -28,17 +29,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if ((req.query.format as string) === 'csv') {
     const rows: string[] = [];
-    rows.push('VAT on sales for the period — provide to your accountant for your return; excludes purchase/input VAT');
+    rows.push(`${T} on sales for the period — provide to your accountant for your return; excludes purchase/input ${T}`);
     rows.push(`Business,${(group?.group_name ?? '').replace(/,/g, ' ')}`);
-    if (group?.vat_number) rows.push(`VAT number,${group.vat_number}`);
+    if (group?.vat_number) rows.push(`${T} number,${group.vat_number}`);
     rows.push(`Period,${periodLabel}`);
     rows.push('');
-    rows.push('Total sales ex-VAT,' + money(summary.netPennies));
-    rows.push('Total output VAT,' + money(summary.vatPennies));
+    rows.push(`Total sales ex-${T},` + money(summary.netPennies));
+    rows.push(`Total output ${T},` + money(summary.vatPennies));
     rows.push('Total gross,' + money(summary.grossPennies));
     rows.push('Invoices,' + summary.invoiceCount);
     rows.push('');
-    rows.push('VAT rate,Net (ex-VAT),VAT,Lines');
+    rows.push(`${T} rate,Net (ex-${T}),${T},Lines`);
     for (const r of summary.byRate) rows.push(`${r.ratePercent}%,${money(r.netPennies)},${money(r.vatPennies)},${r.lineCount}`);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="vat-on-sales_${dateOnly(summary.fromISO)}_${dateOnly(new Date(range.to.getTime() - 1).toISOString())}.csv"`);

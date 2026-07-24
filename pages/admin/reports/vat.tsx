@@ -16,7 +16,7 @@ import { formatMoney, currencySymbol } from '@/lib/format-money';
 
 type PageProps = {
   summary: VatSummary; periodLabel: string; preset: string; from: string; to: string;
-  currency: string; locale: string; vatRegistered: boolean; groupName: string;
+  currency: string; locale: string; vatRegistered: boolean; groupName: string; taxLabel: string;
 };
 
 const PRESETS: Array<{ key: string; label: string }> = [
@@ -28,7 +28,8 @@ const PRESETS: Array<{ key: string; label: string }> = [
 ];
 
 export default function VatReport(props: PageProps) {
-  const { summary, periodLabel, currency, locale, vatRegistered, groupName } = props;
+  const { summary, periodLabel, currency, locale, vatRegistered, groupName, taxLabel } = props;
+  const T = taxLabel || 'VAT';
   const router = useRouter();
   const [preset, setPreset] = useState(props.preset || 'this_quarter');
   const [from, setFrom] = useState(props.from || '');
@@ -45,22 +46,22 @@ export default function VatReport(props: PageProps) {
 
   return (
     <>
-      <Head><title>VAT on sales - GreaseDesk</title></Head>
+      <Head><title>{T} on sales - GreaseDesk</title></Head>
       <div className="max-w-3xl">
-        <h1 className="text-2xl font-bold text-ink mb-1">VAT on sales</h1>
+        <h1 className="text-2xl font-bold text-ink mb-1">{T} on sales</h1>
         <p className="text-muted mb-4">{groupName} · {periodLabel}</p>
 
         {/* The unambiguous label — this is a reconciliation aid, never a complete return. */}
         <div className="bg-warn-soft border border-warn text-warn rounded-xl p-4 mb-5 text-sm">
-          <span className="font-semibold">VAT on sales for the period — provide to your accountant for your return.</span>{' '}
-          This shows <span className="font-medium">output VAT on your issued sales invoices only</span> and
-          <span className="font-medium"> excludes purchase / input VAT</span> (parts, overheads and other purchases).
-          It is not a complete VAT return.
+          <span className="font-semibold">{T} on sales for the period — provide to your accountant for your return.</span>{' '}
+          This shows <span className="font-medium">output {T} on your issued sales invoices only</span> and
+          <span className="font-medium"> excludes purchase / input {T}</span> (parts, overheads and other purchases).
+          It is not a complete return.
         </div>
 
         {!vatRegistered && (
           <div className="bg-surface-muted border border-line rounded-lg p-3 mb-4 text-sm text-muted">
-            Your account is set to <span className="font-medium">not VAT-registered</span>, so output VAT is {currencySymbol({ currency, locale })}0. Change this in Settings if you are registered.
+            Your account is set to <span className="font-medium">not registered for {T}</span>, so output {T} is {currencySymbol({ currency, locale })}0. Change this in Settings if you are registered.
           </div>
         )}
 
@@ -135,7 +136,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const { vis } = gate;
   const groupId = vis.groupId as string;
 
-  const group = (await prisma.group.findUnique({ where: { id: groupId }, select: { fy_start_month: true, vat_registered: true, group_name: true } })) as { fy_start_month: number; vat_registered: boolean; group_name: string } | null;
+  const group = (await prisma.group.findUnique({ where: { id: groupId }, select: { fy_start_month: true, vat_registered: true, group_name: true, tax_label: true } })) as { fy_start_month: number; vat_registered: boolean; group_name: string; tax_label: string } | null;
   const site = vis.primarySiteId
     ? ((await prisma.site.findUnique({ where: { id: vis.primarySiteId }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null)
     : null;
@@ -153,6 +154,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       from: q.from ?? '', to: q.to ?? '',
       currency: site?.currency_code ?? 'GBP', locale: site?.locale ?? 'en-GB',
       vatRegistered: group?.vat_registered ?? true, groupName: group?.group_name ?? 'Your business',
+      taxLabel: group?.tax_label || 'VAT',
     },
   };
 };

@@ -20,6 +20,7 @@ import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
 import { importableSiteIds } from '@/lib/admin-guard';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
+import { prisma } from '@/lib/db';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 
@@ -44,7 +45,7 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
 }
 
-export default function InvoicesPage({ isAdmin, canImport }: { isAdmin: boolean; canImport: boolean }) {
+export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin: boolean; canImport: boolean; taxLabel: string }) {
   const { t } = useTranslation('invoices');
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
@@ -111,7 +112,7 @@ export default function InvoicesPage({ isAdmin, canImport }: { isAdmin: boolean;
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
-            {isAdmin && <Link href="/admin/reports/vat" className="text-sm text-accent hover:underline font-medium">VAT on sales →</Link>}
+            {isAdmin && <Link href="/admin/reports/vat" className="text-sm text-accent hover:underline font-medium">{taxLabel} on sales →</Link>}
             {/* Import entry-point link removed 2026-07-20 — the feature still lives at
                 /admin/invoices/import (and the /admin/settings/import redirect), just not surfaced
                 from here. canImport/importableSiteIds retained; re-add the Link to restore it. */}
@@ -202,5 +203,6 @@ export const getServerSideProps: GetServerSideProps = withI18n(['invoices'])(asy
   if (!canViewInvoices(vis, perms)) return { redirect: { destination: '/admin/dashboard', permanent: false } };
   // The import entry point is shown on the SAME permission that governs issuing an invoice —
   // importing mints one, so it is that act by another door, not a new privilege.
-  return { props: { isAdmin: vis.isAdmin, canImport: importableSiteIds(vis).length > 0 } };
+  const grp = await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { tax_label: true } });
+  return { props: { isAdmin: vis.isAdmin, canImport: importableSiteIds(vis).length > 0, taxLabel: (grp?.tax_label as string) || 'VAT' } };
 });
