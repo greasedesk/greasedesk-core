@@ -50,23 +50,25 @@ export default function HomePage() {
         softwareApp
       />
       <SiteChrome>
-        {/* Amendment 3 — three-line category block, all lines full-bleed and WIDTH-MATCHED on md+.
-            Each line's font-size is DERIVED: its rendered width per 1px of font was measured on the
-            page font, then solved for ~90% of viewport. At 1440 that is L1 6.97vw≈100px / L2 5.14vw≈74px
-            / L3 2.32vw≈33px — all land on ~1296px (matched within ±2%). Expressed in vw so the match
-            holds across the desktop range; never exceeds the viewport. Presence comes from WIDTH, never
-            weight: font-light + muted, lighter than the H1. Below md width-matching is abandoned (L3
-            would be unreadable): fixed readable sizes, L1 stays one line, L2-L3 wrap. Non-heading
-            <p>s — the H1 below is the page's only heading. overflow-hidden guards sub-pixel scroll. */}
-        <div className="w-full overflow-hidden text-center text-muted font-light py-2 sm:py-3">
-          <p className="uppercase whitespace-nowrap leading-none tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.83vw]">WORKSHOP ECONOMICS</p>
-          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1.5 md:mt-0 text-sm md:text-[5.01vw]">Potential vs reality — and the opportunity.</p>
-          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1 md:mt-0 text-sm md:text-[2.22vw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
-        </div>
+        {/* Amendment 3 (revised) — CONTAINED descending pyramid (no longer full-bleed): sits in the
+            standard page container, matching the hero's bounds. Each line's font-size is DERIVED — its
+            rendered width-per-px was measured on the page font, then solved to hit ~90/72/55% of the
+            CONTAINER width, so the lines step DOWN in width. Expressed in cqw against a container-query
+            wrapper, so the ratio holds across the desktop range (the container caps at max-w-6xl).
+            Colour + weight descend with width: L1 darkest (ink/80) → L2 muted → L3 lightest (muted/60),
+            all font-light and clearly subordinate to the extrabold H1. Tight leading — one calm block.
+            Below md: fixed readable sizes (L1 one line, L2 text-base, L3 text-sm; L2-L3 may wrap).
+            Non-heading <p>s — the H1 below is the page's only heading. */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-2 sm:pt-10 sm:pb-3">
+          <div className="[container-type:inline-size] text-center">
+            <p className="uppercase whitespace-nowrap leading-tight font-light text-ink/80 tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.83cqw]">WORKSHOP ECONOMICS</p>
+            <p className="whitespace-normal md:whitespace-nowrap leading-tight font-light text-muted tracking-[0.02em] mt-1 text-base md:text-[4.01cqw]">Potential vs reality — and the opportunity.</p>
+            <p className="whitespace-normal md:whitespace-nowrap leading-tight font-light text-muted/60 tracking-[0.02em] mt-1 text-sm md:text-[1.36cqw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
+          </div>
+        </section>
 
-        {/* Hero — two column: copy + CTAs left, dashboard-extract tiles right. Top padding trimmed:
-            the band now owns the space above the grid. */}
-        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 sm:pt-12 pb-16">
+        {/* Hero — two column: copy + CTAs left, dashboard-extract tiles right. */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 pb-16">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
             <div>
               <h1 className="text-4xl sm:text-5xl font-extrabold text-ink tracking-tight leading-tight">

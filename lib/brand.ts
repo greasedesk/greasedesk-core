@@ -4,7 +4,7 @@
  * footer and page metadata all read from here, so the promise reads identically everywhere and a
  * wording change happens in exactly one place. No other copy belongs here.
  */
-export const STRAPLINE = 'Know what you kept.';
+export const STRAPLINE = 'Close the gap.';
 export const SUBLINE = 'Manage your profit, not just your diary.';
 
 /**
