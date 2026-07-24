@@ -7,6 +7,7 @@
 import Link from 'next/link';
 import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
+import { PAGE_TITLE } from '@/lib/brand';
 import { perLocationLabel } from '@/lib/billing-pricing';
 
 const Check = () => (
@@ -25,8 +26,8 @@ export default function HomePage() {
   return (
     <>
       <Seo
-        title="GreaseDesk — Garage management software that shows your real profit"
-        description="Job cards, bookings, invoicing and a live profit-and-loss view for independent garages. Start a 60-day free trial — £75 per site, per month."
+        title={PAGE_TITLE}
+        description="See what you actually kept: GreaseDesk gives independent garages a live profit-and-loss view alongside job cards, bookings and invoicing. Start a 60-day free trial."
         path="/"
         softwareApp
       />

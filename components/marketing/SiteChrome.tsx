@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
+import { STRAPLINE, SUBLINE } from '@/lib/brand';
 import { useConsent } from '@/components/consent/ConsentProvider';
 import { useNav } from '@/components/marketing/NavProvider';
 import type { PublicNavLink } from '@/lib/nav';
@@ -59,11 +60,15 @@ function Header() {
       className={`sticky top-0 z-50 bg-surface border-b transition-shadow ${scrolled ? 'border-line shadow-card' : 'border-transparent'}`}
       style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <nav className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
-        {/* Mark + wordmark — the SAME gear-and-spanner mark the product uses, so site and app match. */}
-        <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
-          <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
-          <span className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</span>
-        </Link>
+        {/* Mark + wordmark — the SAME gear-and-spanner mark the product uses, so site and app match.
+            Strapline sits inline beside it on md+ (muted), giving the promise without crowding mobile. */}
+        <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
+            <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
+            <span className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</span>
+          </Link>
+          <span className="hidden md:inline text-sm text-muted">{STRAPLINE}</span>
+        </div>
 
         {/* Desktop nav (sm+) — content links from the Content-system nav config; auth CTAs structural. */}
         <div className="hidden sm:flex items-center gap-5 text-sm">
@@ -106,7 +111,8 @@ function Footer() {
         <div className="flex flex-col sm:flex-row sm:justify-between gap-8">
           <div className="max-w-sm">
             <div className="text-lg font-extrabold text-ink">{COMPANY.trademark}</div>
-            <p className="mt-2 text-sm text-muted">Garage management software — job cards, bookings, invoicing and a live view of your real profit.</p>
+            <p className="mt-2 text-base font-semibold text-ink">{STRAPLINE}</p>
+            <p className="mt-1 text-sm text-muted">{SUBLINE}</p>
           </div>
           <FooterNav />
           <div className="flex flex-col gap-2 text-sm">
