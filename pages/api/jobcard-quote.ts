@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Card must be in the caller's group; editing requires authority over its site.
   const card = (await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
-    select: { id: true, site_id: true, invoice: { select: { status: true, invoice_number: true, lines: { select: { id: true }, take: 1 } } } },
+    select: { id: true, site_id: true, site: { select: { pricing_display_mode: true } }, invoice: { select: { status: true, invoice_number: true, lines: { select: { id: true }, take: 1 } } } },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
@@ -74,6 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const finWrite = financeVisibility(vis, perms);
     saved = await performEstimateSave({
       groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered,
+      grossEntry: card.site?.pricing_display_mode === 'inc_vat',
       costWritable: finWrite.seeMargin, actorUserId: user.id as string,
     });
   } catch (e: any) {
@@ -133,12 +134,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
  */
 export async function performEstimateSave(args: {
   groupId: string; jobCardId: string; items: any[]; vatRate: number; vatRegistered: boolean;
+  /** gross-first pricing (Site.pricing_display_mode = inc_vat): unit prices read VAT-inclusive. */
+  grossEntry?: boolean;
   /** seeMargin, RE-DERIVED server-side by the caller — never a client claim. */
   costWritable?: boolean;
   /** For the cost audit: who typed it. */
   actorUserId?: string | null;
 }) {
   const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
+  const grossEntry = args.grossEntry === true;
   const costWritable = args.costWritable === true;
 
   // Validate catalogue origin ids against THIS tenant's catalogue — unknown/foreign ids drop to
@@ -216,7 +220,7 @@ export async function performEstimateSave(args: {
   }
 
   // Master switch: a non-registered tenant gets no VAT anywhere, regardless of per-line flags.
-  const totals = computeQuoteTotals(inputs, vatRate, { vatRegistered });
+  const totals = computeQuoteTotals(inputs, vatRate, { vatRegistered, grossEntry });
 
   // Effective per-line values to store (mirror the compute flooring).
   const rows = inputs.map((it, i) => ({
@@ -224,7 +228,7 @@ export async function performEstimateSave(args: {
     item_type: it.item_type,
     description: resolved[i].description,
     qty: new Prisma.Decimal(Math.max(0, it.qty)),
-    unit_price: new Prisma.Decimal(penniesToPounds(it.item_type === 'labour' ? Math.max(0, it.unit_price_pennies) : it.unit_price_pennies)),
+    unit_price: new Prisma.Decimal(penniesToPounds(totals.lines[i].unit_price_pennies)),
     unit_cost: it.unit_cost_pennies == null ? null : new Prisma.Decimal(penniesToPounds(Math.max(0, it.unit_cost_pennies))), // null = cost UNKNOWN
 
     vat_rate: new Prisma.Decimal(it.vatable ? totals.vat_rate : 0),

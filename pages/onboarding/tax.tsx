@@ -113,7 +113,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     select: { tax_country_code: true, vat_registered: true, vat_number: true, default_vat_rate: true },
   })) as { tax_country_code: string | null; vat_registered: boolean; vat_number: string | null; default_vat_rate: unknown } | null;
 
-  const locale = group?.tax_country_code || 'GB';
+  const locale = (group as any)?.country_code || group?.tax_country_code || "GB";
   const questions = taxQuestionsForLocale(locale);
 
   const initial: Answers = {

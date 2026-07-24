@@ -26,12 +26,26 @@ export type OnboardingQuestion = {
 };
 
 /** THE registry. One array per locale. Add a locale = add a row, not a rebuild. */
+// Country is now the FIRST onboarding step, so the tax step no longer asks it — it renders the
+// question set for the country already chosen, forked by TAX MODEL:
+//   VAT (GB, IE): registered? / number / rate  →  invoices labelled VAT
+//   Sales tax (US): charge sales tax? / combined rate  →  labelled Sales Tax, NO tax number
+// `vat_registered`/`vat_rate_percent` are reused as the generic "charges tax" + "rate" fields (the
+// API maps them the same way), so the fork is pure config, not a second write path.
 export const TAX_QUESTIONS_BY_LOCALE: Record<string, OnboardingQuestion[]> = {
   GB: [
-    { key: 'country', question: 'Country', field: 'tax_country_code', type: 'country', locale: 'GB', default: 'GB' },
     { key: 'vat_registered', question: 'Is your garage VAT-registered?', field: 'vat_registered', type: 'boolean', locale: 'GB', default: true },
     { key: 'vat_number', question: 'VAT number', field: 'vat_number', type: 'text', locale: 'GB', appliesWhen: { field: 'vat_registered', equals: true }, help: 'e.g. GB123456789' },
     { key: 'vat_rate', question: 'Standard VAT rate (%)', field: 'vat_rate_percent', type: 'percent', locale: 'GB', default: '20', appliesWhen: { field: 'vat_registered', equals: true } },
+  ],
+  IE: [
+    { key: 'vat_registered', question: 'Is your garage VAT-registered?', field: 'vat_registered', type: 'boolean', locale: 'IE', default: true },
+    { key: 'vat_number', question: 'VAT number', field: 'vat_number', type: 'text', locale: 'IE', appliesWhen: { field: 'vat_registered', equals: true }, help: 'e.g. IE1234567X' },
+    { key: 'vat_rate', question: 'Standard VAT rate (%)', field: 'vat_rate_percent', type: 'percent', locale: 'IE', default: '23', appliesWhen: { field: 'vat_registered', equals: true } },
+  ],
+  US: [
+    { key: 'charges_tax', question: 'Do you charge sales tax?', field: 'vat_registered', type: 'boolean', locale: 'US', default: true },
+    { key: 'sales_tax_rate', question: 'Your combined sales tax rate (%)', field: 'vat_rate_percent', type: 'percent', locale: 'US', default: '0', appliesWhen: { field: 'vat_registered', equals: true }, help: 'The total rate you charge at the till — state + local. No lookup; enter your own rate.' },
   ],
 };
 

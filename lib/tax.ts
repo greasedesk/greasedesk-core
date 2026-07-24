@@ -45,9 +45,12 @@ export class NotImplementedTaxModel extends Error {
  *  float division and can tip a round). */
 export const bpToPercent = (bp: number): number => (Number.isFinite(bp) ? bp : 0) / 100;
 
-/** Guard: the vat branch is the only live one. Called at every apply/gross-up entry. */
+/** Guard: FLAT-RATE tax models are live (vat, sales_tax) — both are 'a percentage of the base',
+ *  so they share this arithmetic and differ only in LABEL + whether a tax number is asked. gst_split
+ *  is genuinely different (input/output split) and still throws so we fail loud, not silently wrong. */
+const FLAT_RATE_MODELS = new Set<TaxModel>(['vat', 'sales_tax']);
 function assertVat(profile: { taxModel: TaxModel }): void {
-  if (profile.taxModel !== 'vat') throw new NotImplementedTaxModel(profile.taxModel);
+  if (!FLAT_RATE_MODELS.has(profile.taxModel)) throw new NotImplementedTaxModel(profile.taxModel);
 }
 
 /** Tax on an ex-tax base, in pennies. THE single rate application. Gated by registration (an

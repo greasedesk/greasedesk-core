@@ -29,12 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = (session?.user as any)?.group_id as string | undefined;
   if (!groupId) return res.status(401).json({ message: 'No group in scope.' });
 
-  const { tax_country_code, vat_registered, vat_number, vat_rate_percent } = (req.body || {}) as Body;
+  const { vat_registered, vat_number, vat_rate_percent } = (req.body || {}) as Body;
 
-  const country = (tax_country_code || 'GB').trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(country)) return res.status(400).json({ message: 'Please choose a country.' });
-
-  const registered = vat_registered !== false; // default registered unless explicitly false
+  const registered = vat_registered !== false; // default registered / charges tax unless explicitly false
 
   // Rate → integer basis points. Not registered ⇒ 0 bp / no rate charged.
   let rateBp = 0;
@@ -50,8 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await prisma.group.update({
     where: { id: groupId },
     data: {
-      tax_country_code: country,
-      vat_registered: registered,
+      vat_registered: registered, // country (+ tax_model/tax_label) is owned by the country step — untouched here
       vat_number: cleanVatNumber,
       tax_default_rate_bp: rateBp,   // completion signal (was NULL)
       default_vat_rate: vatDec,      // legacy Decimal mirror, kept in lockstep

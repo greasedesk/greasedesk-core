@@ -15,7 +15,7 @@
  *  - Per-line VATable flag: only VATable lines contribute to VAT.
  *  - VAT = round( (sum of VATable line totals) × vatRate / 100 )  — sum-then-multiply, one rounding.
  */
-import { computeTax, taxOnBasePennies, TaxApplyLine } from '@/lib/tax';
+import { computeTax, taxOnBasePennies, exFromIncPennies, TaxApplyLine } from '@/lib/tax';
 
 export type QuoteItemType = 'labour' | 'part' | 'misc' | 'fixed';
 
@@ -27,7 +27,14 @@ export type QuoteLineInput = {
   vatable: boolean;
 };
 
-export type QuoteLineResult = { line_total_pennies: number; vat_pennies: number };
+export type QuoteLineResult = {
+  line_total_pennies: number; // EX-VAT line net — what gets stored as the line total either way
+  vat_pennies: number;        // line VAT (gross mode: the RESIDUAL, so ex + vat === the round gross)
+  // The unit price to STORE (ex-VAT pennies). In ex mode = the input. In gross mode = the entered
+  // GROSS unit price back-computed to ex, so nothing downstream (qty × unit_price, the freeze, the
+  // invoice) has to know which mode created the line — they all keep seeing ex-VAT figures.
+  unit_price_pennies: number;
+};
 
 export type QuoteTotals = {
   labour_pennies: number;        // sum of labour line totals (ex VAT)
@@ -73,10 +80,19 @@ export type QuoteTotalsOpts = {
   // per-line vatable flags — a non-registered garage charges/shows no VAT. Default true = VAT-as-now.
   // Gates at compute time only; stored line flags are untouched, so re-registering restores VAT.
   vatRegistered?: boolean;
+  // GROSS-FIRST PRICING (Site.pricing_display_mode = 'inc_vat'). When true, each line's unit price is
+  // read as VAT-INCLUSIVE: the garage types the total the customer pays and the ex-VAT + VAT fall out
+  // of it. Per line the LINE GROSS (round(qty × gross-unit)) is the anchor; ex = exFromIncPennies,
+  // and VAT = gross − ex (the RESIDUAL), so ex + vat === the round gross the customer sees — no
+  // £99.99. The card VAT total is then the SUM of the residual line VATs (matching how the invoice
+  // sums frozen per-line VAT), so the card total reconciles to the round gross exactly.
+  // DEFAULT false — ex-VAT-first, byte-identical to before; existing tenants and June are untouched.
+  grossEntry?: boolean;
 };
 
 export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, opts: QuoteTotalsOpts = {}): QuoteTotals {
   const vatApplies = opts.vatRegistered !== false; // default true (backward-compatible)
+  const grossEntry = opts.grossEntry === true && vatApplies; // gross-first only bites when VAT applies
   const vat_rate = vatApplies ? clampVatRate(rawVatRate) : 0;
   // ALL tax arithmetic now routes through lib/tax (the one chokepoint). The gate is a lite profile
   // (taxModel+isRegistered) — the full TaxProfile is server-only; this stays pure/isomorphic.
@@ -88,8 +104,29 @@ export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, 
   const lines: QuoteLineResult[] = [];
   const vatableLines: TaxApplyLine[] = [];
 
+  let residualVat = 0; // gross mode: Σ per-line residual VAT — the authoritative card VAT in that mode
   for (const item of items) {
-    const total = lineTotalPennies(item);
+    // In gross mode a VATABLE line's entered unit price is VAT-INCLUSIVE. The line GROSS is the
+    // anchor: ex = exFromIncPennies(gross), stored unit_price becomes the ex unit, VAT = gross − ex.
+    // A non-VATable line has no VAT to strip, so gross === ex and it is identical in both modes.
+    const rawTotal = lineTotalPennies(item); // in gross mode this is the GROSS line total
+    let total: number;             // the EX-VAT line net to store + report
+    let storedUnitPennies: number; // the EX unit price to persist
+    let lineVat: number;
+
+    if (grossEntry && item.vatable) {
+      const lineGross = rawTotal;
+      const lineEx = exFromIncPennies(profile, lineGross, rateBp);
+      total = lineEx;
+      lineVat = lineGross - lineEx;            // RESIDUAL — guarantees ex + vat === the round gross
+      const qty = Math.max(0, nz(item.qty));
+      storedUnitPennies = qty > 0 ? Math.round(lineEx / qty) : Math.max(0, nz(item.unit_price_pennies));
+    } else {
+      total = rawTotal;
+      lineVat = taxOnBasePennies(profile, item.vatable ? total : 0, rateBp);
+      storedUnitPennies = item.item_type === 'labour' ? Math.max(0, nz(item.unit_price_pennies)) : nz(item.unit_price_pennies);
+    }
+
     const cost = lineCostPennies(item); // null = cost unknown
     if (item.item_type === 'labour') { labour += total; if (cost != null) labourCost += cost; }
     else { // part + misc both bucket into parts
@@ -98,12 +135,14 @@ export function computeQuoteTotals(items: QuoteLineInput[], rawVatRate: number, 
       else partsCost += cost;
     }
     if (item.vatable) vatableLines.push({ netPennies: total, rateBp, taxable: true });
-    // Per-line VAT is informational (record only); the card VAT below is the authoritative figure.
-    lines.push({ line_total_pennies: total, vat_pennies: taxOnBasePennies(profile, item.vatable ? total : 0, rateBp) });
+    residualVat += lineVat;
+    lines.push({ line_total_pennies: total, vat_pennies: lineVat, unit_price_pennies: storedUnitPennies });
   }
 
-  // Authoritative VAT: sum-then-multiply, rounded once (computeTax groups by rate). Zero when not registered.
-  const vat = computeTax(profile, vatableLines).taxPennies;
+  // EX mode: authoritative VAT is sum-then-multiply, rounded once (computeTax groups by rate).
+  // GROSS mode: authoritative VAT is the SUM of per-line residuals, so the card total reconciles to
+  // the round grosses the customer sees (and to how the invoice sums frozen per-line VAT).
+  const vat = grossEntry ? residualVat : computeTax(profile, vatableLines).taxPennies;
 
   return {
     labour_pennies: labour,

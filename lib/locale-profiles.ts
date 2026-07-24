@@ -1,49 +1,105 @@
 /**
  * File: lib/locale-profiles.ts
- * THE single country → locale/commercial-profile map. Everything that varies by country —
- * currency, locale, tax name (VAT/TVA/MwSt), roadworthiness test name (MOT/TÜV), date format,
- * enabled modules — reads from here. No scattered country checks anywhere else.
+ * THE Countries module. Everything that varies by country — currency, timezone options, tax model,
+ * tax label, roadworthiness test name, date format — reads from ONE profile per country. Country is
+ * the first onboarding question and it configures the rest of the flow; adding a country later is a
+ * config entry here (+ optionally a public/locales/<code> file), never new per-step code.
  *
- * Adding a country later = add ONE entry below (+ a public/locales/<code> file). No rebuild.
+ * SUPPORTED today: GB, US, IE. Every other English-speaking country appears in the picker so a
+ * visitor sees themselves listed, but selecting one lands on the coming-soon gate (supported=false).
  *
- * Country is resolved in ONE place (resolveTenantProfile) from the tenant ref prefix today
- * (e.g. "GB-GD42" → "GB"). When a real field lands (Group.country_code), change ONLY the
- * internals of countryFromRef — every caller stays the same.
+ * Country of record = Group.country_code (nullable; the first step writes it). tax_country_code /
+ * tax_model / tax_label are DERIVED from the chosen profile, so price/label can't drift from country.
  */
-export type LocaleProfile = {
-  countryCode: string;
-  currency: string;                 // ISO 4217
-  locale: string;                   // BCP-47
-  tax_name: string;                 // VAT / TVA / MwSt …
-  roadworthiness_test_name: string; // MOT / TÜV …
+export type TaxModel = 'vat' | 'sales_tax' | 'none';
+
+export type CountryProfile = {
+  countryCode: string;               // ISO 3166-1 alpha-2
+  name: string;
+  currency: string;                  // ISO 4217
+  currencySymbol: string;            // for the labour-rate field etc. (Intl still formats money)
+  locale: string;                    // BCP-47
+  timezones: string[];               // the zones offered for this country
+  defaultTimezone: string;
+  taxModel: TaxModel;                // 'vat' (UK/IE) | 'sales_tax' (US) | 'none'
+  taxLabel: string;                  // VAT / Sales Tax — what invoices are labelled
+  defaultTaxRatePercent: number;     // seeds the tax step (garage can change)
+  requiresTaxNumber: boolean;        // VAT number asked (UK/IE) vs not (US flat rate)
+  roadworthiness_test_name: string;  // MOT …
   date_format: string;
   modules: { hr: boolean };
+  supported: boolean;
+  // Back-compat alias for existing readers (resolveTenantProfile etc.).
+  currencyCode?: string;
+  tax_name?: string;
 };
 
 export const DEFAULT_COUNTRY = 'GB';
 
-// Only GB is populated for now (single-market launch).
-export const COUNTRY_PROFILES: Record<string, LocaleProfile> = {
-  GB: {
-    countryCode: 'GB',
-    currency: 'GBP',
-    locale: 'en-GB',
-    tax_name: 'VAT',
-    roadworthiness_test_name: 'MOT',
-    date_format: 'dd/MM/yyyy',
-    modules: { hr: true },
-  },
+const P = (p: Omit<CountryProfile, 'currencyCode' | 'tax_name'>): CountryProfile => ({
+  ...p, currencyCode: p.currency, tax_name: p.taxLabel,
+});
+
+/** SUPPORTED countries — full config. */
+export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
+  GB: P({
+    countryCode: 'GB', name: 'United Kingdom', currency: 'GBP', currencySymbol: '£', locale: 'en-GB',
+    timezones: ['Europe/London'], defaultTimezone: 'Europe/London',
+    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 20, requiresTaxNumber: true,
+    roadworthiness_test_name: 'MOT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
+  }),
+  IE: P({
+    countryCode: 'IE', name: 'Ireland', currency: 'EUR', currencySymbol: '€', locale: 'en-IE',
+    timezones: ['Europe/Dublin'], defaultTimezone: 'Europe/Dublin',
+    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 23, requiresTaxNumber: true,
+    roadworthiness_test_name: 'NCT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
+  }),
+  US: P({
+    countryCode: 'US', name: 'United States', currency: 'USD', currencySymbol: '$', locale: 'en-US',
+    timezones: [
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix',
+      'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu',
+    ],
+    defaultTimezone: 'America/New_York',
+    // Flat garage-entered combined rate, like their till — no VAT number, no jurisdiction lookup.
+    taxModel: 'sales_tax', taxLabel: 'Sales Tax', defaultTaxRatePercent: 0, requiresTaxNumber: false,
+    roadworthiness_test_name: 'Safety Inspection', date_format: 'MM/dd/yyyy', modules: { hr: true }, supported: true,
+  }),
 };
 
-/** Profile for an ISO country code, falling back to GB. */
-export function getProfile(countryCode: string | null | undefined): LocaleProfile {
+/** The full picker — every English-speaking country, so every visitor sees themselves. Supported
+ *  ones resolve to a profile above; the rest land on the coming-soon gate. */
+export const PICKER_COUNTRIES: Array<{ code: string; name: string; supported: boolean }> = [
+  { code: 'GB', name: 'United Kingdom', supported: true },
+  { code: 'US', name: 'United States', supported: true },
+  { code: 'IE', name: 'Ireland', supported: true },
+  { code: 'CA', name: 'Canada', supported: false },
+  { code: 'AU', name: 'Australia', supported: false },
+  { code: 'NZ', name: 'New Zealand', supported: false },
+  { code: 'ZA', name: 'South Africa', supported: false },
+  { code: 'IN', name: 'India', supported: false },
+  { code: 'SG', name: 'Singapore', supported: false },
+  { code: 'NG', name: 'Nigeria', supported: false },
+  { code: 'JM', name: 'Jamaica', supported: false },
+  { code: 'MT', name: 'Malta', supported: false },
+];
+
+export const isSupportedCountry = (code: string | null | undefined): boolean =>
+  !!code && !!COUNTRY_PROFILES[code.toUpperCase()]?.supported;
+
+/** Profile for an ISO code, falling back to GB (so every existing reader keeps working). */
+export function getProfile(countryCode: string | null | undefined): CountryProfile {
   return COUNTRY_PROFILES[(countryCode || '').toUpperCase()] ?? COUNTRY_PROFILES[DEFAULT_COUNTRY];
 }
 
-/**
- * Derive the ISO country from a tenant ref like "GB-GD42". THE ONLY place country is read.
- * Swap this body for a Group.country_code lookup when that field exists — callers unaffected.
- */
+/** Country of record: Group.country_code first, else the legacy ref prefix, else GB. */
+export function countryFromGroup(group: { country_code?: string | null; ref?: string | null } | null | undefined): string {
+  const c = group?.country_code?.toUpperCase();
+  if (c && COUNTRY_PROFILES[c]) return c;
+  return countryFromRef(group?.ref);
+}
+
+/** Legacy: derive ISO country from a tenant ref like "GB-GD42". Kept for callers not yet migrated. */
 export function countryFromRef(ref: string | null | undefined): string {
   if (ref && ref.length >= 2) {
     const prefix = ref.slice(0, 2).toUpperCase();
@@ -52,7 +108,10 @@ export function countryFromRef(ref: string | null | undefined): string {
   return DEFAULT_COUNTRY;
 }
 
-/** Resolve a tenant's full locale-profile from its Group (anything carrying a `ref`). */
-export function resolveTenantProfile(group: { ref?: string | null } | null | undefined): LocaleProfile {
-  return getProfile(countryFromRef(group?.ref));
+/** Resolve a tenant's full profile from its Group (country_code preferred, ref fallback). */
+export function resolveTenantProfile(group: { country_code?: string | null; ref?: string | null } | null | undefined): CountryProfile {
+  return getProfile(countryFromGroup(group));
 }
+
+// Back-compat type alias — older imports referenced LocaleProfile.
+export type LocaleProfile = CountryProfile;

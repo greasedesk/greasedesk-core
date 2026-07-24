@@ -18,11 +18,12 @@
  * tenants tax-complete, which is correct; new tenants start NULL and the wizard fills it.
  */
 import { prisma } from '@/lib/db';
+import { isSupportedCountry } from '@/lib/locale-profiles';
 
-export type OnboardingStep = 'site' | 'rates' | 'tax' | 'checkout';
+export type OnboardingStep = 'country' | 'site' | 'rates' | 'tax' | 'checkout';
 
 /** The wizard order — also the order the gate evaluates completion in. */
-export const ONBOARDING_ORDER: OnboardingStep[] = ['site', 'rates', 'tax', 'checkout'];
+export const ONBOARDING_ORDER: OnboardingStep[] = ['country', 'site', 'rates', 'tax', 'checkout'];
 
 /** A live trial or paid subscription — the only statuses that count as "billing done". */
 const SUBSCRIBED = new Set(['trialing', 'active']);
@@ -30,6 +31,7 @@ const SUBSCRIBED = new Set(['trialing', 'active']);
 /** The wizard page each step lives on (single place the step→URL mapping is defined). */
 export function stepPath(step: OnboardingStep): string {
   switch (step) {
+    case 'country': return '/onboarding/country';
     case 'site': return '/onboarding/setup';
     case 'rates': return '/onboarding/rates-settings';
     case 'tax': return '/onboarding/tax';
@@ -47,7 +49,14 @@ export type OnboardingState = {
  * Each check is a single indexed lookup; (A)+(B) share one Site read.
  */
 export async function getOnboardingState(groupId: string | null | undefined): Promise<OnboardingState> {
-  if (!groupId) return { onboarded: false, firstIncompleteStep: 'site' };
+  if (!groupId) return { onboarded: false, firstIncompleteStep: 'country' };
+
+  // (0) COUNTRY FIRST — a SUPPORTED country must be chosen. An unsupported one leaves country_code
+  // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.
+  const grpCountry = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { country_code: true },
+  })) as { country_code: string | null } | null;
+  if (!isSupportedCountry(grpCountry?.country_code)) return { onboarded: false, firstIncompleteStep: 'country' };
 
   // (A) — the tenant has a site.
   const site = (await prisma.site.findFirst({

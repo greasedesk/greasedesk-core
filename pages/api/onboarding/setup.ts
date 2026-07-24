@@ -20,6 +20,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { trialEndsFromNow } from '@/lib/trial';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { getProfile } from '@/lib/locale-profiles';
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -158,14 +159,18 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
             },
           });
         } else {
-          // Create the first site for this group
+          // Create the first site with the trading identity of the CHOSEN COUNTRY (the country step
+          // ran first and wrote Group.country_code). No more hardcoded GBP/London — a US tenant gets
+          // USD + an American default zone, IE gets EUR/Dublin, from the one profile.
+          const grpForSite = (await tx.group.findUnique({ where: { id: groupId }, select: { country_code: true } })) as { country_code: string | null } | null;
+          const prof = getProfile(grpForSite?.country_code);
           site = await tx.site.create({
             data: {
               group_id: groupId,
               site_name: siteName || 'Main Workshop',
-              timezone: 'Europe/London',
-              currency_code: 'GBP',
-              locale: 'en-GB',
+              timezone: prof.defaultTimezone,
+              currency_code: prof.currency,
+              locale: prof.locale,
               address: fullAddress ?? undefined,
               users: { connect: { id: dbUser.id } },
             },

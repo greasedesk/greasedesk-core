@@ -163,7 +163,11 @@ model Group {
   // (a UK group may open a Dublin site — same VAT branch, different rate). Assembled + consumed ONLY
   // via lib/tax.ts::getTaxProfile / computeTax. tax_name is Group.tax_label RELOCATED (one value,
   // seeded from locale_profiles at onboarding — never a third name source). ──
-  tax_country_code    String  @default("GB")   // ISO 3166-1 alpha-2
+  // COUNTRY OF RECORD (country-first onboarding). NULL until the country step runs → the step's
+  // completion signal. Drives currency, timezone options, tax_model and tax_label from the profile
+  // (lib/locale-profiles). tax_country_code is kept in lockstep, derived from this.
+  country_code        String?                   // ISO 3166-1 alpha-2; NULL until chosen
+  tax_country_code    String  @default("GB")   // ISO 3166-1 alpha-2 (derived from country_code)
   tax_model           String  @default("vat")  // 'vat' (only live branch) | 'sales_tax' | 'gst_split' (throw NotImplemented)
   tax_default_rate_bp Int?                      // integer BASIS POINTS (2000 = 20%); NULL until backfilled → derive ×100 of default_vat_rate
   prices_include_tax  Boolean @default(false)   // false for UK B2B (line prices are ex-tax)
@@ -264,6 +268,7 @@ model Group {
   lineSplitTemplates LineSplitTemplate[]
   notifications    NotificationLog[]
   magicLinks       CustomerMagicLink[]
+  countryWaitlist  CountryWaitlist[]
   quoteVersions    QuoteVersion[]
 }
 
@@ -2106,4 +2111,21 @@ model QuoteVersionLine {
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade)
 
   @@index([quote_version_id, position])
+}
+
+
+// COMING-SOON WAITLIST (country-first onboarding). When a visitor picks an unsupported country the
+// flow ends on a friendly gate and captures their email here, WITH the country — so demand by
+// country is directly queryable (GROUP BY country_code). group_id is set when the capture happens
+// mid-onboarding (an account already exists); null otherwise.
+model CountryWaitlist {
+  id           String   @id @default(uuid())
+  email        String
+  country_code String   // ISO 3166-1 alpha-2 of the unsupported country they asked for
+  group_id     String?
+  created_at   DateTime @default(now())
+
+  group Group? @relation(fields: [group_id], references: [id], onDelete: SetNull)
+
+  @@index([country_code, created_at])
 }
