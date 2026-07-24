@@ -17,9 +17,16 @@ const Check = () => (
 );
 
 const FEATURES = [
-  { title: 'See your real profit', body: 'A live profit-and-loss view — revenue, true parts cost, labour and overheads — so you know what each month actually made, not just what you billed.' },
-  { title: 'Digital job cards', body: 'Create, price and track every job from one screen, with photos, a full audit trail and freeze-at-issue invoicing you can trust.' },
-  { title: 'Multi-site ready', body: 'Run one bay or several from a single login — bookings, staff and figures scoped per location, consolidated when you want the whole picture.' },
+  { title: 'Earn it', body: "Job cards, bookings, quotes and invoicing in one place. Price the work, track it, bill it, get paid — with photos and a full audit trail on every job." },
+  { title: 'See it', body: "A live profit-and-loss view built on true parts cost. The hours you sold against the hours you paid for. The numbers a diary can't show you." },
+  { title: 'Keep it', body: "Know which jobs, which customers and which months made money, and which quietly didn't. Then price the next ones properly." },
+];
+
+// Section 3 — contrast rows. Category-defining copy: a busy diary is not a result.
+const CONTRASTS = [
+  { title: "Turnover isn't profit.", body: 'Parts at true cost, against every job.' },
+  { title: "Booked isn't sold.", body: 'The hours you paid for, against the hours you charged for.' },
+  { title: "Invoiced isn't banked.", body: "What's issued, what's paid, what's still owed." },
 ];
 
 export default function HomePage() {
@@ -36,12 +43,14 @@ export default function HomePage() {
         <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-24 pb-16">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
             <div>
-              <h1 className="text-4xl sm:text-5xl font-extrabold text-ink tracking-tight leading-tight">
-                See your <span className="text-accent">real profit</span>, not just your takings.
+              <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-muted">Workshop Economics</p>
+              <h1 className="mt-3 text-4xl sm:text-5xl font-extrabold text-ink tracking-tight leading-tight">
+                {"The numbers don't lie. "}<span className="text-accent">They hide.</span>
               </h1>
               <p className="mt-6 text-lg text-muted max-w-xl">
-                GreaseDesk runs your job cards, bookings and invoicing — then shows you a live profit-and-loss
-                view built on true parts cost, so you know what each month actually made.
+                GreaseDesk runs your job cards, bookings and invoicing — then shows you what the diary never
+                does: true parts cost, the hours you sold against the hours you paid for, and what each month
+                actually made.
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link href="/register" className="inline-flex justify-center items-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
@@ -67,7 +76,7 @@ export default function HomePage() {
 
         {/* Features */}
         <section id="features" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 scroll-mt-20">
-          <h2 className="text-2xl sm:text-3xl font-bold text-ink text-center">Everything a workshop needs — in one place</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-ink text-center">Earn it. See it. Keep it.</h2>
           <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6">
             {FEATURES.map((f) => (
               <div key={f.title} className="bg-surface border border-line rounded-2xl p-6 shadow-card">
@@ -77,10 +86,33 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-          <div className="mt-12 text-center">
-            <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-              Start your 60-day free trial
-            </Link>
+        </section>
+
+        {/* Contrast — the category argument. Visually lighter than the cards: plain rows, no borders. */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+          <h2 className="text-2xl sm:text-3xl font-bold text-ink text-center">A full diary is not a result.</h2>
+          <p className="mt-3 text-lg text-muted text-center max-w-2xl mx-auto">
+            Every garage system will show you a busy week. Almost none will tell you whether it paid.
+          </p>
+          <div className="mt-10 max-w-2xl mx-auto flex flex-col gap-6">
+            {CONTRASTS.map((c) => (
+              <div key={c.title} className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
+                <h3 className="text-lg font-semibold text-ink sm:w-56 sm:shrink-0">{c.title}</h3>
+                <p className="text-base text-muted">{c.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Closing CTA */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="text-center">
+            <h2 className="text-2xl sm:text-3xl font-bold text-ink">Find out what last month actually made.</h2>
+            <div className="mt-8">
+              <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
+                Start your 60-day free trial
+              </Link>
+            </div>
           </div>
         </section>
       </SiteChrome>
