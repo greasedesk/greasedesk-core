@@ -59,9 +59,9 @@ export default function HomePage() {
             would be unreadable): fixed readable sizes, L1 stays one line, L2-L3 wrap. Non-heading
             <p>s — the H1 below is the page's only heading. overflow-hidden guards sub-pixel scroll. */}
         <div className="w-full overflow-hidden text-center text-muted font-light py-2 sm:py-3">
-          <p className="uppercase whitespace-nowrap leading-none tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.97vw]">WORKSHOP ECONOMICS</p>
-          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1.5 md:mt-0 text-sm md:text-[5.14vw]">Potential vs reality — and the opportunity.</p>
-          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1 md:mt-0 text-sm md:text-[2.32vw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
+          <p className="uppercase whitespace-nowrap leading-none tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.83vw]">WORKSHOP ECONOMICS</p>
+          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1.5 md:mt-0 text-sm md:text-[5.01vw]">Potential vs reality — and the opportunity.</p>
+          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1 md:mt-0 text-sm md:text-[2.22vw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
         </div>
 
         {/* Hero — two column: copy + CTAs left, dashboard-extract tiles right. Top padding trimmed:
