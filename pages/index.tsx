@@ -61,9 +61,9 @@ export default function HomePage() {
             Non-heading <p>s — the H1 below is the page's only heading. */}
         <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-2 sm:pt-10 sm:pb-3">
           <div className="[container-type:inline-size] text-center">
-            <p className="uppercase whitespace-nowrap leading-tight font-light text-ink/80 tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.83cqw]">WORKSHOP ECONOMICS</p>
+            <p className="uppercase whitespace-nowrap leading-tight font-light text-ink opacity-80 tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.83cqw]">WORKSHOP ECONOMICS</p>
             <p className="whitespace-normal md:whitespace-nowrap leading-tight font-light text-muted tracking-[0.02em] mt-1 text-base md:text-[4.01cqw]">Potential vs reality — and the opportunity.</p>
-            <p className="whitespace-normal md:whitespace-nowrap leading-tight font-light text-muted/60 tracking-[0.02em] mt-1 text-sm md:text-[1.36cqw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
+            <p className="whitespace-normal md:whitespace-nowrap leading-tight font-light text-muted opacity-60 tracking-[0.02em] mt-1 text-sm md:text-[1.36cqw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
           </div>
         </section>
 
