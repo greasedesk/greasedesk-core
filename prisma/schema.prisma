@@ -260,6 +260,8 @@ model Group {
   importBatches    ImportBatch[]
   catalogueAliases CatalogueAlias[]
   lineSplitTemplates LineSplitTemplate[]
+  notifications    NotificationLog[]
+  magicLinks       CustomerMagicLink[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -1059,6 +1061,7 @@ model JobCard {
   photos            JobCardPhoto[]
   items             JobCardItem[]
   invoice           Invoice?
+  magicLinks        CustomerMagicLink[]
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
@@ -1901,4 +1904,99 @@ model AuthRateLimit {
   created_at DateTime @default(now())
 
   @@index([key, created_at])
+}
+
+// ── NOTIFICATION LAYER (slice-1 A) ────────────────────────────────────────────────────────────────
+// THE record of every message GreaseDesk sends to a person, written by the ONE chokepoint
+// (lib/notify.ts::sendNotification). Provider-agnostic from the start: `channel` says HOW it went,
+// `provider` says WHO carried it (resend today, an SMS provider later) — adding SMS is a new adapter
+// + config, never a second send path. Status is the provider's answer where it reports one; a
+// provider that reports delivery asynchronously (webhook) updates the row by provider_message_id.
+//
+// PRIVACY: `recipient` is stored in the CLEAR on purpose — unlike AuthRateLimit (which must never
+// become a list of who asked for a reset), an operator answering "did my customer get their quote?"
+// needs the address. It is tenant-scoped customer data, same tier as Customer.email.
+enum NotificationChannel {
+  email
+  sms
+}
+
+enum NotificationStatus {
+  queued    // handed to the provider, no answer yet
+  sent      // provider accepted it
+  failed    // provider rejected it, or the transport threw
+  delivered // provider later confirmed delivery (webhook)
+  bounced   // provider later reported a hard bounce (webhook)
+  skipped   // deliberately not sent (provider unconfigured / no recipient) — recorded, not silent
+}
+
+model NotificationLog {
+  id       String              @id @default(uuid())
+  group_id String? // null = platform-level send (operator invite, reseller enquiry) — not tenant work
+  channel  NotificationChannel
+  template String // template key (lib/notification-templates) — never free-text body
+  provider String // 'resend' | 'none' | future sms provider — configuration, not code
+  status   NotificationStatus  @default(queued)
+
+  recipient           String // email address or E.164 phone — see PRIVACY note above
+  subject             String? // email only
+  provider_message_id String? // provider's id, for delivery-webhook reconciliation
+  error               String? // provider/transport error, when status = failed
+
+  // What this send was ABOUT, for support ("resend the quote link for card X"). Loose by design —
+  // a notification must never own a hard FK that blocks deleting the thing it referred to.
+  subject_type String? // 'job_card' | 'user' | 'invoice' | …
+  subject_id   String?
+
+  created_at DateTime  @default(now())
+  sent_at    DateTime? // when the provider accepted it
+
+  group Group? @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@index([group_id, created_at])
+  @@index([provider_message_id])
+  @@index([subject_type, subject_id])
+}
+
+// ── MAGIC-LINK CUSTOMER AUTH (slice-1 B) ──────────────────────────────────────────────────────────
+// A capability URL handed to a CUSTOMER (not a User — customers have no account). Same discipline as
+// the operator invite: long random token, only its SHA-256 hash stored, so a DB leak yields nothing
+// usable. Bound to ONE job card and ONE purpose — a quote link can never be replayed against the
+// portal, and a link for card A can never open card B.
+//
+// ⚠️ THE LINK IS THE CREDENTIAL. Anyone holding the URL can view what it grants — there is no second
+// factor and no identity proof. That is the deliberate trade (customers will not create accounts to
+// approve a quote). It is why the grant is narrow (one card, one purpose), time-boxed (14 days), and
+// read-oriented. Never let a magic link authorise a money movement or a destructive action.
+//
+// NOT single-use: a customer re-opening the same email must still work, so `consumed_at` records the
+// FIRST use and `use_count` every use — consumption is recorded, not burned.
+enum MagicLinkPurpose {
+  quote_view // view + approve/decline a quote for one job card
+  portal_view // customer portal view of one job card (progress, photos, invoice)
+}
+
+model CustomerMagicLink {
+  id          String           @id @default(uuid())
+  group_id    String
+  job_card_id String
+  purpose     MagicLinkPurpose
+
+  token_hash String    @unique // sha256(raw) — the raw token exists only in the emailed URL
+  expires_at DateTime
+  revoked_at DateTime? // explicit kill switch (card cancelled, sent to the wrong address)
+
+  recipient   String // who it was sent to, for the audit answer "who could see this?"
+  consumed_at DateTime? // FIRST use
+  last_used_at DateTime?
+  use_count   Int       @default(0)
+
+  created_at      DateTime @default(now())
+  created_by_user String? // the staff User who caused it to be issued (null = system)
+
+  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+
+  @@index([group_id, job_card_id])
+  @@index([expires_at])
 }
