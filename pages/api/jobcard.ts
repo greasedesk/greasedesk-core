@@ -21,8 +21,13 @@ import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
 import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
+import { detailsMinDataMet } from '@/lib/jobcard-tabs';
+import { writeAudit } from '@/lib/audit';
 
 type CreateJobCardBody = {
+  /** 'quote' = created from the Quotes entry point; lets the server auto-complete Customer Details
+   *  when (and only when) the captured data satisfies detailsMinDataMet. */
+  intent?: 'quote';
   registration: string;
   customerName: string;
   phone?: string;
@@ -200,6 +205,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           vehicleId, groupId, customerId, registration, vin: body.vin,
         });
 
+        // Owner + registration are the stage's requirement; both are guaranteed present here only
+        // when the form supplied them (customerId is find-or-created from a name, registration from
+        // the reg field). Anything missing → left incomplete for the user to finish.
+        const autoCompleteDetails = body.intent === 'quote'
+          && detailsMinDataMet({ hasOwner: !!customerId, hasRegistration: !!registration });
+
         const created = await tx.jobCard.create({
           data: {
             group_id: groupId,
@@ -212,9 +223,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             flag_customer_car: !!body.flag_customer_car,
             flag_mot: !!body.flag_mot,
             flag_diag: !!body.flag_diag,
+            // QUOTE ENTRY POINT ONLY (?next=quote): the form has just captured exactly what the
+            // Customer Details stage records, so asking the user to re-confirm it before pricing is
+            // pure friction. Completed here ONLY when the SAME chokepoint the stage API enforces
+            // (detailsMinDataMet: an owner AND a registration) is satisfied by what was supplied —
+            // never mark a stage done that isn't. `intent` is a hint; this check is the authority.
+            ...(autoCompleteDetails ? { stage_details_done: true } : {}),
           },
           select: { id: true },
         });
+        // Audited as a NORMAL stage completion, attributed to the creating user — the trail must not
+        // distinguish "the system did it" from "someone ticked it"; a human's action caused it.
+        if (autoCompleteDetails) {
+          await writeAudit(tx, {
+            groupId, userId: user.id as string, jobCardId: created.id,
+            action: 'stage.details.done',
+            diff: { via: 'quote_entry_autocomplete' },
+          });
+        }
         // Create + schedule atomically through the shared booking guard (double-booking refused).
         // Diary drag-create is within-day, so working-minutes = (end - start).
         if (scheduling) {

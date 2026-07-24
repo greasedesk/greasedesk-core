@@ -127,6 +127,9 @@ export default function NewJobCardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form, ...flags,
+          // Quote entry point: lets the server auto-complete Customer Details when the captured
+          // data satisfies the stage. The SERVER re-checks; this is a hint, not authority.
+          ...(router.query.next === 'quote' ? { intent: 'quote' as const } : {}),
           phone: normalizePhone(form.phone), // store the ONE canonical phone form
           motExpiry: mot.motExpiry ?? undefined,
           lastMotMileage: mot.lastMotMileage ?? undefined,
