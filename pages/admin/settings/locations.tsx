@@ -31,6 +31,8 @@ type LocationView = {
   id: string;
   name: string;
   address: string | null;
+  phone: string | null;
+  whatsapp: string | null;
   isActive: boolean;
   isCurrent: boolean;
   resources: ResourceView[];
@@ -284,11 +286,13 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(loc.name);
   const [address, setAddress] = useState(loc.address ?? '');
+  const [phone, setPhone] = useState(loc.phone ?? '');
+  const [wa, setWa] = useState(loc.whatsapp ?? '');
   const [active, setActive] = useState(loc.isActive);
   const [err, setErr] = useState<string | null>(null);
 
   async function save() {
-    const error = await mutate('/api/locations', 'PATCH', { id: loc.id, site_name: name, address, is_active: active });
+    const error = await mutate('/api/locations', 'PATCH', { id: loc.id, site_name: name, address, phone, whatsapp: wa, is_active: active });
     if (error) return setErr(error);
     setEditing(false);
     onChanged();
@@ -306,6 +310,10 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
           <div className="flex flex-wrap items-center gap-2">
             <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} w-44`} placeholder="Name" />
             <input value={address} onChange={(e) => setAddress(e.target.value)} className={`${inputClass} w-56`} placeholder="Address" />
+            {/* Customer-facing contact routes for this location. WhatsApp is independent of the
+                phone; both fall back to the company-level values when blank. */}
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} className={`${inputClass} w-40`} placeholder="Phone" />
+            <input value={wa} onChange={(e) => setWa(e.target.value)} className={`${inputClass} w-40`} placeholder="WhatsApp (07700 900123)" />
             <label className="text-xs text-muted flex items-center gap-1">
               <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
             </label>
@@ -389,6 +397,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     id: s.id,
     name: s.site_name,
     address: s.address,
+    phone: (s as any).phone ?? null,
+    whatsapp: (s as any).whatsapp ?? null,
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),

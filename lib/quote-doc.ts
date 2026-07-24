@@ -19,6 +19,7 @@ import { prisma } from '@/lib/db';
 import { invoiceTotals, type InvoiceTotals } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { presignGet } from '@/lib/r2';
+import { resolveContactRoutes, type ContactRoutes } from '@/lib/contact-routes';
 
 /** Identical field-for-field to InvoiceDocLine — the shape both documents render. */
 export type DocLine = {
@@ -41,10 +42,10 @@ export type QuoteDoc = {
   taxLabel: string;
   logoUrl: string | null;
   company: { name: string; vatNumber: string | null; address: string | null; phone: string | null; email: string | null };
-  /** TRUE when NO number exists at site OR group level. The page shows a visible setup gap rather
-   *  than silently dropping the customer's escape hatch — an affordance that vanishes without
-   *  trace is the failure mode to avoid. */
-  phoneSetupGap: boolean;
+  /** Phone + WhatsApp, each resolved site → group INDEPENDENTLY by the ONE resolver
+   *  (lib/contact-routes). `setupGap` is true only when NEITHER route exists — the page flags that
+   *  out loud rather than silently dropping the customer's escape hatch. */
+  contact: ContactRoutes;
   customer: { name: string };
   vehicle: { reg: string | null; desc: string | null; mileage: number | null };
   jobDescription: string | null;
@@ -61,13 +62,13 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       id: true, job_card_id: true, version: true, status: true, sent_at: true,
       vat_registered: true, tax_label: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
-      group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true, phone: true } },
+      group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true, phone: true, whatsapp: true } },
       job_card: {
         select: {
           garage_notes: true, odometer_in: true,
           customer: { select: { name: true } },
           vehicle: { select: { registration: true, make: true, model: true, colour: true, mileage_at_create: true } },
-          site: { select: { currency_code: true, locale: true, phone: true, site_name: true, address: true } },
+          site: { select: { currency_code: true, locale: true, phone: true, whatsapp: true, site_name: true, address: true } },
         },
       },
     },
@@ -87,6 +88,9 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
     lines.map((l) => ({ vat_rate: l.vatRate, line_total: l.netPennies / 100, line_vat: l.vatPennies / 100 })),
   );
 
+  // ONE resolver for both routes — phone and WhatsApp cannot drift apart.
+  const contact = resolveContactRoutes(v.job_card?.site, v.group);
+
   const veh = v.job_card?.vehicle;
   const desc = [veh?.make, veh?.model, veh?.colour].filter(Boolean).join(' ') || null;
 
@@ -104,11 +108,10 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       name: v.group?.trading_name || v.group?.group_name || 'Your garage',
       vatNumber: v.group?.vat_number ?? null,
       address: v.job_card?.site?.address ?? v.group?.address ?? null,
-      // FALLBACK CHAIN: the site's own number, else the company-level one.
-      phone: v.job_card?.site?.phone ?? v.group?.phone ?? null,
+      phone: contact.phone,
       email: null, // form-only contact discipline — never expose a mailbox on a public page
     },
-    phoneSetupGap: !(v.job_card?.site?.phone ?? v.group?.phone),
+    contact,
     customer: { name: v.job_card?.customer?.name ?? '' },
     vehicle: {
       reg: veh?.registration ?? null,

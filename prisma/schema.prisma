@@ -195,6 +195,7 @@ model Group {
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")
   phone                     String? // company-level contact number — the FALLBACK when a site has none (customer-facing escape hatch)
+  whatsapp                  String? // company-level WhatsApp, stored E.164 DIGITS (447700900123). INDEPENDENT of phone — a garage may run WhatsApp on a different number, or not at all.
   billing_email             String   @unique
   is_franchise_grp          Boolean  @default(false)
   created_at                DateTime @default(now())
@@ -613,6 +614,7 @@ model Site {
   vat_number     String?
   address        String?
   phone          String?
+  whatsapp       String? // site WhatsApp, stored as E.164 DIGITS; independent of phone (see Group.whatsapp)
   email          String?
   timezone       String   @default("Europe/London")
   currency_code  String   @default("GBP")

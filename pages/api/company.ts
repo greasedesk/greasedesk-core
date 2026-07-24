@@ -11,6 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { toE164Digits } from '@/lib/contact-routes';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -34,13 +35,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
-    invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label,
+    invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp,
   } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
     invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string;
+    phone?: string; whatsapp?: string;
   };
 
   const data: any = {};
@@ -51,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
   if (address !== undefined) data.address = address.trim() || null;
+  if (phone !== undefined) data.phone = phone.trim() || null;
+  // Stored as E.164 DIGITS (see lib/contact-routes) — normalised once, at the write.
+  if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp) : null;
   if ((req.body || {}).vin_hint_text !== undefined) data.vin_hint_text = String((req.body || {}).vin_hint_text).trim().slice(0, 200) || null; // phone-card VIN hint (tenant-worded; empty = none)
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
   if (vat_registered !== undefined) data.vat_registered = !!vat_registered;

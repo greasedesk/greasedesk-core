@@ -13,6 +13,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
+import { toE164Digits } from '@/lib/contact-routes';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -43,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sites = await prisma.site.findMany({
       where: { group_id: groupId, id: { in: vis.activeSiteIds } },
       orderBy: { site_name: 'asc' },
-      select: { id: true, site_name: true },
+      select: { id: true, site_name: true, address: true, phone: true, whatsapp: true },
     });
     // primarySiteId drives the nav's default-location highlight when no ?site is set.
     // canViewInvoices gates the Invoices nav item (the page + API re-check server-side).
@@ -74,8 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') {
     // Editing a location (a billable unit) is admin/owner-only — site managers manage resources, not locations.
     if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can edit a location.' });
-    const { id, site_name, address, is_active } = (req.body || {}) as {
-      id?: string; site_name?: string; address?: string; is_active?: boolean;
+    const { id, site_name, address, is_active, phone, whatsapp } = (req.body || {}) as {
+      id?: string; site_name?: string; address?: string; is_active?: boolean; phone?: string; whatsapp?: string;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });
@@ -88,6 +89,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (address !== undefined) data.address = address.trim() || null;
     if (is_active !== undefined) data.is_active = !!is_active;
+    if (phone !== undefined) data.phone = phone.trim() || null;
+    // WhatsApp is stored as E.164 DIGITS so wa.me links are correct by construction — a UK-local
+    // number is converted here, at the write, rather than at every render (lib/contact-routes).
+    if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp) : null;
 
     await prisma.site.update({ where: { id }, data });
     return res.status(200).json({ message: 'Location updated.' });

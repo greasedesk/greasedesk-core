@@ -15,14 +15,14 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 
 type PageProps = {
-  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string;
+  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
 
 export default function CompanyDetails(props: PageProps) {
-  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint } = props;
+  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp } = props;
   const { t } = useTranslation('company');
   const router = useRouter();
   const [name, setName] = useState(groupName);
@@ -32,6 +32,8 @@ export default function CompanyDetails(props: PageProps) {
   const [vat, setVat] = useState(vatNumber);
   const [rate, setRate] = useState(defaultVatRate);
   const [vinHintText, setVinHintText] = useState(vinHint);
+  const [phoneVal, setPhoneVal] = useState(phone);
+  const [waVal, setWaVal] = useState(whatsapp);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -43,6 +45,7 @@ export default function CompanyDetails(props: PageProps) {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           group_name: name, company_number: num, address: addr,
+          phone: phoneVal, whatsapp: waVal,
           vin_hint_text: vinHintText,
           vat_registered: vatReg, vat_number: vatReg ? vat : '', // clear number when de-registering
           ...(vatReg ? { default_vat_rate: Number(rate || 0) } : {}), // rate only meaningful when registered
@@ -70,6 +73,14 @@ export default function CompanyDetails(props: PageProps) {
           <div><label className={labelClass}>{t('details.number')}</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} /></div>
           <div><label className={labelClass}>{t('details.address')}</label><input value={addr} onChange={(e) => setAddr(e.target.value)} className={inputClass} /></div>
           {/* Phone-card VIN hint — tenant-worded, free text; EMPTY ships no hint (never a marque default). */}
+          {/* Customer-facing contact routes. WhatsApp is INDEPENDENT of the phone — a garage may run
+              it on a different number, or not at all. Falls back to this when a site has none. */}
+          <div><label className={labelClass}>Phone (company)</label>
+            <input value={phoneVal} onChange={(e) => setPhoneVal(e.target.value)} className={inputClass} placeholder="0121 555 0199" />
+            <p className="text-xs text-muted mt-1">Shown to customers on quotes when a location has no number of its own.</p></div>
+          <div><label className={labelClass}>WhatsApp (company)</label>
+            <input value={waVal} onChange={(e) => setWaVal(e.target.value)} className={inputClass} placeholder="07700 900123" />
+            <p className="text-xs text-muted mt-1">Optional, and separate from the phone number. A UK number can be typed normally (07700 900123) — we convert it for the WhatsApp link. For a non-UK number use the international form (+353…).</p></div>
           <div><label className={labelClass}>{t('details.vinHint')}</label><input value={vinHintText} onChange={(e) => setVinHintText(e.target.value)} placeholder={t('details.vinHintPlaceholder')} className={inputClass} maxLength={200} />
             <p className="text-xs text-muted mt-1">{t('details.vinHintHelp')}</p></div>
           <label className="flex items-start gap-3 py-1 cursor-pointer">
@@ -105,7 +116,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true,
+      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true,
     },
   })) as any;
   return {
@@ -117,6 +128,8 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       vatNumber: g?.vat_number ?? '',
       defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : '20.00',
       vinHint: g?.vin_hint_text ?? '',
+      phone: g?.phone ?? '',
+      whatsapp: g?.whatsapp ?? '',
     },
   };
 });

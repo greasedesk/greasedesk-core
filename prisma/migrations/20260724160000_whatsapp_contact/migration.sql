@@ -1,0 +1,2 @@
+ALTER TABLE "Group" ADD COLUMN "whatsapp" TEXT;
+ALTER TABLE "Site" ADD COLUMN "whatsapp" TEXT;

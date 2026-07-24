@@ -190,15 +190,25 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
     finally { setBusy(null); }
   }
 
-  const phoneBlock = doc.company.phone ? (
-    <p className="mt-1 text-ink">
-      Call {doc.company.name} on{' '}
-      <a className="text-accent font-semibold" href={`tel:${doc.company.phone.replace(/\s/g, '')}`}>{doc.company.phone}</a>
-    </p>
-  ) : (
+  // Phone and WhatsApp are INDEPENDENT: either, both or neither. The warning fires only when the
+  // resolver says there is no route at all — an escape hatch must never vanish without trace.
+  const c = doc.contact;
+  const phoneBlock = c.setupGap ? (
     <p className="mt-1 text-sm text-warn">
       No contact number has been set up for this garage yet — please reply to the email they sent you.
     </p>
+  ) : (
+    <div className="mt-1 flex flex-col sm:flex-row sm:items-center gap-2">
+      {c.phoneHref && (
+        <a className="text-accent font-semibold" href={c.phoneHref}>{c.phone}</a>
+      )}
+      {c.whatsappUrl && (
+        <a href={c.whatsappUrl} target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-sm font-semibold rounded-lg px-3 py-1.5 bg-ok-soft text-ok w-fit">
+          <span aria-hidden>💬</span> Message on WhatsApp
+        </a>
+      )}
+    </div>
   );
 
   if (outcome === 'accepted') {
