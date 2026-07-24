@@ -35,3 +35,6 @@ yarn-error.log*
 .DS_Store # Added Mac OS cache files (important for Mac users like you).DS_Store
 public/pdfjs/
 .commission-gate-tmp/
+
+# throwaway gate/verify scripts (run from repo dir for node_modules resolution)
+_*.mjs
