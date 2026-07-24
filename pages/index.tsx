@@ -50,16 +50,18 @@ export default function HomePage() {
         softwareApp
       />
       <SiteChrome>
-        {/* Amendment 2 — full-bleed category band above the hero grid, edge to edge (breaks out of
-            the page container). Presence is width + tracking; it stays LIGHTER than the H1 (font-light,
-            muted). Non-heading (a <p>) — the H1 below is the page's only heading. Tracking is tuned
-            DOWN from the briefed 0.18em, which measured 100.5% of viewport at 1440 (overflow) and ~109%
-            at 375; 0.06em/0.10em fill ~93%/~90% and never exceed. overflow-hidden guards sub-pixel scroll. */}
-        <div className="w-full overflow-hidden">
-          <p className="text-center uppercase font-light text-muted leading-none whitespace-nowrap py-3 sm:py-5 tracking-[0.06em] sm:tracking-[0.1em]"
-            style={{ fontSize: 'clamp(1.75rem, 7vw, 7rem)' }}>
-            WORKSHOP ECONOMICS
-          </p>
+        {/* Amendment 3 — three-line category block, all lines full-bleed and WIDTH-MATCHED on md+.
+            Each line's font-size is DERIVED: its rendered width per 1px of font was measured on the
+            page font, then solved for ~90% of viewport. At 1440 that is L1 6.97vw≈100px / L2 5.14vw≈74px
+            / L3 2.32vw≈33px — all land on ~1296px (matched within ±2%). Expressed in vw so the match
+            holds across the desktop range; never exceeds the viewport. Presence comes from WIDTH, never
+            weight: font-light + muted, lighter than the H1. Below md width-matching is abandoned (L3
+            would be unreadable): fixed readable sizes, L1 stays one line, L2-L3 wrap. Non-heading
+            <p>s — the H1 below is the page's only heading. overflow-hidden guards sub-pixel scroll. */}
+        <div className="w-full overflow-hidden text-center text-muted font-light py-2 sm:py-3">
+          <p className="uppercase whitespace-nowrap leading-none tracking-[0.06em] md:tracking-[0.1em] text-2xl md:text-[6.97vw]">WORKSHOP ECONOMICS</p>
+          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1.5 md:mt-0 text-sm md:text-[5.14vw]">Potential vs reality — and the opportunity.</p>
+          <p className="whitespace-normal md:whitespace-nowrap leading-tight tracking-[0.02em] mt-1 md:mt-0 text-sm md:text-[2.32vw]">Know what your workshop could earn and what it actually earned, so you can close the gap.</p>
         </div>
 
         {/* Hero — two column: copy + CTAs left, dashboard-extract tiles right. Top padding trimmed:
