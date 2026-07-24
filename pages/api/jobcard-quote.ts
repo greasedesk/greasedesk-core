@@ -18,6 +18,7 @@ import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/
 import { writeAudit } from '@/lib/audit';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { requireCanWrite } from '@/lib/admin-guard';
+import { supersedeOnEdit } from '@/lib/quote-version';
 import { canEditInvoice } from '@/lib/invoice';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
@@ -289,6 +290,19 @@ export async function performEstimateSave(args: {
       },
     });
   });
+
+  // REVOKE-ON-EDIT (slice-2a): the estimate just changed, so any quote still out with a customer
+  // has stopped being the offer. Supersede the version and kill its magic link — acceptance must
+  // never be possible against figures the garage has since moved away from. An ACCEPTED version is
+  // deliberately untouched: it stays frozen as the record of what was agreed.
+  const supersededCount = await supersedeOnEdit(jobCardId).catch(() => 0);
+  if (supersededCount > 0) {
+    await writeAudit(prisma, {
+      groupId, userId: args.actorUserId ?? null, jobCardId,
+      action: 'quote.superseded',
+      diff: { superseded: supersededCount, reason: 'estimate edited after send' },
+    }).catch(() => {});
+  }
 
   return { totals };
 }

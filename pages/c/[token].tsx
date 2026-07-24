@@ -1,12 +1,18 @@
 /**
  * File: pages/c/[token].tsx
  * The CUSTOMER end of a magic link. No session, no login — the URL is the credential (see the
- * security model in lib/magic-link). Resolution happens SERVER-SIDE in getServerSideProps: the raw
- * token never reaches client JS as a usable secret beyond the URL itself, and an invalid link never
- * renders card data.
+ * security model in lib/magic-link). Resolution happens SERVER-SIDE in getServerSideProps, so an
+ * invalid link never renders card data and the token never becomes client state.
  *
- * An expired/revoked link EXPLAINS ITSELF — "this link has expired, ask the garage for a new one" —
- * rather than 404ing. A 404 reads as "GreaseDesk is broken"; the truth is "your link aged out".
+ * The quote renders through the SHARED document shape (lib/quote-doc) and the SHARED line/totals
+ * component (components/DocumentLines) that the invoice view also uses — the quote and the invoice
+ * are one document rendered twice, not two that happen to agree.
+ *
+ * READ-ONLY in this slice. Accept/decline is slice-2b. Per the magic-link rule this page authorises
+ * no money movement and no destructive action.
+ *
+ * Expired / revoked / unknown links EXPLAIN THEMSELVES rather than 404ing — a 404 reads as "the
+ * garage's system is broken"; the truth is "your link aged out, ask for a new one".
  */
 import React from 'react';
 import Head from 'next/head';
@@ -14,40 +20,48 @@ import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { resolveMagicLink, MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
+import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
+import DocumentLines from '@/components/DocumentLines';
 
-type Denied = 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose';
+type Denied = 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose' | 'no_quote';
 
 type Props =
-  | { state: 'ok'; garageName: string; registration: string | null; purpose: string; expiresAt: string }
-  | { state: 'denied'; reason: Denied };
+  | { state: 'ok'; doc: SerializedDoc }
+  | { state: 'denied'; reason: Denied; garagePhone: string | null };
 
-const shellCls = 'min-h-screen bg-surface-muted flex items-center justify-center p-4';
-const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-md w-full p-6 sm:p-8';
+type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
 
 const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
   expired: {
-    title: 'This link has expired',
-    body: `Links stay valid for ${MAGIC_LINK_DAYS} days. Please contact the garage and ask them to send you a fresh one — your job and its details are safe, only the link has aged out.`,
+    title: 'This quote has expired',
+    body: `Quote links stay valid for ${MAGIC_LINK_DAYS} days. Your job and its details are safe — only the link has aged out. Please contact the garage and ask them to send a fresh one.`,
   },
   revoked: {
-    title: 'This link is no longer active',
-    body: 'The garage has withdrawn this link. Please contact them directly if you still need to see this job.',
+    title: 'This quote is no longer current',
+    body: 'The garage has updated or withdrawn this quote, so this link no longer opens it. If they sent you a newer quote, please use that link instead — otherwise give them a call.',
   },
   not_found: {
-    title: "We couldn't find that link",
-    body: 'The address may have been copied incompletely — links are long, and email clients sometimes break them across lines. Try opening it again from the original message, or ask the garage to resend it.',
+    title: "We couldn't find that quote",
+    body: 'The address may have been copied incompletely — these links are long and email clients sometimes break them across lines. Try opening it again from the original message, or ask the garage to resend it.',
   },
   wrong_purpose: {
-    title: "This link doesn't open this page",
+    title: "This link doesn't open a quote",
     body: 'Please use the link exactly as the garage sent it, or ask them to resend it.',
   },
   rate_limited: {
     title: 'Too many attempts',
     body: 'Too many links have been opened from this connection in the last hour. Please wait a little while and try again.',
   },
+  no_quote: {
+    title: 'This quote isn’t ready yet',
+    body: 'The garage hasn’t finished preparing this quote. Please give them a call — they’ll be able to tell you where things are.',
+  },
 };
 
-export default function CustomerMagicLinkPage(props: Props) {
+const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
+const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
+
+export default function CustomerQuotePage(props: Props) {
   if (props.state === 'denied') {
     const copy = DENIED_COPY[props.reason];
     return (
@@ -57,26 +71,99 @@ export default function CustomerMagicLinkPage(props: Props) {
           <div className={cardCls}>
             <h1 className="text-xl font-bold text-ink mb-2">{copy.title}</h1>
             <p className="text-sm text-muted leading-relaxed">{copy.body}</p>
+            {/* Never a dead end: "call me about this" should be a phone call, not a form. */}
+            {props.garagePhone && (
+              <p className="mt-4 text-sm text-ink">
+                Call the garage: <a className="text-accent font-semibold" href={`tel:${props.garagePhone.replace(/\s/g, '')}`}>{props.garagePhone}</a>
+              </p>
+            )}
           </div>
         </div>
       </>
     );
   }
+
+  const d = props.doc;
+  const expiry = new Date(d.expiresAt).toLocaleDateString(d.locale, { day: 'numeric', month: 'long', year: 'numeric' });
+
   return (
     <>
-      <Head><title>Your job at {props.garageName} — GreaseDesk</title><meta name="robots" content="noindex" /></Head>
+      <Head><title>Your quote from {d.company.name} — GreaseDesk</title><meta name="robots" content="noindex" /></Head>
       <div className={shellCls}>
         <div className={cardCls}>
-          <p className="text-xs uppercase tracking-wide text-muted mb-1">{props.garageName}</p>
-          <h1 className="text-2xl font-bold text-ink mb-3">
-            {props.registration ? `Your vehicle ${props.registration}` : 'Your job'}
-          </h1>
-          <p className="text-sm text-muted leading-relaxed">
-            This link is valid until {new Date(props.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.
+          {/* Tenant branding — this is the GARAGE's document, GreaseDesk is only the carrier. */}
+          <div className="flex items-start justify-between gap-4 pb-5 border-b border-line">
+            <div>
+              {d.logoUrl
+                ? <img src={d.logoUrl} alt={d.company.name} className="h-12 w-auto mb-2 object-contain" />
+                : <h2 className="text-lg font-bold text-ink">{d.company.name}</h2>}
+              {d.company.address && <p className="text-xs text-muted whitespace-pre-line mt-1">{d.company.address}</p>}
+              {d.company.phone && <p className="text-xs text-muted mt-1">{d.company.phone}</p>}
+              {d.vatRegistered && d.company.vatNumber && (
+                <p className="text-xs text-muted mt-1">{d.taxLabel} no. {d.company.vatNumber}</p>
+              )}
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-xs uppercase tracking-wide text-muted">Quote</p>
+              <p className="text-sm font-semibold text-ink">v{d.version}</p>
+            </div>
+          </div>
+
+          {/* Vehicle + customer */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-5 text-sm">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">Vehicle</p>
+              <p className="text-ink font-semibold">{d.vehicle.reg ?? '—'}</p>
+              {d.vehicle.desc && <p className="text-muted">{d.vehicle.desc}</p>}
+              {d.vehicle.mileage != null && <p className="text-muted">{d.vehicle.mileage.toLocaleString(d.locale)} miles</p>}
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">Prepared for</p>
+              <p className="text-ink">{d.customer.name || '—'}</p>
+            </div>
+          </div>
+
+          {d.jobDescription && (
+            <div className="pb-2 text-sm">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">Work</p>
+              <p className="text-ink whitespace-pre-line">{d.jobDescription}</p>
+            </div>
+          )}
+
+          {/* THE shared line table + totals — same component the invoice renders. */}
+          <DocumentLines
+            lines={d.lines}
+            totals={d.totals}
+            showVat={d.vatRegistered}
+            currency={d.currency}
+            locale={d.locale}
+            labels={{
+              description: 'Description', qty: 'Qty', unitPrice: 'Unit price',
+              vatRate: `${d.taxLabel} rate`, net: 'Net', amount: 'Amount',
+              subtotal: `Subtotal (excl. ${d.taxLabel})`,
+              vatAt: (rate) => `${d.taxLabel} at ${rate}%`,
+              totalVat: `Total ${d.taxLabel}`, grandTotal: 'Total', total: 'Total',
+            }}
+          />
+
+          <p className="mt-6 text-sm text-muted">
+            This quote is valid until <span className="text-ink font-medium">{expiry}</span>.
           </p>
-          {/* The quote/portal surface itself lands in the next slice — this slice proves the
-              credential, its expiry and its explanation, which everything above will sit on. */}
-          <p className="mt-4 text-sm text-muted">Your garage will be in touch with the details.</p>
+
+          {/* Not a dead end. Accept/decline lands in the next slice; the phone always works. */}
+          {d.company.phone && (
+            <div className="mt-6 pt-5 border-t border-line text-sm">
+              <p className="text-muted">Questions, or want to go ahead?</p>
+              <p className="mt-1 text-ink">
+                Call {d.company.name} on{' '}
+                <a className="text-accent font-semibold" href={`tel:${d.company.phone.replace(/\s/g, '')}`}>{d.company.phone}</a>
+              </p>
+            </div>
+          )}
+
+          <p className="mt-6 text-[11px] text-muted">
+            Anyone with this link can view the quote — please don’t forward it.
+          </p>
         </div>
       </div>
     </>
@@ -85,21 +172,32 @@ export default function CustomerMagicLinkPage(props: Props) {
 
 export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   const token = String(ctx.params?.token ?? '');
-  const res = await resolveMagicLink(token, { ip: clientIp(ctx.req.headers as any) });
-  if (!res.ok) return { props: { state: 'denied', reason: res.reason } };
+  const res = await resolveMagicLink(token, { purpose: 'quote_view', ip: clientIp(ctx.req.headers as any) });
 
-  const card = await prisma.jobCard.findFirst({
-    where: { id: res.link.jobCardId, group_id: res.link.groupId },
-    select: { vehicle: { select: { registration: true } }, group: { select: { group_name: true, trading_name: true } } },
+  if (!res.ok) {
+    // Even a refusal should offer the phone where we can identify the garage cheaply — but a
+    // not-found token identifies nothing, so the number is simply absent there.
+    return { props: { state: 'denied', reason: res.reason, garagePhone: null } };
+  }
+
+  // The version this link was minted for; if it has been superseded the link is already revoked,
+  // so reaching here means it is still the live offer.
+  const version = await prisma.quoteVersion.findFirst({
+    where: { job_card_id: res.link.jobCardId, magic_link_id: res.link.id },
+    select: { id: true },
   });
+  if (!version) {
+    const site = await prisma.jobCard.findUnique({ where: { id: res.link.jobCardId }, select: { site: { select: { phone: true } } } });
+    return { props: { state: 'denied', reason: 'no_quote', garagePhone: site?.site?.phone ?? null } };
+  }
+
+  const doc = await buildQuoteDoc(version.id, res.link.expiresAt);
+  if (!doc) return { props: { state: 'denied', reason: 'no_quote', garagePhone: null } };
 
   return {
     props: {
       state: 'ok',
-      garageName: card?.group?.trading_name || card?.group?.group_name || 'Your garage',
-      registration: card?.vehicle?.registration ?? null,
-      purpose: res.link.purpose,
-      expiresAt: res.link.expiresAt.toISOString(),
+      doc: { ...doc, sentAt: doc.sentAt.toISOString(), expiresAt: doc.expiresAt.toISOString() },
     },
   };
 };

@@ -262,6 +262,7 @@ model Group {
   lineSplitTemplates LineSplitTemplate[]
   notifications    NotificationLog[]
   magicLinks       CustomerMagicLink[]
+  quoteVersions    QuoteVersion[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -1084,6 +1085,7 @@ model JobCard {
   items             JobCardItem[]
   invoice           Invoice?
   magicLinks        CustomerMagicLink[]
+  quoteVersions     QuoteVersion[]
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
@@ -2021,4 +2023,79 @@ model CustomerMagicLink {
 
   @@index([group_id, job_card_id])
   @@index([expires_at])
+}
+
+// ── QUOTE VERSIONS (slice-2) ──────────────────────────────────────────────────────────────────────
+// A quote is SENT as a FROZEN VERSION, never as a live pointer at the card's estimate. Acceptance
+// has to refer to specific figures: if the garage edits the estimate afterwards, what the customer
+// agreed to must still be recoverable, exactly. So each send snapshots the lines + totals into a
+// numbered version; editing and re-sending mints version n+1, supersedes n, and REVOKES n's magic
+// link so the old figures can never be accepted after the fact.
+//
+// THE ACCEPTED VERSION IS WHAT BECOMES THE INVOICE (lib/invoice-issue::snapshotInvoiceLines copies
+// from it when one exists). That is the anti-drift guarantee: the customer is billed the rows they
+// accepted, identical by construction — not because two renderers happened to agree.
+enum QuoteVersionStatus {
+  sent       // out with the customer, awaiting a response
+  accepted   // customer accepted — frozen forever as the record of what was agreed
+  declined   // customer declined
+  superseded // a newer version was sent; this one's link is revoked
+}
+
+model QuoteVersion {
+  id          String             @id @default(uuid())
+  group_id    String
+  job_card_id String
+  version     Int // 1-based, per card
+  status      QuoteVersionStatus @default(sent)
+
+  // Totals frozen at SEND, in pennies — never recomputed from live rows.
+  net_pennies   Int
+  vat_pennies   Int
+  gross_pennies Int
+  // VAT treatment frozen at send, exactly as the invoice freezes vat_registered_at_issue.
+  vat_registered Boolean
+  tax_label      String @default("VAT")
+
+  sent_at         DateTime  @default(now())
+  sent_to         String? // the address it was emailed to; null = link handed over by hand
+  magic_link_id   String? // the credential minted for THIS version
+  created_by_user String?
+
+  // ── Response, audit-grade. Same weight as the rep agreement's click-sign: WHICH version, WHEN,
+  // from WHAT IP and user-agent — so a disputed price has an attributable, frozen answer. ──
+  responded_at         DateTime?
+  responded_ip         String?
+  responded_user_agent String?
+
+  group    Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard            @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  lines    QuoteVersionLine[]
+
+  @@unique([job_card_id, version])
+  @@index([group_id, job_card_id])
+  @@index([status])
+}
+
+// The frozen line snapshot. Mirrors InvoiceLine's money columns so the copy into InvoiceLine at
+// issue is field-for-field — no arithmetic in between, nothing to round differently.
+model QuoteVersionLine {
+  id               String   @id @default(uuid())
+  quote_version_id String
+  position         Int
+  item_type        ItemType
+  description      String
+  qty              Decimal  @db.Decimal(12, 2)
+  unit_price       Decimal  @db.Decimal(12, 2)
+  vat_rate         Decimal  @db.Decimal(5, 2)
+  line_vat         Decimal  @db.Decimal(12, 2)
+  line_total       Decimal  @db.Decimal(12, 2)
+  // Internal grain, carried so the invoice freeze stays lossless. NEVER rendered to a customer.
+  unit_cost         Decimal? @db.Decimal(12, 2)
+  labour_hours      Decimal? @db.Decimal(6, 2)
+  labour_outsourced Boolean  @default(false)
+
+  quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade)
+
+  @@index([quote_version_id, position])
 }

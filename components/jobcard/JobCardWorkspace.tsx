@@ -786,6 +786,67 @@ function QuoteActions(props: {
         )}
         {canCancel && <button disabled={busy !== null} onClick={() => props.setStatus('cancelled')} className={`${btn} bg-danger-soft text-danger sm:ml-auto`}>{t('action.cancelled')}</button>}
       </div>
+
+      {/* SEND QUOTE TO CUSTOMER (slice-2a). Freezes the estimate as a version, mints a 14-day
+          magic link and emails it. The URL is ALWAYS shown afterwards so it can be handed over by
+          hand — WhatsApp, read out over the phone — and a customer with no email on file is
+          offered the link rather than blocked. */}
+      {!isAcceptedOnwards && <SendQuote jobCardId={jobCardId} disabled={busy !== null} />}
+    </div>
+  );
+}
+
+function SendQuote({ jobCardId, disabled }: { jobCardId: string; disabled: boolean }) {
+  const [sending, setSending] = React.useState(false);
+  const [result, setResult] = React.useState<{ url: string; emailed: boolean; sentTo: string | null; version: number; expiresAt: string } | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+  const [copied, setCopied] = React.useState(false);
+
+  async function send() {
+    setSending(true); setErr(null); setCopied(false);
+    try {
+      const r = await fetch('/api/quote-send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.message || 'Could not send the quote.'); return; }
+      setResult({ url: d.url, emailed: !!d.emailed, sentTo: d.sentTo ?? null, version: d.version, expiresAt: d.expiresAt });
+    } catch { setErr('Could not send the quote.'); }
+    finally { setSending(false); } // never strand the busy flag
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-line">
+      <button type="button" disabled={disabled || sending} onClick={send}
+        className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+        {sending ? 'Sending…' : 'Send quote to customer'}
+      </button>
+      {err && <p className="mt-2 text-sm text-danger">{err}</p>}
+      {result && (
+        <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">
+          <p className="text-sm text-ink">
+            {result.emailed
+              ? <>Quote v{result.version} emailed to <span className="font-medium">{result.sentTo}</span>.</>
+              : <>Quote v{result.version} is ready. {result.sentTo
+                  ? <span className="text-warn">The email didn’t send — pass the link on instead.</span>
+                  : <>No email address on file — pass this link on instead.</>}</>}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <input readOnly value={result.url} onFocus={(e) => e.currentTarget.select()}
+              className="flex-1 p-2 text-xs bg-surface border border-line rounded-lg text-ink" />
+            <button type="button"
+              onClick={() => { navigator.clipboard?.writeText(result.url).then(() => setCopied(true)).catch(() => {}); }}
+              className="shrink-0 text-xs font-medium bg-surface border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface-muted">
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-muted">
+            Valid until {new Date(result.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.
+            Anyone with the link can view the quote. Editing the estimate cancels it and needs a new send.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
