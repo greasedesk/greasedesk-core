@@ -29,6 +29,17 @@ const CONTRASTS = [
   { title: "Invoiced isn't banked.", body: "What's issued, what's paid, what's still owed." },
 ];
 
+// Amendment 1 — hero dashboard-extract tiles. STATIC marketing markup styled to read as the real
+// product (app tile look copied, never imported). Figures are illustrative — the caption says so;
+// on tiles 1 & 2 the comparison line uses the warn token (the posted-vs-realised gap is the point,
+// it must not read as a positive).
+const HERO_TILES = [
+  { label: 'Effective hourly rate', figure: '£38.86', sub: 'Posted rate £75.00', warn: true },
+  { label: 'Hours sold', figure: '87.25', sub: 'of 157 paid for', warn: true },
+  { label: 'Gross profit', figure: '£9,327.79', sub: 'on £12,940.67 revenue', warn: false },
+  { label: 'Work in progress', figure: '£4,180', sub: '9 open jobs', warn: false },
+];
+
 export default function HomePage() {
   return (
     <>
@@ -39,12 +50,24 @@ export default function HomePage() {
         softwareApp
       />
       <SiteChrome>
-        {/* Hero — two column: copy + CTAs left, P&L screenshot placeholder right */}
-        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 sm:pt-24 pb-16">
+        {/* Amendment 2 — full-bleed category band above the hero grid, edge to edge (breaks out of
+            the page container). Presence is width + tracking; it stays LIGHTER than the H1 (font-light,
+            muted). Non-heading (a <p>) — the H1 below is the page's only heading. Tracking is tuned
+            DOWN from the briefed 0.18em, which measured 100.5% of viewport at 1440 (overflow) and ~109%
+            at 375; 0.06em/0.10em fill ~93%/~90% and never exceed. overflow-hidden guards sub-pixel scroll. */}
+        <div className="w-full overflow-hidden">
+          <p className="text-center uppercase font-light text-muted leading-none whitespace-nowrap py-3 sm:py-5 tracking-[0.06em] sm:tracking-[0.1em]"
+            style={{ fontSize: 'clamp(1.75rem, 7vw, 7rem)' }}>
+            WORKSHOP ECONOMICS
+          </p>
+        </div>
+
+        {/* Hero — two column: copy + CTAs left, dashboard-extract tiles right. Top padding trimmed:
+            the band now owns the space above the grid. */}
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 sm:pt-12 pb-16">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
             <div>
-              <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.2em] text-muted">Workshop Economics</p>
-              <h1 className="mt-3 text-4xl sm:text-5xl font-extrabold text-ink tracking-tight leading-tight">
+              <h1 className="text-4xl sm:text-5xl font-extrabold text-ink tracking-tight leading-tight">
                 {"The numbers don't lie. "}<span className="text-accent">They hide.</span>
               </h1>
               <p className="mt-6 text-lg text-muted max-w-xl">
@@ -63,13 +86,19 @@ export default function HomePage() {
               <p className="mt-4 text-sm text-muted">{perLocationLabel()} per site, per month · payment card required · cancel anytime.</p>
             </div>
 
-            {/* P&L dashboard — LABELLED PLACEHOLDER sized to the real screenshot (16:10). Demo data fills it. */}
+            {/* Amendment 1 — dashboard-extract tile group (static marketing markup; app tile styling
+                copied, not imported). 2×2 on desktop, single column below md. */}
             <div className="lg:pl-4">
-              <div className="rounded-2xl border-2 border-dashed border-line bg-surface-muted aspect-[16/10] flex flex-col items-center justify-center text-center p-6 shadow-card">
-                <div className="text-3xl mb-3" aria-hidden="true">📊</div>
-                <div className="text-sm font-semibold text-ink">P&amp;L dashboard</div>
-                <div className="mt-1 text-xs text-muted">Live product screenshot — demo data coming</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {HERO_TILES.map((tile) => (
+                  <div key={tile.label} className="bg-surface p-5 rounded-xl border border-line">
+                    <h3 className="text-sm font-semibold text-muted mb-2">{tile.label}</h3>
+                    <p className="text-3xl font-bold text-ink tabular-nums">{tile.figure}</p>
+                    <p className={`text-xs mt-1 ${tile.warn ? 'text-warn' : 'text-muted'}`}>{tile.sub}</p>
+                  </div>
+                ))}
               </div>
+              <p className="mt-3 text-xs text-muted">Example figures.</p>
             </div>
           </div>
         </section>
