@@ -194,6 +194,7 @@ model Group {
   leave_type_colours        Json?
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")
+  phone                     String? // company-level contact number — the FALLBACK when a site has none (customer-facing escape hatch)
   billing_email             String   @unique
   is_franchise_grp          Boolean  @default(false)
   created_at                DateTime @default(now())

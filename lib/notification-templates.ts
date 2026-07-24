@@ -63,6 +63,35 @@ export const NOTIFICATION_TEMPLATES = {
     sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: track your vehicle${d.registration ? ` ${d.registration}` : ''} here: ${d.link}` }),
   },
 
+  // ── Garage-facing: the customer answered ────────────────────────────────────────────────────────
+  quote_accepted: {
+    label: 'Customer accepted a quote',
+    email: (d) => ({
+      subject: `Quote ACCEPTED — ${d.registration ?? 'job'} (${d.total ?? ''})`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">${esc(d.customerName)} accepted the quote</h2>
+        <p><strong>${esc(d.registration)}</strong>${d.total ? ` · ${esc(d.total)}` : ''} — quote v${esc(d.version)}.</p>
+        <p>Book it into the diary when you're ready.</p>
+        ${d.link ? button(String(d.link), 'Open the job card') : ''}
+        <p style="font-size:13px;color:#475569">Accepted ${esc(d.when)}.</p>`),
+    }),
+    sms: (d) => ({ text: `Quote ACCEPTED: ${d.registration ?? 'job'} ${d.total ?? ''} (v${d.version}) — book it in.` }),
+  },
+
+  quote_declined: {
+    label: 'Customer declined a quote',
+    email: (d) => ({
+      subject: `Quote declined — ${d.registration ?? 'job'}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">${esc(d.customerName)} declined the quote</h2>
+        <p><strong>${esc(d.registration)}</strong> — quote v${esc(d.version)}${d.total ? ` · ${esc(d.total)}` : ''}.</p>
+        <p>Worth a call if you want to understand why.</p>
+        ${d.link ? button(String(d.link), 'Open the job card') : ''}
+        <p style="font-size:13px;color:#475569">Declined ${esc(d.when)}.</p>`),
+    }),
+    sms: (d) => ({ text: `Quote declined: ${d.registration ?? 'job'} (v${d.version}).` }),
+  },
+
   // ── Staff / account (migrated from the ad-hoc senders) ──────────────────────────────────────────
   team_invite: {
     label: 'Team invitation',

@@ -195,6 +195,55 @@ export async function snapshotInvoiceLines(
     return;
   }
 
+  const registered = !!invoice.vat_registered_at_issue;
+
+  // ── ACCEPTED-QUOTE INHERITANCE (slice-2b) ───────────────────────────────────────────────────────
+  // If the customer ACCEPTED a quote, the invoice is built from THAT frozen version — a straight
+  // COLUMN COPY with no arithmetic in between, so what they were billed is byte-identical to what
+  // they agreed to. Editing the estimate afterwards cannot change it: the accepted version is never
+  // superseded (lib/quote-version), so this branch keeps resolving to the agreed rows.
+  //
+  // NO ACCEPTED VERSION → fall through to the live JobCardItem path below, UNCHANGED. Every card
+  // that never used the quote flow — which is every historical card — behaves exactly as before.
+  const accepted = (await tx.quoteVersion.findFirst({
+    where: { job_card_id: invoice.job_card_id, status: 'accepted' },
+    orderBy: { version: 'desc' },
+    select: {
+      id: true, version: true,
+      lines: {
+        orderBy: { position: 'asc' },
+        select: {
+          position: true, item_type: true, description: true, qty: true, unit_price: true,
+          vat_rate: true, line_vat: true, line_total: true, unit_cost: true,
+          labour_hours: true, labour_outsourced: true,
+        },
+      },
+    },
+  })) as any;
+
+  if (accepted?.lines?.length) {
+    await tx.invoiceLine.createMany({
+      data: accepted.lines.map((l: any) => ({
+        invoice_id: invoice.id,
+        description: l.description,
+        qty: l.qty,
+        unit_price: l.unit_price,
+        // The version froze VAT at SEND under the same registration gate the invoice applies at
+        // issue. Re-gate here so a tenant who deregistered between send and issue cannot emit VAT.
+        vat_rate: registered ? l.vat_rate : new Prisma.Decimal(0),
+        line_vat: registered ? l.line_vat : new Prisma.Decimal(0),
+        line_total: l.line_total, // copied, never recomputed
+        unit_cost: l.unit_cost,
+        catalogue_item_id: null, // the frozen line is the record; the product link is not re-resolved
+        labour_hours: l.labour_hours,
+        item_type: l.item_type,
+        labour_outsourced: !!l.labour_outsourced,
+        position: l.position,
+      })),
+    });
+    return;
+  }
+
   const items = (await tx.jobCardItem.findMany({
     where: { job_card_id: invoice.job_card_id },
     select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true, labour_hours: true, labour_outsourced: true },
@@ -202,7 +251,6 @@ export async function snapshotInvoiceLines(
   })) as any[];
   if (!items.length) return;
 
-  const registered = !!invoice.vat_registered_at_issue;
   await tx.invoiceLine.createMany({
     data: items.map((it, i) => {
       const net = Number(it.qty) * Number(it.unit_price);

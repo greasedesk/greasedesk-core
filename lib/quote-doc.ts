@@ -41,6 +41,10 @@ export type QuoteDoc = {
   taxLabel: string;
   logoUrl: string | null;
   company: { name: string; vatNumber: string | null; address: string | null; phone: string | null; email: string | null };
+  /** TRUE when NO number exists at site OR group level. The page shows a visible setup gap rather
+   *  than silently dropping the customer's escape hatch — an affordance that vanishes without
+   *  trace is the failure mode to avoid. */
+  phoneSetupGap: boolean;
   customer: { name: string };
   vehicle: { reg: string | null; desc: string | null; mileage: number | null };
   jobDescription: string | null;
@@ -57,7 +61,7 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       id: true, job_card_id: true, version: true, status: true, sent_at: true,
       vat_registered: true, tax_label: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
-      group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true } },
+      group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true, phone: true } },
       job_card: {
         select: {
           garage_notes: true, odometer_in: true,
@@ -100,9 +104,11 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       name: v.group?.trading_name || v.group?.group_name || 'Your garage',
       vatNumber: v.group?.vat_number ?? null,
       address: v.job_card?.site?.address ?? v.group?.address ?? null,
-      phone: v.job_card?.site?.phone ?? null,
+      // FALLBACK CHAIN: the site's own number, else the company-level one.
+      phone: v.job_card?.site?.phone ?? v.group?.phone ?? null,
       email: null, // form-only contact discipline — never expose a mailbox on a public page
     },
+    phoneSetupGap: !(v.job_card?.site?.phone ?? v.group?.phone),
     customer: { name: v.job_card?.customer?.name ?? '' },
     vehicle: {
       reg: veh?.registration ?? null,

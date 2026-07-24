@@ -1,0 +1,1 @@
+ALTER TABLE "Group" ADD COLUMN "phone" TEXT;

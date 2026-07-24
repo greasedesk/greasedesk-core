@@ -8,8 +8,8 @@
  * component (components/DocumentLines) that the invoice view also uses — the quote and the invoice
  * are one document rendered twice, not two that happen to agree.
  *
- * READ-ONLY in this slice. Accept/decline is slice-2b. Per the magic-link rule this page authorises
- * no money movement and no destructive action.
+ * Read-only APART FROM accept/decline. Per the magic-link rule this page authorises no money
+ * movement and no destructive action — accepting writes one decision onto one frozen version.
  *
  * Expired / revoked / unknown links EXPLAIN THEMSELVES rather than 404ing — a 404 reads as "the
  * garage's system is broken"; the truth is "your link aged out, ask for a new one".
@@ -22,11 +22,12 @@ import { resolveMagicLink, MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
 import DocumentLines from '@/components/DocumentLines';
+import { useState } from 'react';
 
 type Denied = 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose' | 'no_quote';
 
 type Props =
-  | { state: 'ok'; doc: SerializedDoc }
+  | { state: 'ok'; doc: SerializedDoc; token: string }
   | { state: 'denied'; reason: Denied; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
@@ -150,16 +151,7 @@ export default function CustomerQuotePage(props: Props) {
             This quote is valid until <span className="text-ink font-medium">{expiry}</span>.
           </p>
 
-          {/* Not a dead end. Accept/decline lands in the next slice; the phone always works. */}
-          {d.company.phone && (
-            <div className="mt-6 pt-5 border-t border-line text-sm">
-              <p className="text-muted">Questions, or want to go ahead?</p>
-              <p className="mt-1 text-ink">
-                Call {d.company.name} on{' '}
-                <a className="text-accent font-semibold" href={`tel:${d.company.phone.replace(/\s/g, '')}`}>{d.company.phone}</a>
-              </p>
-            </div>
-          )}
+          <Respond token={props.token} doc={d} />
 
           <p className="mt-6 text-[11px] text-muted">
             Anyone with this link can view the quote — please don’t forward it.
@@ -167,6 +159,87 @@ export default function CustomerQuotePage(props: Props) {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Accept / decline. NEITHER IS A DEAD END: the garage's number is shown alongside, resolved
+ * site → group. When NO number exists anywhere the page says so explicitly — an escape hatch that
+ * silently disappears is the failure mode we're avoiding, so the gap is visible to the customer
+ * (and therefore reported back to the garage) rather than absent without trace.
+ */
+function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
+  const [busy, setBusy] = useState<null | 'accept' | 'decline'>(null);
+  const [outcome, setOutcome] = useState<string | null>(
+    doc.status === 'accepted' || doc.status === 'declined' ? doc.status : null,
+  );
+  const [err, setErr] = useState<string | null>(null);
+
+  async function respond(action: 'accept' | 'decline') {
+    if (action === 'decline' && !window.confirm('Decline this quote? The garage will be told.')) return;
+    setBusy(action); setErr(null);
+    try {
+      const r = await fetch('/api/quote-respond', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, action }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(j?.message || 'Something went wrong — please call the garage.'); return; }
+      setOutcome(j.outcome);
+    } catch { setErr('Something went wrong — please call the garage.'); }
+    finally { setBusy(null); }
+  }
+
+  const phoneBlock = doc.company.phone ? (
+    <p className="mt-1 text-ink">
+      Call {doc.company.name} on{' '}
+      <a className="text-accent font-semibold" href={`tel:${doc.company.phone.replace(/\s/g, '')}`}>{doc.company.phone}</a>
+    </p>
+  ) : (
+    <p className="mt-1 text-sm text-warn">
+      No contact number has been set up for this garage yet — please reply to the email they sent you.
+    </p>
+  );
+
+  if (outcome === 'accepted') {
+    return (
+      <div className="mt-6 pt-5 border-t border-line">
+        <div className="rounded-lg bg-ok-soft text-ok p-3 text-sm font-semibold">
+          Thank you — you've accepted this quote. The garage will be in touch to book you in.
+        </div>
+        <div className="mt-4 text-sm"><p className="text-muted">Need to change something?</p>{phoneBlock}</div>
+      </div>
+    );
+  }
+  if (outcome === 'declined') {
+    return (
+      <div className="mt-6 pt-5 border-t border-line">
+        <div className="rounded-lg bg-surface-muted text-ink p-3 text-sm">
+          You've declined this quote and the garage has been told.
+        </div>
+        <div className="mt-4 text-sm"><p className="text-muted">Changed your mind, or want to talk it through?</p>{phoneBlock}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6 pt-5 border-t border-line">
+      <div className="flex flex-col sm:flex-row gap-2">
+        <button type="button" disabled={busy !== null} onClick={() => respond('accept')}
+          className="flex-1 text-sm font-semibold rounded-lg px-4 py-3 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+          {busy === 'accept' ? 'Accepting…' : 'Accept quote'}
+        </button>
+        <button type="button" disabled={busy !== null} onClick={() => respond('decline')}
+          className="flex-1 text-sm font-semibold rounded-lg px-4 py-3 bg-surface-muted border border-line text-ink disabled:opacity-50">
+          {busy === 'decline' ? 'Declining…' : 'Decline quote'}
+        </button>
+      </div>
+      {err && <p className="mt-2 text-sm text-danger">{err}</p>}
+      <div className="mt-4 text-sm">
+        <p className="text-muted">Questions, or want to talk it through first?</p>
+        {phoneBlock}
+      </div>
+    </div>
   );
 }
 
@@ -197,6 +270,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   return {
     props: {
       state: 'ok',
+      token,
       doc: { ...doc, sentAt: doc.sentAt.toISOString(), expiresAt: doc.expiresAt.toISOString() },
     },
   };

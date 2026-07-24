@@ -42,6 +42,8 @@ export type AuditAction =
   | 'quote.cost_entered' // a parts cost typed on the quote line (ruling 2026-07-20): { line, from, to, via, meaning }
   | 'quote.sent'         // a frozen QuoteVersion went to the customer: { version, lines, emailed, sentTo }
   | 'quote.superseded'   // the estimate was edited while a quote was out — old version + link killed: { version }
+  | 'quote.accepted'     // CUSTOMER accepted, via magic link: { version, grossPennies, at, ip, userAgent }
+  | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
   // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
   // never the business audit trail. The audit trail carries business events only. Nothing technical.
