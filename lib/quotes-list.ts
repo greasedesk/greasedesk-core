@@ -4,6 +4,13 @@
  * this returns ONE ROW PER CARD at its LATEST version. A card whose v1 was superseded by v2 is one
  * row showing v2.
  *
+ * COVERS VERBAL QUOTES TOO. Most quoting happens over the counter or by phone: the card is marked
+ * `quoted` and nothing is ever sent. Those cards have NO QuoteVersion, and a list built only from
+ * versions would miss the commoner case entirely. So the list is the UNION — cards with a sent
+ * version (dates, expiry, version, frozen value) and cards merely marked `quoted` (value read live
+ * off the estimate, flagged "quoted verbally"). Both are chaseable; this is the complete quoting
+ * picture, not the subset that used the formal flow.
+ *
  * EXPIRY IS DERIVED, NEVER STORED. A quote sent 15 days ago with no answer is expired whether or not
  * any job ran, any cron fired, or anyone opened the link. Deriving it from sent_at + MAGIC_LINK_DAYS
  * means the list can never disagree with what the customer's link actually does.
@@ -41,15 +48,20 @@ export function deriveQuoteStatus(
   return quoteExpiry(v.sent_at).getTime() <= now.getTime() ? 'expired' : 'awaiting';
 }
 
+/** Card statuses that mean the work has moved ON from being a quote. */
+export const DELIVERED_STATUSES = ['invoiced', 'paid', 'done'] as const;
+
 export type QuoteRow = {
   jobCardId: string;
-  quoteVersionId: string;
-  version: number;
+  quoteVersionId: string | null; // null = verbal quote, never sent
+  version: number | null;
+  /** TRUE when the card is marked quoted but nothing was ever sent. */
+  verbal: boolean;
   registration: string | null;
   customerName: string | null;
   grossPennies: number;
-  sentAt: string;
-  expiresAt: string;
+  sentAt: string | null;
+  expiresAt: string | null;
   status: DerivedQuoteStatus;
   cardStatus: string;
   siteId: string;
@@ -94,6 +106,7 @@ export async function listQuotes(args: {
       jobCardId: v.job_card_id,
       quoteVersionId: v.id,
       version: v.version,
+      verbal: false,
       registration: v.job_card?.vehicle?.registration ?? null,
       customerName: v.job_card?.customer?.name ?? null,
       grossPennies: v.gross_pennies,
@@ -105,11 +118,51 @@ export async function listQuotes(args: {
     });
   }
 
-  const filtered = args.filter ? rows.filter((r) => r.status === args.filter) : rows;
+  // ── VERBAL QUOTES: cards sitting at `quoted` with NO version at all. ──
+  const verbalCards = (await prisma.jobCard.findMany({
+    where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: 'quoted', id: { notIn: [...seen] } },
+    select: {
+      id: true, status: true, site_id: true, created_at: true,
+      vehicle: { select: { registration: true } },
+      customer: { select: { name: true } },
+      items: { select: { qty: true, unit_price: true, vat_amount: true } },
+    },
+  })) as any[];
+  for (const c of verbalCards) {
+    // Value read LIVE off the estimate — there is no frozen version to read, and pretending
+    // otherwise would invent a figure nobody agreed to.
+    const gross = c.items.reduce(
+      (sum: number, it: any) => sum + Math.round(Number(it.qty) * Number(it.unit_price) * 100) + Math.round(Number(it.vat_amount) * 100),
+      0,
+    );
+    rows.push({
+      jobCardId: c.id,
+      quoteVersionId: null,
+      version: null,
+      verbal: true,
+      registration: c.vehicle?.registration ?? null,
+      customerName: c.customer?.name ?? null,
+      grossPennies: gross,
+      sentAt: null,
+      expiresAt: null, // nothing was sent, so nothing lapses — a verbal quote never "expires"
+      status: 'awaiting',
+      cardStatus: c.status,
+      siteId: c.site_id,
+    });
+  }
+
+  let filtered = args.filter ? rows.filter((r) => r.status === args.filter) : rows;
+  // ACCEPTED IS BOUNDED BY STATE, NOT DATE: once a card is invoiced/paid/done it is delivered work
+  // and lives in Job Cards + Invoices. Accepted then settles at "accepted but not yet delivered" —
+  // a working list rather than an archive, with no arbitrary cutoff to explain.
+  if (args.filter === 'accepted') {
+    filtered = filtered.filter((r) => !(DELIVERED_STATUSES as readonly string[]).includes(r.cardStatus));
+  }
   filtered.sort((a, b) =>
     args.filter === 'awaiting'
-      ? a.expiresAt.localeCompare(b.expiresAt)   // soonest to lapse = most urgent to chase
-      : b.sentAt.localeCompare(a.sentAt),
+      // Soonest to lapse first; verbal quotes have no clock, so they sort after the timed ones.
+      ? (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999')
+      : (b.sentAt ?? '').localeCompare(a.sentAt ?? ''),
   );
   return filtered;
 }

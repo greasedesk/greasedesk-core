@@ -101,11 +101,15 @@ export default function QuotesPage(props: Props) {
                       <span className="py-3 px-4 font-semibold text-ink">{r.registration ?? '—'}</span>
                       <span className="py-3 px-4 text-ink">{r.customerName ?? '—'}</span>
                       <span className="py-3 px-4 text-right text-ink tabular-nums">{formatMoney(r.grossPennies, { currency: props.currency, locale: props.locale })}</span>
-                      <span className="py-3 px-2 text-center text-muted tabular-nums">v{r.version}</span>
-                      <span className="py-3 px-4 text-muted">{fmtDate(r.sentAt)}</span>
-                      <span className="py-3 px-4 text-muted">{fmtDate(r.expiresAt)}</span>
+                      <span className="py-3 px-2 text-center text-muted tabular-nums">{r.version ? `v${r.version}` : '—'}</span>
+                      <span className="py-3 px-4 text-muted">{r.sentAt ? fmtDate(r.sentAt) : '—'}</span>
+                      <span className="py-3 px-4 text-muted">{r.expiresAt ? fmtDate(r.expiresAt) : '—'}</span>
                       <span className="py-3 px-4">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>
+                        {/* A verbal quote has no send, no clock and no customer-side record — say so
+                            plainly rather than dressing it as a sent quote with blank dates. */}
+                        {r.verbal
+                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line">Quoted verbally — not sent</span>
+                          : <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>}
                       </span>
                     </Link>
                   </td>
@@ -118,6 +122,8 @@ export default function QuotesPage(props: Props) {
 
       <p className="text-xs text-muted mt-4">
         Expiry is worked out from the send date — a quote past its window shows as Expired whether or not anything has run.
+        Quotes given verbally have no send date and never lapse; they stay here until answered.
+        Accepted shows work that hasn’t been delivered yet — once a job is invoiced it moves to Job Cards.
       </p>
     </>
   );

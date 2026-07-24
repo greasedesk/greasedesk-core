@@ -2070,6 +2070,11 @@ model QuoteVersion {
   responded_at         DateTime?
   responded_ip         String?
   responded_user_agent String?
+  // WHO answered, and therefore HOW MUCH THE RECORD IS WORTH. NULL with responded_at set = the
+  // CUSTOMER answered through their magic link (attested: ip + user-agent captured). SET = a staff
+  // user recorded an answer taken by phone or over the counter — genuine, but garage-recorded, not
+  // customer-attested. Never fake an ip/user-agent for that path; the absence is the honest signal.
+  responded_by_user    String?
 
   group    Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
   job_card JobCard            @relation(fields: [job_card_id], references: [id], onDelete: Cascade)

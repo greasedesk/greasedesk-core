@@ -45,17 +45,18 @@ type JobCardRow = {
 // Per-status tabs (ruling 2026-07-10, replaces Current/Completed). Paid includes cards in the
 // clearance window (paid_pending is an INVOICE state — the card sits at `paid` through it).
 // Statuses without a named tab (invoiced, done, declined, cancelled) appear under All only.
-const TABS = ['all', 'draft', 'quoted', 'accepted', 'in_progress', 'paid'] as const;
+// 'quoted' RETIRED (slice: Quotes section): the Quotes lens now covers every quoted card —
+// both those with a sent QuoteVersion and those quoted verbally — so the tab was a strict subset.
+const TABS = ['all', 'draft', 'accepted', 'in_progress', 'paid'] as const;
 type Tab = typeof TABS[number];
 const TAB_STATUSES: Record<Tab, string[] | null> = {
   all: null,
   draft: ['draft'],
-  quoted: ['quoted'],
   accepted: ['accepted'],
   in_progress: ['in_progress'],
   paid: ['paid'],
 };
-const TAB_LABELS: Record<Tab, string> = { all: 'All', draft: 'Draft', quoted: 'Quoted', accepted: 'Accepted', in_progress: 'In-Progress', paid: 'Paid' };
+const TAB_LABELS: Record<Tab, string> = { all: 'All', draft: 'Draft', accepted: 'Accepted', in_progress: 'In-Progress', paid: 'Paid' };
 
 type WipSummary = { total: number; count: number; ageDays: number; site: string };
 type PageProps = {

@@ -792,6 +792,43 @@ function QuoteActions(props: {
           hand — WhatsApp, read out over the phone — and a customer with no email on file is
           offered the link rather than blocked. */}
       {!isAcceptedOnwards && <SendQuote jobCardId={jobCardId} disabled={busy !== null} />}
+
+      {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
+          captures WHO on staff marked it and that it was verbal, and deliberately records NO ip or
+          user-agent — those would describe the receptionist, not the customer. */}
+      {!isAcceptedOnwards && <AcceptVerbal jobCardId={jobCardId} disabled={busy !== null} />}
+    </div>
+  );
+}
+
+function AcceptVerbal({ jobCardId, disabled }: { jobCardId: string; disabled: boolean }) {
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  async function mark() {
+    if (!window.confirm('Record that the customer confirmed this quote by phone? This is logged as a garage-recorded acceptance, not a customer-signed one.')) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await fetch('/api/quote-accept-verbal', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.message || 'Could not record the acceptance.'); return; }
+      setMsg(d.message);
+    } catch { setErr('Could not record the acceptance.'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="mt-3">
+      <button type="button" disabled={disabled || busy} onClick={mark}
+        className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface-muted border border-line text-ink disabled:opacity-50">
+        {busy ? 'Recording…' : 'Mark accepted (customer confirmed by phone)'}
+      </button>
+      {err && <p className="mt-2 text-sm text-danger">{err}</p>}
+      {msg && <p className="mt-2 text-sm text-ok">{msg}</p>}
     </div>
   );
 }

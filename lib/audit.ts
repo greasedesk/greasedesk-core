@@ -44,6 +44,9 @@ export type AuditAction =
   | 'quote.superseded'   // the estimate was edited while a quote was out — old version + link killed: { version }
   | 'quote.accepted'     // CUSTOMER accepted, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
+  | 'quote.accepted_verbal' // GARAGE recorded an acceptance taken by phone/counter. Distinct from
+                            // quote.accepted ON PURPOSE: { attested:false, via, version, frozenVersion }.
+                            // Only quote.accepted is customer-attested (ip + user-agent captured).
   | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
   // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
   // never the business audit trail. The audit trail carries business events only. Nothing technical.
