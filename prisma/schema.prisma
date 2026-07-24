@@ -569,11 +569,33 @@ model GroupBilling {
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
 
+// PER-TENANT MODULE ENTITLEMENT (slice-1 C). Read ONLY through lib/modules::hasModule — never an
+// inline query, same discipline as lib/billing::canWrite.
+//
+// STRIPE IS THE SOURCE OF TRUTH; these rows are a DERIVED CACHE, exactly as subscription_status is.
+// The single writer (lib/stripe-billing-cache::applyStripeSubscriptionToCache) derives the module
+// set from the subscription's Price IDs and writes billing status AND modules together, from the
+// same subscription object, in one transaction. Two facts written by one writer from one source
+// cannot drift — which is the whole point: a tenant must never pay for Booking and not have it.
+//
+// `source` records WHY a module is on, so an override is visible rather than indistinguishable from
+// something paid for:
+//   stripe  — derived from a subscription line item (the normal case)
+//   grant   — an explicit operator override (comped, beta, migration); survives Stripe sync
+//   default — seeded open before modules were sold; every pre-existing tenant
+enum FeatureSource {
+  stripe
+  grant
+  default
+}
+
 model GroupFeature {
-  id          String  @id @default(uuid())
+  id          String        @id @default(uuid())
   group_id    String
   feature_key String
-  enabled     Boolean @default(false)
+  enabled     Boolean       @default(false)
+  source      FeatureSource @default(stripe)
+  updated_at  DateTime      @default(now()) @updatedAt
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 

@@ -17,6 +17,7 @@
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { billingStatusFromStripe } from '@/lib/billing';
+import { modulesFromPriceIds, applyStripeModules } from '@/lib/modules';
 
 /** Map a Stripe subscription onto GroupBilling (+ the trial clock on Group). Resolves the tenant by
  *  customer id, falling back to an explicit groupId (first confirm, before the customer is cached). */
@@ -31,15 +32,26 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   const periodEnd = (sub as any).current_period_end ? new Date((sub as any).current_period_end * 1000) : null;
   const trialEnd = (sub as any).trial_end ? new Date((sub as any).trial_end * 1000) : null;
 
-  await prisma.groupBilling.update({
-    where: { group_id: groupId },
-    data: {
-      stripe_customer_id: customerId ?? undefined,
-      stripe_subscription_id: sub.id,
-      subscription_status: sub.status,
-      current_period_end: periodEnd,
-      status: billingStatusFromStripe(sub.status), // coarse projection for display
-    },
+  // ENTITLEMENT IS DERIVED HERE, from the SAME subscription object, in the SAME transaction as the
+  // billing status — that is what makes "the price they pay" and "the modules they get" incapable of
+  // drifting. Per-module line items: each item's Price ID maps 1:1 to a module key (lib/modules).
+  const priceIds = (sub.items?.data ?? [])
+    .map((i) => (typeof i.price === 'string' ? i.price : i.price?.id))
+    .filter((x): x is string => !!x);
+  const entitled = modulesFromPriceIds(priceIds);
+
+  await prisma.$transaction(async (tx: any) => {
+    await tx.groupBilling.update({
+      where: { group_id: groupId },
+      data: {
+        stripe_customer_id: customerId ?? undefined,
+        stripe_subscription_id: sub.id,
+        subscription_status: sub.status,
+        current_period_end: periodEnd,
+        status: billingStatusFromStripe(sub.status), // coarse projection for display
+      },
+    });
+    await applyStripeModules(tx as any, groupId, entitled);
   });
 
   // Stripe owns the trial clock once a subscription exists (item-13): mirror trial_end onto Group.
