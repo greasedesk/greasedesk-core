@@ -252,8 +252,8 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
               <div>
                 <label htmlFor="pricingDisplayMode" className={labelClass}>Price Entry Mode</label>
                 <select id="pricingDisplayMode" name="pricingDisplayMode" value={settings.pricingDisplayMode} onChange={handleChange} className={inputClass}>
-                  <option value="ex_vat">Excluding VAT (Net Price)</option>
-                  <option value="inc_vat">Including VAT (Gross Price)</option>
+                  <option value="ex_vat">Excluding {taxLabel} (Net Price)</option>
+                  <option value="inc_vat">Including {taxLabel} (Gross Price)</option>
                 </select>
                 <p className="text-xs text-muted mt-1">The default {taxLabel} rate lives in Company Profile → Company Details.</p>
               </div>

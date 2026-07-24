@@ -86,11 +86,11 @@ export default function VatReport(props: PageProps) {
         {/* Figures */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="bg-surface border border-line rounded-xl p-5">
-            <div className="text-xs uppercase tracking-wide text-muted mb-1">Total sales (ex-VAT)</div>
+            <div className="text-xs uppercase tracking-wide text-muted mb-1">Total sales (ex-{T})</div>
             <div className="text-2xl font-bold text-ink tabular-nums">{fmt(summary.netPennies)}</div>
           </div>
           <div className="bg-surface border border-accent rounded-xl p-5">
-            <div className="text-xs uppercase tracking-wide text-muted mb-1">Total output VAT</div>
+            <div className="text-xs uppercase tracking-wide text-muted mb-1">Total output {T}</div>
             <div className="text-2xl font-bold text-ink tabular-nums">{fmt(summary.vatPennies)}</div>
           </div>
           <div className="bg-surface border border-line rounded-xl p-5">
@@ -103,7 +103,7 @@ export default function VatReport(props: PageProps) {
         <div className="bg-surface border border-line rounded-xl overflow-hidden mb-6">
           <table className="w-full text-sm">
             <thead className="bg-surface-muted text-muted">
-              <tr className="text-left"><th className="px-4 py-2 font-medium">VAT rate</th><th className="px-4 py-2 font-medium text-right">Net (ex-VAT)</th><th className="px-4 py-2 font-medium text-right">VAT</th><th className="px-4 py-2 font-medium text-right">Lines</th></tr>
+              <tr className="text-left"><th className="px-4 py-2 font-medium">{T} rate</th><th className="px-4 py-2 font-medium text-right">Net (ex-{T})</th><th className="px-4 py-2 font-medium text-right">{T}</th><th className="px-4 py-2 font-medium text-right">Lines</th></tr>
             </thead>
             <tbody>
               {summary.byRate.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-muted">No sales invoices in this period.</td></tr>}
@@ -124,7 +124,7 @@ export default function VatReport(props: PageProps) {
           <a href={`/api/reports/vat-summary-pdf?${qs}`} target="_blank" rel="noreferrer" className="bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium">Download PDF</a>
           <a href={`/api/reports/vat-summary?format=csv&${qs}`} className="bg-surface border border-line text-ink rounded-lg px-4 py-2.5 text-sm font-medium hover:bg-surface-muted">Download CSV</a>
         </div>
-        <p className="text-xs text-muted mt-4">Figures come from the same issued-invoice ledger as your Invoices list, by invoice date. Input/purchase VAT recording is a future step.</p>
+        <p className="text-xs text-muted mt-4">Figures come from the same issued-invoice ledger as your Invoices list, by invoice date. Input/purchase {T} recording is a future step.</p>
       </div>
     </>
   );
