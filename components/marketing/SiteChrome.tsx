@@ -60,15 +60,17 @@ function Header() {
       className={`sticky top-0 z-50 bg-surface border-b transition-shadow ${scrolled ? 'border-line shadow-card' : 'border-transparent'}`}
       style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <nav className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
-        {/* Mark + wordmark — the SAME gear-and-spanner mark the product uses, so site and app match.
-            Strapline sits inline beside it on md+ (muted), giving the promise without crowding mobile. */}
-        <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
-            <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
-            <span className="text-xl font-extrabold text-ink tracking-tight">GreaseDesk</span>
-          </Link>
-          <span className="hidden md:inline text-sm text-muted">{STRAPLINE}</span>
-        </div>
+        {/* Mark + STACKED lockup — the SAME gear-and-spanner mark the product uses, so site and app
+            match. Wordmark + strapline stack in a column on md+; the icon is centred against the pair.
+            Below md the strapline is hidden, so the lockup is a single line. The nav stays h-16 —
+            the two-line lockup (~40px) fits within it, so the bar never grows. */}
+        <Link href="/" className="flex items-center gap-2.5" aria-label="GreaseDesk — home">
+          <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
+          <span className="flex flex-col">
+            <span className="text-xl font-extrabold text-ink tracking-tight leading-tight">GreaseDesk</span>
+            <span className="hidden md:block text-xs text-muted font-normal leading-tight">{STRAPLINE}</span>
+          </span>
+        </Link>
 
         {/* Desktop nav (sm+) — content links from the Content-system nav config; auth CTAs structural. */}
         <div className="hidden sm:flex items-center gap-5 text-sm">
