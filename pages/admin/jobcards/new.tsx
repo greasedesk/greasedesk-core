@@ -5,6 +5,15 @@
  * Captures vehicle/customer fields + flags and POSTs to /api/jobcard, which creates the
  * JobCard (and find-or-creates Customer + Vehicle) scoped to the session's group_id/site_id.
  * Auth-guarded in getServerSideProps, mirroring the Settings page.
+ *
+ * RETURN-DESTINATION PARAMETER (?next=quote). A quote needs exactly the same capture — reg + VRM
+ * lookup, customer, vehicle, flags — so Quotes reuses THIS form rather than forking a copy that
+ * would drift. The only difference is where you land: ?next=quote drops you on the card's Quote tab
+ * ready to price; without it you land on the card overview, exactly as before.
+ *
+ * The card is created as DRAFT either way. It only becomes `quoted` when the quote is actually sent
+ * or marked quoted verbally — so clicking "New quote" never puts an unpriced £0 row in the Quotes
+ * list.
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
@@ -126,7 +135,9 @@ export default function NewJobCardPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to create job card.');
-      router.push(`/admin/jobcards/${data.id}`);
+      // ONE difference between the two entry points: where you land.
+      const next = String(router.query.next ?? '');
+      router.push(next === 'quote' ? `/admin/jobcards/${data.id}?tab=quote` : `/admin/jobcards/${data.id}`);
     } catch (err: any) {
       setError(err?.message || 'Failed to create job card.');
       setSaving(false);
@@ -136,13 +147,13 @@ export default function NewJobCardPage() {
   return (
     <>
       <Head>
-        <title>New Job Card - GreaseDesk</title>
+        <title>{router.query.next === 'quote' ? 'New Quote' : 'New Job Card'} - GreaseDesk</title>
       </Head>
 
       <div className="max-w-3xl">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold text-ink">New Job Card</h1>
-          <Link href="/admin/jobcards" className="text-sm text-muted hover:text-ink">
+          <h1 className="text-3xl font-bold text-ink">{router.query.next === 'quote' ? 'New Quote' : 'New Job Card'}</h1>
+          <Link href={router.query.next === 'quote' ? '/admin/quotes' : '/admin/jobcards'} className="text-sm text-muted hover:text-ink">
             ← Back to list
           </Link>
         </div>
@@ -260,7 +271,7 @@ export default function NewJobCardPage() {
               disabled={saving}
               className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-5 py-2.5 disabled:opacity-50"
             >
-              {saving ? 'Creating…' : 'Create Job Card'}
+              {saving ? 'Creating…' : (router.query.next === 'quote' ? 'Create & price quote' : 'Create Job Card')}
             </button>
           </div>
         </form>
