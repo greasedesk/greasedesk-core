@@ -200,7 +200,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
             </select>
           </div>
         )}
-        <p className="text-muted mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>. The VAT rate is business-wide (applies to every location).</p>
+        <p className="text-muted mb-6">Financial &amp; regional settings for <strong>{settings.siteName}</strong>. The {taxLabel} rate is business-wide (applies to every location).</p>
 
         {message.text && (
           <div className={`p-3 rounded-lg mb-4 text-sm ${message.type === 'success' ? 'bg-ok text-white' : 'bg-danger text-white'}`}>
@@ -255,10 +255,10 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                   <option value="ex_vat">Excluding VAT (Net Price)</option>
                   <option value="inc_vat">Including VAT (Gross Price)</option>
                 </select>
-                <p className="text-xs text-muted mt-1">The default VAT rate lives in Company Profile → Company Details.</p>
+                <p className="text-xs text-muted mt-1">The default {taxLabel} rate lives in Company Profile → Company Details.</p>
               </div>
               <div>
-                <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. VAT)</label>
+                <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. {taxLabel})</label>
                 <input type="number" step="0.01" id="defaultLabourRate" name="defaultLabourRate" value={settings.defaultLabourRate} onChange={handleChange} className={inputClass} required />
               </div>
             </div>

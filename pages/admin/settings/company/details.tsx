@@ -15,14 +15,16 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 
 type PageProps = {
-  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string;
+  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string; taxLabel: string; taxModel: string;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
 
 export default function CompanyDetails(props: PageProps) {
-  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp } = props;
+  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp, taxLabel, taxModel } = props;
+  const L = taxLabel || 'VAT';
+  const isSalesTax = taxModel === 'sales_tax'; // US: flat rate, NO tax number to ask for
   const { t } = useTranslation('company');
   const router = useRouter();
   const [name, setName] = useState(groupName);
@@ -86,17 +88,17 @@ export default function CompanyDetails(props: PageProps) {
           <label className="flex items-start gap-3 py-1 cursor-pointer">
             <input type="checkbox" checked={vatReg} onChange={(e) => setVatReg(e.target.checked)} className="w-5 h-5 mt-0.5" />
             <span>
-              <span className="text-sm font-medium text-ink block">{t('details.vatRegistered')}</span>
-              <span className="text-xs text-muted">{t('details.vatRegisteredHint')}</span>
+              <span className="text-sm font-medium text-ink block">{t('details.vatRegistered', { label: L })}</span>
+              <span className="text-xs text-muted">{t('details.vatRegisteredHint', { label: L })}</span>
             </span>
           </label>
           {vatReg && (
             <>
-              <div><label className={labelClass}>{t('details.vatNumber')}</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>
+              {!isSalesTax && <div><label className={labelClass}>{t('details.vatNumber', { label: L })}</label><input value={vat} onChange={(e) => setVat(e.target.value)} className={inputClass} /></div>}
               <div>
-                <label className={labelClass}>{t('details.defaultVatRate')}</label>
+                <label className={labelClass}>{t('details.defaultVatRate', { label: L })}</label>
                 <input type="number" inputMode="decimal" min={0} max={100} step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} className={inputClass} />
-                <span className="text-xs text-muted mt-0.5 block">{t('details.defaultVatRateHint')}</span>
+                <span className="text-xs text-muted mt-0.5 block">{t('details.defaultVatRateHint', { label: L })}</span>
               </div>
             </>
           )}
@@ -116,7 +118,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true,
+      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true,
     },
   })) as any;
   return {
@@ -126,6 +128,8 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       address: g?.address ?? '',
       vatRegistered: !!g?.vat_registered,
       vatNumber: g?.vat_number ?? '',
+      taxLabel: (g as any)?.tax_label || 'VAT',
+      taxModel: (g as any)?.tax_model || 'vat',
       defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : '20.00',
       vinHint: g?.vin_hint_text ?? '',
       phone: g?.phone ?? '',

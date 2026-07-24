@@ -61,7 +61,7 @@ const TAB_LABELS: Record<Tab, string> = { all: 'All', draft: 'Draft', accepted: 
 type WipSummary = { total: number; count: number; ageDays: number; site: string };
 type PageProps = {
   cards: JobCardRow[]; noSites: boolean; scopeLabel: string;
-  currency: string; locale: string;
+  currency: string; locale: string; taxLabel: string;
   wip: WipSummary | null; // present ⇒ WIP mode
 };
 
@@ -92,7 +92,7 @@ function StageBadges({ stages }: { stages: Stages }) {
   );
 }
 
-export default function JobCardsListPage({ cards, noSites, scopeLabel, currency, locale, wip }: PageProps) {
+export default function JobCardsListPage({ cards, noSites, scopeLabel, currency, locale, taxLabel, wip }: PageProps) {
   // Default = All (per the six-tab ruling; the named tabs are one click away).
   const [tab, setTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
@@ -140,7 +140,7 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel, currency,
             <span className="font-semibold text-ink">Work in progress, not invoiced</span>
             <span className="text-muted"> — accepted or in progress, no invoice raised. Oldest first.</span>
             <div className="mt-1 text-ink font-semibold tabular-nums">
-              {wip.count} {wip.count === 1 ? 'card' : 'cards'} · {money(wip.total)} <span className="font-normal text-muted">ex-VAT</span>
+              {wip.count} {wip.count === 1 ? 'card' : 'cards'} · {money(wip.total)} <span className="font-normal text-muted">ex-{taxLabel}</span>
             </div>
           </div>
           <Link href="/admin/jobcards" className="shrink-0 text-sm font-medium text-accent whitespace-nowrap hover:underline">Clear filter ✕</Link>
@@ -175,7 +175,7 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel, currency,
               {wip
                 ? <>
                     <th className="px-4 py-3">Days open</th>
-                    <th className="px-4 py-3 text-right">Value (ex-VAT)</th>
+                    <th className="px-4 py-3 text-right">Value (ex-{taxLabel})</th>
                   </>
                 : <th className="px-4 py-3">Created</th>}
             </tr>
@@ -265,9 +265,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const fmt = fmtSite ? ((await prisma.site.findUnique({ where: { id: fmtSite }, select: { currency_code: true, locale: true } })) as { currency_code: string; locale: string } | null) : null;
   const currency = fmt?.currency_code ?? 'GBP';
   const locale = fmt?.locale ?? 'en-GB';
+  const grpTax = (await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { tax_label: true } })) as { tax_label: string } | null;
+  const taxLabel = grpTax?.tax_label || 'VAT';
 
   if (vis.siteIds.length === 0) {
-    return { props: { cards: [], noSites: true, scopeLabel: '', currency, locale, wip: wipMode ? { total: 0, count: 0, ageDays: WIP_AGE_DAYS, site: '' } : null } };
+    return { props: { cards: [], noSites: true, scopeLabel: '', currency, locale, taxLabel, wip: wipMode ? { total: 0, count: 0, ageDays: WIP_AGE_DAYS, site: '' } : null } };
   }
 
   // Location scope from ?site: "all" (multi-site only) shows every accessible site; a valid site id
@@ -324,7 +326,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   return {
     props: {
-      cards, noSites: false, scopeLabel, currency, locale,
+      cards, noSites: false, scopeLabel, currency, locale, taxLabel,
       wip: wipMode ? { total: wipTotal, count: cards.length, ageDays: WIP_AGE_DAYS, site: (isAll ? 'all' : (sid as string)) } : null,
     },
   };

@@ -30,7 +30,7 @@ export type VatPdfInput = VatSummary & { businessName: string; vatNumber: string
 
 function VatSummaryPdf({ d }: { d: VatPdfInput }) {
   const T = d.taxLabel || 'VAT';
-  const gbp = (p: number) => formatMoney(p, { currency: d.currency, locale: d.locale }); // tenant currency, not hardcoded £
+  const money = (p: number) => formatMoney(p, { currency: d.currency, locale: d.locale }); // tenant currency, not hardcoded £
   return (
     <Document>
       <Page size="A4" style={S.page}>
@@ -43,9 +43,9 @@ function VatSummaryPdf({ d }: { d: VatPdfInput }) {
         </Text>
 
         <View style={S.totalsBox}>
-          <View style={S.totalRow}><Text style={S.muted}>Total sales (ex-{T})</Text><Text>{gbp(d.netPennies)}</Text></View>
+          <View style={S.totalRow}><Text style={S.muted}>Total sales (ex-{T})</Text><Text>{money(d.netPennies)}</Text></View>
           <View style={S.totalRow}><Text style={S.muted}>Invoices</Text><Text>{d.invoiceCount}</Text></View>
-          <View style={[S.totalRow, S.grand]}><Text>Total output {T}</Text><Text>{gbp(d.vatPennies)}</Text></View>
+          <View style={[S.totalRow, S.grand]}><Text>Total output {T}</Text><Text>{money(d.vatPennies)}</Text></View>
         </View>
 
         <Text style={S.label}>Breakdown by {T} rate</Text>
@@ -56,8 +56,8 @@ function VatSummaryPdf({ d }: { d: VatPdfInput }) {
         {d.byRate.length === 0 && <Text style={{ paddingVertical: 8, ...S.muted }}>No sales invoices in this period.</Text>}
         {d.byRate.map((r) => (
           <View style={S.row} key={r.ratePercent}>
-            <Text style={S.cRate}>{r.ratePercent}%</Text><Text style={S.cNet}>{gbp(r.netPennies)}</Text>
-            <Text style={S.cVat}>{gbp(r.vatPennies)}</Text><Text style={S.cLines}>{r.lineCount}</Text>
+            <Text style={S.cRate}>{r.ratePercent}%</Text><Text style={S.cNet}>{money(r.netPennies)}</Text>
+            <Text style={S.cVat}>{money(r.vatPennies)}</Text><Text style={S.cLines}>{r.lineCount}</Text>
           </View>
         ))}
 
