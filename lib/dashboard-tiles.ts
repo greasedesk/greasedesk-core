@@ -33,6 +33,41 @@ const grossOfIssued = grossOfPaid;
 
 export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown>> = {
   // Confirmed paid revenue in the period (paid ledger; three-state: only `paid` counts).
+  // QUOTE CONVERSION — COHORT BASIS. The denominator is the quotes ISSUED in the period (a card's
+  // FIRST send, so re-sending a revised quote doesn't inflate the count); the numerator is how many
+  // of THAT cohort have since been accepted, whenever they were accepted. So "12 issued · 7 accepted"
+  // means seven of this period's twelve converted — not seven acceptances that happened this period.
+  // A CURRENT period necessarily UNDERSTATES conversion: its most recent quotes have not had time to
+  // be answered. The renderer says so.
+  quoteConversion: async ({ groupId, siteIds, from, to }) => {
+    const versions = (await prisma.quoteVersion.findMany({
+      where: { group_id: groupId, job_card: { site_id: { in: siteIds } } },
+      select: { job_card_id: true, sent_at: true, status: true, gross_pennies: true, version: true },
+      orderBy: { version: 'asc' },
+    })) as any[];
+
+    const firstSent = new Map<string, Date>();
+    const accepted = new Set<string>();
+    const acceptedValue = new Map<string, number>();
+    for (const v of versions) {
+      if (!firstSent.has(v.job_card_id)) firstSent.set(v.job_card_id, v.sent_at);
+      if (v.status === 'accepted') { accepted.add(v.job_card_id); acceptedValue.set(v.job_card_id, v.gross_pennies); }
+    }
+    // Value of the cohort = each card's FIRST-sent quote value (what was put in front of the customer).
+    const firstValue = new Map<string, number>();
+    for (const v of versions) if (!firstValue.has(v.job_card_id)) firstValue.set(v.job_card_id, v.gross_pennies);
+
+    const cohort = [...firstSent.entries()].filter(([, d]) => d >= from && d < to).map(([id]) => id);
+    const won = cohort.filter((id) => accepted.has(id));
+    return {
+      issued: cohort.length,
+      accepted: won.length,
+      ratePct: cohort.length ? Math.round((won.length / cohort.length) * 1000) / 10 : null,
+      issuedPennies: cohort.reduce((s, id) => s + (firstValue.get(id) ?? 0), 0),
+      acceptedPennies: won.reduce((s, id) => s + (acceptedValue.get(id) ?? 0), 0),
+    };
+  },
+
   revenue: async ({ groupId, siteIds, from, to }) => {
     const rows = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', series: 'chargeable' },

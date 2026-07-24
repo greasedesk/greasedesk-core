@@ -476,6 +476,45 @@ export default function AdminDashboard(props: PageProps) {
            resolved month window renders LOUD so the strip can never be misread against the cash
            tiles; part-period selections show the containing-month notice instead of a silent
            substitute. ---- */}
+      {/* QUOTE CONVERSION — cohort basis, gated to the SAME finance visibility as the P&L strip:
+          both render only when the server chose to send those tiles (absent, not hidden). */}
+      {tiles?.pnl && tiles?.quoteConversion && (() => {
+        const q = tiles.quoteConversion as any;
+        return (
+          <div className="mt-8 bg-surface border border-line rounded-xl p-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-lg font-bold text-ink">Quote conversion</h2>
+              <Link href="/admin/quotes" className="text-xs text-accent hover:underline">Quotes →</Link>
+            </div>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mt-2">
+              <span className="text-2xl font-extrabold text-ink tabular-nums">{q.issued}</span>
+              <span className="text-sm text-muted">issued</span>
+              <span className="text-muted">·</span>
+              <span className="text-2xl font-extrabold text-ok tabular-nums">{q.accepted}</span>
+              <span className="text-sm text-muted">accepted</span>
+              {q.ratePct != null && (<>
+                <span className="text-muted">·</span>
+                <span className="text-2xl font-extrabold text-ink tabular-nums">{q.ratePct}%</span>
+              </>)}
+            </div>
+            {q.issued > 0 && (
+              <p className="text-xs text-muted mt-1">
+                {formatMoney(q.issuedPennies, { currency: props.currency, locale: props.locale })} quoted ·{' '}
+                {formatMoney(q.acceptedPennies, { currency: props.currency, locale: props.locale })} won
+              </p>
+            )}
+            <details className="mt-2">
+              <summary className="text-xs text-accent cursor-pointer">How this is worked out</summary>
+              <p className="text-xs text-muted mt-1">
+                Counted by COHORT: the quotes first sent in this period, and how many of those have since been
+                accepted — whenever they were accepted. A current period will UNDERSTATE conversion, because its
+                most recent quotes haven’t had time to be answered yet.
+              </p>
+            </details>
+          </div>
+        );
+      })()}
+
       <div className="flex flex-wrap items-center justify-between gap-3 mt-8 mb-3">
         <div>
           <h2 className="text-lg font-bold text-ink">{t('pnl.title')}</h2>

@@ -26,6 +26,7 @@ const navItems: NavItemDef[] = [
   { key: 'dashboard', href: '/admin/dashboard', icon: '🏠', ready: true },
   { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true, locScope: 'diary' },
   { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true, locScope: 'jobcards' },
+  { key: 'quotes', href: '/admin/quotes', icon: '📝', ready: true },
   { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
