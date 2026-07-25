@@ -33,12 +33,26 @@ const CONTRASTS = [
 // product (app tile look copied, never imported). Figures are illustrative — the caption says so;
 // on tiles 1 & 2 the comparison line uses the warn token (the posted-vs-realised gap is the point,
 // it must not read as a positive).
+//
+// HERO is the ONE source of the numbers for BOTH the tiles AND the caption beneath them, so the
+// caption's derived figures can never drift from the tiles above. Reconciled to TMBS June 2026:
+// you paid for 168.40 sellable hours and sold 87.25 → 81.15 never sold; £38.86 = labour value ÷
+// hours paid for (the effective rate). Deterministic formatter (no Intl) → no SSR/CSR hydration drift.
+const HERO = {
+  effRate: 38.86, postedRate: 75.0, hoursSold: 87.25, hoursPaidFor: 168.4,
+  grossProfit: 9327.79, turnover: 12940.67, wip: 4180, openJobs: 9,
+};
+const withCommas = (s: string) => s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const gbp2 = (n: number) => '£' + withCommas(n.toFixed(2));
+const gbp0 = (n: number) => '£' + withCommas(n.toFixed(0));
 const HERO_TILES = [
-  { label: 'Effective hourly rate', figure: '£38.86', sub: 'Posted rate £75.00', warn: true },
-  { label: 'Hours sold', figure: '87.25', sub: 'of 157 paid for', warn: true },
-  { label: 'Gross profit', figure: '£9,327.79', sub: 'on £12,940.67 revenue', warn: false },
-  { label: 'Work in progress', figure: '£4,180', sub: '9 open jobs', warn: false },
+  { label: 'Effective hourly rate', figure: gbp2(HERO.effRate), sub: `You posted ${gbp2(HERO.postedRate)}`, warn: true },
+  { label: 'Hours sold', figure: HERO.hoursSold.toFixed(2), sub: `You paid for ${HERO.hoursPaidFor.toFixed(2)}`, warn: true },
+  { label: 'Gross profit', figure: gbp2(HERO.grossProfit), sub: `From ${gbp2(HERO.turnover)} turnover`, warn: false },
+  { label: 'Work in progress', figure: gbp0(HERO.wip), sub: `Across ${HERO.openJobs} open jobs`, warn: false },
 ];
+// Caption figures — DERIVED from the same HERO constants, never typed independently.
+const HERO_UNSOLD = (HERO.hoursPaidFor - HERO.hoursSold).toFixed(2); // 168.40 − 87.25 = 81.15
 
 export default function HomePage() {
   return (
@@ -76,8 +90,8 @@ export default function HomePage() {
               </h1>
               <p className="mt-6 text-lg text-muted max-w-xl">
                 GreaseDesk runs your job cards, bookings and invoicing — then shows you what the diary never
-                does: true parts cost, the hours you sold against the hours you paid for, and what each month
-                actually made.
+                does: the hours you sold against the hours you paid for, and what each month actually made
+                after costs.
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link href="/register" className="inline-flex justify-center items-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
@@ -102,7 +116,10 @@ export default function HomePage() {
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-xs text-muted">Example figures.</p>
+              <p className="mt-3 text-xs text-muted">
+                {"That's "}<span className="text-warn">{gbp2(HERO.effRate)}</span>{' an hour and '}
+                <span className="text-warn">{HERO_UNSOLD}</span>{' hours you paid for but never sold. Example figures.'}
+              </p>
             </div>
           </div>
         </section>
