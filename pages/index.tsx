@@ -46,7 +46,7 @@ const withCommas = (s: string) => s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const gbp2 = (n: number) => '£' + withCommas(n.toFixed(2));
 const gbp0 = (n: number) => '£' + withCommas(n.toFixed(0));
 const HERO_TILES = [
-  { label: 'Effective hourly rate', figure: gbp2(HERO.effRate), sub: `You posted ${gbp2(HERO.postedRate)}`, warn: true },
+  { label: 'Real hourly rate', figure: gbp2(HERO.effRate), sub: `You charge ${gbp0(HERO.postedRate)}`, warn: true },
   { label: 'Hours sold', figure: HERO.hoursSold.toFixed(2), sub: `You paid for ${HERO.hoursPaidFor.toFixed(2)}`, warn: true },
   { label: 'Gross profit', figure: gbp2(HERO.grossProfit), sub: `From ${gbp2(HERO.turnover)} turnover`, warn: false },
   { label: 'Work in progress', figure: gbp0(HERO.wip), sub: `Across ${HERO.openJobs} open jobs`, warn: false },
