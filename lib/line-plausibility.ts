@@ -20,6 +20,7 @@ export type PlausibleLine = { item_type: string; qty: number; unit_price: number
 
 export type LineFlag =
   | { rule: 'B'; fixQty: 1; fixUnitPrice: number } // fixUnitPrice = the value currently in the qty box
+  | { rule: 'E' } // implausible quantity (> 20) — round money typed into qty, which A and B both miss
   | { rule: 'A' }
   | { rule: 'C'; cost: number; retail: number };
 
@@ -30,8 +31,13 @@ export function lineFlags(l: PlausibleLine): LineFlag[] {
   if (l.item_type === 'labour') return out; // fractional hours are legitimate; qty→1 is meaningless
   const qty = l.qty, up = l.unit_price, uc = l.unit_cost;
   if (!(qty > 0)) return out; // blank / zero quantity — nothing to judge yet
+  // B / E / A are MUTUALLY EXCLUSIVE (one quantity-shaped suspicion per line, never two warnings):
+  // B is precise + fixable; E catches a large round quantity (>20) that A's non-integer test misses;
+  // A catches a fractional 10–20 quantity. C (margin) is independent and may co-fire.
   if (Math.abs(up - 1) < EPS && qty > 1) {
     out.push({ rule: 'B', fixQty: 1, fixUnitPrice: qty }); // £1.00 unit price + qty>1 = price-in-quantity
+  } else if (qty > 20) {
+    out.push({ rule: 'E' }); // quantity > 20 — implausible for a part (round money typed into qty)
   } else if (!Number.isInteger(qty) && qty > 10) {
     out.push({ rule: 'A' }); // fractional part-quantity above 10
   }
@@ -39,6 +45,26 @@ export function lineFlags(l: PlausibleLine): LineFlag[] {
     out.push({ rule: 'C', cost: qty * uc, retail: qty * up }); // negative-margin line (STRICT >, not ≥)
   }
   return out;
+}
+
+/**
+ * Invoice-level parts profit (pre-issue only): sum retail and cost across NON-LABOUR lines that have
+ * a KNOWN cost. A null cost is unknown, not zero — lines with null cost are EXCLUDED entirely (never
+ * summed as 0, which would understate cost and hide a loss) and counted so the caller can say the
+ * figure is incomplete. `hasKnownCost` is false when no costed parts line exists, so the caller can
+ * avoid asserting a loss on an all-unknown/empty set.
+ */
+export type PartsProfit = { retailPennies: number; costPennies: number; profitPennies: number; nullCostLines: number; hasKnownCost: boolean };
+export function partsProfit(lines: PlausibleLine[]): PartsProfit {
+  let retail = 0, cost = 0, nullCostLines = 0, known = 0;
+  for (const l of lines) {
+    if (l.item_type === 'labour') continue;
+    if (l.unit_cost == null) { if (l.unit_price > 0) nullCostLines++; continue; } // unknown cost → excluded
+    known++;
+    retail += Math.round(l.qty * l.unit_price * 100);
+    cost += Math.round(l.qty * l.unit_cost * 100);
+  }
+  return { retailPennies: retail, costPennies: cost, profitPennies: retail - cost, nullCostLines, hasKnownCost: known > 0 };
 }
 
 export const hasLineFlags = (l: PlausibleLine): boolean => lineFlags(l).length > 0;

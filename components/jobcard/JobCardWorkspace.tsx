@@ -14,7 +14,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
-import { lineFlags, toPlausible } from '@/lib/line-plausibility';
+import { lineFlags, toPlausible, partsProfit } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
@@ -238,7 +238,13 @@ export default function JobCardWorkspace(p: Props) {
     () => p.lines.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0),
     [p.lines],
   );
-  const startMint = () => { if (mintMissing.length || preIssueFlags.length) { setMintOpen(true); } else { setStatus('invoiced'); } };
+  // Invoice-level parts profit — pre-issue only. Catches a card where no single line looks wrong but
+  // the parts as a whole lose money (a discount applied too heavily, or several small errors). Only
+  // asserts a loss when there is at least one costed parts line; null-cost lines are excluded and the
+  // figure is flagged incomplete (a null cost is unknown, not zero — see partsProfit).
+  const partsPL = useMemo(() => partsProfit(p.lines.map((l) => toPlausible(l))), [p.lines]);
+  const partsLoss = partsPL.hasKnownCost && partsPL.profitPennies < 0;
+  const startMint = () => { if (mintMissing.length || preIssueFlags.length || partsLoss) { setMintOpen(true); } else { setStatus('invoiced'); } };
   async function addAndMint() {
     const vehicle: Record<string, string> = {};
     if (mintVinMissing && mintVin.trim()) vehicle.vin = mintVin.trim();
@@ -463,8 +469,10 @@ export default function JobCardWorkspace(p: Props) {
     // Last-chance VIN/mileage prompt — only for what's actually missing; skip always available.
     const flagReason = (f: ReturnType<typeof lineFlags>[number], l: EstimateLine) =>
       f.rule === 'B' ? t('estimate.warnPriceInQty', { qty: Number(l.qty) })
+      : f.rule === 'E' ? t('estimate.warnQtyImplausible', { qty: Number(l.qty) })
       : f.rule === 'A' ? t('estimate.warnQtyHigh', { qty: Number(l.qty) })
       : t('estimate.warnCostOverRetail', { cost: f.cost.toFixed(2), retail: f.retail.toFixed(2) });
+    const gbp = (pennies: number) => (pennies / 100).toFixed(2);
     const mintPanel = mintOpen && (
       <div className="bg-warn-soft border border-line rounded-xl p-4 space-y-3">
         {mintMissing.length > 0 && (
@@ -491,6 +499,11 @@ export default function JobCardWorkspace(p: Props) {
               ))}
             </ul>
           </div>
+        )}
+        {partsLoss && (
+          <p className="text-sm text-warn">⚠ {t('invoiceTab.partsLoss', { revenue: gbp(partsPL.retailPennies), cost: gbp(partsPL.costPennies), loss: gbp(-partsPL.profitPennies) })}
+            {partsPL.nullCostLines > 0 && <span className="block text-xs">{t('invoiceTab.partsLossIncomplete', { count: partsPL.nullCostLines })}</span>}
+          </p>
         )}
         <div className="flex flex-col sm:flex-row gap-2">
           {mintMissing.length > 0 && (

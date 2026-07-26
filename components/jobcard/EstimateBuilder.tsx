@@ -191,6 +191,7 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
           </div>
         );
         if (f.rule === 'A') return <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnQtyHigh', { qty: Number(row.qty) })}</div>;
+        if (f.rule === 'E') return <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnQtyImplausible', { qty: Number(row.qty) })}</div>;
         // C — only surfaced to cost-visible users (the cost column is theirs).
         return costVisible ? <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnCostOverRetail', { cost: m(f.cost), retail: m(f.retail) })}</div> : null;
       })}
