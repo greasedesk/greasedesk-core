@@ -35,11 +35,17 @@ const CONTRASTS = [
 // it must not read as a positive).
 //
 // HERO is the ONE source of the numbers for BOTH the tiles AND the caption beneath them, so the
-// caption's derived figures can never drift from the tiles above. Reconciled to TMBS June 2026:
-// you paid for 168.40 sellable hours and sold 87.25 → 81.15 never sold; £38.86 = labour value ÷
-// hours paid for (the effective rate). Deterministic formatter (no Intl) → no SSR/CSR hydration drift.
+// derived figures can never drift from the tiles above. Deterministic formatter (no Intl) → no
+// SSR/CSR hydration drift.
+//
+// Capacity constants — values from getGroupUtilisation for TMBS June 2026 (whole-month UTC window,
+// group-scoped). sellableHours = rostered gross less absence and public holidays, then discounted
+// by the per-person utilisation factor. UNSOLD = sellableHours − hoursSold − reworkHours, matching
+// pages/admin/dashboard.tsx:643: rework hours were paid for and SPENT (redoing work for free), not
+// idle, so they are NOT "capacity you never sold". (Real rate £38.86 = labour value ÷ sellableHours.)
 const HERO = {
-  effRate: 38.86, postedRate: 75.0, hoursSold: 87.25, hoursPaidFor: 168.4,
+  effRate: 38.86, postedRate: 75.0,
+  sellableHours: 168.40, hoursSold: 87.25, reworkHours: 12.00,
   grossProfit: 9327.79, turnover: 12940.67, wip: 4180, openJobs: 9,
 };
 const withCommas = (s: string) => s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -47,12 +53,13 @@ const gbp2 = (n: number) => '£' + withCommas(n.toFixed(2));
 const gbp0 = (n: number) => '£' + withCommas(n.toFixed(0));
 const HERO_TILES = [
   { label: 'Real hourly rate', figure: gbp2(HERO.effRate), sub: `You charge ${gbp0(HERO.postedRate)}`, warn: true },
-  { label: 'Hours sold', figure: HERO.hoursSold.toFixed(2), sub: `You paid for ${HERO.hoursPaidFor.toFixed(2)}`, warn: true },
+  { label: 'Hours sold', figure: HERO.hoursSold.toFixed(2), sub: `You paid for ${HERO.sellableHours.toFixed(2)}`, warn: true },
   { label: 'Gross profit', figure: gbp2(HERO.grossProfit), sub: `From ${gbp2(HERO.turnover)} turnover`, warn: false },
   { label: 'Work in progress', figure: gbp0(HERO.wip), sub: `Across ${HERO.openJobs} open jobs`, warn: false },
 ];
-// Caption figures — DERIVED from the same HERO constants, never typed independently.
-const HERO_UNSOLD = (HERO.hoursPaidFor - HERO.hoursSold).toFixed(2); // 168.40 − 87.25 = 81.15
+// Caption figures — DERIVED from HERO, never typed independently.
+const HERO_UNSOLD = (HERO.sellableHours - HERO.hoursSold - HERO.reworkHours).toFixed(2); // 168.40 − 87.25 − 12.00 = 69.15
+const HERO_RATE_GAP = HERO.postedRate - HERO.effRate; // 75.00 − 38.86 = 36.14 (posted − real: the per-hour shortfall)
 
 export default function HomePage() {
   return (
@@ -117,8 +124,8 @@ export default function HomePage() {
                 ))}
               </div>
               <p className="mt-3 text-xs text-muted">
-                {"That's "}<span className="text-warn">{gbp2(HERO.effRate)}</span>{' an hour and '}
-                <span className="text-warn">{HERO_UNSOLD}</span>{' hours you paid for but never sold. Example figures.'}
+                {"That's "}<span className="text-warn">{gbp2(HERO_RATE_GAP)}</span>{' an hour, and '}
+                <span className="text-warn">{HERO_UNSOLD}</span>{' hours of capacity you never sold. Example figures.'}
               </p>
             </div>
           </div>
