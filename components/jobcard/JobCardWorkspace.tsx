@@ -234,17 +234,21 @@ export default function JobCardWorkspace(p: Props) {
   // Surface 2 — pre-issue plausibility summary. Issue freezes the lines (only unlock→reissue reverses
   // it), so this is the last cheap moment to catch a price-in-quantity or a loss-making line. Advisory:
   // the panel requires acknowledgement (proceed), never a correction — the line may be legitimate.
-  const preIssueFlags = useMemo(
-    () => p.lines.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0),
-    [p.lines],
-  );
-  // Invoice-level parts profit — pre-issue only. Catches a card where no single line looks wrong but
-  // the parts as a whole lose money (a discount applied too heavily, or several small errors). Only
-  // asserts a loss when there is at least one costed parts line; null-cost lines are excluded and the
-  // figure is flagged incomplete (a null cost is unknown, not zero — see partsProfit).
-  const partsPL = useMemo(() => partsProfit(p.lines.map((l) => toPlausible(l))), [p.lines]);
-  const partsLoss = partsPL.hasKnownCost && partsPL.profitPennies < 0;
-  const startMint = () => { if (mintMissing.length || preIssueFlags.length || partsLoss) { setMintOpen(true); } else { setStatus('invoiced'); } };
+  // Pre-issue plausibility, computed from the LIVE estimate lines at click time (the estimate stays
+  // mounted across tabs, so the ref is valid here). Reading p.lines — the page's load-time snapshot —
+  // would miss a bad line added in the SAME session, which is exactly the case this guards. Falls back
+  // to p.lines only if the ref is somehow absent. Invoice-level parts profit only asserts a loss when a
+  // costed parts line exists; null-cost lines are excluded (unknown ≠ zero) and flagged incomplete.
+  type PreIssue = { flags: Array<{ i: number; l: EstimateLine; flags: ReturnType<typeof lineFlags> }>; pp: ReturnType<typeof partsProfit>; loss: boolean };
+  const [preIssue, setPreIssue] = useState<PreIssue | null>(null);
+  const startMint = () => {
+    const live = estimateRef.current?.lines() ?? p.lines;
+    const flags = live.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0);
+    const pp = partsProfit(live.map((l) => toPlausible(l)));
+    const loss = pp.hasKnownCost && pp.profitPennies < 0;
+    if (mintMissing.length || flags.length || loss) { setPreIssue({ flags, pp, loss }); setMintOpen(true); }
+    else { setStatus('invoiced'); }
+  };
   async function addAndMint() {
     const vehicle: Record<string, string> = {};
     if (mintVinMissing && mintVin.trim()) vehicle.vin = mintVin.trim();
@@ -490,19 +494,19 @@ export default function JobCardWorkspace(p: Props) {
             </div>
           </>
         )}
-        {preIssueFlags.length > 0 && (
+        {(preIssue?.flags.length ?? 0) > 0 && (
           <div className="space-y-1">
             <p className="text-sm text-warn font-medium">{t('invoiceTab.plausTitle')}</p>
             <ul className="text-xs text-warn space-y-1">
-              {preIssueFlags.map(({ i, l, flags }) => (
+              {preIssue!.flags.map(({ i, l, flags }) => (
                 <li key={i}>⚠ <span className="text-ink">{(l.description || '').split('\n')[0].trim() || t('estimate.parts')}</span> — {flags.map((f) => flagReason(f, l)).join(' ')}</li>
               ))}
             </ul>
           </div>
         )}
-        {partsLoss && (
-          <p className="text-sm text-warn">⚠ {t('invoiceTab.partsLoss', { revenue: gbp(partsPL.retailPennies), cost: gbp(partsPL.costPennies), loss: gbp(-partsPL.profitPennies) })}
-            {partsPL.nullCostLines > 0 && <span className="block text-xs">{t('invoiceTab.partsLossIncomplete', { count: partsPL.nullCostLines })}</span>}
+        {preIssue?.loss && (
+          <p className="text-sm text-warn">⚠ {t('invoiceTab.partsLoss', { revenue: gbp(preIssue.pp.retailPennies), cost: gbp(preIssue.pp.costPennies), loss: gbp(-preIssue.pp.profitPennies) })}
+            {preIssue.pp.nullCostLines > 0 && <span className="block text-xs">{t('invoiceTab.partsLossIncomplete', { count: preIssue.pp.nullCostLines })}</span>}
           </p>
         )}
         <div className="flex flex-col sm:flex-row gap-2">

@@ -208,7 +208,7 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
  * `terminal` false, because there the edit is worth keeping and retrying.
  */
 export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
-export type EstimateHandle = { commit: () => Promise<CommitResult> };
+export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () => EstimateLine[] };
 
 const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false }: Props, ref) {
   const { t } = useTranslation('jobcard');
@@ -366,7 +366,9 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       return { ok: false, message: t('estimate.saveError') };
     }
   }
-  useImperativeHandle(ref, () => ({ commit }), [lines, vatRate, jobCardId]);
+  // Expose the LIVE lines so the pre-issue check reads what is about to freeze (not the page's
+  // load-time snapshot, which goes stale the moment the estimate is edited in-session).
+  useImperativeHandle(ref, () => ({ commit, lines: () => lines.map(({ _uid, ...rest }) => rest) }), [lines, vatRate, jobCardId]);
 
   // AUTOSAVE (Option B): debounced write of the draft on every line-item / VAT change, so a quote
   // survives step changes, navigating away and back, and a tab close WITHOUT a manual Save. The draft
