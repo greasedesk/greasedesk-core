@@ -424,7 +424,9 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         {parts.map(({ l, idx }) => (
           <React.Fragment key={l._uid}>
             <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
-              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} onFieldBlur={() => markBlurred(l._uid)} />
+              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t}
+              onChange={(i, patch) => { update(i, patch); if (('qty' in patch || 'unit_price' in patch) && fixedUids.has(l._uid)) setFixedUids((s) => { const n = new Set(s); n.delete(l._uid); return n; }); }}
+              onCode={onCode} onRemove={remove} onFieldBlur={() => markBlurred(l._uid)} />
             <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={fixedUids.has(l._uid)} canEdit={canEdit} costVisible={costVisible} t={t} onFix={(i, fp) => applyLineFix(i, l._uid, fp)} />
           </React.Fragment>
         ))}
