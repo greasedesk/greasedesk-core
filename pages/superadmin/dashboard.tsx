@@ -55,7 +55,9 @@ export default function EngineRoomDashboard({ role, scopeLabel, tenantCount }: P
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const gate = await requireOperatorPage(ctx); // ANY operator (Dashboard is all-roles); wrong class → 404
   if (!gate.ok) return { notFound: true };
-  const tenantCount = await prisma.group.count({ where: operatorTenantScope(gate.op) }); // region-scoped, real
+  // Region-scoped AND customer-only: internal (GreaseDesk-owned gate/test) tenants never count toward
+  // the headline tenant figure or the forecast built from it.
+  const tenantCount = await prisma.group.count({ where: { ...operatorTenantScope(gate.op), is_internal: { not: true } } });
   const scopeLabel = gate.op.role === 'owner' ? 'all regions' : (gate.op.regions.length ? gate.op.regions.join(', ') : 'none');
   return { props: { role: gate.op.role, scopeLabel, tenantCount } };
 };

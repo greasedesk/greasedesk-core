@@ -213,6 +213,10 @@ model Group {
   // hidden from active use, ALL data kept, fully reversible (un-archive clears it). Set only via
   // /api/superadmin/archive — never a tenant-facing action.
   archived_at   DateTime?
+  // GreaseDesk-owned tenant (gate/test), never a paying customer. Set EXPLICITLY, never inferred from
+  // the name (a real "ZZ Motors" must not silently vanish). Excluded from the tenant count, forecast,
+  // and any revenue/commission figure; badged in the Engine Room. NULL = a normal customer tenant.
+  is_internal   Boolean?
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.

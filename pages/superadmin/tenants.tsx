@@ -7,6 +7,7 @@
  */
 import { useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
@@ -15,7 +16,7 @@ import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type TenantRow = {
   id: string; name: string; ref: string; created: string; archivedAt: string | null;
-  subscriptionStatus: string | null; siteCount: number; userCount: number; lastActivity: string | null; isTmbs: boolean; isOwn: boolean;
+  subscriptionStatus: string | null; siteCount: number; userCount: number; lastActivity: string | null; isTmbs: boolean; isOwn: boolean; isInternal: boolean;
 };
 // canAct = the lifecycle actions (Archive/Purge) are shown — Country Manager and above. Support gets a
 // read-only view; the buttons are absent AND the archive/purge APIs enforce the same role server-side.
@@ -68,7 +69,9 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
         <div className="max-w-6xl">
           <div className="flex items-baseline justify-between mb-6">
             <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: '#7C8AA3' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
-            <span className="text-xs" style={{ color: '#7C8AA3' }}>{rows.length} tenants</span>
+            {/* Count is CUSTOMER tenants only — internal (GreaseDesk-owned gate/test) tenants stay in
+                the list, badged, but never inflate the headline number. */}
+            <span className="text-xs" style={{ color: '#7C8AA3' }}>{rows.filter((r) => !r.isInternal).length} tenants</span>
           </div>
           {msg && <div className="mb-4 text-sm rounded-lg px-3 py-2" style={{ background: '#12294a', border: '1px solid #1C3257' }}>{msg}</div>}
           <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid #1C3257' }}>
@@ -81,7 +84,7 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
               <tbody>
                 {rows.map((t) => (
                   <tr key={t.id} style={{ borderTop: '1px solid #1C3257', opacity: t.archivedAt ? 0.55 : 1 }}>
-                    <td className="px-3 py-2 text-white font-medium whitespace-nowrap">{t.name}{t.isTmbs && <span className="ml-1 text-xs" style={{ color: '#FCD34D' }}>★live</span>}{t.archivedAt && <span className="ml-1 text-xs" style={{ color: '#FCA5A5' }}>archived</span>}</td>
+                    <td className="px-3 py-2 font-medium whitespace-nowrap"><Link href={`/superadmin/tenants/${t.id}`} className="text-white hover:underline" style={{ color: '#8AB4F8' }}>{t.name}</Link>{t.isInternal && <span className="ml-1 text-xs px-1.5 py-0.5 rounded" style={{ background: '#3A2A0B', color: '#FCD34D' }}>internal</span>}{t.isTmbs && <span className="ml-1 text-xs" style={{ color: '#FCD34D' }}>★live</span>}{t.archivedAt && <span className="ml-1 text-xs" style={{ color: '#FCA5A5' }}>archived</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{t.ref}</td>
                     <td className="px-3 py-2 text-xs" style={{ color: '#7C8AA3' }}>{t.id.slice(0, 8)}…</td>
                     <td className="px-3 py-2 whitespace-nowrap">{new Date(t.created).toLocaleDateString('en-GB')}</td>
@@ -140,7 +143,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     where: operatorTenantScope(gate.op), // REGION-SCOPED from the principal — a Country Manager sees only their regions
     orderBy: { created_at: 'desc' },
     select: {
-      id: true, group_name: true, ref: true, created_at: true, archived_at: true,
+      id: true, group_name: true, ref: true, created_at: true, archived_at: true, is_internal: true,
       billing: { select: { subscription_status: true } },
       _count: { select: { sites: true, users: true } },
     },
@@ -160,6 +163,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
         siteCount: g._count.sites, userCount: g._count.users,
         lastActivity: lastByGroup.get(g.id) ? (lastByGroup.get(g.id) as Date).toISOString() : null,
         isTmbs: g.id === TMBS_GROUP_ID, isOwn: false, // an operator has no own tenant (separate identity)
+        isInternal: g.is_internal === true,
       })),
     },
   };
