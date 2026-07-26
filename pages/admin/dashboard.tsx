@@ -239,6 +239,11 @@ export default function AdminDashboard(props: PageProps) {
   // In-progress SINGLE month meta (server-authoritative): drives the to-date labels + net-profit reframe.
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
   const [loading, setLoading] = useState(true);
+  // Persist ONLY the period selection (a view preference — no money path) in localStorage, keyed per
+  // tenant so a shared browser can't surface another tenant's view. `ready` gates the first fetch
+  // until the stored period is restored, so tiles load once for the restored period (no default flash).
+  const [ready, setReady] = useState(false);
+  const PERIOD_KEY = `gd.dash.period.${props.accountRef}`;
   // ONE period control drives BOTH strips. The P&L stays whole-calendar-months only: it follows
   // whole-month selections exactly; part-periods (to-dates / partial custom) fall back to the
   // CONTAINING calendar month with a plain on-screen notice — never a silent mismatch, and
@@ -277,7 +282,36 @@ export default function AdminDashboard(props: PageProps) {
     } catch { /* tiles keep last values */ }
     setLoading(false);
   }, [cashQS, monthQS, siteQS]);
-  useEffect(() => { load(); }, [load]);
+  // Restore the persisted period ONCE on mount (client-only — never runs on the server, so the first
+  // client render still matches the SSR default and there is no hydration mismatch). CONSTRAINT: a
+  // stored selection the user can no longer see — a named month that has rolled off the option list,
+  // or a 'custom' with a missing end — is NOT restored; it falls back to the default rather than
+  // erroring or rendering a period that isn't offered.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PERIOD_KEY);
+      if (raw) {
+        const s = JSON.parse(raw) as { preset?: string; customFrom?: string; customTo?: string };
+        const valid = new Set<string>([
+          'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom',
+          ...rollingMonths(pickerNow, props.locale).map((m) => m.value),
+        ]);
+        if (s.preset && valid.has(s.preset) && (s.preset !== 'custom' || (s.customFrom && s.customTo))) {
+          setPreset(s.preset);
+          if (s.preset === 'custom') { setCustomFrom(s.customFrom || ''); setCustomTo(s.customTo || ''); }
+        }
+      }
+    } catch { /* corrupt/blocked storage → keep the default */ }
+    setReady(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount-only restore
+
+  // Persist on change, but ONLY after restore, so the pre-restore default never overwrites storage.
+  useEffect(() => {
+    if (!ready) return;
+    try { localStorage.setItem(PERIOD_KEY, JSON.stringify({ preset, customFrom, customTo })); } catch { /* full/blocked → ignore */ }
+  }, [ready, preset, customFrom, customTo, PERIOD_KEY]);
+
+  useEffect(() => { if (ready) load(); }, [load, ready]); // fetch only once the period is restored
 
   const fmt: Fmt = { money: (p) => formatMoney(p, { currency: props.currency, locale: props.locale }), t, qs: cashQS, site: siteId };
   const rateSym = currencySymbol({ currency: props.currency, locale: props.locale }); // for "/h" rate labels
