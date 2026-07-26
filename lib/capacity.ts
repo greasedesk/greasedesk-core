@@ -46,7 +46,10 @@ export type AvailableHours = {
   // Waterfall grain (ADDITIVE): gross = contracted × rostered days × allocation BEFORE any
   // deduction (non-rostered days never enter it), and the leave subtraction split by type.
   // FRAMING (binding): leave/PH are reductions to CAPACITY, never "lost hours" — they shrink
-  // raw hours; the factor then discounts raw to sellable; what's lost is sellable − charged.
+  // raw hours; the factor then discounts raw to sellable; what's lost (unsold) is
+  // sellable − charged − rework (see dashboard.tsx unsold tile). Rework is subtracted because
+  // those hours were SPENT (redoing work for free), not idle — counting them as unsold would
+  // overstate the opportunity (ruling 2026-07-12, which excludes rework from `charged` too).
   grossHours: number;
   leaveByType: Record<string, number>;
   // FACTOR exposition (computed, never typed): per person, raw × factor = sellable. The factor
