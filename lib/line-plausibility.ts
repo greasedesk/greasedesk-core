@@ -48,23 +48,27 @@ export function lineFlags(l: PlausibleLine): LineFlag[] {
 }
 
 /**
- * Invoice-level parts profit (pre-issue only): sum retail and cost across NON-LABOUR lines that have
- * a KNOWN cost. A null cost is unknown, not zero — lines with null cost are EXCLUDED entirely (never
- * summed as 0, which would understate cost and hide a loss) and counted so the caller can say the
- * figure is incomplete. `hasKnownCost` is false when no costed parts line exists, so the caller can
- * avoid asserting a loss on an all-unknown/empty set.
+ * Invoice-level parts profit (pre-issue only). Mirrors lib/quote-totals EXACTLY (the one margin model):
+ * RETAIL sums every non-labour line — including negative discount lines and unknown-cost parts; COST
+ * sums KNOWN costs only (a null cost is unknown, never counted as 0). That makes `profit` an OPTIMISTIC
+ * upper bound (unknown costs treated as their cheapest, £0): if even this loses money the loss is
+ * GUARANTEED real, so the check never cries a false loss. Excluding a null cost from the cost side only
+ * OVERSTATES profit, so `nullCostLines` (positive parts with unknown cost) lets the caller flag the
+ * figure as incomplete — the true loss can only be worse. A discount (negative retail, no COGS) is a
+ * real revenue reduction and IS counted, so a discount that drags the whole invoice negative is caught
+ * even when no single line looks wrong. `hasParts` is false only for an empty/labour-only set.
  */
-export type PartsProfit = { retailPennies: number; costPennies: number; profitPennies: number; nullCostLines: number; hasKnownCost: boolean };
+export type PartsProfit = { retailPennies: number; costPennies: number; profitPennies: number; nullCostLines: number; hasParts: boolean };
 export function partsProfit(lines: PlausibleLine[]): PartsProfit {
-  let retail = 0, cost = 0, nullCostLines = 0, known = 0;
+  let retail = 0, cost = 0, nullCostLines = 0, parts = 0;
   for (const l of lines) {
     if (l.item_type === 'labour') continue;
-    if (l.unit_cost == null) { if (l.unit_price > 0) nullCostLines++; continue; } // unknown cost → excluded
-    known++;
-    retail += Math.round(l.qty * l.unit_price * 100);
+    parts++;
+    retail += Math.round(l.qty * l.unit_price * 100); // ALL non-labour retail (incl discounts + unknown-cost parts)
+    if (l.unit_cost == null) { if (l.unit_price > 0) nullCostLines++; continue; } // unknown cost → excluded from cost only
     cost += Math.round(l.qty * l.unit_cost * 100);
   }
-  return { retailPennies: retail, costPennies: cost, profitPennies: retail - cost, nullCostLines, hasKnownCost: known > 0 };
+  return { retailPennies: retail, costPennies: cost, profitPennies: retail - cost, nullCostLines, hasParts: parts > 0 };
 }
 
 export const hasLineFlags = (l: PlausibleLine): boolean => lineFlags(l).length > 0;

@@ -245,7 +245,7 @@ export default function JobCardWorkspace(p: Props) {
     const live = estimateRef.current?.lines() ?? p.lines;
     const flags = live.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0);
     const pp = partsProfit(live.map((l) => toPlausible(l)));
-    const loss = pp.hasKnownCost && pp.profitPennies < 0;
+    const loss = pp.hasParts && pp.profitPennies < 0;
     if (mintMissing.length || flags.length || loss) { setPreIssue({ flags, pp, loss }); setMintOpen(true); }
     else { setStatus('invoiced'); }
   };
