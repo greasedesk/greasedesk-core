@@ -15,6 +15,7 @@ import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-
 import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
 import { PromoLite, computePromoDiscounts } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
+import { lineFlags, toPlausible } from '@/lib/line-plausibility';
 // THE SHARED SHAPE (sections, row card, code autocomplete). Layout only — the fields below are
 // this surface's own, because quoting composes a price while the import decomposes a fixed total.
 import { CODES_DATALIST, CodesDatalist, CodeField, LineCard, LineSection, inputCls, labelCls } from '@/components/estimate/EstimateShell';
@@ -86,9 +87,10 @@ type RowProps = {
   onChange: (idx: number, patch: Partial<EstimateLine>) => void;
   onCode: (idx: number, code: string) => void;
   onRemove: (idx: number) => void;
+  onFieldBlur?: () => void; // qty / unit-price blur → reveal the plausibility note (Surface 1)
 };
 
-function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible, costVisible, canCatalogue, lineTotal, t, onChange, onCode, onRemove }: RowProps) {
+function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible, costVisible, canCatalogue, lineTotal, t, onChange, onCode, onRemove, onFieldBlur }: RowProps) {
   // An ad-hoc part = a parts/misc line with no catalogue origin and no fixed-service labour content,
   // and not a (negative) discount line. Only these have no cost home, so only these accept a typed
   // cost — from a cost-visible user, re-validated server-side. Catalogue/fixed rows show cost read-only.
@@ -115,13 +117,13 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
         <div className="sm:w-24">
           <label className={labelCls}>{kind === 'labour' ? t('estimate.rate') : t('estimate.unitPrice')}</label>
           <input className={inputCls} type="number" inputMode="decimal" step="0.01" value={row.unit_price}
-            disabled={!canEdit} onChange={(e) => onChange(idx, { unit_price: e.target.value })} />
+            disabled={!canEdit} onChange={(e) => onChange(idx, { unit_price: e.target.value })} onBlur={onFieldBlur} />
         </div>
       )}
       <div className="sm:w-20">
         <label className={labelCls}>{kind === 'labour' ? t('estimate.hours') : t('estimate.qty')}</label>
         <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" value={row.qty}
-          disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} />
+          disabled={!canEdit} onChange={(e) => onChange(idx, { qty: e.target.value })} onBlur={onFieldBlur} />
       </div>
       {/* COST — TYPED, by cost-visible users only (ruling 2026-07-20, revising 2026-07-12/07-17).
           A fixed-price catalogue is the wrong model for a part: prices move weekly and per supplier,
@@ -166,6 +168,34 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
         </div>
       ) : undefined}
     />
+  );
+}
+
+// Surface 1 — the inline plausibility note under a parts row (revealed on qty/price blur). Advisory,
+// never blocking. For rule B it offers the deterministic one-click fix (qty→1, price→old qty).
+function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible, t, onFix }: {
+  row: Row; idx: number; show: boolean; justFixed: boolean; canEdit: boolean; costVisible: boolean;
+  t: (k: string, o?: any) => string; onFix: (idx: number, fixUnitPrice: number) => void;
+}) {
+  if (!show) return null;
+  const flags = lineFlags(toPlausible(row));
+  if (!flags.length && !justFixed) return null;
+  const m = (x: number) => x.toFixed(2);
+  return (
+    <div className="-mt-2 mb-2 sm:pl-2 space-y-1" role="status">
+      {flags.map((f, i) => {
+        if (f.rule === 'B') return (
+          <div key={i} className="text-xs text-warn flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>⚠ {t('estimate.warnPriceInQty', { qty: Number(row.qty) })}</span>
+            {canEdit && <button type="button" onClick={() => onFix(idx, f.fixUnitPrice)} className="underline font-medium hover:text-ink">{t('estimate.warnFix', { price: m(f.fixUnitPrice) })}</button>}
+          </div>
+        );
+        if (f.rule === 'A') return <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnQtyHigh', { qty: Number(row.qty) })}</div>;
+        // C — only surfaced to cost-visible users (the cost column is theirs).
+        return costVisible ? <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnCostOverRetail', { cost: m(f.cost), retail: m(f.retail) })}</div> : null;
+      })}
+      {justFixed && <div className="text-xs text-warn">✓ {t('estimate.warnFixed')}</div>}
+    </div>
   );
 }
 
@@ -285,6 +315,16 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
 
   const update = (idx: number, patch: Partial<EstimateLine>) =>
     setLines((p) => p.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+
+  // Surface-1 plausibility state: which rows have been blurred (so the note appears on blur, not
+  // mid-type) and which have just had the one-click fix applied (to show the "check the cost" note).
+  const [blurredUids, setBlurredUids] = useState<Set<string>>(() => new Set());
+  const [fixedUids, setFixedUids] = useState<Set<string>>(() => new Set());
+  const markBlurred = (u: string) => setBlurredUids((s) => (s.has(u) ? s : new Set(s).add(u)));
+  const applyLineFix = (idx: number, u: string, fixUnitPrice: number) => {
+    update(idx, { qty: '1', unit_price: fixUnitPrice.toFixed(2) }); // retail = qty×£1 preserved exactly
+    setFixedUids((s) => new Set(s).add(u));
+  };
   const remove = (idx: number) => setLines((p) => p.filter((_, i) => i !== idx));
   // New labour lines pre-fill the site's default rate (Financial settings) — editable per line.
   const add = (item_type: QuoteItemType) => setLines((p) => [...p, {
@@ -382,8 +422,11 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         className="mt-4" addLabel={canEdit ? t('estimate.addParts') : undefined}
         onAdd={canEdit ? () => add('part') : undefined} hint={canEdit ? t('estimate.discountHint') : undefined}>
         {parts.map(({ l, idx }) => (
-          <LineRow key={l._uid} row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
-            lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+          <React.Fragment key={l._uid}>
+            <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
+              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} onFieldBlur={() => markBlurred(l._uid)} />
+            <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={fixedUids.has(l._uid)} canEdit={canEdit} costVisible={costVisible} t={t} onFix={(i, fp) => applyLineFix(i, l._uid, fp)} />
+          </React.Fragment>
         ))}
       </LineSection>
 

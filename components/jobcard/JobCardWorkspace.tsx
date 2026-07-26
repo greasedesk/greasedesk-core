@@ -14,6 +14,7 @@ import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
 import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
+import { lineFlags, toPlausible } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
@@ -230,7 +231,14 @@ export default function JobCardWorkspace(p: Props) {
   const mintVinMissing = !(eff.vehicle.vin && eff.vehicle.vin.trim());
   const mintMileageMissing = eff.vehicle.mileageIn == null;
   const mintMissing = [mintVinMissing && t('field.vin'), mintMileageMissing && t('field.mileage')].filter(Boolean) as string[];
-  const startMint = () => { if (mintMissing.length) { setMintOpen(true); } else { setStatus('invoiced'); } };
+  // Surface 2 — pre-issue plausibility summary. Issue freezes the lines (only unlock→reissue reverses
+  // it), so this is the last cheap moment to catch a price-in-quantity or a loss-making line. Advisory:
+  // the panel requires acknowledgement (proceed), never a correction — the line may be legitimate.
+  const preIssueFlags = useMemo(
+    () => p.lines.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0),
+    [p.lines],
+  );
+  const startMint = () => { if (mintMissing.length || preIssueFlags.length) { setMintOpen(true); } else { setStatus('invoiced'); } };
   async function addAndMint() {
     const vehicle: Record<string, string> = {};
     if (mintVinMissing && mintVin.trim()) vehicle.vin = mintVin.trim();
@@ -453,24 +461,44 @@ export default function JobCardWorkspace(p: Props) {
       </div>
     );
     // Last-chance VIN/mileage prompt — only for what's actually missing; skip always available.
+    const flagReason = (f: ReturnType<typeof lineFlags>[number], l: EstimateLine) =>
+      f.rule === 'B' ? t('estimate.warnPriceInQty', { qty: Number(l.qty) })
+      : f.rule === 'A' ? t('estimate.warnQtyHigh', { qty: Number(l.qty) })
+      : t('estimate.warnCostOverRetail', { cost: f.cost.toFixed(2), retail: f.retail.toFixed(2) });
     const mintPanel = mintOpen && (
       <div className="bg-warn-soft border border-line rounded-xl p-4 space-y-3">
-        <p className="text-sm text-warn font-medium">{t('invoiceTab.missingTitle', { list: mintMissing.join(', ') })}</p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {mintVinMissing && (
-            <input value={mintVin} onChange={(e) => setMintVin(e.target.value)} placeholder={t('field.vin')} maxLength={17}
-              className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
-          )}
-          {mintMileageMissing && (
-            <input type="number" inputMode="numeric" min={0} value={mintMileage} onChange={(e) => setMintMileage(e.target.value)} placeholder={t('field.mileage')}
-              className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
-          )}
-        </div>
+        {mintMissing.length > 0 && (
+          <>
+            <p className="text-sm text-warn font-medium">{t('invoiceTab.missingTitle', { list: mintMissing.join(', ') })}</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {mintVinMissing && (
+                <input value={mintVin} onChange={(e) => setMintVin(e.target.value)} placeholder={t('field.vin')} maxLength={17}
+                  className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+              )}
+              {mintMileageMissing && (
+                <input type="number" inputMode="numeric" min={0} value={mintMileage} onChange={(e) => setMintMileage(e.target.value)} placeholder={t('field.mileage')}
+                  className="p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+              )}
+            </div>
+          </>
+        )}
+        {preIssueFlags.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-sm text-warn font-medium">{t('invoiceTab.plausTitle')}</p>
+            <ul className="text-xs text-warn space-y-1">
+              {preIssueFlags.map(({ i, l, flags }) => (
+                <li key={i}>⚠ <span className="text-ink">{(l.description || '').split('\n')[0].trim() || t('estimate.parts')}</span> — {flags.map((f) => flagReason(f, l)).join(' ')}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row gap-2">
-          <button disabled={busy !== null || (!(mintVinMissing && mintVin.trim()) && !(mintMileageMissing && mintMileage.trim()))} onClick={addAndMint}
-            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('invoiceTab.addAndInvoice')}</button>
+          {mintMissing.length > 0 && (
+            <button disabled={busy !== null || (!(mintVinMissing && mintVin.trim()) && !(mintMileageMissing && mintMileage.trim()))} onClick={addAndMint}
+              className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('invoiceTab.addAndInvoice')}</button>
+          )}
           <button disabled={busy !== null} onClick={skipAndMint}
-            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{t('invoiceTab.skipAndInvoice')}</button>
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{mintMissing.length > 0 ? t('invoiceTab.skipAndInvoice') : t('invoiceTab.plausAck')}</button>
           <button onClick={() => setMintOpen(false)} className="text-sm text-muted hover:text-ink px-2 py-2.5">{t('delete.cancel')}</button>
         </div>
       </div>

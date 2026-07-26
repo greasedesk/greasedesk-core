@@ -49,7 +49,12 @@
     "discountHint": "Tip: enter a negative unit price for a discount line.",
     "fixedHours": "Includes {{hours}}h labour (charged)",
     "frozen": "This job is invoiced and its lines are frozen. An admin can unlock the invoice to make corrections.",
-    "costUnknown": "unknown"
+    "costUnknown": "unknown",
+    "warnPriceInQty": "This looks like a price typed into the quantity ({{qty}}) with a £1.00 unit price.",
+    "warnFix": "Fix: set quantity to 1, unit price to £{{price}}",
+    "warnFixed": "Fixed. Now check the unit cost is right — the fix can't tell if a total was typed there too.",
+    "warnQtyHigh": "Unusual quantity for a part ({{qty}}). Check a price wasn't typed into the quantity.",
+    "warnCostOverRetail": "Cost (£{{cost}}) is higher than the price (£{{retail}}) — this line loses money."
   },
   "back": {
     "diary": "← Back to diary",
@@ -260,6 +265,8 @@
     "missingTitle": "This invoice is missing: {{list}}. Add it now, or skip and invoice anyway.",
     "addAndInvoice": "Add & invoice",
     "skipAndInvoice": "Skip and invoice anyway",
+    "plausTitle": "Check these lines before invoicing — issuing freezes them:",
+    "plausAck": "Invoice anyway",
     "emailSend": "Email invoice",
     "emailSending": "Sending…",
     "emailSent": "Invoice emailed to the customer (copy to your inbox).",
