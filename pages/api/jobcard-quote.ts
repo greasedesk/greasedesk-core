@@ -18,7 +18,7 @@ import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/
 import { writeAudit } from '@/lib/audit';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { requireCanWrite } from '@/lib/admin-guard';
-import { supersedeOnEdit } from '@/lib/quote-version';
+import { supersedeOnMaterialEdit } from '@/lib/quote-version';
 import { canEditInvoice } from '@/lib/invoice';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
@@ -295,16 +295,29 @@ export async function performEstimateSave(args: {
     });
   });
 
-  // REVOKE-ON-EDIT (slice-2a): the estimate just changed, so any quote still out with a customer
-  // has stopped being the offer. Supersede the version and kill its magic link — acceptance must
-  // never be possible against figures the garage has since moved away from. An ACCEPTED version is
-  // deliberately untouched: it stays frozen as the record of what was agreed.
-  const supersededCount = await supersedeOnEdit(jobCardId).catch(() => 0);
-  if (supersededCount > 0) {
+  // REVOKE-ON-MATERIAL-EDIT: a quote still out with a customer stops being the offer ONLY when the
+  // estimate changed in a way THEY can see (description / qty / unit price / VAT rate — the customer
+  // document fields). A no-op Save, a "160"→"160.00" reformat, a unit-cost-only edit or a pure reorder
+  // reproduces the frozen figures and MUST leave the link live — otherwise the send flow's own
+  // trailing autosave silently revokes the quote the customer is about to accept. The comparison is
+  // against the FROZEN version (what the customer sees), server-side at the chokepoint — never the
+  // client's mount-local, string-based autosave guard. An ACCEPTED version is untouched.
+  const material = rows.map((r) => ({ description: r.description, qty: r.qty, unit_price: r.unit_price, vat_rate: r.vat_rate }));
+  const sup = await supersedeOnMaterialEdit(jobCardId, material).catch(() => ({ superseded: 0, immaterial: false, liveVersion: null as number | null }));
+  if (sup.superseded > 0) {
     await writeAudit(prisma, {
       groupId, userId: args.actorUserId ?? null, jobCardId,
       action: 'quote.superseded',
-      diff: { superseded: supersededCount, reason: 'estimate edited after send' },
+      diff: { superseded: sup.superseded, reason: 'estimate materially changed after send' },
+    }).catch(() => {});
+  } else if (sup.immaterial) {
+    // AUDIT THE NO-OP: a write landed but was judged immaterial and the link was kept. Without this
+    // row, "the guard worked" and "nothing was ever written" are indistinguishable after the fact —
+    // exactly the distinction that was missing when this defect was investigated.
+    await writeAudit(prisma, {
+      groupId, userId: args.actorUserId ?? null, jobCardId,
+      action: 'quote.edit_immaterial',
+      diff: { version: sup.liveVersion, reason: 'estimate re-saved with no customer-visible change — quote left live' },
     }).catch(() => {});
   }
 

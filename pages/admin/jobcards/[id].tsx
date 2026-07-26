@@ -39,6 +39,7 @@ type PageProps = {
   canEdit: boolean;
   canEditPricing: boolean;
   quoteFrozen: boolean;
+  quoteSupersededNoLink: boolean;
   canIssueInvoice: boolean;
   priceVisible: boolean;
   costVisible: boolean;
@@ -125,6 +126,7 @@ export default function JobCardDetailPage(props: PageProps) {
         labourRate={props.labourRate}
         canEditPricing={props.canEditPricing}
         quoteFrozen={props.quoteFrozen}
+        quoteSupersededNoLink={props.quoteSupersededNoLink}
         isAdmin={props.isAdmin}
         owner={props.owner}
         vehicle={props.vehicle}

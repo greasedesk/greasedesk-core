@@ -41,7 +41,8 @@ export type AuditAction =
   | 'invoice.sent'          // emailed to the customer (PDF attached)
   | 'quote.cost_entered' // a parts cost typed on the quote line (ruling 2026-07-20): { line, from, to, via, meaning }
   | 'quote.sent'         // a frozen QuoteVersion went to the customer: { version, lines, emailed, sentTo }
-  | 'quote.superseded'   // the estimate was edited while a quote was out — old version + link killed: { version }
+  | 'quote.superseded'   // the estimate was MATERIALLY edited while a quote was out — old version + link killed: { superseded }
+  | 'quote.edit_immaterial' // an estimate write reproduced the live version's customer-visible figures — quote LEFT LIVE: { version }
   | 'quote.accepted'     // CUSTOMER accepted, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // GARAGE recorded an acceptance taken by phone/counter. Distinct from

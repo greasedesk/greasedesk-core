@@ -60,7 +60,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   if (!row) return null;
 
   // Card ownership proven → NOW safe to read its invoice + audit trail (keyed on the card).
-  const [invoiceRow, auditRows] = await Promise.all([
+  const [invoiceRow, auditRows, latestQuote] = await Promise.all([
     prisma.invoice.findUnique({
       where: { job_card_id: cardId },
       // `lines: take 1` answers "are the lines FROZEN?" without loading them — the same test the
@@ -73,7 +73,17 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       take: 100,
       select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
     }) as Promise<any[]>,
+    // The card's LATEST quote version status — a `superseded` latest means the estimate was
+    // materially edited after sending and never re-sent, so there is no live link for the customer.
+    prisma.quoteVersion.findFirst({
+      where: { job_card_id: cardId },
+      orderBy: { version: 'desc' },
+      select: { status: true },
+    }) as Promise<{ status: string } | null>,
   ]);
+  // No live customer link: the latest version is superseded (clears the moment a fresh quote is sent,
+  // as the new `sent` version becomes the latest).
+  const quoteSupersededNoLink = latestQuote?.status === 'superseded';
 
   // Wave 3 — row-keyed queries, fired together. The owner chain keeps its internal order:
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
@@ -193,6 +203,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     status: row.status,
     jobCardId: row.id,
     canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
+    quoteSupersededNoLink,
     isAdmin: vis.isAdmin,
     currency: site?.currency_code ?? 'GBP',
     locale: site?.locale ?? 'en-GB',

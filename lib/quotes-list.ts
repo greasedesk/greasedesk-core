@@ -63,6 +63,11 @@ export type QuoteRow = {
   sentAt: string | null;
   expiresAt: string | null;
   status: DerivedQuoteStatus;
+  /** TRUE when this card's LATEST version is `superseded` — the estimate was materially edited after
+   *  sending and never re-sent, so there is NO live link: the customer can no longer view it. Distinct
+   *  from a timed-out expiry (both file under `expired`). Clears the moment a fresh quote is sent, as
+   *  the new `sent` version becomes the latest. */
+  supersededNoLink: boolean;
   cardStatus: string;
   siteId: string;
 };
@@ -113,6 +118,7 @@ export async function listQuotes(args: {
       sentAt: v.sent_at.toISOString(),
       expiresAt: quoteExpiry(v.sent_at).toISOString(),
       status: deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now),
+      supersededNoLink: v.status === 'superseded',
       cardStatus: v.job_card?.status ?? '',
       siteId: v.job_card?.site_id ?? '',
     });
@@ -146,6 +152,7 @@ export async function listQuotes(args: {
       sentAt: null,
       expiresAt: null, // nothing was sent, so nothing lapses — a verbal quote never "expires"
       status: 'awaiting',
+      supersededNoLink: false, // never sent → no link to have lost
       cardStatus: c.status,
       siteId: c.site_id,
     });

@@ -113,10 +113,15 @@ export default function QuotesPage(props: Props) {
                       <span className="py-3 px-4 text-muted">{r.expiresAt ? fmtDate(r.expiresAt) : '—'}</span>
                       <span className="py-3 px-4">
                         {/* A verbal quote has no send, no clock and no customer-side record — say so
-                            plainly rather than dressing it as a sent quote with blank dates. */}
+                            plainly rather than dressing it as a sent quote with blank dates. A
+                            superseded latest = the estimate was materially edited and never re-sent,
+                            so the customer's link is dead: state the fact AND the remedy, without
+                            implying the garage did anything wrong. */}
                         {r.verbal
                           ? <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line">Quoted verbally — not sent</span>
-                          : <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>}
+                          : r.supersededNoLink
+                            ? <span className="text-xs text-warn">Superseded — customer can no longer view this quote. Send a new one.</span>
+                            : <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>}
                       </span>
                     </Link>
                   </td>

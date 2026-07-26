@@ -38,6 +38,7 @@ type Props = {
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
+  quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   owner: { name: string; phone: string | null; email: string | null; address: string | null };
@@ -596,6 +597,7 @@ export default function JobCardWorkspace(p: Props) {
             status={eff.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
+            quoteSupersededNoLink={p.quoteSupersededNoLink}
           />
           {/* THE UI'S OWN STATEMENT, from its own flag — not the 409 body echoed back. Before this
               the only "frozen" wording in the app lived in the API refusal, so the page could not
@@ -668,6 +670,7 @@ function QuoteActions(props: {
   resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
+  quoteSupersededNoLink: boolean;
 }) {
   const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
   const { openHour, closeHour, openDays, breaks } = siteHours;
@@ -836,7 +839,14 @@ function QuoteActions(props: {
           magic link and emails it. The URL is ALWAYS shown afterwards so it can be handed over by
           hand — WhatsApp, read out over the phone — and a customer with no email on file is
           offered the link rather than blocked. */}
-      {!isAcceptedOnwards && <SendQuote jobCardId={jobCardId} disabled={busy !== null} />}
+      {/* DEAD-QUOTE FLAG: the estimate was materially edited after sending and never re-sent, so the
+          customer's link no longer opens. State the fact and the remedy; it clears when a fresh quote
+          is sent. Not shown once the card has moved on to accepted/onwards. */}
+      {!isAcceptedOnwards && props.quoteSupersededNoLink && (
+        <p className="mt-4 text-sm text-warn">Superseded — customer can no longer view this quote. Send a new one.</p>
+      )}
+
+      {!isAcceptedOnwards && <SendQuote jobCardId={jobCardId} disabled={busy !== null} beforeSend={commitEstimate} />}
 
       {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
           captures WHO on staff marked it and that it was verbal, and deliberately records NO ip or
@@ -878,7 +888,7 @@ function AcceptVerbal({ jobCardId, disabled }: { jobCardId: string; disabled: bo
   );
 }
 
-function SendQuote({ jobCardId, disabled }: { jobCardId: string; disabled: boolean }) {
+function SendQuote({ jobCardId, disabled, beforeSend }: { jobCardId: string; disabled: boolean; beforeSend?: () => Promise<unknown> }) {
   const [sending, setSending] = React.useState(false);
   const [result, setResult] = React.useState<{ url: string; emailed: boolean; sentTo: string | null; version: number; expiresAt: string } | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -887,6 +897,10 @@ function SendQuote({ jobCardId, disabled }: { jobCardId: string; disabled: boole
   async function send() {
     setSending(true); setErr(null); setCopied(false);
     try {
+      // FLUSH, don't cancel: settle any pending estimate autosave BEFORE freezing, so the version
+      // captures the latest edit and no trailing write lands behind the freeze. Belt to the server
+      // material-guard's braces — a stale autosave that still fires is now immaterial and no-ops.
+      await beforeSend?.().catch(() => {});
       const r = await fetch('/api/quote-send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobCardId }),

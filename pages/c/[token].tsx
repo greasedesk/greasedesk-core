@@ -38,8 +38,10 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
     body: `Quote links stay valid for ${MAGIC_LINK_DAYS} days. Your job and its details are safe — only the link has aged out. Please contact the garage and ask them to send a fresh one.`,
   },
   revoked: {
-    title: 'This quote is no longer current',
-    body: 'The garage has updated or withdrawn this quote, so this link no longer opens it. If they sent you a newer quote, please use that link instead — otherwise give them a call.',
+    // Seen at the moment someone was about to accept — keep the conversation OPEN, don't imply the
+    // door has closed. (Expired copy is separate and deliberately unchanged.)
+    title: 'This quote has been updated',
+    body: 'This quote has been updated — please ask the garage for the current version.',
   },
   not_found: {
     title: "We couldn't find that quote",
