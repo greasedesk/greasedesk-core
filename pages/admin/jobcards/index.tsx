@@ -10,6 +10,17 @@
  * list total always reconciles with the tile), scoped to the same sites, sorted OLDEST FIRST with
  * per-card ex-VAT value + days-open. Gated to admin/SITE_MANAGER (the tile's audience): a user who
  * can't see the tile is bounced to the plain list, so they can't reach the money view by URL.
+ *
+ * DATE COLUMN + SORT (the useful date is when the car is actually in — not the bulk-entry created_at
+ * that every backfilled row shares):
+ *   • Plain list — one "Booked" column = JobCard.start_at. Sorted start_at DESC, nulls (unscheduled
+ *     drafts) LAST, then created_at DESC as the tiebreak: scheduled work stays together and ordered,
+ *     and an unbooked draft never leaps to the top on a date it doesn't own. Where start_at is null
+ *     the cell falls back to created_at with a "(created)" marker so booked and created can never be
+ *     confused at a glance. There is deliberately NO separate "Created" column — that would
+ *     reintroduce the confusion the marker prevents.
+ *   • WIP mode — UNCHANGED: sorted created_at OLDEST FIRST. There the point is genuine card AGE, so
+ *     created_at is the right basis; the Booked column and its sort do not apply.
  */
 import React, { useMemo, useState } from 'react';
 import Head from 'next/head';
@@ -35,7 +46,8 @@ type JobCardRow = {
   registration: string;
   customerName: string;
   status: string;
-  createdAt: string; // ISO
+  createdAt: string;        // ISO
+  startAt: string | null;   // ISO booking start; null = never scheduled (draft) → falls back to createdAt, marked
   stages: Stages;
   invoiceNumber: string | null;
   valuePennies?: number; // WIP mode only — ex-VAT working-draft value (comeback = 0)
@@ -177,7 +189,7 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel, currency,
                     <th className="px-4 py-3">Days open</th>
                     <th className="px-4 py-3 text-right">Value (ex-{taxLabel})</th>
                   </>
-                : <th className="px-4 py-3">Created</th>}
+                : <th className="px-4 py-3">Booked</th>}
             </tr>
           </thead>
           <tbody>
@@ -218,8 +230,12 @@ export default function JobCardsListPage({ cards, noSites, scopeLabel, currency,
                       <td className="px-4 py-3 text-right tabular-nums">{money(c.valuePennies ?? 0)}</td>
                     </>
                   ) : (
-                    <td className="px-4 py-3 text-muted">
-                      {new Date(c.createdAt).toLocaleDateString('en-GB')}
+                    // Booked = start_at (plain ink). Unscheduled → created_at, muted + "(created)" so
+                    // the two are never confusable at a glance.
+                    <td className="px-4 py-3">
+                      {c.startAt
+                        ? <span className="text-ink">{new Date(c.startAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                        : <span className="text-muted italic">{new Date(c.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} (created)</span>}
                     </td>
                   )}
                 </tr>
@@ -283,7 +299,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const rows = (await prisma.jobCard.findMany({
     where: wipMode ? wipCardsWhere(scopeIds) : { site_id: isAll ? { in: vis.siteIds } : (sid as string) },
-    orderBy: { created_at: wipMode ? 'asc' : 'desc' }, // WIP: oldest first — the aged cards are the problem
+    // WIP: oldest first by created_at — genuine card AGE is the point there. Plain list: booked date
+    // (start_at) DESC with unscheduled cards (null) LAST, created_at DESC as the within-group tiebreak.
+    orderBy: wipMode
+      ? { created_at: 'asc' }
+      : [{ start_at: { sort: 'desc', nulls: 'last' } }, { created_at: 'desc' }],
     include: {
       customer: { select: { name: true } },
       vehicle: { select: { registration: true } },
@@ -306,6 +326,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       customerName: r.customer?.name ?? '—',
       status: r.status,
       createdAt: r.created_at.toISOString(),
+      startAt: r.start_at ? r.start_at.toISOString() : null,
       invoiceNumber: r.invoice?.invoice_number ?? null,
       stages: {
         details: r.stage_details_done,
