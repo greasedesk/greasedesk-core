@@ -3,6 +3,7 @@
   "week": "Week",
   "day": "Day",
   "weekOf": "Week of {{date}}",
+  "statusKey": { "outlineNote": "Block outline = lift colour" },
   "prev": "Previous",
   "next": "Next",
   "todayBtn": "Today",

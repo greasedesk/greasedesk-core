@@ -233,6 +233,26 @@ function MonthGrid({ siteId, anchor, today, weekStart, openDays, locale, cards, 
   );
 }
 
+// ---- STATUS COLOUR KEY: compact legend beneath the grid (day/week/month). Swatches resolve from the
+// SAME tenant status_colours the blocks use (threaded in as `colours`), never a hardcoded palette — so
+// a legend can never disagree with the board. Quiet: one wrapping row of small swatches, muted text. ----
+function StatusKey({ colours, view, t }: { colours: Record<StatusBand, string>; view: string; t: (k: string, o?: any) => string }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted">
+      {STATUS_BANDS.map(({ key, label }) => (
+        <span key={key} data-key-band={key} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <span data-key-swatch={key} className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: colours[key], border: '1px solid rgba(0,0,0,0.12)' }} />
+          {label}
+        </span>
+      ))}
+      {/* The block OUTLINE is the lift colour — day/week only (month has no outline). */}
+      {(view === 'day' || view === 'week') && (
+        <span className="whitespace-nowrap text-muted/80">· {t('statusKey.outlineNote')}</span>
+      )}
+    </div>
+  );
+}
+
 // ---- YEAR VIEW: 12 mini-months (Apple year style). No bookings at this zoom; today marked;
 // double-clicking any date opens Month view focused on it. -----------------------------------------
 function MiniMonth({ siteId, year, month, today, weekStart, locale }: {
@@ -990,6 +1010,10 @@ export default function DiaryPage(props: PageProps) {
             )}
           </>
         )}
+
+        {/* Status colour key — beneath the grid on all three views. Swatches resolve from the tenant's
+            status_colours (same chokepoint the blocks use), so the key can never disagree with the board. */}
+        <StatusKey colours={statusColours} view={view} t={t} />
       </div>
 
       {/* Peek popover */}
