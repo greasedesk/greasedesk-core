@@ -575,8 +575,10 @@ export default function DiaryPage(props: PageProps) {
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
       >
         <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
-        {/* Status-band label — always present (the colour reinforces it, never replaces it). */}
-        {height > 40 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
+        {/* Status-band label — THE single status word, always present (non-gated; the colour reinforces
+            it, never replaces it). Shown wherever a pill fits (>28, matching where the pay pill used to
+            appear) so short blocks still carry the word. */}
+        {height > 28 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
         {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
             overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
         {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
@@ -586,9 +588,10 @@ export default function DiaryPage(props: PageProps) {
         ))}
         {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
         {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
-        {/* Payment-state pill at the FOOT of the block (anchored, clear of the text lines above —
-            the pb reserves its lane). Follows the permission ONLY, never the toggle. */}
-        {finance.canSeeValues && height > 28 && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
+        {/* Payment pill retained ONLY where it says something the band does not: the warranty/settled
+            "No charge" (£0 outcome). Everywhere else it duplicated the band word ("Paid"/"Paid",
+            "Invoiced" vs "Complete, unpaid") and collided with the inline band pill on short blocks. */}
+        {finance.canSeeValues && height > 28 && paymentState(c.status, c.isComeback) === 'settled' && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
       </div>
     );
   }
@@ -838,8 +841,8 @@ export default function DiaryPage(props: PageProps) {
                           </div>
                           <div className="text-sm text-ink">{it.card.customer}</div>
                           {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
-                          {/* Payment-state pill at the FOOT of the card — permission-only, toggle-proof. */}
-                          {finance.canSeeValues && <div className="mt-1"><PayPill status={it.card.status} isComeback={it.card.isComeback} t={t} className="text-[10px] py-0.5" /></div>}
+                          {/* Payment pill only where it adds to the band: warranty/settled "No charge". */}
+                          {finance.canSeeValues && paymentState(it.card.status, it.card.isComeback) === 'settled' && <div className="mt-1"><PayPill status={it.card.status} isComeback={it.card.isComeback} t={t} className="text-[10px] py-0.5" /></div>}
                         </div>
                         {showMoney && finance.canSeeValues && (
                           <div className={`shrink-0 text-sm font-semibold tabular-nums ${it.card.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(it.card.valuePennies)}</div>
