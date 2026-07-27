@@ -17,6 +17,7 @@ import { prisma } from '@/lib/db';
 import { parseBreaks } from '@/lib/occupancy';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
+import { STATUS_BANDS, DEFAULT_STATUS_COLOURS, resolveStatusColours, type StatusBand } from '@/lib/status-colours';
 import { requireSiteManagerPage } from '@/lib/admin-guard';
 
 const RESOURCE_TYPE_OPTIONS = [
@@ -42,7 +43,7 @@ type LocationView = {
   weekStart: number;
   breaks: { start: number; end: number }[];
 };
-type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean };
+type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean; statusColours: Record<StatusBand, string> };
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -353,7 +354,59 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
   );
 }
 
-export default function LocationsSettings({ locations, isAdmin, isManager }: PageProps) {
+// --- Job status colours (diary traffic-light fills). Group-level, admin-only. Curated palette only
+//     (no free hex → a fill can never be white-on-white). Colour reinforces the status pill, and the
+//     configurability is part of the red/green colour-blindness mitigation. ---
+function StatusColoursPanel({ initial }: { initial: Record<StatusBand, string> }) {
+  const [vals, setVals] = useState<Record<StatusBand, string>>(initial);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function save(next: Record<StatusBand, string>, reset = false) {
+    setBusy(true); setMsg(null);
+    const res = await fetch('/api/status-colours', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reset ? { reset: true } : { colours: next }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(data?.message || 'Could not save.'); return; }
+    setVals(data.colours); setMsg(reset ? 'Reset to defaults.' : 'Saved.');
+  }
+  const pick = (band: StatusBand, colour: string) => { const next = { ...vals, [band]: colour }; setVals(next); void save(next); };
+
+  return (
+    <div className="bg-surface border border-line rounded-xl p-5 mt-8">
+      <h2 className="text-lg font-semibold text-ink">Job status colours</h2>
+      <p className="text-muted text-sm mt-0.5 mb-4">
+        The diary colours each booking by its job status; the lift’s own colour becomes the block outline.
+        Colour reinforces the status label, it doesn’t replace it. A comeback always shows the warranty colour.
+      </p>
+      <div className="space-y-3">
+        {STATUS_BANDS.map(({ key, label }) => (
+          <div key={key} className="flex items-center gap-3 flex-wrap">
+            <span className="w-4 h-4 rounded" style={{ backgroundColor: vals[key], border: '1px solid rgba(0,0,0,0.15)' }} />
+            <span className="text-sm text-ink w-40">{label}</span>
+            <span className="flex items-center gap-1.5">
+              {RESOURCE_PALETTE.map((c) => (
+                <button key={c} type="button" title={c} disabled={busy} onClick={() => pick(key, c)}
+                  aria-label={`${label}: ${c}`}
+                  className={`w-5 h-5 rounded-full border ${vals[key] === c ? 'ring-2 ring-accent border-accent' : 'border-line'}`}
+                  style={{ backgroundColor: c }} />
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex items-center gap-3">
+        <button type="button" disabled={busy} onClick={() => save(DEFAULT_STATUS_COLOURS, true)} className="text-sm text-muted underline hover:text-ink">Reset to defaults</button>
+        {msg && <span className="text-xs text-ok">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+export default function LocationsSettings({ locations, isAdmin, isManager, statusColours }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
 
@@ -372,6 +425,9 @@ export default function LocationsSettings({ locations, isAdmin, isManager }: Pag
       ) : (
         locations.map((loc) => <LocationCard key={loc.id} loc={loc} isAdmin={isAdmin} onChanged={refresh} />)
       )}
+
+      {/* Job status colours — beneath Locations & Resources, admin-only, per tenant. */}
+      {isAdmin && <StatusColoursPanel initial={statusColours} />}
     </SettingsLayout>
   );
 }
@@ -409,5 +465,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     breaks: parseBreaks(s.breaks),
   }));
 
-  return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER' } };
+  // Tenant diary status-band palette (Group-level; one per tenant). Defaults merged under overrides.
+  const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { status_colours: true } })) as any;
+  const statusColours = resolveStatusColours(grp?.status_colours);
+
+  return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER', statusColours } };
 };

@@ -15,6 +15,21 @@ import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
+import { bandColour, statusBand, STATUS_BANDS, resolveStatusColours, DEFAULT_STATUS_COLOURS, type StatusBand } from '@/lib/status-colours';
+
+const BAND_LABEL: Record<StatusBand, string> = Object.fromEntries(STATUS_BANDS.map((b) => [b.key, b.label])) as Record<StatusBand, string>;
+// The status-band label pill. NON-gated (shown to every user) — the colour REINFORCES this label, it
+// never replaces it (red/green colour-blindness ≈ 1 in 12 men). Tinted by the band's own colour.
+function BandPill({ status, isComeback, colours, className }: { status: string; isComeback?: boolean; colours: Record<StatusBand, string>; className?: string }) {
+  const band = statusBand(status, isComeback);
+  const colour = colours[band];
+  return (
+    <span className={`inline-block shrink-0 rounded-full border px-1.5 font-medium whitespace-nowrap ${className ?? ''}`}
+      style={{ color: colour, borderColor: colour, backgroundColor: `${colour}1A` }}>
+      {BAND_LABEL[band]}
+    </span>
+  );
+}
 import { getVisibility } from '@/lib/site-visibility';
 import { hhmm } from '@/lib/diary-time'; // THE shared diary-time chokepoint (floating wall-clock render)
 import { canManageSite } from '@/lib/admin-guard';
@@ -69,6 +84,7 @@ type PageProps = {
   // All-day absence banners (Roster leave, every type) keyed by day + the tenant's type→colour map.
   leaveBanners?: Record<string, Array<{ n: string; t: string; h: boolean }>>;
   leaveColours?: Record<string, string>;
+  statusColours?: Record<StatusBand, string>;
   noSites?: boolean;
 };
 type FinanceProps = { canSeeValues: boolean; canSeeMargin: boolean; vatRegistered: boolean; bookedPennies: number; marginPennies: number; days: Record<string, { bookedPennies: number; marginPennies: number }> };
@@ -264,6 +280,9 @@ export default function DiaryPage(props: PageProps) {
   const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites, openDays } = props;
   const leaveBanners = props.leaveBanners ?? {};
   const leaveColours = props.leaveColours ?? {};
+  const statusColours = props.statusColours ?? DEFAULT_STATUS_COLOURS;
+  // The booking block's FILL is the job-status band; the lift's own colour becomes the OUTLINE.
+  const cardFill = (c: { status: string; isComeback?: boolean }) => bandColour(c.status, c.isComeback, statusColours);
   const { t } = useTranslation('diary');
   // Runtime "Show values" toggle — hides already-permitted money ("turn the screen to the customer").
   // The permission gates what's SENT; this only hides what was sent. Persisted per browser.
@@ -535,7 +554,8 @@ export default function DiaryPage(props: PageProps) {
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
   function JobBlock({ c, col, top, height, leftPct, widthPct }: { c: DiaryCard; col: { date: string; resourceId?: string }; top: number; height: number; leftPct: number; widthPct: number }) {
-    const colour = resolveColour(c.resourceColour);
+    const liftColour = resolveColour(c.resourceColour); // the lift's own colour → block OUTLINE
+    const fill = cardFill(c);                           // the job-status band → block FILL
     return (
       <div
         onPointerDown={(e) => e.stopPropagation()}
@@ -545,11 +565,13 @@ export default function DiaryPage(props: PageProps) {
         onTouchStart={(e) => onBlockLongPress(c, col, e)}
         onTouchEnd={cancelPress}
         onTouchMove={cancelPress}
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(colour), borderLeft: `3px solid ${colour}` }}
+        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(fill), border: `2px solid ${liftColour}` }}
         className={`diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
       >
         <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
+        {/* Status-band label — always present (the colour reinforces it, never replaces it). */}
+        {height > 40 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
         {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
             overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
         {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
@@ -800,12 +822,13 @@ export default function DiaryPage(props: PageProps) {
                   <div className="space-y-2">
                     {listItems.map((it) => it.kind === 'job' ? (
                       <button key={`j-${it.card.id}`} onClick={() => openCard(it.card.id)}
-                        className="w-full text-left bg-surface border border-line rounded-xl p-3 flex gap-3 items-start active:bg-surface-muted"
-                        style={{ borderLeft: `4px solid ${resolveColour(it.card.resourceColour)}` }}>
+                        className="w-full text-left rounded-xl p-3 flex gap-3 items-start active:bg-surface-muted"
+                        style={{ backgroundColor: blockTint(cardFill(it.card)), border: `2px solid ${resolveColour(it.card.resourceColour)}` }}>
                         <div className="shrink-0 text-sm text-muted tabular-nums pt-0.5 w-14">{hhmm(it.card.startAt)}<br /><span className="text-xs">{hhmm(it.card.endAt)}</span></div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-semibold text-ink">{it.card.reg}</span>
+                            <BandPill status={it.card.status} isComeback={it.card.isComeback} colours={statusColours} className="text-[10px] py-0.5" />
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-muted whitespace-nowrap">{it.card.resourceName}</span>
                           </div>
                           <div className="text-sm text-ink">{it.card.customer}</div>
@@ -1558,8 +1581,9 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       orderBy: { date: 'asc' },
       select: { date: true, type: true, hours: true, cost_person: { select: { name: true } } },
     }) as Promise<any[]>,
-    prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true } }) as any,
+    prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true, status_colours: true } }) as any,
   ]);
+  const statusColours = resolveStatusColours(grpColours?.status_colours);
   const leaveBanners: Record<string, Array<{ n: string; t: string; h: boolean }>> = {};
   for (const l of leaveRows) {
     const k = ymd(l.date as Date);
@@ -1626,5 +1650,5 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), openDays, finance, leaveBanners, leaveColours } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), openDays, finance, leaveBanners, leaveColours, statusColours } };
 });

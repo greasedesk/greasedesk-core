@@ -12,7 +12,10 @@ import { prisma } from '@/lib/db';
  *  gated) totals; a money-free consumer must project them out server-side. */
 export function fetchDayBookings(siteId: string, rangeStart: Date, rangeEnd: Date): Promise<any[]> {
   return prisma.jobCard.findMany({
-    where: { site_id: siteId, resource_id: { not: null }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
+    // cancelled/declined are excluded — a cancelled job must not occupy a lift on the board. (NOTE:
+    // cancelling does not itself clear resource_id/start_at, so this filter is what keeps the slot
+    // visually free; see the report on unbook-on-cancel.)
+    where: { site_id: siteId, resource_id: { not: null }, status: { notIn: ['cancelled', 'declined'] }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
     select: {
       id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true, held_on_lift: true,
       resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },

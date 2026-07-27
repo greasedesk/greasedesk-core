@@ -196,6 +196,7 @@ model Group {
   // Per-tenant leave-type colour overrides (type→hex; defaults = Okabe–Ito in lib/leave-types;
   // admin-remappable for colour-blind accessibility). Read via resolveLeaveColours only.
   leave_type_colours        Json?
+  status_colours            Json? // diary job-status band → curated-palette hex (lib/status-colours); null keys fall back to defaults. One palette per tenant (a mechanic moving sites shouldn't relearn colours).
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")
   phone                     String? // company-level contact number — the FALLBACK when a site has none (customer-facing escape hatch)
