@@ -24,6 +24,12 @@ export const JOB_STATUSES: JobStatus[] = [
 export const QUOTE_DONE_STATUSES: JobStatus[] = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'];
 export const INVOICE_DONE_STATUSES: JobStatus[] = ['invoiced', 'paid', 'done'];
 
+// TERMINAL-INACTIVE: a card in one of these does NOT occupy a resource slot. ONE definition, shared by
+// the diary DISPLAY reader (lib/diary-day) and the occupancy GUARD (lib/diary-booking), so the two can
+// never disagree on what "occupied" means. (The slot data is deliberately KEPT — the record of when/
+// where the job had been booked survives — but it no longer blocks the lift or shows on the board.)
+export const OFF_DIARY_STATUSES: JobStatus[] = ['cancelled', 'declined'];
+
 const TRANSITIONS: Record<JobStatus, Transition[]> = {
   draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }],
   quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],

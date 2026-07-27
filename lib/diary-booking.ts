@@ -13,6 +13,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
+import { OFF_DIARY_STATUSES } from '@/lib/jobcard-status';
 
 export type PlaceParams = {
   jobCardId: string;
@@ -52,7 +53,9 @@ export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams)
   // test is footprint-vs-footprint below, so a stale end_at can never cause a missed clash.
   const windowStart = new Date(p.start.getTime() - PREFILTER_LOOKBACK_MS);
   const candidates = await tx.jobCard.findMany({
-    where: { id: { not: p.jobCardId }, resource_id: p.resourceId, start_at: { gte: windowStart, lte: newEnd } },
+    // A cancelled/declined card KEEPS its slot data (the record of when it had been booked) but must NOT
+    // occupy the lift — same "off diary" definition the display reader uses, so guard and board agree.
+    where: { id: { not: p.jobCardId }, resource_id: p.resourceId, status: { notIn: OFF_DIARY_STATUSES }, start_at: { gte: windowStart, lte: newEnd } },
     select: { start_at: true, end_at: true, booking_duration_minutes: true, vehicle: { select: { registration: true } } },
   });
   for (const c of candidates) {
