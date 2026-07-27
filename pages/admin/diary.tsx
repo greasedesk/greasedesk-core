@@ -163,9 +163,14 @@ function DayPicker({ siteId, view, anchor, today, weekStart, locale, t, onClose 
 // Week strip uses. Adjacent-month days are greyed and not bookable (Apple-style); closed days
 // (weekday ∉ open_days, the same rule Week uses to drop a column) are greyed with a Closed tag.
 const CELL_CAP = 3; // chips per cell before "+N more" — a stable cap standing in for cell height
-function MonthGrid({ siteId, anchor, today, weekStart, openDays, locale, cards, t }: {
+function MonthGrid({ siteId, anchor, today, weekStart, openDays, locale, cards, cardFill, t }: {
   siteId: string; anchor: string; today: string; weekStart: number; openDays: number[];
-  locale: string; cards: DiaryCard[]; t: (k: string, o?: any) => string;
+  locale: string; cards: DiaryCard[];
+  // The status-band fill, threaded from the parent — the SAME definition day/week use (never
+  // recomputed here). Month chips are colour-only: too small for a BandPill, so this scanning view
+  // carries the colour and day/week carry the labelled version (a deliberate exception).
+  cardFill: (c: { status: string; isComeback?: boolean }) => string;
+  t: (k: string, o?: any) => string;
 }) {
   const router = useRouter();
   const a = new Date(`${anchor}T00:00:00.000Z`);
@@ -210,7 +215,7 @@ function MonthGrid({ siteId, anchor, today, weekStart, openDays, locale, cards, 
                 <button key={cd.id} onClick={(e) => { e.stopPropagation(); router.push(openCardHref(cd.id)); }}
                   title={`${hhmm(cd.startAt)} · ${cd.reg} · ${cd.customer}`}
                   className="text-left rounded px-1 py-0.5 text-[10px] leading-tight truncate hover:bg-surface-muted"
-                  style={{ borderLeft: `3px solid ${resolveColour(cd.resourceColour)}` }}>
+                  style={{ borderLeft: `3px solid ${cardFill(cd)}` }}>
                   <span className="tabular-nums text-muted">{hhmm(cd.startAt)}</span> <span className="font-semibold text-ink">{cd.reg}</span>
                   {cd.customer && cd.customer !== '—' && <span className="text-muted"> · {cd.customer}</span>}
                 </button>
@@ -735,7 +740,7 @@ export default function DiaryPage(props: PageProps) {
           /* MONTH: calendar grid of the selected month. Bookings come from props.cards (the same
              server path as Week); the Booked/Margin strip above is the shared finance panel summed
              over the month by the identical loop — no fresh margin/revenue calc lives here. */
-          <MonthGrid siteId={siteId} anchor={anchor} today={today} weekStart={weekStart} openDays={openDays} locale={locale} cards={cards} t={t} />
+          <MonthGrid siteId={siteId} anchor={anchor} today={today} weekStart={weekStart} openDays={openDays} locale={locale} cards={cards} cardFill={cardFill} t={t} />
         ) : view === 'year' ? (
           /* YEAR: 12 mini-months, today marked, double-click a date → Month. No bookings at this zoom. */
           <YearGrid siteId={siteId} year={anchorUTC.getUTCFullYear()} today={today} weekStart={weekStart} locale={locale} />
