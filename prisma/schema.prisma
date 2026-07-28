@@ -623,6 +623,10 @@ model Site {
   company_number String?
   vat_number     String?
   address        String?
+  // US-only structured subdivision (USPS code, e.g. 'AL'). Captured at the onboarding site step for
+  // countries whose profile sets stateField; drives timezone derivation (lib/us-states) and is the
+  // future sales-tax jurisdiction hook. NULL for non-US tenants and pre-existing rows (honest-null).
+  state_code     String?
   phone          String?
   whatsapp       String? // site WhatsApp, stored as E.164 DIGITS; independent of phone (see Group.whatsapp)
   email          String?

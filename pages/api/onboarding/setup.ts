@@ -21,6 +21,7 @@ import { authOptions } from '../auth/[...nextauth]';
 import { trialEndsFromNow } from '@/lib/trial';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getProfile } from '@/lib/locale-profiles';
+import { isUsStateCode, timezoneForState } from '@/lib/us-states';
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -52,12 +53,13 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       return res.status(401).json({ message: 'Authentication Error: User not found.' });
     }
 
-    const { groupName, siteName, addressLine1, city, postcode } = req.body as {
+    const { groupName, siteName, addressLine1, city, postcode, stateCode } = req.body as {
       groupName?: string;
       siteName?: string;
       addressLine1?: string;
       city?: string;
       postcode?: string;
+      stateCode?: string;
     };
 
     // MANDATORY garage name (item-13) — no silent derivation from the person's name. The wizard
@@ -68,6 +70,24 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     if (!siteName || !siteName.trim()) {
       return res.status(400).json({ message: 'Please enter your primary location name.' });
     }
+
+    // STATE (ruling 2026-07-28): required and validated for countries whose profile sets stateField
+    // (US); rejected outright elsewhere — a UK tenant can never carry a US state. The timezone the
+    // site is created with derives from the state (majority zone for split states), narrowing
+    // WITHIN the profile's zone set by construction (lib/us-states only maps to profile zones).
+    const grpCountry = dbUser.group_id
+      ? await prisma.group.findUnique({ where: { id: dbUser.group_id }, select: { country_code: true, ref: true } })
+      : null;
+    const bodyProfile = getProfile(grpCountry?.country_code);
+    const sentState = String(stateCode ?? '').trim().toUpperCase() || null;
+    if (bodyProfile.stateField === true) {
+      if (!sentState || !isUsStateCode(sentState)) {
+        return res.status(400).json({ message: 'Please select your state from the list.' });
+      }
+    } else if (sentState) {
+      return res.status(400).json({ message: 'State does not apply to your country.' });
+    }
+    const stateTimezone = bodyProfile.stateField === true ? timezoneForState(sentState) : null;
 
     const fullAddressParts = [addressLine1, city, postcode].filter(Boolean);
     const fullAddress = fullAddressParts.length ? fullAddressParts.join(', ') : null;
@@ -135,6 +155,10 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       // C. Ensure Site exists for this group
       let site;
 
+      // State + derived timezone travel with every branch: an idempotent re-run that changes the
+      // state also moves the timezone (the rates step lets a split-state garage correct it after).
+      const stateData = sentState ? { state_code: sentState, timezone: stateTimezone ?? undefined } : {};
+
       if (siteId) {
         // Update the existing site for this user
         site = await tx.site.update({
@@ -142,6 +166,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
           data: {
             site_name: siteName ?? undefined,
             address: fullAddress ?? undefined,
+            ...stateData,
           },
         });
       } else {
@@ -156,6 +181,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
             data: {
               site_name: siteName ?? undefined,
               address: fullAddress ?? undefined,
+              ...stateData,
             },
           });
         } else {
@@ -168,10 +194,13 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
             data: {
               group_id: groupId,
               site_name: siteName || 'Main Workshop',
-              timezone: prof.defaultTimezone,
+              // State wins over the profile default when present (US) — Birmingham, Alabama gets
+              // Chicago, not the profile's first zone.
+              timezone: stateTimezone ?? prof.defaultTimezone,
               currency_code: prof.currency,
               locale: prof.locale,
               address: fullAddress ?? undefined,
+              state_code: sentState ?? undefined,
               users: { connect: { id: dbUser.id } },
             },
           });

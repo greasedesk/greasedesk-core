@@ -29,6 +29,9 @@ export type CountryProfile = {
   date_format: string;
   modules: { hr: boolean };
   supported: boolean;
+  /** Render a structured state/subdivision select at the site step (US-only today). The state
+   *  narrows the timezone within `timezones` (lib/us-states) — it never widens it. */
+  stateField?: boolean;
   // Back-compat alias for existing readers (resolveTenantProfile etc.).
   currencyCode?: string;
   tax_name?: string;
@@ -64,6 +67,7 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     // Flat garage-entered combined rate, like their till — no VAT number, no jurisdiction lookup.
     taxModel: 'sales_tax', taxLabel: 'Sales Tax', defaultTaxRatePercent: 0, requiresTaxNumber: false,
     roadworthiness_test_name: 'Safety Inspection', date_format: 'MM/dd/yyyy', modules: { hr: true }, supported: true,
+    stateField: true, // US garages pick a state; timezone derives from it (lib/us-states)
   }),
 };
 

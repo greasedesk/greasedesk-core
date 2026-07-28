@@ -8,14 +8,34 @@ import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
+import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { US_STATES } from '@/lib/us-states';
+
+type PageProps = {
+  // Country-profile-driven (ruling 2026-07-28): render a structured state select for countries
+  // whose profile sets stateField (US) — timezone derives from it. Absent elsewhere.
+  stateField: boolean;
+  states: Array<{ code: string; name: string }>;
+};
 
 // Wizard step-guard: only reachable as the FIRST incomplete step; bounces skip-ahead / resumes /
 // sends a complete tenant to the dashboard (item-13).
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
+export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const gate = await requireOnboardingStep(ctx, 'site');
   if (!gate.ok) return { redirect: gate.redirect };
-  return { props: {} };
+  const group = await prisma.group.findUnique({
+    where: { id: gate.vis.groupId as string },
+    select: { country_code: true, ref: true },
+  });
+  const profile = resolveTenantProfile(group);
+  return {
+    props: {
+      stateField: profile.stateField === true,
+      states: profile.stateField === true ? US_STATES.map((s) => ({ code: s.code, name: s.name })) : [],
+    },
+  };
 };
 
 // Define the expected form data shape
@@ -25,12 +45,13 @@ interface SetupData {
   addressLine1: string;
   city: string;
   postcode: string;
+  stateCode: string;
 }
 
 // Logo Configuration (Assuming it's placed in /public)
 const LOGO_SRC = '/greasedesk-logo-source.png';
 
-export default function OnboardingSetupPage() {
+export default function OnboardingSetupPage({ stateField, states }: PageProps) {
   const router = useRouter();
   const [formData, setFormData] = useState<SetupData>({
     groupName: '',
@@ -38,11 +59,12 @@ export default function OnboardingSetupPage() {
     addressLine1: '',
     city: '',
     postcode: '',
+    stateCode: '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
@@ -55,6 +77,11 @@ export default function OnboardingSetupPage() {
     // Simple validation
     if (!formData.groupName || !formData.siteName || !formData.postcode) {
       setError('Group Name, Site Name, and Postcode are required.');
+      setLoading(false);
+      return;
+    }
+    if (stateField && !formData.stateCode) {
+      setError('Please select your state.');
       setLoading(false);
       return;
     }
@@ -200,7 +227,7 @@ export default function OnboardingSetupPage() {
                   </div>
                   <div>
                     <label htmlFor="postcode" className={labelClass}>
-                      Postcode
+                      {stateField ? 'ZIP code' : 'Postcode'}
                     </label>
                     <input
                       type="text"
@@ -209,12 +236,32 @@ export default function OnboardingSetupPage() {
                       value={formData.postcode}
                       onChange={handleChange}
                       className={inputClass}
-                      placeholder="e.g., B1 2AB"
+                      placeholder={stateField ? 'e.g., 35203' : 'e.g., B1 2AB'}
                       disabled={loading}
                       required
                     />
                   </div>
                 </div>
+                {stateField && (
+                  <div className="mt-4">
+                    <label htmlFor="stateCode" className={labelClass}>
+                      State
+                    </label>
+                    <select
+                      id="stateCode"
+                      name="stateCode"
+                      value={formData.stateCode}
+                      onChange={handleChange}
+                      className={inputClass}
+                      disabled={loading}
+                      required
+                    >
+                      <option value="" disabled>Select your state…</option>
+                      {states.map((s) => <option key={s.code} value={s.code}>{s.name}</option>)}
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">Sets your timezone; you can adjust it on the next step if your area differs.</p>
+                  </div>
+                )}
               </div>
             </div>
 

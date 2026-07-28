@@ -18,13 +18,19 @@ import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { getUsState } from '@/lib/us-states';
 import { currencySymbol } from '@/lib/format-money';
 
 type PageProps = {
   countryName: string;
   currencyCode: string;     // profile currency — display + submitted for server re-validation
-  timezones: string[];      // the profile's zones, the ONLY options offered
-  initialTimezone: string;  // site's stored zone when valid for the profile, else profile default
+  timezones: string[];      // the zone OPTIONS offered (state-narrowed for split-state US tenants)
+  initialTimezone: string;  // site's stored zone when valid for the options, else the majority/default
+  // Timezone render mode (ruling 2026-07-28): a single-zone country (GB/IE) or an unambiguous US
+  // state needs no picker — the zone is shown as set, same treatment as currency. Only split
+  // states (and stateless multi-zone cases) get a picker.
+  timezoneFixed: boolean;
+  timezoneNote: string;     // "Set by your country — X" / "Derived from your state — Alabama"
 };
 
 type FormData = {
@@ -38,7 +44,7 @@ const tzLabel = (z: string) => (z.split('/').pop() ?? z).replace(/_/g, ' ');
 const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500 transition';
 const labelClass = 'block text-sm font-medium text-slate-300 mb-1 mt-3';
 
-export default function RatesSettingsPage({ countryName, currencyCode, timezones, initialTimezone }: PageProps) {
+export default function RatesSettingsPage({ countryName, currencyCode, timezones, initialTimezone, timezoneFixed, timezoneNote }: PageProps) {
   const router = useRouter();
   const { status } = useSession();
   // Labour rate starts BLANK — the owner must enter their own; we never pre-fill a number
@@ -124,16 +130,29 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
           <p className="text-xs text-slate-500 mt-1">Set by your country — {countryName}.</p>
 
           <label htmlFor="timezone" className={labelClass}>Timezone</label>
-          <select
-            id="timezone"
-            name="timezone"
-            value={data.timezone}
-            onChange={handleChange}
-            className={inputClass}
-            required
-          >
-            {timezones.map((tz) => <option key={tz} value={tz}>{tzLabel(tz)}</option>)}
-          </select>
+          {timezoneFixed ? (
+            <>
+              <input
+                id="timezone"
+                value={tzLabel(data.timezone)}
+                className={`${inputClass} opacity-70 cursor-not-allowed`}
+                disabled
+                readOnly
+              />
+              <p className="text-xs text-slate-500 mt-1">{timezoneNote}</p>
+            </>
+          ) : (
+            <select
+              id="timezone"
+              name="timezone"
+              value={data.timezone}
+              onChange={handleChange}
+              className={inputClass}
+              required
+            >
+              {timezones.map((tz) => <option key={tz} value={tz}>{tzLabel(tz)}</option>)}
+            </select>
+          )}
 
           <h2 className="text-xl font-semibold mt-8 mb-2">Default Labour Rate</h2>
           <hr className="border-slate-700 mb-4" />
@@ -173,19 +192,31 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const group = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { country_code: true, ref: true, sites: { select: { timezone: true }, orderBy: { created_at: 'asc' }, take: 1 } },
-  })) as { country_code: string | null; ref: string | null; sites: Array<{ timezone: string | null }> } | null;
+    select: { country_code: true, ref: true, sites: { select: { timezone: true, state_code: true }, orderBy: { created_at: 'asc' }, take: 1 } },
+  })) as { country_code: string | null; ref: string | null; sites: Array<{ timezone: string | null; state_code: string | null }> } | null;
 
   const profile = resolveTenantProfile(group);
   const siteTz = group?.sites?.[0]?.timezone ?? null;
-  const initialTimezone = siteTz && profile.timezones.includes(siteTz) ? siteTz : profile.defaultTimezone;
+  const state = profile.stateField === true ? getUsState(group?.sites?.[0]?.state_code) : null;
+
+  // Zone options: the state narrows within the profile (never widens — lib/us-states maps only to
+  // profile zones); no state → the full profile set, exactly as before.
+  const options = state ? state.zones : profile.timezones;
+  const initialTimezone = siteTz && options.includes(siteTz) ? siteTz : options[0];
+  // No picker when there is nothing to pick: single-zone country, or unambiguous state.
+  const timezoneFixed = options.length === 1;
+  const timezoneNote = state
+    ? `Derived from your state — ${state.name}.`
+    : `Set by your country — ${profile.name}.`;
 
   return {
     props: {
       countryName: profile.name,
       currencyCode: profile.currency,
-      timezones: profile.timezones,
+      timezones: options,
       initialTimezone,
+      timezoneFixed,
+      timezoneNote,
     },
   };
 };
