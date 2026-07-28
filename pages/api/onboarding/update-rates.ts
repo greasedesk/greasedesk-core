@@ -6,6 +6,7 @@ import { authOptions } from '../auth/[...nextauth]';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 type SaveRatesBody = {
   defaultVatRate: string;
@@ -116,6 +117,28 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     return res.status(400).json({ message: 'Invalid labour rate' });
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // COUNTRY-PROFILE VALIDATION (ruling 2026-07-28). The form is never trusted for regional
+  // identity: currency must BE the country's currency and the timezone must be one of the
+  // country's zones, else 400. Before this, the client's hardcoded GBP/Europe/London defaults
+  // were written verbatim here, silently overwriting the correct values the country + site
+  // steps had stored — a US tenant came out GBP/London ("XYZ" and "gb " stored too).
+  // The CANONICAL profile values are what get written, never the raw form text.
+  // ─────────────────────────────────────────────────────────────
+  const grpForProfile = await prisma.group.findUnique({
+    where: { id: groupId },
+    select: { country_code: true, ref: true },
+  });
+  const profile = resolveTenantProfile(grpForProfile);
+  const sentCurrency = String(currencyCode ?? '').trim().toUpperCase();
+  if (sentCurrency !== profile.currency) {
+    return res.status(400).json({ message: `Currency must be ${profile.currency} — it is set by your country and can’t be edited here.` });
+  }
+  const sentTimezone = String(timezone ?? '').trim();
+  if (!profile.timezones.includes(sentTimezone)) {
+    return res.status(400).json({ message: 'Pick a timezone from the list for your country.' });
+  }
+
   // VAT/tax is now its OWN onboarding step (item-13) — the rates step no longer sends it. Accept it
   // when present (legacy/settings callers), skip the VAT writes when absent.
   const hasVat = defaultVatRate != null && String(defaultVatRate).trim() !== '';
@@ -141,8 +164,8 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       await tx.site.update({
         where: { id: siteId! },
         data: {
-          timezone,
-          currency_code: currencyCode,
+          timezone: sentTimezone,          // validated: one of the profile's zones
+          currency_code: profile.currency, // canonical profile value, never the raw form text
         },
       });
 

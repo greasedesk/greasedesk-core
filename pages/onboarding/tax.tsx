@@ -11,6 +11,7 @@ import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { taxQuestionsForLocale, ONBOARDING_COUNTRIES, type OnboardingQuestion } from '@/lib/onboarding-steps';
+import { getProfile } from '@/lib/locale-profiles';
 
 type Answers = Record<string, string | boolean>;
 type PageProps = { questions: OnboardingQuestion[]; initial: Answers };
@@ -110,17 +111,28 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const group = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { tax_country_code: true, vat_registered: true, vat_number: true, default_vat_rate: true },
-  })) as { tax_country_code: string | null; vat_registered: boolean; vat_number: string | null; default_vat_rate: unknown } | null;
+    // country_code was previously read but NEVER SELECTED (always undefined) — the locale fork
+    // only worked via the tax_country_code fallback. Selected properly now (ruling 2026-07-28).
+    select: { country_code: true, tax_country_code: true, vat_registered: true, vat_number: true, default_vat_rate: true, tax_default_rate_bp: true },
+  })) as { country_code: string | null; tax_country_code: string | null; vat_registered: boolean; vat_number: string | null; default_vat_rate: unknown; tax_default_rate_bp: number | null } | null;
 
-  const locale = (group as any)?.country_code || group?.tax_country_code || "GB";
+  const locale = group?.country_code || group?.tax_country_code || 'GB';
   const questions = taxQuestionsForLocale(locale);
+  // Pre-fill from the COUNTRY PROFILE, not a hardcoded '20' — a US garage accepting defaults was
+  // getting 20% "Sales Tax" (the US profile default is 0; the garage types their own rate).
+  // default_vat_rate can NOT distinguish "answered" from "untouched" — it is non-nullable with a
+  // DB default of 20, so the schema default masquerades as an answer. tax_default_rate_bp is the
+  // step's own completion signal (NULL until this step writes it) — THAT is the re-entry test.
+  const profile = getProfile(locale);
+  const taxStepAnswered = group?.tax_default_rate_bp != null;
 
   const initial: Answers = {
-    tax_country_code: group?.tax_country_code || 'GB',
+    tax_country_code: group?.tax_country_code || locale,
     vat_registered: group?.vat_registered ?? true,
     vat_number: group?.vat_number || '',
-    vat_rate_percent: group?.default_vat_rate != null ? String(group.default_vat_rate) : '20',
+    vat_rate_percent: taxStepAnswered && group?.default_vat_rate != null
+      ? String(group.default_vat_rate)
+      : String(profile.defaultTaxRatePercent),
   };
 
   return { props: { questions, initial } };
