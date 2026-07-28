@@ -4,11 +4,12 @@
  * footer and page metadata all read from here, so the promise reads identically everywhere and a
  * wording change happens in exactly one place. No other copy belongs here.
  */
-export const STRAPLINE = 'Close the gap.';
+export const STRAPLINE = 'Paydirt';
 export const SUBLINE = 'Manage your profit, not just your diary.';
 
 /**
- * The homepage <title>/og:title/twitter:title. Derived from STRAPLINE (so it can't drift) but with
- * the terminal full stop dropped — titles don't take sentence punctuation.
+ * The homepage <title>/og:title/twitter:title. DECOUPLED from STRAPLINE (ruling 2026-07-28: the
+ * strapline moved to 'Paydirt' but the title keeps the search-established wording) — a literal now,
+ * no terminal full stop because titles don't take sentence punctuation.
  */
-export const PAGE_TITLE = `GreaseDesk — ${STRAPLINE.replace(/\.$/, '')}`;
+export const PAGE_TITLE = 'GreaseDesk — Close the gap';
