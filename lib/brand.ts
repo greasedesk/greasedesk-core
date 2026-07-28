@@ -8,8 +8,7 @@ export const STRAPLINE = 'Paydirt';
 export const SUBLINE = 'Manage your profit, not just your diary.';
 
 /**
- * The homepage <title>/og:title/twitter:title. DECOUPLED from STRAPLINE (ruling 2026-07-28: the
- * strapline moved to 'Paydirt' but the title keeps the search-established wording) — a literal now,
- * no terminal full stop because titles don't take sentence punctuation.
+ * The homepage <title>/og:title/twitter:title. A literal, DECOUPLED from STRAPLINE by design
+ * (rulings 2026-07-28): the strapline is 'Paydirt'; the title carries the category positioning.
  */
-export const PAGE_TITLE = 'GreaseDesk — Close the gap';
+export const PAGE_TITLE = 'GreaseDesk — Workshop Economics';
