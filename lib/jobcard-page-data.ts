@@ -55,6 +55,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       customer: { select: { name: true, phone: true, email: true } },
       vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
       items: { orderBy: { created_at: 'asc' } },
+      // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
+      // (source customer vs this card's customer, compared by ID at render).
+      duplicated_from: { select: { id: true, customer_id: true, customer: { select: { name: true } }, vehicle: { select: { registration: true } } } },
     },
   })) as any;
   if (!row) return null;
@@ -197,6 +200,20 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     id: a.id, action: a.action, actor: a.user?.name ?? a.user?.email ?? null, at: (a.created_at as Date).toISOString(),
   }));
 
+  // Duplicate provenance for the two notices. Ownership change compares customer IDs (source card
+  // vs this card — set at duplicate time to the vehicle's then-current owner); names are display
+  // only, never the comparison. costsInherited is an editor advisory — shaped to canEditPricing
+  // (absent, not hidden) because only an estimate editor can act on it, and the save that clears it.
+  const dup = row.duplicated_from;
+  const duplicatedFrom = dup
+    ? {
+        registration: dup.vehicle?.registration ?? null,
+        ownershipChanged: !!(dup.customer_id && row.customer_id && dup.customer_id !== row.customer_id),
+        previousCustomerName: dup.customer?.name ?? null,
+      }
+    : null;
+  const costsInherited = canEditPricing && !!row.costs_inherited;
+
   return {
     registration: row.vehicle?.registration ?? '—',
     createdAt: row.created_at.toISOString(),
@@ -226,6 +243,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       lastMotDate: row.vehicle?.last_mot_date ? (row.vehicle.last_mot_date as Date).toISOString().slice(0, 10) : null,
     },
     flags, isComeback: !!row.is_comeback,
+    duplicatedFrom, costsInherited,
     garageNotes: row.garage_notes ?? '',
     lines, catalogue, fixedServices, tiers, promos,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them

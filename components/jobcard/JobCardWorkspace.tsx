@@ -49,6 +49,10 @@ type Props = {
   };
   flags: string[];
   isComeback: boolean;
+  // Duplicate provenance (both nullable/absent on ordinary cards). ownershipChanged drives the
+  // prominent vehicle-reowned notice; costsInherited drives the Quote-tab stale-cost advisory.
+  duplicatedFrom?: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
+  costsInherited?: boolean;
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
   lines: EstimateLine[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
@@ -74,6 +78,9 @@ export default function JobCardWorkspace(p: Props) {
   const [err, setErr] = useState<string | null>(null);
   const estimateRef = useRef<EstimateHandle>(null);
   const commitEstimate = () => estimateRef.current ? estimateRef.current.commit() : Promise.resolve({ ok: true as const });
+  // Duplicated-card advisory: server state at load, dropped live once any save lands (the server
+  // clears costs_inherited in the same write — this only mirrors it, never decides it).
+  const [inheritedCleared, setInheritedCleared] = useState(false);
 
   // ---- OPTIMISTIC SAVE / NO FULL-PAGE REFRESH -------------------------------------------------
   // Mutations no longer router.replace(asPath) (a full 11-query gssp re-run — the save "blank").
@@ -583,6 +590,13 @@ export default function JobCardWorkspace(p: Props) {
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
       {eff.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
+      {/* Ownership moved since the source card — its own PROMINENT notice, never a clause on the
+          cost line (amendment 2026-07-28): a skimmer of the cost advisory must still see this. */}
+      {p.duplicatedFrom?.ownershipChanged && p.duplicatedFrom.previousCustomerName && (
+        <div className="bg-warn-soft border border-warn text-warn rounded-xl px-4 py-3 mb-5 text-sm font-semibold" data-testid="dup-owner-notice">
+          {t('duplicate.ownerChanged', { current: eff.owner.name, previous: p.duplicatedFrom.previousCustomerName })}
+        </div>
+      )}
       <JobCardTabs tabs={tabViews} active={active} onSelect={selectTab} lockedReason={t('tab.locked')} />
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
@@ -607,7 +621,15 @@ export default function JobCardWorkspace(p: Props) {
               {t('estimate.frozen')}
             </div>
           )}
-          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={quoteEditable} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} />
+          {/* Stale-cost advisory (duplicated card): the numbers below came from another card and may
+              be weeks old. Advisory, never a gate — cleared by the first estimate save. Kept apart
+              from the ownership notice above by design (amendment 2026-07-28). */}
+          {p.costsInherited && !inheritedCleared && (
+            <div className="bg-accent-soft border border-line rounded-xl p-3 mb-3 text-sm text-ink" data-testid="dup-costs-notice">
+              {t('duplicate.costsInherited', { reg: p.duplicatedFrom?.registration ?? '' })}
+            </div>
+          )}
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={quoteEditable} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} onSaved={() => setInheritedCleared(true)} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
               intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}

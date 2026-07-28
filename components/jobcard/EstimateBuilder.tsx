@@ -67,6 +67,9 @@ type Props = {
   priceVisible?: boolean; // finance-shaped: prices absent from props when false (defaults true)
   costVisible?: boolean;  // margin grain: ad-hoc parts editable for cost-visible; else read-only
   canCatalogue?: boolean; // ADMIN — surface "Add to catalogue" on ad-hoc parts (the cost home)
+  onSaved?: () => void; // fires after ANY successful persist (manual, autosave, parent commit) —
+                        // mirrors the server clearing costs_inherited on save, so the duplicated-card
+                        // stale-cost advisory drops without a reload
 };
 
 const blank = (item_type: QuoteItemType): Row => ({ _uid: uid(), item_type, description: '', qty: '', unit_price: '', unit_cost: '', vatable: true, code: '', catalogue_item_id: null });
@@ -210,7 +213,7 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
 export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
 export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () => EstimateLine[] };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
   const { t } = useTranslation('jobcard');
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
@@ -360,6 +363,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         return { ok: false, message: data?.message || t('estimate.saveError') };
       }
       lastSavedRef.current = snap; // now on the server
+      onSaved?.(); // the server just cleared costs_inherited — let the advisory drop live
       return { ok: true };
     } catch {
       // Network failure — NOT terminal. Stay dirty so a later change retries.

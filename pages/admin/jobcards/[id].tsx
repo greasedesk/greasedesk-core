@@ -57,6 +57,8 @@ type PageProps = {
   };
   flags: string[];
   isComeback: boolean;
+  duplicatedFrom: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
+  costsInherited: boolean;
   garageNotes: string;
   lines: EstimateLine[];
   catalogue: CatalogueLite[];
@@ -110,6 +112,9 @@ export default function JobCardDetailPage(props: PageProps) {
           >
             {back.label}
           </Link>
+          {/* Duplicate is READ-on-source — offered on cancelled/frozen cards on purpose: that is
+              the recovery case it exists for. The server re-derives estimate-edit authority. */}
+          {props.canEditPricing && <DuplicateCardButton jobCardId={props.jobCardId} />}
           {props.isAdmin && <DeleteCardButton jobCardId={props.jobCardId} hasInvoice={!!props.invoice} />}
         </div>
       </div>
@@ -132,6 +137,8 @@ export default function JobCardDetailPage(props: PageProps) {
         vehicle={props.vehicle}
         flags={props.flags}
         isComeback={props.isComeback}
+        duplicatedFrom={props.duplicatedFrom}
+        costsInherited={props.costsInherited}
         garageNotes={props.garageNotes}
         currency={props.currency}
         locale={props.locale}
@@ -153,6 +160,38 @@ export default function JobCardDetailPage(props: PageProps) {
         events={props.events}
       />
     </>
+  );
+}
+
+// Duplicate the card's estimate onto a fresh draft. No confirmation — the result is a deletable
+// draft, so the action is cheap to undo; navigates straight to the new card.
+function DuplicateCardButton({ jobCardId }: { jobCardId: string }) {
+  const { t } = useTranslation('jobcard');
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function duplicate() {
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch('/api/jobcard-duplicate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data?.message || t('duplicate.failed')); return; }
+      await router.push(`/admin/jobcards/${data.id}`);
+    } catch { setErr(t('duplicate.failed')); }
+    finally { setBusy(false); } // busy clears in finally — same-URL replace never remounts this page
+  }
+
+  return (
+    <span className="flex items-center gap-2">
+      {err && <span className="text-xs text-danger">{err}</span>}
+      <button onClick={duplicate} disabled={busy} className="text-sm text-accent hover:underline disabled:opacity-50" data-testid="duplicate-card">
+        {busy ? t('duplicate.working') : t('duplicate.button')}
+      </button>
+    </span>
   );
 }
 

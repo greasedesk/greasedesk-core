@@ -1087,6 +1087,16 @@ model JobCard {
   start_slot               Int?
   end_slot                 Int?
 
+  // --- DUPLICATE (estimate recovery) ---
+  // Provenance edge: this card was created by copying another card's estimate. SetNull so an admin
+  // hard-delete of the source never breaks the copy. The creation audit row carries the source
+  // registration too (self-describing), so the trail survives even a nulled edge.
+  duplicated_from_id String?
+  // Costs on this card were inherited from the source at duplicate time and may be stale. Cleared
+  // by the FIRST estimate save (the operator has looked at the numbers) — until then the Quote tab
+  // shows a check-your-supplier-costs advisory.
+  costs_inherited    Boolean @default(false)
+
   group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
   site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
   profit_centre     ProfitCentre?  @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
@@ -1099,11 +1109,14 @@ model JobCard {
   invoice           Invoice?
   magicLinks        CustomerMagicLink[]
   quoteVersions     QuoteVersion[]
+  duplicated_from   JobCard?       @relation("CardDuplicate", fields: [duplicated_from_id], references: [id], onDelete: SetNull)
+  duplicates        JobCard[]      @relation("CardDuplicate")
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
   @@index([resource_id, scheduled_date])
   @@index([resource_id, start_at])
+  @@index([duplicated_from_id])
 }
 
 model JobCardPhoto {

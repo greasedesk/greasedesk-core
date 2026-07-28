@@ -291,6 +291,9 @@ export async function performEstimateSave(args: {
         parts_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_pennies)),
         labour_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_cost_pennies)),
         parts_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_cost_pennies)),
+        // A save means the operator has looked at these numbers — the duplicated-card
+        // "costs were inherited, check them" advisory has done its job.
+        costs_inherited: false,
       },
     });
   });

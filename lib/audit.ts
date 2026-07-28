@@ -48,6 +48,9 @@ export type AuditAction =
   | 'quote.accepted_verbal' // GARAGE recorded an acceptance taken by phone/counter. Distinct from
                             // quote.accepted ON PURPOSE: { attested:false, via, version, frozenVersion }.
                             // Only quote.accepted is customer-attested (ip + user-agent captured).
+  | 'card.duplicated'    // created by copying a source card's estimate — SELF-DESCRIBING: the diff
+                         // carries { source_card_id, source_registration, ... } so the row stays
+                         // searchable even after the duplicated_from edge is SetNull'd by a purge
   | 'video.uploaded';       // landing receipt: verified {key, size} via server-side HeadObject at commit
   // NB: video.upload_error was REMOVED (2026-07-14) — technical failures live in UploadTelemetry,
   // never the business audit trail. The audit trail carries business events only. Nothing technical.
