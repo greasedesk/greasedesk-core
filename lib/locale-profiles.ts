@@ -53,7 +53,9 @@ export type CountryProfile = {
   // call that can only ever miss for a foreign plate. Adding NHTSA later = flip this to 'nhtsa' +
   // write the handler; no form rebuild.
   vehicleIdLabel: string;            // "Registration" (GB/IE) / "License plate" (US)
-  vehicleLookupProvider: 'dvla' | 'none';
+  // Provider NAME only — lib/vehicle-lookup-providers binds it to behaviour (and to WHICH FIELD the
+  // lookup is keyed on: DVSA on the registration, vPIC on the VIN). 'none' renders no control.
+  vehicleLookupProvider: 'dvsa' | 'vpic' | 'none';
   // Back-compat alias for existing readers (resolveTenantProfile etc.).
   currencyCode?: string;
   tax_name?: string;
@@ -77,7 +79,7 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'Postcode', postcodePlaceholder: 'e.g. B1 2AB',
     postcodePattern: '^[A-Za-z]{1,2}\\d[A-Za-z\\d]?\\s*\\d[A-Za-z]{2}$',
     fyStartMonth: 4,
-    vehicleIdLabel: 'Registration', vehicleLookupProvider: 'dvla',
+    vehicleIdLabel: 'Registration', vehicleLookupProvider: 'dvsa',
   }),
   IE: P({
     countryCode: 'IE', name: 'Ireland', currency: 'EUR', currencySymbol: '€', locale: 'en-IE',
@@ -89,7 +91,8 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'Eircode', postcodePlaceholder: 'e.g. A65 F4E2',
     postcodePattern: '^[A-Za-z]\\d[\\dWw]\\s*[A-Za-z\\d]{4}$',
     fyStartMonth: 1,
-    // IE: DVLA does not cover Irish plates and no free public reg→vehicle API exists. No lookup.
+    // IE: DVSA/DVLA do not cover Irish plates and no FREE public reg→vehicle API exists (Cartell /
+    // Motorcheck are commercial and keyed). No lookup rather than a control that cannot work.
     vehicleIdLabel: 'Registration', vehicleLookupProvider: 'none',
   }),
   US: P({
@@ -108,9 +111,10 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'ZIP code', postcodePlaceholder: 'e.g. 35203',
     postcodePattern: '^\\d{5}(-\\d{4})?$',
     fyStartMonth: 1,
-    // US: plates are state-issued with no national plate→vehicle API. Shops identify by VIN;
-    // NHTSA vPIC decodes VIN→make/model/year/engine (free, no key) — a future 'nhtsa' provider.
-    vehicleIdLabel: 'License plate', vehicleLookupProvider: 'none',
+    // US: plates are state-issued with no national plate→vehicle API — shops identify by VIN.
+    // NHTSA vPIC decodes VIN→make/model/year/engine/fuel (US DOT, free, no key). Spec only: no
+    // colour, mileage, plate or inspection history.
+    vehicleIdLabel: 'License plate', vehicleLookupProvider: 'vpic',
   }),
 };
 

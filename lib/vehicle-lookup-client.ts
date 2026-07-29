@@ -81,3 +81,33 @@ export async function lookupVehicleByReg(
     return { ok: false, reg, reason: 'error' }; // network/parse failure — caller shows "enter manually"
   }
 }
+
+/**
+ * VIN → vehicle prefill (US / NHTSA vPIC), the sibling of lookupVehicleByReg and held to the same
+ * contract: NON-THROWING, fill-blanks-only at the caller, and honest about what a VIN cannot say
+ * (colour, mileage, plate and inspection history come back empty — never invented).
+ */
+export type VinLookupResult =
+  | { ok: true; vin: string; source: 'vpic'; vehicle: LookupVehicleFields; spec: { trim: string; bodyClass: string; cylinders: string; drive: string } }
+  | { ok: false; vin: string; reason: 'empty-vin' | 'invalid-vin' | 'not-found' | 'no-provider' | 'error' };
+
+export async function lookupVehicleByVin(rawVin: string): Promise<VinLookupResult> {
+  const vin = String(rawVin ?? '').trim().toUpperCase();
+  if (!vin) return { ok: false, vin, reason: 'empty-vin' };
+  try {
+    const r = await fetch(`/api/vin-lookup?vin=${encodeURIComponent(vin)}`);
+    if (!r.ok) return { ok: false, vin, reason: 'error' };
+    const d = await r.json();
+    if (!d?.found) return { ok: false, vin, reason: (d?.reason ?? 'not-found') as VinLookupResult extends { ok: false } ? any : any };
+    return {
+      ok: true, vin: d.vin ?? vin, source: 'vpic',
+      vehicle: {
+        make: S(d.vehicle?.make), model: S(d.vehicle?.model), colour: '', year: Snum(d.vehicle?.year),
+        fuel: S(d.vehicle?.fuel), engineCc: Snum(d.vehicle?.engineCc), vin: d.vin ?? vin, mileage: '',
+      },
+      spec: { trim: S(d.spec?.trim), bodyClass: S(d.spec?.bodyClass), cylinders: S(d.spec?.cylinders), drive: S(d.spec?.drive) },
+    };
+  } catch {
+    return { ok: false, vin, reason: 'error' };
+  }
+}

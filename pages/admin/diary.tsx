@@ -41,7 +41,7 @@ import { formatMoney } from '@/lib/format-money';
 import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -49,6 +49,7 @@ import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
 import { resolveLeaveColours } from '@/lib/leave-types';
 import { paymentState, PaymentState } from '@/lib/jobcard-status';
+import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 const PX_PER_MIN = 1;
 
@@ -82,7 +83,7 @@ type PageProps = {
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
   // Country-shaped vehicle identity (ruling 2026-07-29): the plate's NAME and whether a lookup
   // provider exists. 'none' hides the button rather than offering a call that cannot succeed.
-  vehicleIdLabel: string; vehicleLookupProvider: 'dvla' | 'none';
+  vehicleIdLabel: string; vehicleLookupProvider: LookupProviderName;
   weekStart: number; today: string; openDays: number[];
   finance: FinanceProps;
   // All-day absence banners (Roster leave, every type) keyed by day + the tenant's type→colour map.
@@ -1103,7 +1104,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string; pickWhen?: boolean };
   siteId: string; resources: ResourceCol[]; defaultResourceId: string | null;
   // Country-shaped: what the plate is CALLED, and whether a lookup provider exists at all.
-  vehicleIdLabel: string; vehicleLookupProvider: 'dvla' | 'none';
+  vehicleIdLabel: string; vehicleLookupProvider: LookupProviderName;
   onClose: () => void; onDone: () => void;
 }) {
   const { t } = useTranslation('diary');
@@ -1131,6 +1132,25 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // hot path — so a new card carries make/colour/year now and gets its MOT check later.
   const [lookBusy, setLookBusy] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  // VIN-keyed decode (US / vPIC). Same fill-blanks-only policy and the same non-throwing contract
+  // as the reg path; vPIC cannot know colour/mileage so those are never touched.
+  async function lookupByVin() {
+    if (!vin.trim()) return;
+    setLookBusy(true); setLookMsg(null);
+    const r = await lookupVehicleByVin(vin);
+    setLookBusy(false);
+    if (!r.ok) {
+      setLookMsg({ text: r.reason === 'invalid-vin' ? t('create.vinInvalid') : t('create.lookupNone'), ok: false });
+      return;
+    }
+    if (!make && r.vehicle.make) setMake(r.vehicle.make);
+    if (!model && r.vehicle.model) setModel(r.vehicle.model);
+    if (!year && r.vehicle.year) setYear(r.vehicle.year);
+    if (!fuel && r.vehicle.fuel) setFuel(r.vehicle.fuel);
+    if (!engineCc && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    setLookMsg({ text: t('create.lookupVpic'), ok: true });
+  }
+
   async function lookupVehicle() {
     setLookBusy(true); setLookMsg(null);
     // ONE shared client path (lib/vehicle-lookup-client): OUR records first (returning car → owner +
@@ -1244,8 +1264,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
               <div className="flex items-center gap-2">
                 <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={12} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
                   onChange={(e) => setReg(normalizeReg(e.target.value) || '')}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && vehicleLookupProvider !== 'none') { e.preventDefault(); lookupVehicle(); } }} />
-                {vehicleLookupProvider !== 'none' && (
+                  onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); lookupVehicle(); } }} />
+                {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
                   <button type="button" onClick={lookupVehicle} disabled={lookBusy || !reg.trim()} data-testid="veh-lookup"
                     className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
                     {lookBusy ? t('create.lookupBusy') : t('create.lookupBtn')}
@@ -1275,7 +1295,18 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
               </div>
               <div>
                 <label className={labelCls}>{t('create.vin')}</label>
-                <input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)} />
+                {/* Where the country's provider is keyed on the VIN (US / vPIC), the lookup control
+                    belongs HERE, not against the plate — that is the structural difference. */}
+                <div className="flex items-center gap-2">
+                  <input className={inputCls} value={vin} autoCapitalize="characters" autoCorrect="off" spellCheck={false} onChange={(e) => setVin(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'vin') { e.preventDefault(); lookupByVin(); } }} />
+                  {lookupKeyFor(vehicleLookupProvider) === 'vin' && (
+                    <button type="button" onClick={lookupByVin} disabled={lookBusy || !isPlausibleVin(vin)} data-testid="veh-lookup-vin"
+                      className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
+                      {lookBusy ? t('create.lookupBusy') : t('create.lookupBtn')}
+                    </button>
+                  )}
+                </div>
                 {vinWarn(vin) && <p className={warnCls}>{t('create.warn.vin')}</p>}
               </div>
             </div>

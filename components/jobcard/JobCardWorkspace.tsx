@@ -25,6 +25,7 @@ import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState, computeTabs } from '@/lib/jobcard-tabs';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
+import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
@@ -54,7 +55,7 @@ type Props = {
   duplicatedFrom?: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
   // Country-shaped vehicle identity (ruling 2026-07-29) — label + whether a lookup provider exists.
   vehicleIdLabel?: string;
-  vehicleLookupProvider?: 'dvla' | 'none';
+  vehicleLookupProvider?: LookupProviderName;
   costsInherited?: boolean;
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;

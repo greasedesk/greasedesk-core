@@ -3,7 +3,9 @@
   "week": "Week",
   "day": "Day",
   "weekOf": "Week of {{date}}",
-  "statusKey": { "outlineNote": "Block outline = lift colour" },
+  "statusKey": {
+    "outlineNote": "Block outline = lift colour"
+  },
   "prev": "Previous",
   "next": "Next",
   "todayBtn": "Today",
@@ -156,7 +158,9 @@
     "lastMotMileage": "Mileage at last MOT",
     "date": "Date",
     "startTime": "Start time",
-    "pickLift": "Choose a lift…"
+    "pickLift": "Choose a lift…",
+    "lookupVpic": "Filled from the VIN decoder — colour and mileage aren’t in a VIN, add them yourself.",
+    "vinInvalid": "A VIN is 17 characters, letters and numbers, no I, O or Q."
   },
   "menu": {
     "hint": "Right-click (or long-press) the diary to book a job or add a note.",

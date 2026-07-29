@@ -24,10 +24,11 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
+import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 const inputClass =
   'w-full p-3 bg-surface border border-line rounded-lg text-ink placeholder-muted focus:ring-accent focus:border-accent transition';
@@ -49,7 +50,7 @@ const FLAG_LABELS: Array<[keyof Flags, string]> = [
   ['flag_diag', 'DIAG (diagnostic)'],
 ];
 
-export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: { vehicleIdLabel?: string; vehicleLookupProvider?: 'dvla' | 'none' }) {
+export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: { vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName }) {
   const router = useRouter();
   const [form, setForm] = useState({
     registration: '',
@@ -92,6 +93,24 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
   const [looking, setLooking] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  // VIN decode (US / vPIC) — fill-blanks-only, same as the reg path.
+  async function runVinLookup() {
+    if (!form.vin?.trim()) return;
+    setLooking(true); setLookMsg(null);
+    const r = await lookupVehicleByVin(form.vin);
+    setLooking(false);
+    if (!r.ok) {
+      setLookMsg({ ok: false, text: r.reason === 'invalid-vin' ? 'A VIN is 17 characters, no I, O or Q.' : 'No details found for that VIN — enter them manually.' });
+      return;
+    }
+    setForm((p2) => ({
+      ...p2,
+      make: p2.make || r.vehicle.make, model: p2.model || r.vehicle.model,
+      year: p2.year || r.vehicle.year, fuel: p2.fuel || r.vehicle.fuel, engineCc: p2.engineCc || r.vehicle.engineCc,
+    }));
+    setLookMsg({ ok: true, text: 'Filled from the VIN decoder — colour and mileage aren’t in a VIN.' });
+  }
+
   async function runLookup() {
     setLooking(true); setLookMsg(null);
     const r = await lookupVehicleByReg(form.registration);
@@ -179,14 +198,14 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
                   value={form.registration}
                   maxLength={12}
                   onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && vehicleLookupProvider !== 'none') { e.preventDefault(); runLookup(); } }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); runLookup(); } }}
                   required
-                  placeholder={vehicleLookupProvider === 'dvla' ? 'e.g. AB12CDE' : 'e.g. 7ABC123'}
+                  placeholder={lookupKeyFor(vehicleLookupProvider) === 'registration' ? 'e.g. AB12CDE' : 'e.g. 7ABC123'}
                   className={`${inputClass} uppercase max-w-[9rem] tracking-wider`}
                 />
                 {/* No lookup provider for this country → no button (DVLA cannot answer for a
                     non-UK plate; a button that can only miss is worse than none). */}
-                {vehicleLookupProvider !== 'none' && (
+                {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
                   <button
                     type="button"
                     onClick={runLookup}
@@ -239,7 +258,16 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
             </div>
             <div>
               <label className={labelClass}>VIN</label>
-              <input name="vin" value={form.vin} onChange={handleField} className={inputClass} />
+              <div className="flex items-center gap-2">
+                <input name="vin" value={form.vin} onChange={handleField} className={inputClass}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'vin') { e.preventDefault(); runVinLookup(); } }} />
+                {lookupKeyFor(vehicleLookupProvider) === 'vin' && (
+                  <button type="button" onClick={runVinLookup} disabled={looking || !isPlausibleVin(form.vin || '')} data-testid="veh-lookup-vin"
+                    className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
+                    {looking ? 'Looking up…' : 'Look up'}
+                  </button>
+                )}
+              </div>
             </div>
             <div>
               <label className={labelClass}>Current mileage</label>

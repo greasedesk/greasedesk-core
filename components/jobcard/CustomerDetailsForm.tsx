@@ -7,8 +7,9 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
+import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
 type Vehicle = {
@@ -18,7 +19,7 @@ type Vehicle = {
 };
 type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
   // Country-shaped vehicle identity (ruling 2026-07-29); defaults keep every existing caller working.
-  vehicleIdLabel?: string; vehicleLookupProvider?: 'dvla' | 'none' };
+  vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName };
 
 const inputCls = 'w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs uppercase text-muted mb-1';
@@ -48,6 +49,19 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   // it's saved with the form and displayed immediately below.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null } | null>(null);
   const [lookBusy, setLookBusy] = useState(false);
+  async function vinLookup() {
+    if (!vin.trim()) return;
+    setLookBusy(true);
+    const r = await lookupVehicleByVin(vin);
+    setLookBusy(false);
+    if (!r.ok) return;
+    if (!make && r.vehicle.make) setMake(r.vehicle.make);
+    if (!model && r.vehicle.model) setModel(r.vehicle.model);
+    if (!vyear && r.vehicle.year) setVYear(r.vehicle.year);
+    if (!fuel && r.vehicle.fuel) setFuel(r.vehicle.fuel);
+    if (!engineCc && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+  }
+
   async function dvsaLookup() {
     setLookBusy(true); setMsg(null);
     // The record already exists → DVSA only (internal: false), through the ONE shared client path.
@@ -139,7 +153,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
           <input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" />
           {/* Deliberate button press — returning cars never auto-fire DVSA (skip-on-existing stays).
               Hidden where the country has no lookup provider: DVLA/DVSA are keyed on UK plates. */}
-          {vehicleLookupProvider !== 'none' && (
+          {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
             <button type="button" disabled={lookBusy || busy || !registration.trim()} onClick={dvsaLookup} data-testid="veh-lookup"
               className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline">
               {lookBusy ? t('detailsEdit.dvsaBusy') : t('detailsEdit.dvsaButton')}
@@ -152,7 +166,15 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
         <div><label className={labelCls}>{t('field.year')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={vyear} onChange={(e) => setVYear(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.fuel')}</label><input className={inputCls} value={fuel} onChange={(e) => setFuel(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.engineCc')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={engineCc} onChange={(e) => setEngineCc(e.target.value)} /></div>
-        <div><label className={labelCls}>{t('field.vin')}</label><input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} autoCapitalize="characters" /></div>
+        <div><label className={labelCls}>{t('field.vin')}</label>
+          <input className={inputCls} value={vin} onChange={(e) => setVin(e.target.value)} autoCapitalize="characters" />
+          {lookupKeyFor(vehicleLookupProvider) === 'vin' && (
+            <button type="button" disabled={lookBusy || busy || !isPlausibleVin(vin)} onClick={vinLookup} data-testid="veh-lookup-vin"
+              className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline">
+              {lookBusy ? t('detailsEdit.dvsaBusy') : t('detailsEdit.dvsaButton')}
+            </button>
+          )}
+        </div>
         <div><label className={labelCls}>{t('field.mileage')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={mileageIn} onChange={(e) => setMileageIn(e.target.value)} /></div>
         {(motShow.motExpiry || motShow.lastMotMileage != null) && (
           <div className="sm:col-span-2 text-xs text-muted">

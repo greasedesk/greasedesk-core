@@ -29,6 +29,7 @@ import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
 import { buildJobCardPageProps } from '@/lib/jobcard-page-data';
 import { parseBreaks, Break } from '@/lib/occupancy';
 import { diaryReturnHref } from '@/lib/diary-return';
+import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type PageProps = {
   registration: string;
@@ -59,7 +60,7 @@ type PageProps = {
   isComeback: boolean;
   duplicatedFrom: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
   vehicleIdLabel: string;
-  vehicleLookupProvider: 'dvla' | 'none';
+  vehicleLookupProvider: LookupProviderName;
   costsInherited: boolean;
   garageNotes: string;
   lines: EstimateLine[];
