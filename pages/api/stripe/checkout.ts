@@ -1,12 +1,15 @@
 /**
  * File: pages/api/stripe/checkout.ts
- * POST → a hosted Stripe Checkout Session URL (item-12). ADMIN-only. Subscription mode, one Price
- * (£35/mo GBP licensed), quantity = the tenant's site count. Card VERIFIED + 3DS-authenticated at
- * day 1 but NOT charged (trial_period_days), so the day-61 conversion is an OFF-SESSION charge
- * against an authenticated card with an established mandate — it cannot fail SCA.
+ * POST → a hosted Stripe Checkout Session URL (item-12). ADMIN-only. Subscription mode, ONE Price
+ * selected by the tenant's COUNTRY PROFILE currency (GB £75 / US $100 / IE €90, ruling 2026-07-28),
+ * quantity = the tenant's site count. Card VERIFIED + 3DS-authenticated at day 1 but NOT charged
+ * (trial_period_days), so the day-61 conversion is an OFF-SESSION charge against an authenticated
+ * card with an established mandate — it cannot fail SCA.
+ *   BOTH HALVES OR NEITHER: before creating a session the selected Price is RETRIEVED and its
+ *   amount + currency asserted against the profile's monthlyPrice — a misconfigured Price (the
+ *   £35 drift) refuses loudly instead of showing one figure and charging another.
  *   payment_method_collection:'always' → a card is required to start the trial (no card, no trial).
- *   Stripe Tax is enabled ONLY when GreaseDesk Ltd is VAT-registered (GARAGE_VAT_REGISTERED) —
- *   flat £35 today; flip that one flag and Checkout adds VAT automatically. The price is £35 flat.
+ *   Stripe Tax is enabled ONLY when GreaseDesk Ltd is VAT-registered (GARAGE_VAT_REGISTERED).
  *   client_reference_id = group_id → the webhook maps the subscription back with zero trust in the
  *   redirect. The redirect writes NOTHING; the webhook is the ledger.
  * Idempotency key = group_id + site count, so a double-submit reuses one session.
@@ -14,8 +17,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
-import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { getStripe, stripePriceIdForCurrency, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
 import { GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -23,17 +27,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await requireAdminApi(req, res); if (!vis) return;
 
   const stripe = getStripe();
-  const priceId = stripePriceId();
-  if (!stripe || !priceId) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
+  if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
 
   const groupId = vis.groupId as string;
   if (!groupId) return res.status(400).json({ message: 'No group in scope.' });
   const [group, siteCount, billing] = await Promise.all([
-    prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, billing_email: true } }),
+    prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, billing_email: true, country_code: true, ref: true } }),
     prisma.site.count({ where: { group_id: groupId } }),
     prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { stripe_customer_id: true } }),
   ]);
   if (!group) return res.status(404).json({ message: 'Group not found.' });
+
+  // COUNTRY-AWARE PRICE (ruling 2026-07-28): the profile picks the currency, the currency picks the
+  // Price. No Price for the currency → REFUSE — never fall back to another currency's Price.
+  const profile = resolveTenantProfile(group);
+  const priceId = stripePriceIdForCurrency(profile.currency);
+  if (!priceId) {
+    console.error(`[stripe] no Price configured for ${profile.currency} (tenant country ${profile.countryCode})`);
+    return res.status(503).json({ message: 'Billing isn’t configured for your country yet.' });
+  }
+  // BOTH HALVES OR NEITHER: the Price must charge exactly what the profile displays.
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    const wantAmount = Math.round(profile.monthlyPrice * 100);
+    const wantCurrency = profile.currency.toLowerCase();
+    if (price.unit_amount !== wantAmount || price.currency !== wantCurrency) {
+      console.error(`[stripe] PRICE MISMATCH: ${priceId} is ${price.unit_amount} ${price.currency}, profile says ${wantAmount} ${wantCurrency} — refusing checkout`);
+      return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
+    }
+  } catch (e: any) {
+    console.error('[stripe] price retrieve failed', e?.message);
+    return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
+  }
   const quantity = Math.max(1, siteCount);
   const base = appBaseUrl();
 
@@ -62,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
       },
       payment_method_collection: 'always',
-      // Stripe Tax ONLY when GreaseDesk Ltd is VAT-registered — flat £35 until the flag flips.
+      // Stripe Tax ONLY when GreaseDesk Ltd is VAT-registered — tax-exclusive prices until then.
       ...(GARAGE_VAT_REGISTERED
         ? { automatic_tax: { enabled: true }, billing_address_collection: 'required' as const, tax_id_collection: { enabled: true } }
         : {}),

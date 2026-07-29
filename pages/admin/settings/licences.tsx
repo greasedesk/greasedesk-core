@@ -11,7 +11,8 @@ import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
-import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
+import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 type PageProps = {
   groupName: string;
@@ -19,7 +20,7 @@ type PageProps = {
   currentPeriodEnd: string | null;
   hasCustomer: boolean;
   siteCount: number;
-  perMonthPounds: number;
+  perMonthLabel: string; perLocationLbl: string;
   billingConfigured: boolean;
   isAdmin: boolean;
 };
@@ -40,7 +41,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, hasCustomer, siteCount, perMonthPounds, billingConfigured, isAdmin } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lapsed = !!subscriptionStatus && LAPSED.has(subscriptionStatus);
@@ -59,7 +60,7 @@ export default function LicencesSettings(props: PageProps) {
   return (
     <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Licence & Subscriptions - GreaseDesk</title></Head>
-      <p className="text-muted mb-6">Your GreaseDesk subscription. Billing is {perLocationLabel()} per location, per month.</p>
+      <p className="text-muted mb-6">Your GreaseDesk subscription. Billing is {perLocationLbl} per location, per month.</p>
 
       {lapsed && (
         <div className="bg-warn-soft border border-warn text-warn rounded-xl p-4 max-w-xl mb-4">
@@ -71,7 +72,7 @@ export default function LicencesSettings(props: PageProps) {
         <Row label="Account" value={groupName} />
         <Row label="Status" value={subscriptionStatus ? (STATUS_LABEL[subscriptionStatus] || subscriptionStatus) : 'No subscription'} />
         <Row label="Current locations" value={siteCount} />
-        <Row label="Monthly" value={monthlyPriceLabel(siteCount)} />
+        <Row label="Monthly" value={perMonthLabel} />
         {currentPeriodEnd && <Row label={subscribed ? 'Renews / next charge' : 'Period end'} value={new Date(currentPeriodEnd).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} />}
       </div>
 
@@ -103,7 +104,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const { vis } = gate;
 
   const [group, billing, siteCount] = await Promise.all([
-    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true } }),
+    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true, country_code: true, ref: true } }),
     prisma.groupBilling.findUnique({ where: { group_id: vis.groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
     prisma.site.count({ where: { group_id: vis.groupId } }),
   ]);
@@ -115,7 +116,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       currentPeriodEnd: billing?.current_period_end ? billing.current_period_end.toISOString() : null,
       hasCustomer: !!billing?.stripe_customer_id,
       siteCount,
-      perMonthPounds: 35 * Math.max(1, siteCount),
+      perMonthLabel: monthlyPriceLabelFor(resolveTenantProfile(group), siteCount),
+      perLocationLbl: perLocationLabelFor(resolveTenantProfile(group)),
       billingConfigured: !!process.env.STRIPE_SECRET_KEY,
       isAdmin: true,
     },

@@ -18,13 +18,14 @@ import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
-import { getUsState } from '@/lib/us-states';
+import { getUsState, usZoneLabel } from '@/lib/us-states';
 import { currencySymbol } from '@/lib/format-money';
 
 type PageProps = {
   countryName: string;
   currencyCode: string;     // profile currency — display + submitted for server re-validation
-  timezones: string[];      // the zone OPTIONS offered (state-narrowed for split-state US tenants)
+  timezones: Array<{ value: string; label: string }>; // zone OPTIONS (state-narrowed for split-state US) —
+                            // label is the US zone NAME ("Central Time") or the city elsewhere ("London")
   initialTimezone: string;  // site's stored zone when valid for the options, else the majority/default
   // Timezone render mode (ruling 2026-07-28): a single-zone country (GB/IE) or an unambiguous US
   // state needs no picker — the zone is shown as set, same treatment as currency. Only split
@@ -38,7 +39,8 @@ type FormData = {
   timezone: string;
 };
 
-// "America/New_York" → "New York" — a readable label without a second timezone dataset.
+// Non-US label: "Europe/London" → "London" — how UK/IE users refer to their zone. US zones get
+// named labels (usZoneLabel) computed server-side into the options.
 const tzLabel = (z: string) => (z.split('/').pop() ?? z).replace(/_/g, ' ');
 
 const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500 transition';
@@ -134,7 +136,7 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
             <>
               <input
                 id="timezone"
-                value={tzLabel(data.timezone)}
+                value={timezones.find((t) => t.value === data.timezone)?.label ?? tzLabel(data.timezone)}
                 className={`${inputClass} opacity-70 cursor-not-allowed`}
                 disabled
                 readOnly
@@ -150,7 +152,7 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
               className={inputClass}
               required
             >
-              {timezones.map((tz) => <option key={tz} value={tz}>{tzLabel(tz)}</option>)}
+              {timezones.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
             </select>
           )}
 
@@ -201,10 +203,16 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   // Zone options: the state narrows within the profile (never widens — lib/us-states maps only to
   // profile zones); no state → the full profile set, exactly as before.
-  const options = state ? state.zones : profile.timezones;
-  const initialTimezone = siteTz && options.includes(siteTz) ? siteTz : options[0];
+  const zoneValues = state ? state.zones : profile.timezones;
+  const initialTimezone = siteTz && zoneValues.includes(siteTz) ? siteTz : zoneValues[0];
+  // US zones display by NAME ("Central Time"), everywhere else by city ("London") — labels only,
+  // the stored IANA value is untouched.
+  const options = zoneValues.map((z) => ({
+    value: z,
+    label: profile.stateField === true ? usZoneLabel(z) : (z.split('/').pop() ?? z).replace(/_/g, ' '),
+  }));
   // No picker when there is nothing to pick: single-zone country, or unambiguous state.
-  const timezoneFixed = options.length === 1;
+  const timezoneFixed = zoneValues.length === 1;
   const timezoneNote = state
     ? `Derived from your state — ${state.name}.`
     : `Set by your country — ${profile.name}.`;

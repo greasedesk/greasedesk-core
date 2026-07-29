@@ -15,11 +15,13 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
-import { perLocationLabel } from '@/lib/billing-pricing';
+import { perLocationLabelFor } from '@/lib/billing-pricing';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { prisma } from '@/lib/db';
 
 type Mode = 'idle' | 'launching' | 'finalising' | 'stuck' | 'unconfigured';
 
-export default function BillingPage() {
+export default function BillingPage({ priceLabel }: { priceLabel: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +102,7 @@ export default function BillingPage() {
           ) : (
             <>
               <div className="bg-slate-700/40 p-4 rounded-lg mb-6 text-sm text-slate-300 space-y-2">
-                <p><span className="text-white font-semibold">{perLocationLabel()}</span> per location, per month.</p>
+                <p><span className="text-white font-semibold">{priceLabel}</span> per location, per month.</p>
                 <p>Your card is verified today but <span className="text-white font-semibold">not charged</span>. The trial runs 60 days.</p>
                 <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
               </div>
@@ -124,5 +126,8 @@ export default function BillingPage() {
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const gate = await requireOnboardingStep(ctx, 'checkout');
   if (!gate.ok) return { redirect: gate.redirect };
-  return { props: {} };
+  // Country-profile price (ruling 2026-07-28): the figure shown here is the figure checkout
+  // verifies against the Stripe Price — both halves or neither.
+  const group = await prisma.group.findUnique({ where: { id: gate.vis.groupId as string }, select: { country_code: true, ref: true } });
+  return { props: { priceLabel: perLocationLabelFor(resolveTenantProfile(group)) } };
 };

@@ -37,6 +37,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Record the choice either way — an unsupported one is what the coming-soon gate reads.
   await prisma.group.update({ where: { id: user.group_id as string }, data: { country_code: country } });
 
+  // RE-PREFIX the human account ref to the chosen country (GB-GD2153 → US-GD2153, ruling
+  // 2026-07-28). The DB default mints every ref with a GB prefix before the country is known.
+  // Safe: the ref is DISPLAY + audit-snapshot only — Stripe keys on group_id, links on tokens,
+  // invoice numbering on its own per-group series; the numeric suffix (globally unique) is
+  // untouched so @unique cannot collide. Idempotent: a re-visit with the same country no-ops.
+  const grpRef = await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { ref: true } });
+  if (grpRef?.ref && /^[A-Z]{2}-/.test(grpRef.ref) && !grpRef.ref.startsWith(`${country}-`)) {
+    await prisma.group.update({ where: { id: user.group_id as string }, data: { ref: `${country}${grpRef.ref.slice(2)}` } });
+  }
+
   if (!supported) {
     return res.status(200).json({ ok: true, supported: false, country });
   }

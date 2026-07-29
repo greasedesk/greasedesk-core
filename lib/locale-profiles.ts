@@ -23,6 +23,11 @@ export type CountryProfile = {
   defaultTimezone: string;
   taxModel: TaxModel;                // 'vat' (UK/IE) | 'sales_tax' (US) | 'none'
   taxLabel: string;                  // VAT / Sales Tax — what invoices are labelled
+  /** GreaseDesk's OWN subscription price for this country, per site per month, EXCLUSIVE of tax —
+   *  the settled ladder (2026-07-28): GB £75, US $100, IE €90. Display reads this via
+   *  lib/billing-pricing; checkout must select a Stripe Price whose amount+currency MATCH it
+   *  (verified at session creation — both halves or neither). */
+  monthlyPrice: number;
   defaultTaxRatePercent: number;     // seeds the tax step (garage can change)
   requiresTaxNumber: boolean;        // VAT number asked (UK/IE) vs not (US flat rate)
   roadworthiness_test_name: string;  // MOT …
@@ -48,13 +53,13 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
   GB: P({
     countryCode: 'GB', name: 'United Kingdom', currency: 'GBP', currencySymbol: '£', locale: 'en-GB',
     timezones: ['Europe/London'], defaultTimezone: 'Europe/London',
-    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 20, requiresTaxNumber: true,
+    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 20, requiresTaxNumber: true, monthlyPrice: 75,
     roadworthiness_test_name: 'MOT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
   }),
   IE: P({
     countryCode: 'IE', name: 'Ireland', currency: 'EUR', currencySymbol: '€', locale: 'en-IE',
     timezones: ['Europe/Dublin'], defaultTimezone: 'Europe/Dublin',
-    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 23, requiresTaxNumber: true,
+    taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 23, requiresTaxNumber: true, monthlyPrice: 90,
     roadworthiness_test_name: 'NCT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
   }),
   US: P({
@@ -65,7 +70,7 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     ],
     defaultTimezone: 'America/New_York',
     // Flat garage-entered combined rate, like their till — no VAT number, no jurisdiction lookup.
-    taxModel: 'sales_tax', taxLabel: 'Sales Tax', defaultTaxRatePercent: 0, requiresTaxNumber: false,
+    taxModel: 'sales_tax', taxLabel: 'Sales Tax', defaultTaxRatePercent: 0, requiresTaxNumber: false, monthlyPrice: 100,
     roadworthiness_test_name: 'Safety Inspection', date_format: 'MM/dd/yyyy', modules: { hr: true }, supported: true,
     stateField: true, // US garages pick a state; timezone derives from it (lib/us-states)
   }),

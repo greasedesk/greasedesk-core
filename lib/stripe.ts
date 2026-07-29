@@ -8,8 +8,13 @@
  * Env (Vercel, sensitive OFF per standing rule):
  *   STRIPE_SECRET_KEY        — sk_test_… (sandbox)
  *   STRIPE_WEBHOOK_SECRET    — whsec_… (from the webhook endpoint config)
- *   STRIPE_PRICE_ID          — the £35/mo GBP recurring Price (licensed, per-site quantity)
+ *   STRIPE_PRICE_ID          — the £75/mo GBP recurring Price (licensed, per-site quantity)
+ *   STRIPE_PRICE_USD         — the $100/mo USD recurring Price (same product)
+ *   STRIPE_PRICE_EUR         — the €90/mo EUR recurring Price (same product)
  *   NEXT_PUBLIC_APP_URL      — base URL for Checkout success/cancel + Portal return (defaults greasedesk.com)
+ *
+ * Price amounts are the COUNTRY PROFILE's monthlyPrice, exclusive of tax — checkout verifies the
+ * selected Price's amount+currency against the profile before creating a session.
  */
 import Stripe from 'stripe';
 
@@ -26,6 +31,18 @@ export function getStripe(): Stripe | null {
 
 export const stripeConfigured = (): boolean => !!process.env.STRIPE_SECRET_KEY;
 export const stripePriceId = (): string | null => process.env.STRIPE_PRICE_ID ?? null;
+
+/** The recurring Price for a tenant's currency (country profile → currency → env). NULL when that
+ *  currency's Price isn't configured yet — checkout REFUSES rather than falling back to another
+ *  currency, so a US tenant can never be shown $100 and charged a GBP Price. */
+export function stripePriceIdForCurrency(currency: string): string | null {
+  switch (currency.toUpperCase()) {
+    case 'GBP': return process.env.STRIPE_PRICE_ID ?? null;
+    case 'USD': return process.env.STRIPE_PRICE_USD ?? null;
+    case 'EUR': return process.env.STRIPE_PRICE_EUR ?? null;
+    default: return null;
+  }
+}
 export const stripeWebhookSecret = (): string | null => process.env.STRIPE_WEBHOOK_SECRET ?? null;
 export const appBaseUrl = (): string => process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'https://greasedesk.com';
 

@@ -19,7 +19,8 @@ import { getVisibility } from '@/lib/site-visibility';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { getSetupSignals } from '@/lib/setup-signals';
 import { daysLeft } from '@/lib/trial';
-import { monthlyPriceLabel, perLocationLabel } from '@/lib/billing-pricing';
+import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
 import { monthParamsForSelection } from '@/lib/dashboard-periods';
@@ -27,6 +28,7 @@ import CapacityChart from '@/components/dashboard/CapacityChart';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
+  perMonthLabel: string; perSiteLabel: string;
   subscriptionStatus: string | null; siteCount: number;
   currency: string; locale: string;
   fyStartMonth: number; // Group.fy_start_month (1–12) — drives the FY period labels
@@ -198,19 +200,19 @@ function fyRangeLabel(now: Date, fyStartMonth: number, offset: number, locale: s
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
-function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number }) {
+function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string }) {
   const LAPSED = new Set(['canceled', 'unpaid', 'incomplete_expired', 'paused']);
   const endLabel = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : null;
-  const perMonth = monthlyPriceLabel(siteCount); // single pricing source (flat £35 until VAT-registered)
+  const perMonth = perMonthLabel; // country-profile pricing, computed server-side (£75 / $100 / €90)
 
   if (subscriptionStatus && LAPSED.has(subscriptionStatus)) {
     return <div className="rounded-xl border p-4 mb-6 bg-warn-soft border-warn text-warn">Your subscription has lapsed — your records are safe and fully exportable. Resubscribe from Settings → Licence to add new work.</div>;
   }
   if (subscriptionStatus === 'trialing' || (status === 'trial' && (daysLeft(trialEndsAt) ?? 1) > 0)) {
-    const perSite = siteCount > 1 ? ` (${siteCount} locations × ${perLocationLabel()})` : '';
+    const perSite = siteCount > 1 ? ` (${siteCount} locations × ${perSiteLabel})` : '';
     const text = endLabel
       ? `Trial ends ${endLabel} — your card will then be charged ${perMonth} per month${perSite} unless you cancel.`
-      : `Trial active — ${perLocationLabel()} per location per month after the trial unless you cancel.`;
+      : `Trial active — ${perSiteLabel} per location per month after the trial unless you cancel.`;
     return <div className="rounded-xl border p-4 mb-6 bg-accent-soft border-accent text-accent">{text}</div>;
   }
   if (status === 'trial') {
@@ -359,7 +361,7 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
-      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} />
+      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} />
 
       {/* ---- Headline gross-profit COMPOSITION: a list of contributing streams + the total, above the
            Capacity chart. Read STRAIGHT from existing chokepoints (pnl + capacity) — no new calculation.
@@ -988,8 +990,8 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
   }
   const group = (await prisma.group.findUnique({
     where: { id: user.group_id },
-    select: { group_name: true, ref: true, status: true, trial_ends_at: true, fy_start_month: true },
-  })) as { group_name: string; ref: string; status: string; trial_ends_at: Date | null; fy_start_month: number } | null;
+    select: { group_name: true, ref: true, country_code: true, status: true, trial_ends_at: true, fy_start_month: true },
+  })) as { group_name: string; ref: string; country_code: string | null; status: string; trial_ends_at: Date | null; fy_start_month: number } | null;
   const billing = (await prisma.groupBilling.findUnique({ where: { group_id: user.group_id }, select: { subscription_status: true } })) as { subscription_status: string | null } | null;
   const siteCount = await prisma.site.count({ where: { group_id: user.group_id } });
   const site = vis.primarySiteId
@@ -1010,6 +1012,8 @@ export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
       subscriptionStatus: billing?.subscription_status ?? null,
       siteCount,
+      perMonthLabel: monthlyPriceLabelFor(resolveTenantProfile(group), siteCount),
+      perSiteLabel: perLocationLabelFor(resolveTenantProfile(group)),
       sites: visibleSites.map((s2) => ({ id: s2.id, name: s2.site_name })),
       currency: site?.currency_code ?? 'GBP',
       locale: site?.locale ?? 'en-GB',

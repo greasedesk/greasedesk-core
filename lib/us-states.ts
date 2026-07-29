@@ -85,6 +85,24 @@ export const US_STATES: UsState[] = [
   { code: 'WY', name: 'Wyoming', zones: [DE] },
 ];
 
+/**
+ * DISPLAY labels for the US zones (ruling 2026-07-28): Americans refer to zones by NAME, not city.
+ * Labels only — the STORED value stays the IANA id exactly (America/Chicago carries the DST rules).
+ * Phoenix gets the no-DST note: it is the one case where two entries would otherwise read
+ * identically ("Mountain Time") for different clock behaviour.
+ */
+export const US_ZONE_LABELS: Record<string, string> = {
+  'America/New_York': 'Eastern Time',
+  'America/Chicago': 'Central Time',
+  'America/Denver': 'Mountain Time',
+  'America/Phoenix': 'Mountain Time (no DST)',
+  'America/Los_Angeles': 'Pacific Time',
+  'America/Anchorage': 'Alaska Time',
+  'Pacific/Honolulu': 'Hawaii Time',
+};
+
+export const usZoneLabel = (zone: string): string => US_ZONE_LABELS[zone] ?? zone;
+
 const byCode = new Map(US_STATES.map((s) => [s.code, s]));
 
 export const isUsStateCode = (code: string | null | undefined): boolean =>
