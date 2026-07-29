@@ -255,7 +255,7 @@ export default function JobCardWorkspace(p: Props) {
   const [preIssue, setPreIssue] = useState<PreIssue | null>(null);
   const startMint = () => {
     const live = estimateRef.current?.lines() ?? p.lines;
-    const flags = live.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l)) })).filter((x) => x.flags.length > 0);
+    const flags = live.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l), { postedLabourRate: p.labourRate ?? null }) })).filter((x) => x.flags.length > 0);
     const pp = partsProfit(live.map((l) => toPlausible(l)));
     const loss = pp.hasParts && pp.profitPennies < 0;
     if (mintMissing.length || flags.length || loss) { setPreIssue({ flags, pp, loss }); setMintOpen(true); }
@@ -489,6 +489,11 @@ export default function JobCardWorkspace(p: Props) {
       f.rule === 'B' ? t('estimate.warnPriceInQty', { qty: Number(l.qty) })
       : f.rule === 'E' ? t('estimate.warnQtyImplausible', { qty: Number(l.qty) })
       : f.rule === 'A' ? t('estimate.warnQtyHigh', { qty: Number(l.qty) })
+      // Labour price-shaped rules (warn-only, no fix — the hours cannot be inferred).
+      : f.rule === 'L1' ? (f.rate == null
+          ? t('estimate.warnLabourFloor', { price: f.price.toFixed(2) })
+          : t('estimate.warnLabourRate', { price: f.price.toFixed(2), rate: f.rate.toFixed(2), total: (Number(l.qty) * f.price).toFixed(2) }))
+      : f.rule === 'L2' ? t('estimate.warnLabourHours', { qty: f.qty, price: f.price.toFixed(2), rate: f.rate.toFixed(2) })
       : t('estimate.warnCostOverRetail', { cost: f.cost.toFixed(2), retail: f.retail.toFixed(2) });
     const gbp = (pennies: number) => (pennies / 100).toFixed(2);
     const mintPanel = mintOpen && (

@@ -176,12 +176,13 @@ function LineRow({ row, idx, kind, canEdit, showVat, hasCatalogue, priceVisible,
 
 // Surface 1 — the inline plausibility note under a parts row (revealed on qty/price blur). Advisory,
 // never blocking. For rule B it offers the deterministic one-click fix (qty→1, price→old qty).
-function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible, t, onFix }: {
+function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible, labourRate, t, onFix }: {
   row: Row; idx: number; show: boolean; justFixed: boolean; canEdit: boolean; costVisible: boolean;
+  labourRate?: number | null;
   t: (k: string, o?: any) => string; onFix: (idx: number, fixUnitPrice: number) => void;
 }) {
   if (!show) return null;
-  const flags = lineFlags(toPlausible(row));
+  const flags = lineFlags(toPlausible(row), { postedLabourRate: labourRate ?? null });
   if (!flags.length && !justFixed) return null;
   const m = (x: number) => x.toFixed(2);
   return (
@@ -195,6 +196,10 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
         );
         if (f.rule === 'A') return <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnQtyHigh', { qty: Number(row.qty) })}</div>;
         if (f.rule === 'E') return <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnQtyImplausible', { qty: Number(row.qty) })}</div>;
+        // L1 / L2 — labour priced far below the posted rate: money typed into the hours box. WARN
+        // ONLY: the money is recoverable but the true hours are not, so we ask rather than guess.
+        if (f.rule === 'L1') return <div key={i} className="text-xs text-warn" data-testid="warn-L1">⚠ {f.rate == null ? t('estimate.warnLabourFloor', { price: m(f.price) }) : t('estimate.warnLabourRate', { price: m(f.price), rate: m(f.rate), total: m(Number(row.qty) * f.price) })}</div>;
+        if (f.rule === 'L2') return <div key={i} className="text-xs text-warn" data-testid="warn-L2">⚠ {t('estimate.warnLabourHours', { qty: f.qty, price: m(f.price), rate: m(f.rate) })}</div>;
         // C — only surfaced to cost-visible users (the cost column is theirs).
         return costVisible ? <div key={i} className="text-xs text-warn">⚠ {t('estimate.warnCostOverRetail', { cost: m(f.cost), retail: m(f.retail) })}</div> : null;
       })}

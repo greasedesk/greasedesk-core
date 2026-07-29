@@ -12,9 +12,38 @@
  *       "12.50" part is suspect. WARN ONLY (no deterministic fix). Non-labour only.
  *   C — line cost STRICTLY exceeds line retail → the line loses money. WARN ONLY. Non-labour only.
  *
- * Labour is excluded from every rule: fractional hours (0.5, 2.5, 5.45) are legitimate and the qty→1
- * fix is meaningless for time. On one line, B takes precedence over A (B is precise + fixable); C is
- * independent and may co-fire with either.
+ * Labour is excluded from A, B, C and E: fractional hours (0.5, 2.5, 5.45) are legitimate and the
+ * qty→1 fix is meaningless for time. On one line, B takes precedence over A (B is precise + fixable);
+ * C is independent and may co-fire with either.
+ *
+ * ── LABOUR RULES (investigation 2026-07-29 — the 99.5 phantom hours) ──────────────────────────────
+ * Two TMBS invoices carried MONEY typed into the hours box: `75 × £1.00` to replace a bonnet catch,
+ * and `12 × £1.00` twice on a £30 invoice. Hours drive capacity, utilisation and the sold-hours
+ * valuation, so the error corrupted every derived figure. The quantity tests above cannot help
+ * (any hours figure is arithmetically legal), but the UNIT PRICE can: a garage does not sell labour
+ * at £1/hr against a £75 posted rate.
+ *
+ *   L1 — unit price ≤ 5% of the posted rate. The £1-per-hour signature, at any quantity.
+ *   L2 — unit price ≤ 25% of posted AND hours ≥ 8. Catches the same typo at prices L1 misses
+ *        (e.g. `30 × £5`); the HOURS FLOOR is what makes 25% safe.
+ *
+ * THRESHOLDS ARE DERIVED FROM THE DATA, not chosen: across all 133 labour lines in the live tenant,
+ * 113 sit at exactly the posted rate, 9 at £0, and the only reduced rates are £45.83, £40, £12 and
+ * £8 — with NOTHING between £0 and £8. 5% (£3.75 on a £75 rate) sits inside that gap. A flat 25%
+ * rule was REJECTED: it flagged all four legitimate £8/hr apprentice lines and nothing else.
+ * The reduced-rate lines are all ≤ 4h, so the 8h floor clears the largest by 2×.
+ *
+ * NO ONE-CLICK FIX, deliberately. B's fix is exact because a part's retail is qty × £1.00. For
+ * labour the MONEY is recoverable but the HOURS are not: `75 × £1` might have been 1h at £75 or
+ * 1.5h at £50. Hours are the figure that broke, so inventing one to tidy the arithmetic would be
+ * fabrication. The message names the likely reading and asks for the real hours.
+ *
+ * ACCEPTED TRADE (stated, not overlooked): a genuine 10-hour job at £8/hr WILL warn. A long line at
+ * 11% of rate is worth a second glance, and the warning is advisory.
+ *
+ * UNCONFIGURED TENANTS: with no LABOUR_HR rate there is nothing to take a percentage of, so a FIXED
+ * FLOOR applies — any labour under £5/hr warns. A guard that only works on well-configured tenants
+ * is one that fails exactly when it is most needed.
  */
 export type PlausibleLine = { item_type: string; qty: number; unit_price: number; unit_cost: number | null };
 
@@ -22,13 +51,27 @@ export type LineFlag =
   | { rule: 'B'; fixQty: 1; fixUnitPrice: number } // fixUnitPrice = the value currently in the qty box
   | { rule: 'E' } // implausible quantity (> 20) — round money typed into qty, which A and B both miss
   | { rule: 'A' }
-  | { rule: 'C'; cost: number; retail: number };
+  | { rule: 'C'; cost: number; retail: number }
+  // LABOUR (warn-only, never a fix): `rate` is the posted LABOUR_HR rate, or null when the tenant
+  // has none and the fixed floor applied instead.
+  | { rule: 'L1'; price: number; rate: number | null }
+  | { rule: 'L2'; price: number; qty: number; rate: number };
 
 const EPS = 0.005;
+/** Fixed floor (£/hr) where no posted rate exists — the guard must not go silent on a new tenant. */
+export const LABOUR_FLOOR_NO_RATE = 5;
+export const LABOUR_L1_FRACTION = 0.05;
+export const LABOUR_L2_FRACTION = 0.25;
+export const LABOUR_L2_MIN_HOURS = 8;
 
-export function lineFlags(l: PlausibleLine): LineFlag[] {
+export type PlausibleOpts = {
+  /** The site's posted LABOUR_HR rate in POUNDS. null/undefined → the fixed floor is used. */
+  postedLabourRate?: number | null;
+};
+
+export function lineFlags(l: PlausibleLine, opts?: PlausibleOpts): LineFlag[] {
   const out: LineFlag[] = [];
-  if (l.item_type === 'labour') return out; // fractional hours are legitimate; qty→1 is meaningless
+  if (l.item_type === 'labour') return labourFlags(l, opts);
   const qty = l.qty, up = l.unit_price, uc = l.unit_cost;
   if (!(qty > 0)) return out; // blank / zero quantity — nothing to judge yet
   // B / E / A are MUTUALLY EXCLUSIVE (one quantity-shaped suspicion per line, never two warnings):
@@ -45,6 +88,25 @@ export function lineFlags(l: PlausibleLine): LineFlag[] {
     out.push({ rule: 'C', cost: qty * uc, retail: qty * up }); // negative-margin line (STRICT >, not ≥)
   }
   return out;
+}
+
+/**
+ * LABOUR rules — price-shaped, never quantity-shaped (see the header). Warn-only, mutually
+ * exclusive (L1 is the stronger signal), and silent on the two cases that are always legitimate:
+ * a blank line, and a genuinely free £0 line (goodwill work — nine exist in the live tenant).
+ */
+function labourFlags(l: PlausibleLine, opts?: PlausibleOpts): LineFlag[] {
+  const qty = l.qty, price = l.unit_price;
+  if (!(qty > 0)) return [];      // nothing entered yet
+  if (!(price > 0)) return [];     // £0 = goodwill/free, an explicit choice — never a typo
+  const rate = opts?.postedLabourRate;
+  if (rate == null || !(rate > 0)) {
+    // No posted rate to take a percentage of → the fixed floor, so the check is never absent.
+    return price < LABOUR_FLOOR_NO_RATE - EPS ? [{ rule: 'L1', price, rate: null }] : [];
+  }
+  if (price <= rate * LABOUR_L1_FRACTION + EPS) return [{ rule: 'L1', price, rate }];
+  if (price <= rate * LABOUR_L2_FRACTION + EPS && qty >= LABOUR_L2_MIN_HOURS) return [{ rule: 'L2', price, qty, rate }];
+  return [];
 }
 
 /**

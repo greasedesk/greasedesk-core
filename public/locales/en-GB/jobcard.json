@@ -55,7 +55,10 @@
     "warnFixed": "Fixed. Now check the unit cost is right — the fix can't tell if a total was typed there too.",
     "warnQtyHigh": "Unusual quantity for a part ({{qty}}). Check a price wasn't typed into the quantity.",
     "warnQtyImplausible": "Implausible quantity for a part ({{qty}}). Check a price wasn't typed into the quantity.",
-    "warnCostOverRetail": "Cost (£{{cost}}) is higher than the price (£{{retail}}) — this line loses money."
+    "warnCostOverRetail": "Cost (£{{cost}}) is higher than the price (£{{retail}}) — this line loses money.",
+    "warnLabourRate": "Labour at £{{price}}/hr against your £{{rate}} rate — if you meant £{{total}} of labour, enter the hours worked and the rate.",
+    "warnLabourHours": "{{qty}} hours at £{{price}}/hr against your £{{rate}} rate — check the hours: money typed into the hours box inflates capacity.",
+    "warnLabourFloor": "Labour at £{{price}}/hr — check the hours and rate. (No default labour rate set, so this is a general check.)"
   },
   "back": {
     "diary": "← Back to diary",
