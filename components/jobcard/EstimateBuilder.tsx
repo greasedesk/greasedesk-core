@@ -424,8 +424,14 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <LineSection title={t('estimate.labour')} empty={t('estimate.emptyLabour')} isEmpty={labour.length === 0}
         addLabel={canEdit ? t('estimate.addLabour') : undefined} onAdd={canEdit ? () => add('labour') : undefined}>
         {labour.map(({ l, idx }) => (
-          <LineRow key={l._uid} row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
-            lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+          <React.Fragment key={l._uid}>
+            <LineRow row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
+              lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove}
+              onFieldBlur={() => markBlurred(l._uid)} />
+            {/* Labour rules L1/L2 (2026-07-29) — this note did not exist on labour rows before, because
+                every rule was parts-only. Warn-only: no fix button is offered for labour. */}
+            <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={false} canEdit={canEdit} costVisible={costVisible} labourRate={labourRate} t={t} onFix={() => {}} />
+          </React.Fragment>
         ))}
       </LineSection>
 
@@ -439,7 +445,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
               lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t}
               onChange={(i, patch) => { update(i, patch); if (('qty' in patch || 'unit_price' in patch) && fixedUids.has(l._uid)) setFixedUids((s) => { const n = new Set(s); n.delete(l._uid); return n; }); }}
               onCode={onCode} onRemove={remove} onFieldBlur={() => markBlurred(l._uid)} />
-            <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={fixedUids.has(l._uid)} canEdit={canEdit} costVisible={costVisible} t={t} onFix={(i, fp) => applyLineFix(i, l._uid, fp)} />
+            <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={fixedUids.has(l._uid)} canEdit={canEdit} costVisible={costVisible} labourRate={labourRate} t={t} onFix={(i, fp) => applyLineFix(i, l._uid, fp)} />
           </React.Fragment>
         ))}
       </LineSection>
