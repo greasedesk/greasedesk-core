@@ -42,6 +42,7 @@ import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
@@ -79,6 +80,9 @@ type PageProps = {
   prev: string; next: string; days: DayCol[];
   resources: ResourceCol[]; cards: DiaryCard[]; notes: DiaryNoteView[];
   openHour: number; closeHour: number; breaks: Break[]; currency: string; locale: string; canManage: boolean;
+  // Country-shaped vehicle identity (ruling 2026-07-29): the plate's NAME and whether a lookup
+  // provider exists. 'none' hides the button rather than offering a call that cannot succeed.
+  vehicleIdLabel: string; vehicleLookupProvider: 'dvla' | 'none';
   weekStart: number; today: string; openDays: number[];
   finance: FinanceProps;
   // All-day absence banners (Roster leave, every type) keyed by day + the tenant's type→colour map.
@@ -306,6 +310,8 @@ export default function DiaryPage(props: PageProps) {
   const leaveBanners = props.leaveBanners ?? {};
   const leaveColours = props.leaveColours ?? {};
   const statusColours = props.statusColours ?? DEFAULT_STATUS_COLOURS;
+  const vehicleIdLabel = props.vehicleIdLabel ?? 'Registration';
+  const vehicleLookupProvider = props.vehicleLookupProvider ?? 'none';
   // The booking block's FILL is the job-status band; the lift's own colour becomes the OUTLINE.
   const cardFill = (c: { status: string; isComeback?: boolean }) => bandColour(c.status, c.isComeback, statusColours);
   const { t } = useTranslation('diary');
@@ -997,6 +1003,7 @@ export default function DiaryPage(props: PageProps) {
                     labourRate={pane.data.labourRate}
                     owner={pane.data.owner} vehicle={pane.data.vehicle} flags={pane.data.flags} isComeback={pane.data.isComeback}
                     duplicatedFrom={pane.data.duplicatedFrom} costsInherited={pane.data.costsInherited}
+                    vehicleIdLabel={pane.data.vehicleIdLabel} vehicleLookupProvider={pane.data.vehicleLookupProvider}
                     garageNotes={pane.data.garageNotes} currency={pane.data.currency} locale={pane.data.locale}
                     vatRate={pane.data.vatRate} vatRegistered={pane.data.vatRegistered} lines={pane.data.lines}
                     catalogue={pane.data.catalogue} fixedServices={pane.data.fixedServices} promos={pane.data.promos} tiers={pane.data.tiers}
@@ -1066,6 +1073,7 @@ export default function DiaryPage(props: PageProps) {
       {create && (
         <CreateDialog
           info={create} siteId={siteId} resources={resources} defaultResourceId={create.resourceId ?? null}
+          vehicleIdLabel={vehicleIdLabel} vehicleLookupProvider={vehicleLookupProvider}
           onClose={() => setCreate(null)} onDone={() => { setCreate(null); refresh(); }}
         />
       )}
@@ -1088,12 +1096,14 @@ export default function DiaryPage(props: PageProps) {
 }
 
 // ---- create dialogue (module scope so inputs don't remount on keystroke) ----
-function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onDone }: {
+function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLabel, vehicleLookupProvider, onClose, onDone }: {
   // pickWhen = opened WITHOUT cell context (the mobile toolbar "+ Add booking"): date pre-set to the
   // viewed day, but the user picks the start time AND the lift — no fabricated defaults. Same dialog,
   // same /api/jobcard path as the grid gesture; the grid path is untouched.
   info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string; pickWhen?: boolean };
   siteId: string; resources: ResourceCol[]; defaultResourceId: string | null;
+  // Country-shaped: what the plate is CALLED, and whether a lookup provider exists at all.
+  vehicleIdLabel: string; vehicleLookupProvider: 'dvla' | 'none';
   onClose: () => void; onDone: () => void;
 }) {
   const { t } = useTranslation('diary');
@@ -1226,17 +1236,21 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, onClose, onD
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
             <div>
-              <label className={labelCls}>{t('create.reg')}</label>
-              {/* Reg + explicit "Look up" button — the trade convention, and NEVER auto-fire (a
-                  part-typed reg is a wrong reg). Enter in the field also triggers the lookup. */}
+              <label className={labelCls} data-testid="veh-id-label">{vehicleIdLabel}</label>
+              {/* Plate + explicit "Look up" button — the trade convention, and NEVER auto-fire (a
+                  part-typed reg is a wrong reg). Enter triggers the lookup TOO, but only where a
+                  provider exists: DVLA is keyed on UK plates and can only ever miss for a US or
+                  Irish vehicle, so 'none' hides the button rather than offering a dead end. */}
               <div className="flex items-center gap-2">
-                <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={8} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+                <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={12} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
                   onChange={(e) => setReg(normalizeReg(e.target.value) || '')}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookupVehicle(); } }} />
-                <button type="button" onClick={lookupVehicle} disabled={lookBusy || !reg.trim()}
-                  className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
-                  {lookBusy ? t('create.lookupBusy') : t('create.lookupBtn')}
-                </button>
+                  onKeyDown={(e) => { if (e.key === 'Enter' && vehicleLookupProvider !== 'none') { e.preventDefault(); lookupVehicle(); } }} />
+                {vehicleLookupProvider !== 'none' && (
+                  <button type="button" onClick={lookupVehicle} disabled={lookBusy || !reg.trim()} data-testid="veh-lookup"
+                    className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50">
+                    {lookBusy ? t('create.lookupBusy') : t('create.lookupBtn')}
+                  </button>
+                )}
               </div>
               {lookMsg && <p className={`text-[11px] mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
             </div>
@@ -1530,7 +1544,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   // An archived location has no bookable diary; its past job cards stay reachable via Job Cards.
   if (vis.activeSiteIds.length === 0) {
     const today = ymd(new Date());
-    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, openDays: [1, 2, 3, 4, 5], finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true } };
+    return { props: { siteId: '', siteName: '', view: 'week', anchor: today, prev: today, next: today, days: [], resources: [], cards: [], notes: [], openHour: 8, closeHour: 18, breaks: [], currency: 'GBP', locale: 'en-GB', canManage: false, weekStart: 1, today, openDays: [1, 2, 3, 4, 5], finance: { canSeeValues: false, canSeeMargin: false, vatRegistered: false, bookedPennies: 0, marginPennies: 0, days: {} }, noSites: true, vehicleIdLabel: 'Registration', vehicleLookupProvider: 'none' } };
   }
 
   // Default to the user's PRIMARY location; a valid ?site switches. An out-of-scope OR ARCHIVED
@@ -1614,9 +1628,11 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       orderBy: { date: 'asc' },
       select: { date: true, type: true, hours: true, cost_person: { select: { name: true } } },
     }) as Promise<any[]>,
-    prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true, status_colours: true } }) as any,
+    prisma.group.findUnique({ where: { id: user.group_id }, select: { leave_type_colours: true, status_colours: true, country_code: true, ref: true } }) as any,
   ]);
   const statusColours = resolveStatusColours(grpColours?.status_colours);
+  // ONE profile read for the country-shaped vehicle fields in the create dialog.
+  const diaryProfile = resolveTenantProfile(grpColours as any);
   const leaveBanners: Record<string, Array<{ n: string; t: string; h: boolean }>> = {};
   for (const l of leaveRows) {
     const k = ymd(l.date as Date);
@@ -1683,5 +1699,5 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   };
   const notes: DiaryNoteView[] = noteRows.map((n) => ({ id: n.id, title: n.title, resourceId: n.resource_id ?? null, colour: n.colour ?? null, startAt: (n.start_at as Date).toISOString(), endAt: (n.end_at as Date).toISOString() }));
 
-  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), openDays, finance, leaveBanners, leaveColours, statusColours } };
+  return { props: { siteId: site.id, siteName: site.site_name, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency: site.currency_code ?? 'GBP', locale: site.locale ?? 'en-GB', canManage, weekStart, today: ymd(new Date()), openDays, finance, leaveBanners, leaveColours, statusColours, vehicleIdLabel: diaryProfile.vehicleIdLabel, vehicleLookupProvider: diaryProfile.vehicleLookupProvider } };
 });

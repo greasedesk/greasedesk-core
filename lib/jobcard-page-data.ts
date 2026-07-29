@@ -16,6 +16,7 @@ import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibili
 import { canEditInvoice } from '@/lib/invoice';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { computeTabs } from '@/lib/jobcard-tabs';
 import { parseBreaks } from '@/lib/occupancy';
 import type { JobStatus, StageKey } from '@/lib/jobcard-status';
@@ -204,6 +205,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // vs this card — set at duplicate time to the vehicle's then-current owner); names are display
   // only, never the comparison. costsInherited is an editor advisory — shaped to canEditPricing
   // (absent, not hidden) because only an estimate editor can act on it, and the save that clears it.
+  // Country-shaped vehicle identity for the details tab (ruling 2026-07-29).
+  const profileForCard = resolveTenantProfile(await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } }));
   const dup = row.duplicated_from;
   const duplicatedFrom = dup
     ? {
@@ -244,6 +247,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     },
     flags, isComeback: !!row.is_comeback,
     duplicatedFrom, costsInherited,
+    vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
     garageNotes: row.garage_notes ?? '',
     lines, catalogue, fixedServices, tiers, promos,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them

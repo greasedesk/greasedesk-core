@@ -47,6 +47,13 @@ export type CountryProfile = {
   postcodePlaceholder: string;
   postcodePattern: string;           // anchored regex source for validation where a postcode field exists
   fyStartMonth: number;              // financial-year default for NEW tenants (set at country step; never rewrites)
+  // ── VEHICLE IDENTITY (ruling 2026-07-29) ─────────────────────────────────────────────────────────
+  // What the garage calls the plate, and whether a LOOKUP provider exists for this country. A button
+  // that cannot work is worse than no button: 'none' hides it entirely rather than offering a DVLA
+  // call that can only ever miss for a foreign plate. Adding NHTSA later = flip this to 'nhtsa' +
+  // write the handler; no form rebuild.
+  vehicleIdLabel: string;            // "Registration" (GB/IE) / "License plate" (US)
+  vehicleLookupProvider: 'dvla' | 'none';
   // Back-compat alias for existing readers (resolveTenantProfile etc.).
   currencyCode?: string;
   tax_name?: string;
@@ -70,6 +77,7 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'Postcode', postcodePlaceholder: 'e.g. B1 2AB',
     postcodePattern: '^[A-Za-z]{1,2}\\d[A-Za-z\\d]?\\s*\\d[A-Za-z]{2}$',
     fyStartMonth: 4,
+    vehicleIdLabel: 'Registration', vehicleLookupProvider: 'dvla',
   }),
   IE: P({
     countryCode: 'IE', name: 'Ireland', currency: 'EUR', currencySymbol: '€', locale: 'en-IE',
@@ -81,6 +89,8 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'Eircode', postcodePlaceholder: 'e.g. A65 F4E2',
     postcodePattern: '^[A-Za-z]\\d[\\dWw]\\s*[A-Za-z\\d]{4}$',
     fyStartMonth: 1,
+    // IE: DVLA does not cover Irish plates and no free public reg→vehicle API exists. No lookup.
+    vehicleIdLabel: 'Registration', vehicleLookupProvider: 'none',
   }),
   US: P({
     countryCode: 'US', name: 'United States', currency: 'USD', currencySymbol: '$', locale: 'en-US',
@@ -98,6 +108,9 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     postcodeLabel: 'ZIP code', postcodePlaceholder: 'e.g. 35203',
     postcodePattern: '^\\d{5}(-\\d{4})?$',
     fyStartMonth: 1,
+    // US: plates are state-issued with no national plate→vehicle API. Shops identify by VIN;
+    // NHTSA vPIC decodes VIN→make/model/year/engine (free, no key) — a future 'nhtsa' provider.
+    vehicleIdLabel: 'License plate', vehicleLookupProvider: 'none',
   }),
 };
 

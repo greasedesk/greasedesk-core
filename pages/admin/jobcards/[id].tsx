@@ -58,6 +58,8 @@ type PageProps = {
   flags: string[];
   isComeback: boolean;
   duplicatedFrom: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
+  vehicleIdLabel: string;
+  vehicleLookupProvider: 'dvla' | 'none';
   costsInherited: boolean;
   garageNotes: string;
   lines: EstimateLine[];
@@ -138,6 +140,8 @@ export default function JobCardDetailPage(props: PageProps) {
         flags={props.flags}
         isComeback={props.isComeback}
         duplicatedFrom={props.duplicatedFrom}
+        vehicleIdLabel={props.vehicleIdLabel}
+        vehicleLookupProvider={props.vehicleLookupProvider}
         costsInherited={props.costsInherited}
         garageNotes={props.garageNotes}
         currency={props.currency}

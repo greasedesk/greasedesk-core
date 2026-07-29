@@ -25,6 +25,8 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
 import { lookupVehicleByReg } from '@/lib/vehicle-lookup-client';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { prisma } from '@/lib/db';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 
 const inputClass =
@@ -47,7 +49,7 @@ const FLAG_LABELS: Array<[keyof Flags, string]> = [
   ['flag_diag', 'DIAG (diagnostic)'],
 ];
 
-export default function NewJobCardPage() {
+export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: { vehicleIdLabel?: string; vehicleLookupProvider?: 'dvla' | 'none' }) {
   const router = useRouter();
   const [form, setForm] = useState({
     registration: '',
@@ -168,28 +170,33 @@ export default function NewJobCardPage() {
         <form onSubmit={handleSubmit} className="bg-surface border border-line rounded-xl p-6 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className={labelClass}>Registration *</label>
+              <label className={labelClass} data-testid="veh-id-label">{vehicleIdLabel} *</label>
               {/* Reg + explicit "Look up" button — the trade convention, and NEVER auto-fire on typing/
                   blur (a part-typed reg is a wrong reg). Enter in the field triggers it too. */}
               <div className="flex items-center gap-2">
                 <input
                   name="registration"
                   value={form.registration}
-                  maxLength={8}
+                  maxLength={12}
                   onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runLookup(); } }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && vehicleLookupProvider !== 'none') { e.preventDefault(); runLookup(); } }}
                   required
-                  placeholder="e.g. AB12CDE"
+                  placeholder={vehicleLookupProvider === 'dvla' ? 'e.g. AB12CDE' : 'e.g. 7ABC123'}
                   className={`${inputClass} uppercase max-w-[9rem] tracking-wider`}
                 />
-                <button
-                  type="button"
-                  onClick={runLookup}
-                  disabled={looking || !form.registration.trim()}
-                  className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50"
-                >
-                  {looking ? 'Looking up…' : 'Look up'}
-                </button>
+                {/* No lookup provider for this country → no button (DVLA cannot answer for a
+                    non-UK plate; a button that can only miss is worse than none). */}
+                {vehicleLookupProvider !== 'none' && (
+                  <button
+                    type="button"
+                    onClick={runLookup}
+                    disabled={looking || !form.registration.trim()}
+                    data-testid="veh-lookup"
+                    className="shrink-0 text-sm font-medium bg-surface-muted border border-line rounded-lg px-3 py-2 text-ink hover:bg-surface disabled:opacity-50"
+                  >
+                    {looking ? 'Looking up…' : 'Look up'}
+                  </button>
+                )}
               </div>
               {lookMsg && <p className={`text-xs mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
             </div>
@@ -284,11 +291,14 @@ export default function NewJobCardPage() {
 }
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  // Country-shaped vehicle identity (ruling 2026-07-29) — same profile as the diary dialog.
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
   // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
   const onboard = await onboardingGateRedirect(user.group_id);
   if (onboard) return { redirect: { destination: onboard, permanent: false } };
-  return { props: {} };
+  const grp = await prisma.group.findUnique({ where: { id: (session!.user as any).group_id as string }, select: { country_code: true, ref: true } });
+  const prof = resolveTenantProfile(grp);
+  return { props: { vehicleIdLabel: prof.vehicleIdLabel, vehicleLookupProvider: prof.vehicleLookupProvider } };
 };

@@ -52,6 +52,9 @@ type Props = {
   // Duplicate provenance (both nullable/absent on ordinary cards). ownershipChanged drives the
   // prominent vehicle-reowned notice; costsInherited drives the Quote-tab stale-cost advisory.
   duplicatedFrom?: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
+  // Country-shaped vehicle identity (ruling 2026-07-29) — label + whether a lookup provider exists.
+  vehicleIdLabel?: string;
+  vehicleLookupProvider?: 'dvla' | 'none';
   costsInherited?: boolean;
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
@@ -378,6 +381,8 @@ export default function JobCardWorkspace(p: Props) {
   const detailsPane = (
       <div className="space-y-5">
         <CustomerDetailsForm
+          vehicleIdLabel={p.vehicleIdLabel}
+          vehicleLookupProvider={p.vehicleLookupProvider}
           jobCardId={p.jobCardId}
           owner={eff.owner}
           vehicle={eff.vehicle}

@@ -16,12 +16,14 @@ type Vehicle = {
   make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
   motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
 };
-type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void };
+type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
+  // Country-shaped vehicle identity (ruling 2026-07-29); defaults keep every existing caller working.
+  vehicleIdLabel?: string; vehicleLookupProvider?: 'dvla' | 'none' };
 
 const inputCls = 'w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs uppercase text-muted mb-1';
 
-export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved }: Props) {
+export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
@@ -106,7 +108,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
       <div className="bg-surface border border-line rounded-xl p-5">
         <h2 className="text-lg font-semibold text-ink mb-4">{t('tab.details')}</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Row label={t('field.registration')} value={vehicle.registration} />
+          <Row label={vehicleIdLabel} value={vehicle.registration} />
           <Row label={t('field.make')} value={vehicle.make} />
           <Row label={t('field.model')} value={vehicle.model} />
           <Row label={t('field.colour')} value={vehicle.colour} />
@@ -133,13 +135,16 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
       <p className="text-xs text-muted mb-4">{t('field.ownerFromEdge')}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className={labelCls}>{t('field.registration')}</label>
+          <label className={labelCls} data-testid="veh-id-label">{vehicleIdLabel}</label>
           <input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" />
-          {/* Deliberate button press — returning cars never auto-fire DVSA (skip-on-existing stays). */}
-          <button type="button" disabled={lookBusy || busy || !registration.trim()} onClick={dvsaLookup}
-            className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline">
-            {lookBusy ? t('detailsEdit.dvsaBusy') : t('detailsEdit.dvsaButton')}
-          </button>
+          {/* Deliberate button press — returning cars never auto-fire DVSA (skip-on-existing stays).
+              Hidden where the country has no lookup provider: DVLA/DVSA are keyed on UK plates. */}
+          {vehicleLookupProvider !== 'none' && (
+            <button type="button" disabled={lookBusy || busy || !registration.trim()} onClick={dvsaLookup} data-testid="veh-lookup"
+              className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline">
+              {lookBusy ? t('detailsEdit.dvsaBusy') : t('detailsEdit.dvsaButton')}
+            </button>
+          )}
         </div>
         <div><label className={labelCls}>{t('field.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
