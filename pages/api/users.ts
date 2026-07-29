@@ -16,7 +16,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma, UserRole } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { makeInviteToken } from '@/lib/tokens';
-import { sendTeamInvitationEmail } from '@/lib/email-service';
+import { sendNotification } from '@/lib/notify';
 import { writeUserAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -101,7 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com';
       const inviteLink = `${baseUrl}/set-password?token=${invite.raw}`;
       const group = await prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true } });
-      const sent = await sendTeamInvitationEmail(cleanEmail, group?.group_name ?? 'GreaseDesk', inviteLink);
+      // Through THE notification chokepoint (2026-07-29) — one invite path, one NotificationLog trail.
+      const sent = (await sendNotification({ recipient: cleanEmail, template: 'team_invite', channel: 'email', groupId, data: { garageName: group?.group_name ?? 'GreaseDesk', link: inviteLink }, subject: { type: 'user', id: created.id } })).ok;
       if (!sent) console.warn('Invite email not sent (Resend unset?) — link:', inviteLink);
 
       return res.status(201).json({

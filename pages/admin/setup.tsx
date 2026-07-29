@@ -9,7 +9,7 @@
  *     with ?setup=1 so the form returns here and the sequence advances).
  * No form is re-implemented here. No "done" is stored — it's recomputed from rows on every load.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -44,6 +44,9 @@ export default function SetupPage({ signals, doneCount, applicableCount }: PageP
   const { t } = useTranslation('setup');
   const router = useRouter();
   const walk = router.query.walk === '1';
+  // RETIRED (ruling 2026-07-29): the guided walkthrough is superseded by the setup WIZARD — one
+  // guided front-end, the panel + nudge stay as the progress view. Old ?walk=1 links land there.
+  useEffect(() => { if (walk) router.replace('/admin/setup-wizard'); }, [walk, router]);
   const [busyNA, setBusyNA] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
@@ -113,7 +116,7 @@ export default function SetupPage({ signals, doneCount, applicableCount }: PageP
         <p className="text-muted mb-5">{t('subtitle')}</p>
 
         {outstanding.length > 0 ? (
-          <Link href="/admin/setup?walk=1" className="inline-block mb-5 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium">{t('startWalk')}</Link>
+          <Link href="/admin/setup-wizard" className="inline-block mb-5 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium">{t('startWalk')}</Link>
         ) : (
           <div className="mb-5 bg-ok-soft border border-ok/30 text-ok rounded-xl px-4 py-3 text-sm font-medium">{t('allDoneTitle')} — {t('allDoneBody')}</div>
         )}

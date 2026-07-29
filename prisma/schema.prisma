@@ -125,6 +125,7 @@ enum ResourceType {
   lift
   mot_bay
   spray_booth
+  other // any other bookable revenue resource (rolling road, wash bay, …) — name carries the detail
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -431,6 +432,24 @@ model CommissionEntry {
 // PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT
 // AuditLog: AuditLog is group-scoped and cascade-deleted with the tenant, so a purge record can't
 // live in the tenant it destroys. This survives the purge — target_name/ref are SNAPSHOTS.
+// PLATFORM-TIER wizard step definitions (ruling 2026-07-29): the OPERATOR edits wording, order,
+// required/enabled and country scope in the Engine Room; what a step WRITES is code — handler_key
+// binds to the fixed registry in lib/setup-wizard (unknown/retired key = step does not render,
+// fail-closed + logged). Seeded with the six launch steps; latest-wins editing, SuperAdminAudit'd.
+model SetupStepDef {
+  id          String   @id @default(uuid())
+  step_key    String   @unique // stable identity for audit/ordering ties
+  handler_key String // registry binding — NOT operator-editable
+  title       String
+  body        String   @default("")
+  help_text   String   @default("")
+  position    Int
+  required    Boolean  @default(false)
+  enabled     Boolean  @default(true)
+  countries   Json? // ISO-3166 array; NULL = all countries. Most-specific per handler_key wins.
+  updated_at  DateTime @default(now()) @updatedAt
+}
+
 model SuperAdminAudit {
   id                   String   @id @default(uuid())
   operator_user_id     String // the ACTING operator's id

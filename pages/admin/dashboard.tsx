@@ -426,7 +426,7 @@ export default function AdminDashboard(props: PageProps) {
           + guided walkthrough. NOT in the required gate; vanishes once everything applicable is done.
           Derived from setup-signals — no stored "done" flag. */}
       {props.setup.outstanding > 0 && (
-        <Link href="/admin/setup" className="flex items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft p-4 mb-4 hover:brightness-[0.98]">
+        <Link href="/admin/setup-wizard" className="flex items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft p-4 mb-4 hover:brightness-[0.98]">
           <span className="text-sm">
             <span className="text-ink font-semibold">{t('setup.title')}</span>
             <span className="text-muted"> — {t('setup.progress', { done: props.setup.done, total: props.setup.total })}</span>
