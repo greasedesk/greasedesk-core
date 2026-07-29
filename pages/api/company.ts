@@ -12,6 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -54,8 +55,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
   if (address !== undefined) data.address = address.trim() || null;
   if (phone !== undefined) data.phone = phone.trim() || null;
-  // Stored as E.164 DIGITS (see lib/contact-routes) — normalised once, at the write.
-  if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp) : null;
+  // Stored as E.164 DIGITS (see lib/contact-routes) — normalised once, at the write, with the
+  // tenant country's dial code (a US national number previously nulled under the GB default).
+  const grpDial = whatsapp !== undefined ? await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } }) : null;
+  if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp, resolveTenantProfile(grpDial).dialCode) : null;
   if ((req.body || {}).vin_hint_text !== undefined) data.vin_hint_text = String((req.body || {}).vin_hint_text).trim().slice(0, 200) || null; // phone-card VIN hint (tenant-worded; empty = none)
   if (vat_number !== undefined) data.vat_number = vat_number.trim() || null;
   if (vat_registered !== undefined) data.vat_registered = !!vat_registered;
@@ -63,6 +66,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const r = Number(default_vat_rate);
     if (!Number.isFinite(r) || r < 0 || r > 100) return res.status(400).json({ message: 'Default VAT rate must be between 0 and 100.' });
     data.default_vat_rate = new Prisma.Decimal(r.toFixed(2));
+    // DUAL-WRITE (money fix, ruling 2026-07-29): lib/tenant-vat READS tax_default_rate_bp in
+    // preference to the legacy Decimal, and onboarding writes it — so a Settings rate edit that
+    // wrote only the Decimal LOOKED saved while quotes/invoices carried on at the old rate. The
+    // two columns move together here, always.
+    data.tax_default_rate_bp = Math.round(r * 100);
   }
   if (invoice_prefix !== undefined) data.invoice_prefix = String(invoice_prefix).trim();
   if (invoice_pad_width !== undefined) {

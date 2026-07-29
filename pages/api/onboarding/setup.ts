@@ -89,6 +89,13 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     }
     const stateTimezone = bodyProfile.stateField === true ? timezoneForState(sentState) : null;
 
+    // POSTCODE/ZIP shape check against the country profile (ruling 2026-07-29) — catches the
+    // "AL 35244" class of entry (state duplicated into the ZIP field). Anchored, case-insensitive.
+    const sentPostcode = String(postcode ?? '').trim();
+    if (sentPostcode && !new RegExp(bodyProfile.postcodePattern, 'i').test(sentPostcode)) {
+      return res.status(400).json({ message: `Please enter a valid ${bodyProfile.postcodeLabel.toLowerCase()} (${bodyProfile.postcodePlaceholder}).` });
+    }
+
     const fullAddressParts = [addressLine1, city, postcode].filter(Boolean);
     const fullAddress = fullAddressParts.length ? fullAddressParts.join(', ') : null;
 

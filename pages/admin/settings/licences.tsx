@@ -12,12 +12,12 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
-import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { resolveTenantProfile, formatProfileDate } from '@/lib/locale-profiles';
 
 type PageProps = {
   groupName: string;
   subscriptionStatus: string | null;
-  currentPeriodEnd: string | null;
+  currentPeriodEnd: string | null; periodEndLabel: string | null;
   hasCustomer: boolean;
   siteCount: number;
   perMonthLabel: string; perLocationLbl: string;
@@ -41,7 +41,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lapsed = !!subscriptionStatus && LAPSED.has(subscriptionStatus);
@@ -73,7 +73,7 @@ export default function LicencesSettings(props: PageProps) {
         <Row label="Status" value={subscriptionStatus ? (STATUS_LABEL[subscriptionStatus] || subscriptionStatus) : 'No subscription'} />
         <Row label="Current locations" value={siteCount} />
         <Row label="Monthly" value={perMonthLabel} />
-        {currentPeriodEnd && <Row label={subscribed ? 'Renews / next charge' : 'Period end'} value={new Date(currentPeriodEnd).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} />}
+        {currentPeriodEnd && <Row label={subscribed ? 'Renews / next charge' : 'Period end'} value={periodEndLabel ?? ''} />}
       </div>
 
       {error && <div className="bg-danger-soft border border-danger text-danger rounded-lg p-3 text-sm max-w-xl mt-4">{error}</div>}
@@ -114,6 +114,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       groupName: group?.group_name ?? 'Your account',
       subscriptionStatus: billing?.subscription_status ?? null,
       currentPeriodEnd: billing?.current_period_end ? billing.current_period_end.toISOString() : null,
+      periodEndLabel: billing?.current_period_end ? formatProfileDate(resolveTenantProfile(group), billing.current_period_end, { long: true }) : null,
       hasCustomer: !!billing?.stripe_customer_id,
       siteCount,
       perMonthLabel: monthlyPriceLabelFor(resolveTenantProfile(group), siteCount),

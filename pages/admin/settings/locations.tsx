@@ -14,6 +14,10 @@ import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { zoneChoicesFor, initialZone, type ZoneOption } from '@/lib/timezone-choices';
+import { US_STATES } from '@/lib/us-states';
+import TimezoneField from '@/components/TimezoneField';
 import { parseBreaks } from '@/lib/occupancy';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
@@ -34,6 +38,8 @@ type LocationView = {
   address: string | null;
   phone: string | null;
   whatsapp: string | null;
+  timezone: string;
+  stateCode: string | null;
   isActive: boolean;
   isCurrent: boolean;
   resources: ResourceView[];
@@ -43,7 +49,10 @@ type LocationView = {
   weekStart: number;
   breaks: { start: number; end: number }[];
 };
-type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean; statusColours: Record<StatusBand, string> };
+// Country-profile presentation (ruling 2026-07-29): zones + labels per site, US state list when
+// the profile has states, national phone placeholder.
+type CountryUi = { stateField: boolean; states: Array<{ code: string; name: string }>; phonePlaceholder: string; timezones: string[]; zoneLabels: Record<string, string> };
+type PageProps = { locations: LocationView[]; isAdmin: boolean; isManager: boolean; statusColours: Record<StatusBand, string>; countryUi: CountryUi };
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -283,17 +292,25 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
 }
 
 // --- Location card (edit / delete + its resources) ---
-function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin: boolean; onChanged: () => void }) {
+function LocationCard({ loc, isAdmin, onChanged, countryUi }: { loc: LocationView; isAdmin: boolean; onChanged: () => void; countryUi: CountryUi }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(loc.name);
   const [address, setAddress] = useState(loc.address ?? '');
   const [phone, setPhone] = useState(loc.phone ?? '');
   const [wa, setWa] = useState(loc.whatsapp ?? '');
   const [active, setActive] = useState(loc.isActive);
+  const [stateCode, setStateCode] = useState(loc.stateCode ?? '');
+  const [tz, setTz] = useState(loc.timezone);
   const [err, setErr] = useState<string | null>(null);
+  // Zone choices narrow by the state being edited (client mirror of lib/timezone-choices; the API
+  // validates against the full profile set).
+  const stateZones = countryUi.stateField && stateCode ? (US_STATES.find((st) => st.code === stateCode)?.zones ?? countryUi.timezones) : countryUi.timezones;
 
   async function save() {
-    const error = await mutate('/api/locations', 'PATCH', { id: loc.id, site_name: name, address, phone, whatsapp: wa, is_active: active });
+    const error = await mutate('/api/locations', 'PATCH', {
+      id: loc.id, site_name: name, address, phone, whatsapp: wa, is_active: active,
+      timezone: tz, ...(countryUi.stateField ? { state_code: stateCode || null } : {}),
+    });
     if (error) return setErr(error);
     setEditing(false);
     onChanged();
@@ -314,7 +331,23 @@ function LocationCard({ loc, isAdmin, onChanged }: { loc: LocationView; isAdmin:
             {/* Customer-facing contact routes for this location. WhatsApp is independent of the
                 phone; both fall back to the company-level values when blank. */}
             <input value={phone} onChange={(e) => setPhone(e.target.value)} className={`${inputClass} w-40`} placeholder="Phone" />
-            <input value={wa} onChange={(e) => setWa(e.target.value)} className={`${inputClass} w-40`} placeholder="WhatsApp (07700 900123)" />
+            <input value={wa} onChange={(e) => setWa(e.target.value)} className={`${inputClass} w-40`} placeholder={`WhatsApp (${countryUi.phonePlaceholder})`} />
+            {countryUi.stateField && (
+              <select value={stateCode} onChange={(e) => { const v = e.target.value; setStateCode(v); const zs = US_STATES.find((st) => st.code === v)?.zones; if (zs && !zs.includes(tz)) setTz(zs[0]); }} className={`${inputClass} w-40`}>
+                <option value="">State…</option>
+                {countryUi.states.map((st) => <option key={st.code} value={st.code}>{st.name}</option>)}
+              </select>
+            )}
+            <span className="w-44 inline-block">
+              <TimezoneField
+                id={`tz-${loc.id}`}
+                value={stateZones.includes(tz) ? tz : stateZones[0]}
+                options={stateZones.map((z) => ({ value: z, label: countryUi.zoneLabels[z] ?? (z.split('/').pop() ?? z).replace(/_/g, ' ') }))}
+                fixed={stateZones.length === 1}
+                onChange={setTz}
+                inputClass={`${inputClass} w-44`}
+              />
+            </span>
             <label className="text-xs text-muted flex items-center gap-1">
               <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
             </label>
@@ -406,7 +439,7 @@ function StatusColoursPanel({ initial }: { initial: Record<StatusBand, string> }
   );
 }
 
-export default function LocationsSettings({ locations, isAdmin, isManager, statusColours }: PageProps) {
+export default function LocationsSettings({ locations, isAdmin, isManager, statusColours, countryUi }: PageProps) {
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
 
@@ -423,7 +456,7 @@ export default function LocationsSettings({ locations, isAdmin, isManager, statu
           You’re not currently assigned to a location — contact your admin.
         </div>
       ) : (
-        locations.map((loc) => <LocationCard key={loc.id} loc={loc} isAdmin={isAdmin} onChanged={refresh} />)
+        locations.map((loc) => <LocationCard key={loc.id} loc={loc} isAdmin={isAdmin} onChanged={refresh} countryUi={countryUi} />)
       )}
 
       {/* Job status colours — beneath Locations & Resources, admin-only, per tenant. */}
@@ -455,6 +488,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     address: s.address,
     phone: (s as any).phone ?? null,
     whatsapp: (s as any).whatsapp ?? null,
+    timezone: (s as any).timezone ?? 'Europe/London',
+    stateCode: (s as any).state_code ?? null,
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
@@ -466,8 +501,16 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }));
 
   // Tenant diary status-band palette (Group-level; one per tenant). Defaults merged under overrides.
-  const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { status_colours: true } })) as any;
+  const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { status_colours: true, country_code: true, ref: true } })) as any;
   const statusColours = resolveStatusColours(grp?.status_colours);
+  const profile = resolveTenantProfile(grp);
+  const countryUi: CountryUi = {
+    stateField: profile.stateField === true,
+    states: profile.stateField === true ? US_STATES.map((st) => ({ code: st.code, name: st.name })) : [],
+    phonePlaceholder: profile.phonePlaceholder,
+    timezones: profile.timezones,
+    zoneLabels: Object.fromEntries(zoneChoicesFor(profile).options.map((o) => [o.value, o.label])),
+  };
 
-  return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER', statusColours } };
+  return { props: { locations, isAdmin: vis.isAdmin, isManager: vis.role === 'SITE_MANAGER', statusColours, countryUi } };
 };

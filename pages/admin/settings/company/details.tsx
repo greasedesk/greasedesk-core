@@ -13,6 +13,7 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 type PageProps = {
   groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string; taxLabel: string; taxModel: string;
@@ -22,7 +23,7 @@ const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg tex
 const labelClass = 'block text-xs text-muted';
 
 export default function CompanyDetails(props: PageProps) {
-  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp, taxLabel, taxModel } = props;
+  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp, taxLabel, taxModel, companyNumberLabel, companyNumberPlaceholder, phonePlaceholder, countryName } = props as any;
   const L = taxLabel || 'VAT';
   const isSalesTax = taxModel === 'sales_tax'; // US: flat rate, NO tax number to ask for
   const { t } = useTranslation('company');
@@ -72,17 +73,17 @@ export default function CompanyDetails(props: PageProps) {
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         <form onSubmit={save} className="space-y-3">
           <div><label className={labelClass}>{t('details.name')} *</label><input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} /></div>
-          <div><label className={labelClass}>{t('details.number')}</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} /></div>
+          <div><label className={labelClass}>{companyNumberLabel}</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} placeholder={companyNumberPlaceholder} /></div>
           <div><label className={labelClass}>{t('details.address')}</label><input value={addr} onChange={(e) => setAddr(e.target.value)} className={inputClass} /></div>
           {/* Phone-card VIN hint — tenant-worded, free text; EMPTY ships no hint (never a marque default). */}
           {/* Customer-facing contact routes. WhatsApp is INDEPENDENT of the phone — a garage may run
               it on a different number, or not at all. Falls back to this when a site has none. */}
           <div><label className={labelClass}>Phone (company)</label>
-            <input value={phoneVal} onChange={(e) => setPhoneVal(e.target.value)} className={inputClass} placeholder="0121 555 0199" />
+            <input value={phoneVal} onChange={(e) => setPhoneVal(e.target.value)} className={inputClass} placeholder={phonePlaceholder} />
             <p className="text-xs text-muted mt-1">Shown to customers on quotes when a location has no number of its own.</p></div>
           <div><label className={labelClass}>WhatsApp (company)</label>
-            <input value={waVal} onChange={(e) => setWaVal(e.target.value)} className={inputClass} placeholder="07700 900123" />
-            <p className="text-xs text-muted mt-1">Optional, and separate from the phone number. A UK number can be typed normally (07700 900123) — we convert it for the WhatsApp link. For a non-UK number use the international form (+353…).</p></div>
+            <input value={waVal} onChange={(e) => setWaVal(e.target.value)} className={inputClass} placeholder={phonePlaceholder} />
+            <p className="text-xs text-muted mt-1">Optional, and separate from the phone number. A {countryName} number can be typed normally ({phonePlaceholder}) — we convert it for the WhatsApp link. For a number outside {countryName}, use the international form (+…).</p></div>
           <div><label className={labelClass}>{t('details.vinHint')}</label><input value={vinHintText} onChange={(e) => setVinHintText(e.target.value)} placeholder={t('details.vinHintPlaceholder')} className={inputClass} maxLength={200} />
             <p className="text-xs text-muted mt-1">{t('details.vinHintHelp')}</p></div>
           <label className="flex items-start gap-3 py-1 cursor-pointer">
@@ -118,7 +119,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true,
+      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true, country_code: true, ref: true,
     },
   })) as any;
   return {
@@ -130,7 +131,11 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       vatNumber: g?.vat_number ?? '',
       taxLabel: (g as any)?.tax_label || 'VAT',
       taxModel: (g as any)?.tax_model || 'vat',
-      defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : '20.00',
+      defaultVatRate: g && g.default_vat_rate != null ? Number(g.default_vat_rate).toFixed(2) : resolveTenantProfile(g).defaultTaxRatePercent.toFixed(2),
+      companyNumberLabel: resolveTenantProfile(g).companyNumberLabel,
+      companyNumberPlaceholder: resolveTenantProfile(g).companyNumberPlaceholder,
+      phonePlaceholder: resolveTenantProfile(g).phonePlaceholder,
+      countryName: resolveTenantProfile(g).name,
       vinHint: g?.vin_hint_text ?? '',
       phone: g?.phone ?? '',
       whatsapp: g?.whatsapp ?? '',

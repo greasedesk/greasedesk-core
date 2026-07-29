@@ -18,7 +18,9 @@ import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
-import { getUsState, usZoneLabel } from '@/lib/us-states';
+import { getUsState } from '@/lib/us-states';
+import { zoneChoicesFor, initialZone } from '@/lib/timezone-choices';
+import TimezoneField from '@/components/TimezoneField';
 import { currencySymbol } from '@/lib/format-money';
 
 type PageProps = {
@@ -132,29 +134,15 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
           <p className="text-xs text-slate-500 mt-1">Set by your country — {countryName}.</p>
 
           <label htmlFor="timezone" className={labelClass}>Timezone</label>
-          {timezoneFixed ? (
-            <>
-              <input
-                id="timezone"
-                value={timezones.find((t) => t.value === data.timezone)?.label ?? tzLabel(data.timezone)}
-                className={`${inputClass} opacity-70 cursor-not-allowed`}
-                disabled
-                readOnly
-              />
-              <p className="text-xs text-slate-500 mt-1">{timezoneNote}</p>
-            </>
-          ) : (
-            <select
-              id="timezone"
-              name="timezone"
-              value={data.timezone}
-              onChange={handleChange}
-              className={inputClass}
-              required
-            >
-              {timezones.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
-            </select>
-          )}
+          <TimezoneField
+            value={data.timezone}
+            options={timezones}
+            fixed={timezoneFixed}
+            note={timezoneNote}
+            onChange={(z) => setData((prev) => ({ ...prev, timezone: z }))}
+            inputClass={inputClass}
+            noteClass="text-xs text-slate-500 mt-1"
+          />
 
           <h2 className="text-xl font-semibold mt-8 mb-2">Default Labour Rate</h2>
           <hr className="border-slate-700 mb-4" />
@@ -203,16 +191,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   // Zone options: the state narrows within the profile (never widens — lib/us-states maps only to
   // profile zones); no state → the full profile set, exactly as before.
-  const zoneValues = state ? state.zones : profile.timezones;
-  const initialTimezone = siteTz && zoneValues.includes(siteTz) ? siteTz : zoneValues[0];
-  // US zones display by NAME ("Central Time"), everywhere else by city ("London") — labels only,
-  // the stored IANA value is untouched.
-  const options = zoneValues.map((z) => ({
-    value: z,
-    label: profile.stateField === true ? usZoneLabel(z) : (z.split('/').pop() ?? z).replace(/_/g, ' '),
-  }));
-  // No picker when there is nothing to pick: single-zone country, or unambiguous state.
-  const timezoneFixed = zoneValues.length === 1;
+  // Shared derivation (lib/timezone-choices) — Settings uses the same one, so they cannot drift.
+  const choices = zoneChoicesFor(profile, group?.sites?.[0]?.state_code);
+  const options = choices.options;
+  const initialTimezone = initialZone(choices, siteTz);
+  const timezoneFixed = choices.fixed;
   const timezoneNote = state
     ? `Derived from your state — ${state.name}.`
     : `Set by your country — ${profile.name}.`;

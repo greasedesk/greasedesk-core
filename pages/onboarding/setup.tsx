@@ -18,6 +18,8 @@ type PageProps = {
   // whose profile sets stateField (US) — timezone derives from it. Absent elsewhere.
   stateField: boolean;
   states: Array<{ code: string; name: string }>;
+  postcodeLabel: string;
+  postcodePlaceholder: string;
 };
 
 // Wizard step-guard: only reachable as the FIRST incomplete step; bounces skip-ahead / resumes /
@@ -34,6 +36,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     props: {
       stateField: profile.stateField === true,
       states: profile.stateField === true ? US_STATES.map((s) => ({ code: s.code, name: s.name })) : [],
+      postcodeLabel: profile.postcodeLabel,
+      postcodePlaceholder: profile.postcodePlaceholder,
     },
   };
 };
@@ -51,7 +55,7 @@ interface SetupData {
 // Logo Configuration (Assuming it's placed in /public)
 const LOGO_SRC = '/greasedesk-logo-source.png';
 
-export default function OnboardingSetupPage({ stateField, states }: PageProps) {
+export default function OnboardingSetupPage({ stateField, states, postcodeLabel, postcodePlaceholder }: PageProps) {
   const router = useRouter();
   const [formData, setFormData] = useState<SetupData>({
     groupName: '',
@@ -227,7 +231,7 @@ export default function OnboardingSetupPage({ stateField, states }: PageProps) {
                   </div>
                   <div>
                     <label htmlFor="postcode" className={labelClass}>
-                      {stateField ? 'ZIP code' : 'Postcode'}
+                      {postcodeLabel}
                     </label>
                     <input
                       type="text"
@@ -236,7 +240,7 @@ export default function OnboardingSetupPage({ stateField, states }: PageProps) {
                       value={formData.postcode}
                       onChange={handleChange}
                       className={inputClass}
-                      placeholder={stateField ? 'e.g., 35203' : 'e.g., B1 2AB'}
+                      placeholder={postcodePlaceholder}
                       disabled={loading}
                       required
                     />

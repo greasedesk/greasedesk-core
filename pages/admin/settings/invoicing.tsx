@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { presignGet } from '@/lib/r2';
 
 type PageProps = {
@@ -250,7 +251,7 @@ export default function InvoicingSettings(props: PageProps) {
                   <span className={labelClass}>{t('invoice.fyStartMonth')}</span>
                   <select value={fyMonth} disabled={!props.canSeed} onChange={(e) => setFyMonth(e.target.value)} className={`${inputClass} disabled:opacity-50`}>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                      <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString(undefined, { month: 'long' })}</option>
+                      <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString((props as any).monthLocale ?? 'en-GB', { month: 'long' })}</option>
                     ))}
                   </select>
                 </label>
@@ -292,7 +293,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
     select: {
       group_name: true, billing_email: true,
       invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, invoice_footer_text: true, invoice_email_footer: true, logo_r2_key: true,
-      invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, paid_confirm_window_hours: true,
+      invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, paid_confirm_window_hours: true, country_code: true, ref: true,
       invoice_sequence: { select: { last_value: true } },
     },
   })) as any;
@@ -317,6 +318,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       canSeed: chargeableUsed === 0,
       warrantyLocked: warrantyUsed > 0,
       paidWindowHours: String(g?.paid_confirm_window_hours ?? 24),
+      monthLocale: resolveTenantProfile(g).locale,
     },
   };
 });

@@ -14,6 +14,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { isZoneAllowed } from '@/lib/timezone-choices';
+import { isUsStateCode } from '@/lib/us-states';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -60,8 +63,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const cleanName = (site_name || '').trim();
     if (!cleanName) return res.status(400).json({ message: 'Location name is required.' });
 
+    // COUNTRY-PROFILE SEEDING (ruling 2026-07-29): a new site takes the tenant's country identity,
+    // not the schema's GB defaults — a US tenant's second site was silently London/GBP/en-GB,
+    // recreating the mixed-identity tenant one site at a time.
+    const grpForSite = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
+    const prof = resolveTenantProfile(grpForSite);
     const created = await prisma.site.create({
-      data: { group_id: groupId, site_name: cleanName, address: address?.trim() || null },
+      data: {
+        group_id: groupId, site_name: cleanName, address: address?.trim() || null,
+        timezone: prof.defaultTimezone, currency_code: prof.currency, locale: prof.locale,
+      },
       select: { id: true },
     });
 
@@ -75,13 +86,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') {
     // Editing a location (a billable unit) is admin/owner-only — site managers manage resources, not locations.
     if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can edit a location.' });
-    const { id, site_name, address, is_active, phone, whatsapp } = (req.body || {}) as {
+    const { id, site_name, address, is_active, phone, whatsapp, timezone, state_code } = (req.body || {}) as {
       id?: string; site_name?: string; address?: string; is_active?: boolean; phone?: string; whatsapp?: string;
+      timezone?: string; state_code?: string | null;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });
 
+    const grpForPatch = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
+    const profPatch = resolveTenantProfile(grpForPatch);
     const data: any = {};
+    // Regional fields validate against the COUNTRY PROFILE, same stance as onboarding update-rates.
+    if (timezone !== undefined) {
+      const tz = String(timezone).trim();
+      if (!isZoneAllowed(profPatch, tz)) return res.status(400).json({ message: 'Pick a timezone from the list for your country.' });
+      data.timezone = tz;
+    }
+    if (state_code !== undefined) {
+      if (profPatch.stateField !== true) {
+        if (state_code) return res.status(400).json({ message: 'State does not apply to your country.' });
+      } else if (state_code === null || state_code === '') {
+        data.state_code = null;
+      } else {
+        const st = String(state_code).trim().toUpperCase();
+        if (!isUsStateCode(st)) return res.status(400).json({ message: 'Pick a state from the list.' });
+        data.state_code = st;
+      }
+    }
     if (site_name !== undefined) {
       const cleanName = site_name.trim();
       if (!cleanName) return res.status(400).json({ message: 'Location name cannot be empty.' });
@@ -92,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (phone !== undefined) data.phone = phone.trim() || null;
     // WhatsApp is stored as E.164 DIGITS so wa.me links are correct by construction — a UK-local
     // number is converted here, at the write, rather than at every render (lib/contact-routes).
-    if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp) : null;
+    if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp, profPatch.dialCode) : null;
 
     await prisma.site.update({ where: { id }, data });
     return res.status(200).json({ message: 'Location updated.' });

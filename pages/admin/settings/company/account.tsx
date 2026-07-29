@@ -10,12 +10,13 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
+import { resolveTenantProfile, formatProfileDate } from '@/lib/locale-profiles';
 
-type PageProps = { reference: string; status: string; trialEndsAt: string | null };
+type PageProps = { reference: string; status: string; trialEndsAt: string | null; trialEndsLabel: string | null };
 
-export default function AccountDetails({ reference, status, trialEndsAt }: PageProps) {
+export default function AccountDetails({ reference, status, trialEndsAt, trialEndsLabel }: PageProps) {
   const { t } = useTranslation('company');
-  const ends = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB') : '—';
+  const ends = trialEndsLabel ?? '—'; // profile date_format (dd/MM vs MM/dd), formatted server-side
   return (
     <SettingsLayout isAdmin>
       <Head><title>Account details - GreaseDesk</title></Head>
@@ -37,13 +38,14 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
-    select: { ref: true, status: true, trial_ends_at: true },
-  })) as { ref: string; status: string; trial_ends_at: Date | null } | null;
+    select: { ref: true, status: true, trial_ends_at: true, country_code: true },
+  })) as { ref: string; status: string; trial_ends_at: Date | null; country_code: string | null } | null;
   return {
     props: {
       reference: g?.ref ?? '—',
       status: g?.status ?? '—',
       trialEndsAt: g?.trial_ends_at ? g.trial_ends_at.toISOString() : null,
+      trialEndsLabel: g?.trial_ends_at ? formatProfileDate(resolveTenantProfile(g), g.trial_ends_at) : null,
     },
   };
 });

@@ -13,6 +13,9 @@ import { prisma } from '@/lib/db';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { currencySymbol } from '@/lib/format-money';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { zoneChoicesFor, initialZone, type ZoneOption } from '@/lib/timezone-choices';
+import TimezoneField from '@/components/TimezoneField';
 
 type SiteSettings = {
   siteName: string;
@@ -20,16 +23,19 @@ type SiteSettings = {
   timezone: string;
   currencyCode: string;
   pricingDisplayMode: 'ex_vat' | 'inc_vat';
-  supportedCountries: string[];
 };
 type PcTag = { id: string; name: string; category: string | null };
 type SiteOpt = { id: string; name: string };
-type PageProps = { initial: SiteSettings; profitCentres: PcTag[]; sites: SiteOpt[]; selectedSiteId: string; isAdmin: boolean; locale: string };
+type PageProps = {
+  initial: SiteSettings; profitCentres: PcTag[]; sites: SiteOpt[]; selectedSiteId: string; isAdmin: boolean; locale: string;
+  // Country-profile presentation (ruling 2026-07-29): currency is display-only, timezone options
+  // are the profile's (state-narrowed), FY guidance names the tenant's country.
+  countryName: string; tzOptions: ZoneOption[]; tzFixed: boolean; fyDefaultMonth: number; testName: string;
+};
 
-const ALL_COUNTRIES = ['United Kingdom', 'Ireland', 'Germany', 'France', 'Spain', 'Australia', 'United States'];
 const CATEGORY_OPTIONS = [
   { value: 'repairs', label: 'Repairs' },
-  { value: 'mot', label: 'MOT' },
+  { value: 'mot', label: 'MOT' }, // label swapped to the profile's test name at render (value is legacy)
   { value: 'spraybooth', label: 'Spraybooth' },
   { value: 'car_sales', label: 'Car Sales' },
 ];
@@ -53,7 +59,8 @@ async function mutate(url: string, method: string, body: any): Promise<string | 
 }
 
 // --- Profit Centre tag manager (compact) --- (tags are per-site; scoped to the selected location)
-function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
+function ProfitCentreTags({ tags, siteId, testName }: { tags: PcTag[]; siteId: string; testName: string }) {
+  const opts = CATEGORY_OPTIONS.map((o) => (o.value === 'mot' ? { ...o, label: testName } : o));
   const router = useRouter();
   const refresh = () => router.replace(router.asPath);
   const [name, setName] = useState('');
@@ -106,7 +113,7 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
                   className="p-1.5 bg-surface border border-line rounded text-ink text-xs"
                   title={`Category: ${categoryLabel(t.category)}`}
                 >
-                  {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <button onClick={() => remove(t.id)} className="text-xs text-danger hover:underline">Remove</button>
               </div>
@@ -118,7 +125,7 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
       <form onSubmit={add} className="flex flex-wrap items-end gap-2 pt-3 border-t border-line">
         <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Tag name (e.g. Repairs)" className="p-2 bg-surface border border-line rounded text-ink text-sm flex-1 min-w-[160px]" />
         <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-2 bg-surface border border-line rounded text-ink text-sm">
-          {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
         <button type="submit" disabled={busy} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded px-3 py-2 disabled:opacity-50">
           {busy ? 'Adding…' : 'Add Tag'}
@@ -128,7 +135,7 @@ function ProfitCentreTags({ tags, siteId }: { tags: PcTag[]; siteId: string }) {
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number }) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial, countryName, tzOptions, tzFixed, fyDefaultMonth, testName }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const rateSym = currencySymbol({ currency: settings.currencyCode, locale }); // labour-rate unit label, from the tenant currency
@@ -144,15 +151,8 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value } = e.target;
-    if (e.target instanceof HTMLSelectElement && e.target.multiple) {
-      const values = Array.from(e.target.options).filter((o) => o.selected).map((o) => o.value);
-      setSettings((prev) => ({ ...prev, [name]: values }));
-      return;
-    }
     if (name === 'defaultLabourRate') {
       setSettings((prev) => ({ ...prev, [name]: parseFloat(value) }));
-    } else if (name === 'currencyCode') {
-      setSettings((prev) => ({ ...prev, [name]: value.toUpperCase() }));
     } else {
       setSettings((prev) => ({ ...prev, [name]: value as any }));
     }
@@ -172,7 +172,6 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
           timezone: settings.timezone,
           currencyCode: settings.currencyCode,
           pricingDisplayMode: settings.pricingDisplayMode,
-          supportedCountries: settings.supportedCountries,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -213,24 +212,30 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
             <h2 className={sectionHeaderClass}>Regional &amp; Currency Settings</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="supportedCountries" className={labelClass}>Supported Countries</label>
-                <select id="supportedCountries" name="supportedCountries" multiple value={settings.supportedCountries} onChange={handleChange} className={selectMultipleClass}>
-                  {ALL_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <p className="text-xs text-muted mt-1">Hold Ctrl/Cmd to select multiple.</p>
+                <label htmlFor="countryDisplay" className={labelClass}>Country</label>
+                <input id="countryDisplay" value={countryName} className={`${inputClass} opacity-70 cursor-not-allowed`} disabled readOnly />
+                <p className="text-xs text-muted mt-1">Chosen at signup — it sets your currency, timezone options and tax model.</p>
               </div>
               <div>
                 <label htmlFor="timezone" className={labelClass}>Timezone</label>
-                <input id="timezone" name="timezone" value={settings.timezone} onChange={handleChange} className={inputClass} />
+                <TimezoneField
+                  value={settings.timezone}
+                  options={tzOptions}
+                  fixed={tzFixed}
+                  note={tzFixed ? `Set by your country — ${countryName}.` : null}
+                  onChange={(z) => setSettings((prev) => ({ ...prev, timezone: z }))}
+                  inputClass={inputClass}
+                />
               </div>
               <div>
-                <label htmlFor="currencyCode" className={labelClass}>Primary Currency Code</label>
-                <input id="currencyCode" name="currencyCode" value={settings.currencyCode} onChange={handleChange} className={inputClass} />
+                <label htmlFor="currencyCode" className={labelClass}>Currency</label>
+                <input id="currencyCode" value={`${settings.currencyCode} (${rateSym})`} className={`${inputClass} opacity-70 cursor-not-allowed`} disabled readOnly />
+                <p className="text-xs text-muted mt-1">Set by your country — {countryName}.</p>
               </div>
               <div>
                 <label htmlFor="taxLabel" className={labelClass}>Tax Label</label>
                 <input id="taxLabel" value={taxLabel} maxLength={20} onChange={(e) => setTaxLabel(e.target.value)} className={inputClass} placeholder="VAT" />
-                <p className="text-xs text-muted mt-1">What your sales tax is called on invoices — e.g. VAT, GST, Sales Tax. You set it; GreaseDesk never derives it from country.</p>
+                <p className="text-xs text-muted mt-1">How your sales tax appears on invoices. Set from your country at signup ({countryName}); rename it here if your paperwork uses a different term.</p>
               </div>
               <div>
                 <label htmlFor="fyStartMonth" className={labelClass}>Financial year starts</label>
@@ -239,7 +244,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                     <option key={m} value={String(m)}>{new Date(2026, m - 1, 1).toLocaleDateString(locale, { month: 'long' })}</option>
                   ))}
                 </select>
-                <p className="text-xs text-muted mt-1">What your accounting year runs from — used for financial-year reporting. Business-wide (every location). Most UK businesses run April to March.</p>
+                <p className="text-xs text-muted mt-1">What your accounting year runs from — used for financial-year reporting. Business-wide (every location). Most {countryName} businesses start in {new Date(2026, fyDefaultMonth - 1, 1).toLocaleDateString(locale, { month: 'long' })}.</p>
               </div>
             </div>
           </div>
@@ -270,7 +275,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
         </form>
       </div>
 
-      <ProfitCentreTags tags={profitCentres} siteId={selectedSiteId} />
+      <ProfitCentreTags tags={profitCentres} siteId={selectedSiteId} testName={testName} />
     </SettingsLayout>
   );
 }
@@ -299,18 +304,20 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const [site, labourSvc, pcs] = await Promise.all([
     prisma.site.findUnique({
       where: { id: selectedSiteId },
-      select: { site_name: true, timezone: true, currency_code: true, locale: true, pricing_display_mode: true, supported_countries: true },
+      select: { site_name: true, timezone: true, currency_code: true, locale: true, pricing_display_mode: true, state_code: true },
     }),
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: selectedSiteId, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }),
     prisma.profitCentre.findMany({ where: { site_id: selectedSiteId }, orderBy: { name: 'asc' }, select: { id: true, name: true, category: true } }) as Promise<PcDbRow[]>,
   ]);
 
+  const grpForProfile = (await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } })) as any;
+  const profile = resolveTenantProfile(grpForProfile);
+  const choices = zoneChoicesFor(profile, (site as any)?.state_code);
   const initial: SiteSettings = {
     siteName: site?.site_name ?? 'Your Site',
-    timezone: site?.timezone ?? 'Europe/London',
-    currencyCode: site?.currency_code ?? 'GBP',
+    timezone: initialZone(choices, site?.timezone),
+    currencyCode: profile.currency, // display-only; the API writes the canonical profile value
     pricingDisplayMode: (site?.pricing_display_mode as 'ex_vat' | 'inc_vat') ?? 'ex_vat',
-    supportedCountries: (site?.supported_countries as string[]) ?? ['United Kingdom'],
     defaultLabourRate: labourSvc ? Number(labourSvc.default_labour_rate) : 0, // never pre-fill TMBS's £75
   };
 
@@ -318,5 +325,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
   const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true } })) as any;
-  return { props: { initial, profitCentres, sites, selectedSiteId, isAdmin: true, locale: (site as any)?.locale ?? 'en-GB', taxLabelInitial: grpTax?.tax_label ?? 'VAT', fyStartMonthInitial: grpTax?.fy_start_month ?? 4 } };
+  return { props: {
+    initial, profitCentres, sites, selectedSiteId, isAdmin: true,
+    locale: (site as any)?.locale ?? profile.locale,
+    taxLabelInitial: grpTax?.tax_label ?? profile.taxLabel,
+    fyStartMonthInitial: grpTax?.fy_start_month ?? profile.fyStartMonth,
+    countryName: profile.name, tzOptions: choices.options, tzFixed: choices.fixed,
+    fyDefaultMonth: profile.fyStartMonth, testName: profile.roadworthiness_test_name,
+  } };
 };

@@ -37,6 +37,16 @@ export type CountryProfile = {
   /** Render a structured state/subdivision select at the site step (US-only today). The state
    *  narrows the timezone within `timezones` (lib/us-states) — it never widens it. */
   stateField?: boolean;
+  // ── Country-specific PRESENTATION (ruling 2026-07-29). Settings + onboarding read these; adding
+  // a country stays a config entry here, never per-page code. NOT a form engine — fixed fields.
+  phonePlaceholder: string;          // national format example for phone inputs
+  dialCode: string;                  // default country calling code for E.164 normalisation ('44'/'1'/'353')
+  companyNumberLabel: string;        // "Company number" / "EIN" / "CRO number"
+  companyNumberPlaceholder: string;  // shape example
+  postcodeLabel: string;             // "Postcode" / "ZIP code" / "Eircode"
+  postcodePlaceholder: string;
+  postcodePattern: string;           // anchored regex source for validation where a postcode field exists
+  fyStartMonth: number;              // financial-year default for NEW tenants (set at country step; never rewrites)
   // Back-compat alias for existing readers (resolveTenantProfile etc.).
   currencyCode?: string;
   tax_name?: string;
@@ -55,12 +65,22 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     timezones: ['Europe/London'], defaultTimezone: 'Europe/London',
     taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 20, requiresTaxNumber: true, monthlyPrice: 75,
     roadworthiness_test_name: 'MOT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
+    phonePlaceholder: '0121 555 0199', dialCode: '44',
+    companyNumberLabel: 'Company number', companyNumberPlaceholder: 'e.g. 01234567',
+    postcodeLabel: 'Postcode', postcodePlaceholder: 'e.g. B1 2AB',
+    postcodePattern: '^[A-Za-z]{1,2}\\d[A-Za-z\\d]?\\s*\\d[A-Za-z]{2}$',
+    fyStartMonth: 4,
   }),
   IE: P({
     countryCode: 'IE', name: 'Ireland', currency: 'EUR', currencySymbol: '€', locale: 'en-IE',
     timezones: ['Europe/Dublin'], defaultTimezone: 'Europe/Dublin',
     taxModel: 'vat', taxLabel: 'VAT', defaultTaxRatePercent: 23, requiresTaxNumber: true, monthlyPrice: 90,
     roadworthiness_test_name: 'NCT', date_format: 'dd/MM/yyyy', modules: { hr: true }, supported: true,
+    phonePlaceholder: '01 555 0199', dialCode: '353',
+    companyNumberLabel: 'CRO number', companyNumberPlaceholder: 'e.g. 123456',
+    postcodeLabel: 'Eircode', postcodePlaceholder: 'e.g. A65 F4E2',
+    postcodePattern: '^[A-Za-z]\\d[\\dWw]\\s*[A-Za-z\\d]{4}$',
+    fyStartMonth: 1,
   }),
   US: P({
     countryCode: 'US', name: 'United States', currency: 'USD', currencySymbol: '$', locale: 'en-US',
@@ -73,6 +93,11 @@ export const COUNTRY_PROFILES: Record<string, CountryProfile> = {
     taxModel: 'sales_tax', taxLabel: 'Sales Tax', defaultTaxRatePercent: 0, requiresTaxNumber: false, monthlyPrice: 100,
     roadworthiness_test_name: 'Safety Inspection', date_format: 'MM/dd/yyyy', modules: { hr: true }, supported: true,
     stateField: true, // US garages pick a state; timezone derives from it (lib/us-states)
+    phonePlaceholder: '(205) 555-0100', dialCode: '1',
+    companyNumberLabel: 'EIN', companyNumberPlaceholder: 'e.g. 12-3456789',
+    postcodeLabel: 'ZIP code', postcodePlaceholder: 'e.g. 35203',
+    postcodePattern: '^\\d{5}(-\\d{4})?$',
+    fyStartMonth: 1,
   }),
 };
 
@@ -120,6 +145,19 @@ export function countryFromRef(ref: string | null | undefined): string {
 /** Resolve a tenant's full profile from its Group (country_code preferred, ref fallback). */
 export function resolveTenantProfile(group: { country_code?: string | null; ref?: string | null } | null | undefined): CountryProfile {
   return getProfile(countryFromGroup(group));
+}
+
+/** Format a date per the profile's date_format (dd/MM/yyyy vs MM/dd/yyyy) — THE reader of
+ *  date_format; replaces scattered toLocaleDateString('en-GB') hardcodes. */
+export function formatProfileDate(profile: CountryProfile, d: Date | string, opts?: { long?: boolean }): string {
+  const date = typeof d === 'string' ? new Date(d) : d;
+  if (opts?.long) {
+    return date.toLocaleDateString(profile.locale, { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(date.getFullYear());
+  return profile.date_format === 'MM/dd/yyyy' ? `${mm}/${dd}/${yyyy}` : `${dd}/${mm}/${yyyy}`;
 }
 
 // Back-compat type alias — older imports referenced LocaleProfile.

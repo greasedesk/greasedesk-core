@@ -59,6 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tax_country_code: country,
       tax_model: p.taxModel,
       tax_label: p.taxLabel,
+      // FY default for NEW tenants (ruling 2026-07-29): GB April, US/IE January. Safe to write
+      // here — the country step is only reachable pre-onboarding, before the tenant could ever
+      // have touched Financial settings; existing tenants' stored values are never rewritten.
+      fy_start_month: p.fyStartMonth,
     },
   });
   // Prime any existing site with the country's currency + default timezone (the site step edits them).

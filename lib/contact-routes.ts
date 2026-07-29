@@ -35,7 +35,10 @@ export function toE164Digits(raw: string | null | undefined, defaultCc = DEFAULT
 
   if (isPlus) return d.length >= 8 ? d : null;          // +44 7700 900123 → 447700900123
   if (d.startsWith('00')) { d = d.slice(2); return d.length >= 8 ? d : null; } // 0044… → 44…
-  if (d.startsWith('0')) return defaultCc + d.slice(1); // UK local: trunk 0 → country code
+  if (d.startsWith('0')) return defaultCc + d.slice(1); // trunk 0 → country code (GB/IE style)
+  // NANP (defaultCc '1'): a bare 10-digit national number has no trunk prefix — "(205) 555-0100"
+  // was previously nulled here, so US tenants could not store a WhatsApp number at all.
+  if (defaultCc === '1' && d.length === 10) return '1' + d;
   if (d.startsWith(defaultCc)) return d;                // already E.164-ish
   // A bare number that is neither trunk-prefixed nor country-prefixed: too ambiguous to guess.
   return d.length >= 11 ? d : null;

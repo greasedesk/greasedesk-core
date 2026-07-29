@@ -19,6 +19,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { isZoneAllowed } from '@/lib/timezone-choices';
 
 type SaveSettingsBody = {
   siteId?: string; // target location (all-locations Financial); defaults to caller's site
@@ -26,7 +28,6 @@ type SaveSettingsBody = {
   timezone?: string;
   currencyCode?: string;
   pricingDisplayMode: 'ex_vat' | 'inc_vat';
-  supportedCountries: string[];
 };
 
 export default async function handle(req: NextApiRequest, res: NextApiResponse) {
@@ -54,7 +55,6 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
     timezone,
     currencyCode,
     pricingDisplayMode,
-    supportedCountries,
   } = req.body as SaveSettingsBody;
 
   // All-locations Financial: target any site the caller's group owns (validated below). Defaults
@@ -68,8 +68,20 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
 
   // VAT rate is no longer set here — it's the ONE company default on Group (Company Details). The
   // labour service carries a vat_rate for legacy shape only (unread), mirrored from that default.
-  const grp = (await prisma.group.findUnique({ where: { id: groupId }, select: { default_vat_rate: true } })) as { default_vat_rate: unknown } | null;
+  const grp = (await prisma.group.findUnique({ where: { id: groupId }, select: { default_vat_rate: true, country_code: true, ref: true } })) as { default_vat_rate: unknown; country_code: string | null; ref: string | null } | null;
   const companyVat = grp && grp.default_vat_rate != null ? Number(grp.default_vat_rate) : 20;
+
+  // COUNTRY-PROFILE VALIDATION (ruling 2026-07-29, mirrors onboarding update-rates): the form is
+  // never trusted for regional identity. Currency must BE the country's currency; a timezone must
+  // be one of the country's zones. Free text previously flowed straight into Site.currency_code —
+  // the highest-blast-radius unvalidated input in Settings (it reaches every money render).
+  const profile = resolveTenantProfile(grp);
+  if (currencyCode !== undefined && String(currencyCode).trim().toUpperCase() !== profile.currency) {
+    return res.status(400).json({ message: `Currency must be ${profile.currency} — it is set by your country.` });
+  }
+  if (timezone !== undefined && !isZoneAllowed(profile, String(timezone).trim())) {
+    return res.status(400).json({ message: 'Pick a timezone from the list for your country.' });
+  }
 
   try {
     // Ensure this site truly belongs to this group
@@ -91,12 +103,12 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
       await tx.site.update({
         where: { id: siteId },
         data: {
-          ...(timezone && { timezone }),
-          ...(currencyCode && { currency_code: currencyCode }),
+          ...(timezone && { timezone: String(timezone).trim() }),
+          ...(currencyCode && { currency_code: profile.currency }), // canonical, never raw form text
           pricing_display_mode: pricingDisplayMode,
-          supported_countries: supportedCountries ?? [],
-          // supported_currencies intentionally NOT written — the multi-select was removed (nothing
-          // consumed it; it implied multi-currency invoicing that doesn't exist). Column left in place.
+          // supported_countries + supported_currencies intentionally NOT written — both multi-selects
+          // are retired (nothing in the product consumed them; superseded by Group.country_code).
+          // Columns left in place, no migration — the supported_currencies precedent (2026-07-23).
         },
       });
 
