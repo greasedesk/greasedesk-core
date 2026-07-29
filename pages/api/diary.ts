@@ -20,7 +20,6 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
 import { writeAudit } from '@/lib/audit';
-import { requireModuleApi } from '@/lib/modules';
 
 function parseDateTime(s: unknown): Date | null {
   if (typeof s !== 'string' || !s) return null;
@@ -37,11 +36,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(user.id as string); // visible sites
 
   // MODULE GATE (slice-1 C): placing/moving a card on a resource IS the Booking capability. Refused
-  // SERVER-SIDE — hiding the diary's controls is not a guard. No-op today: every tenant is seeded
-  // with booking enabled, so this changes nothing until Booking is actually sold.
-  if (req.method === 'PATCH' || req.method === 'DELETE') {
-    if (!(await requireModuleApi(res, user.group_id as string, 'booking'))) return;
-  }
+  // NO MODULE GATE HERE (ruling 2026-07-29). Moving/removing a job in the garage's OWN diary is
+  // Core and always was — this route was gated on a `booking` module from the retired three-tier
+  // ladder, which blocked every tenant whose subscription touched the cache writer. The paid
+  // module is CUSTOMER-FACING online booking; when that is built it gets a gate on the route that
+  // implements it. lib/modules stays intact and in use — it is simply not this route's concern.
 
   if (req.method === 'PATCH') {
     const { jobCardId, resourceId, startAt, endAt, workingMinutes: wmIn } = (req.body || {}) as {

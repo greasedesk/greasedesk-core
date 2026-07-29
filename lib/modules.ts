@@ -1,6 +1,6 @@
 /**
  * File: lib/modules.ts
- * THE module-entitlement chokepoint. "Does this tenant have Booking?" is answered here and NOWHERE
+ * THE module-entitlement chokepoint. "Is this tenant entitled to X?" is answered here and NOWHERE
  * else — never an inline GroupFeature query, never a scattered boolean. Same discipline as
  * lib/billing::canWrite and lib/admin-guard.
  *
@@ -15,12 +15,17 @@
  * An operator override is a `grant` row: deliberately marked, visible as an override, and NOT
  * overwritten by Stripe sync (comped accounts, beta access, migrations survive a renewal).
  *
- * ── PACKAGING (decided 2026-07-24) ────────────────────────────────────────────────────────────────
- * Per-module Stripe LINE ITEMS on one subscription, not one Price per tier:
- *   core £75  +  booking £20  +  promos £10   →  the published £75 / £95 / £105 ladder.
- * Price ID → module key is 1:1, so entitlement is read straight off the subscription items and a
- * fourth module is one new Price, not a doubling of tier SKUs. Modules are INDEPENDENT — `promos`
- * does not require `booking` — so Core+Promos is a legal (if unpublished) combination.
+ * ── PACKAGING (re-cut 2026-07-29, two tiers) ──────────────────────────────────────────────────────
+ *   core  — everything built today (diary, job cards, quotes, invoicing, dashboard, HR, capacity,
+ *           PWA, staff-applied promo codes). NEVER gateable: `hasModule('core')` is always true.
+ *   web   — the £150 tier as ONE SKU: white-label site, SEO, CUSTOMER-FACING online booking and
+ *           customer-facing promo codes. Nothing implements it yet, so nothing gates on it yet.
+ *
+ * THE LESSON THAT COST US (the live tenant lost diary booking for a day): a module key must name a
+ * SELLABLE SURFACE, never a verb the garage's own staff already do. The retired `booking` key was
+ * pointed at /api/diary PATCH — a garage moving its own job between its own lifts — which is Core.
+ * `promos` had the identical trap waiting: staff discount codes on a quote are Core; promo codes on
+ * the public booking site are Web. Both keys are retired; their rows on existing tenants are inert.
  *
  * ── THE MAP IS CONFIGURATION, NOT CODE ────────────────────────────────────────────────────────────
  * Price IDs come from env, so the same build serves sandbox and live. An unmapped Price ID is
@@ -28,7 +33,7 @@
  */
 import { prisma } from '@/lib/db';
 
-export const MODULES = ['core', 'booking', 'promos'] as const;
+export const MODULES = ['core', 'web'] as const;
 export type ModuleKey = typeof MODULES[number];
 
 export const isModuleKey = (k: string): k is ModuleKey => (MODULES as readonly string[]).includes(k);
@@ -36,16 +41,14 @@ export const isModuleKey = (k: string): k is ModuleKey => (MODULES as readonly s
 /** Human labels for the Engine Room / billing surfaces. */
 export const MODULE_LABELS: Record<ModuleKey, string> = {
   core: 'Core',
-  booking: 'Booking',
-  promos: 'Promotion codes',
+  web: 'Web', // white-label site, SEO, customer-facing online booking, customer-facing promo codes
 };
 
 /**
- * OPEN BY DEFAULT, deliberately, for now. Modules are not on sale yet and every existing tenant was
- * seeded with all three enabled; a tenant with no row must therefore NOT lose a working feature.
- * This is the single line to flip when Booking goes on sale — one constant, one file, and unseeded
- * tenants become closed rather than open. (Mirrors lib/billing's safe-by-default stance: the gate
- * bites only when something explicitly says no.)
+ * OPEN BY DEFAULT, deliberately, for now. Nothing is on sale as a module yet; a tenant with no row
+ * must never lose a working feature. This is the single line to flip when the Web tier goes on
+ * sale — one constant, one file, and unseeded tenants become closed rather than open. (Mirrors
+ * lib/billing's safe-by-default stance: the gate bites only when something explicitly says no.)
  */
 export const MODULE_DEFAULT_WHEN_UNSET = true;
 
@@ -54,8 +57,7 @@ export function priceIdModuleMap(): Record<string, ModuleKey> {
   const map: Record<string, ModuleKey> = {};
   const add = (id: string | undefined, key: ModuleKey) => { if (id) map[id] = key; };
   add(process.env.STRIPE_PRICE_CORE ?? process.env.STRIPE_PRICE_ID, 'core'); // THE multi-currency Core price
-  add(process.env.STRIPE_PRICE_BOOKING, 'booking');
-  add(process.env.STRIPE_PRICE_PROMOS, 'promos');
+  add(process.env.STRIPE_PRICE_WEB, 'web'); // the £150 tier — one SKU, one key (not yet created)
   return map;
 }
 
@@ -137,8 +139,12 @@ export async function applyStripeModules(
       // Only overwrite rows Stripe owns — a `grant` override is deliberate and outranks the sub.
       update: {},
     });
+    // Stripe owns ONLY its own rows (ruling 2026-07-29). `default` was in this set, so the
+    // pre-sale "every existing tenant keeps everything" seed expired at the tenant's next webhook —
+    // which is exactly how the live tenant lost diary booking. A seeded default is now as durable
+    // as a manual grant; both outrank the subscription until deliberately changed.
     await tx.groupFeature.updateMany({
-      where: { group_id: groupId, feature_key: key, source: { in: ['stripe', 'default'] } },
+      where: { group_id: groupId, feature_key: key, source: 'stripe' },
       data: { enabled: on.has(key), source: 'stripe' },
     });
   }
