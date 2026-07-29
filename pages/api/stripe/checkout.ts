@@ -17,7 +17,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
-import { getStripe, stripePriceIdForCurrency, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
 import { GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
@@ -38,21 +38,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ]);
   if (!group) return res.status(404).json({ message: 'Group not found.' });
 
-  // COUNTRY-AWARE PRICE (ruling 2026-07-28): the profile picks the currency, the currency picks the
-  // Price. No Price for the currency → REFUSE — never fall back to another currency's Price.
+  // ONE MULTI-CURRENCY PRICE (model changed 2026-07-28): a single Price carries GBP as base plus
+  // currency_options; the session's `currency` parameter tells Stripe which option to charge.
   const profile = resolveTenantProfile(group);
-  const priceId = stripePriceIdForCurrency(profile.currency);
-  if (!priceId) {
-    console.error(`[stripe] no Price configured for ${profile.currency} (tenant country ${profile.countryCode})`);
-    return res.status(503).json({ message: 'Billing isn’t configured for your country yet.' });
-  }
-  // BOTH HALVES OR NEITHER: the Price must charge exactly what the profile displays.
+  const priceId = stripePriceId();
+  if (!priceId) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
+  const wantCurrency = profile.currency.toLowerCase();
+  // BOTH HALVES OR NEITHER: the Price must carry an option for the tenant's currency and that
+  // option must charge exactly what the profile displays. currency_options is NOT in the default
+  // payload — it needs the expand. No option → REFUSE, never default to the GBP base.
   try {
-    const price = await stripe.prices.retrieve(priceId);
+    const price = await stripe.prices.retrieve(priceId, { expand: ['currency_options'] });
     const wantAmount = Math.round(profile.monthlyPrice * 100);
-    const wantCurrency = profile.currency.toLowerCase();
-    if (price.unit_amount !== wantAmount || price.currency !== wantCurrency) {
-      console.error(`[stripe] PRICE MISMATCH: ${priceId} is ${price.unit_amount} ${price.currency}, profile says ${wantAmount} ${wantCurrency} — refusing checkout`);
+    const optionAmount = price.currency === wantCurrency
+      ? price.unit_amount
+      : (price.currency_options?.[wantCurrency]?.unit_amount ?? null);
+    if (optionAmount == null) {
+      console.error(`[stripe] price ${priceId} has NO currency option for ${wantCurrency} (tenant country ${profile.countryCode}) — refusing checkout`);
+      return res.status(503).json({ message: 'Billing isn’t configured for your country yet.' });
+    }
+    if (optionAmount !== wantAmount) {
+      console.error(`[stripe] PRICE MISMATCH: ${priceId} ${wantCurrency} option is ${optionAmount}, profile says ${wantAmount} — refusing checkout`);
       return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
     }
   } catch (e: any) {
@@ -76,6 +82,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      // Selects the currency option on the multi-currency Price — verified above to exist and to
+      // match the profile's displayed amount.
+      currency: wantCurrency,
       line_items: [{ price: priceId, quantity }],
       // Trial with a mandatory, authenticated card (see file header) — the SCA-safe conversion.
       // missing_payment_method: 'create_invoice' (ruling 2026-07-14): if the card is missing/fails

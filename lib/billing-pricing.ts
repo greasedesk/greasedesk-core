@@ -8,10 +8,10 @@
  * banner, licences, onboarding billing step) use the *For(profile) helpers; the PUBLIC marketing
  * site is GB-targeted and keeps the no-arg wrappers (GB profile).
  *
- * ⚠️ STRIPE ALIGNMENT: these are DISPLAYED prices. The actual charge is the Stripe Price selected
- * by currency (lib/stripe stripePriceIdForCurrency) — and checkout VERIFIES amount + currency
- * against the profile before creating a session, so display and charge cannot disagree (both
- * halves or neither; the £35-Price / £75-display drift can never recur silently).
+ * ⚠️ STRIPE ALIGNMENT: these are DISPLAYED prices. The actual charge is the ONE multi-currency
+ * Stripe Price (STRIPE_PRICE_ID, GBP base + currency_options) — checkout passes the profile's
+ * currency on the session and VERIFIES the option's amount against the profile first, so display
+ * and charge cannot disagree (both halves or neither; the £35 drift can never recur silently).
  *
  * WHEN VAT REGISTRATION COMPLETES: flip GARAGE_VAT_REGISTERED to true. VAT-model countries (GB/IE)
  * gain " + VAT" labels AND Stripe Tax at Checkout. US labels never carry a VAT suffix.

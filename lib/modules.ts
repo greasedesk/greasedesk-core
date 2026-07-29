@@ -53,10 +53,7 @@ export const MODULE_DEFAULT_WHEN_UNSET = true;
 export function priceIdModuleMap(): Record<string, ModuleKey> {
   const map: Record<string, ModuleKey> = {};
   const add = (id: string | undefined, key: ModuleKey) => { if (id) map[id] = key; };
-  add(process.env.STRIPE_PRICE_CORE ?? process.env.STRIPE_PRICE_ID, 'core'); // legacy single price = Core
-  // Per-currency Core Prices (same product, ruling 2026-07-28) — all map to the same module.
-  add(process.env.STRIPE_PRICE_USD, 'core');
-  add(process.env.STRIPE_PRICE_EUR, 'core');
+  add(process.env.STRIPE_PRICE_CORE ?? process.env.STRIPE_PRICE_ID, 'core'); // THE multi-currency Core price
   add(process.env.STRIPE_PRICE_BOOKING, 'booking');
   add(process.env.STRIPE_PRICE_PROMOS, 'promos');
   return map;

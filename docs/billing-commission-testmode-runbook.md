@@ -10,7 +10,7 @@ real cards is a **separate later step**.
 ## Prerequisites
 - A Stripe account in **test mode**. Keys: `sk_test_…`, and a webhook signing secret `whsec_…`.
 - The **Stripe CLI** (`stripe login`) on your machine.
-- A **test-mode Price** for the £75/mo GBP subscription; put its id in `STRIPE_PRICE_ID` (plus $100 USD → `STRIPE_PRICE_USD`, €90 EUR → `STRIPE_PRICE_EUR` on the same product — checkout verifies amount+currency against the country profile).
+- A **test-mode Price** for the subscription in `STRIPE_PRICE_ID` — ONE multi-currency Price: GBP £75 base with currency_options (USD $100, EUR €90, …), tax-exclusive. Checkout passes the tenant's currency on the session and verifies the option's amount against the country profile.
 
 ## Where to point the webhook (keep prod dormant / the real tenant safe)
 Do **not** put `sk_test`/`whsec` on production Vercel — that would un-dormant billing for the real
