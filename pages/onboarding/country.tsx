@@ -11,6 +11,14 @@ import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { PICKER_COUNTRIES } from '@/lib/locale-profiles';
+import { enabledCountryOptions } from '@/lib/enabled-countries';
+
+// Enabled countries ONLY (ruling 2026-07-30) — a country the server would refuse is never offered,
+// so nothing is selectable-then-bounced. Derived from the same allow-list the API refuses on, so the
+// screen and the server cannot drift. The coming-soon/waitlist branch below is kept intact and is
+// unreachable while GB is the only enabled country — it comes back the moment a country is opened
+// without full support.
+const OPTIONS = enabledCountryOptions();
 
 const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500';
 const cardClass = 'max-w-lg w-full bg-slate-800 border border-slate-700 rounded-2xl p-8';
@@ -90,8 +98,8 @@ export default function CountryStepPage() {
             <p className="text-slate-400 mb-6">This sets your currency, timezone and tax — so the rest of setup is right for you.</p>
             <label className="block text-sm text-slate-400 mb-1">Country</label>
             <select className={inputClass} value={country} onChange={(e) => setCountry(e.target.value)}>
-              {PICKER_COUNTRIES.map((c) => (
-                <option key={c.code} value={c.code}>{c.name}{c.supported ? '' : ' — coming soon'}</option>
+              {OPTIONS.map((c) => (
+                <option key={c.code} value={c.code}>{c.name}</option>
               ))}
             </select>
             {error && <p className="text-red-400 text-sm mt-2">{error}</p>}

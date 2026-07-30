@@ -1,7 +1,7 @@
 /**
  * File: pages/api/onboarding/tax.ts
  * Onboarding tax step (item-13). Writes the tenant's tax profile into EXISTING columns:
- *   tax_country_code, vat_registered, vat_number, tax_default_rate_bp (+ default_vat_rate in
+ *   vat_registered, vat_number, tax_default_rate_bp (+ default_vat_rate in
  *   lockstep, the legacy Decimal mirror). tax_default_rate_bp going non-NULL is the completion
  *   SIGNAL the root gate reads — this call is what advances the wizard past the tax step.
  * ADMIN-only. Basis points are integer (2000 = 20%); not-registered ⇒ 0 bp, no VAT number.
@@ -14,7 +14,9 @@ import { authOptions } from '../auth/[...nextauth]';
 import { requireAdminApi } from '@/lib/admin-guard';
 
 type Body = {
-  tax_country_code?: string;
+  // NO country field. Country is owned solely by the country step (/api/onboarding/country) — a
+  // `tax_country_code` used to be declared here and never read, which read as a write surface that
+  // did not exist. Removed 2026-07-30: the type now describes exactly what this route accepts.
   vat_registered?: boolean;
   vat_number?: string;
   vat_rate_percent?: string | number; // percent; converted to integer basis points

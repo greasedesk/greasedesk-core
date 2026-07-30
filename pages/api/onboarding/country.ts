@@ -9,6 +9,11 @@
  *     runs next, inherits them; if a site doesn't exist yet the site step reads the profile).
  * A SUPPORTED country advances the wizard; an UNSUPPORTED one is stored (so the coming-soon gate can
  * render) but never satisfies onboarding — the tenant sees the waitlist gate.
+ *
+ * ADMISSION (ruling 2026-07-30): only an ENABLED country (lib/enabled-countries — GB today) may be
+ * written. That check sits after the shape check and before every write, so a disabled country is
+ * refused whether it arrives from the picker or from a direct API call. The unsupported/waitlist
+ * branch below stays intact and is simply unreachable while GB is the only enabled country.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -16,6 +21,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { requireCanWrite } from '@/lib/admin-guard';
 import { getProfile, isSupportedCountry, PICKER_COUNTRIES } from '@/lib/locale-profiles';
+import { isEnabledCountry } from '@/lib/enabled-countries';
 
 const KNOWN = new Set(PICKER_COUNTRIES.map((c) => c.code));
 
@@ -31,6 +37,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const country = String((req.body ?? {}).country ?? '').toUpperCase();
   if (!country || !KNOWN.has(country)) return res.status(400).json({ message: 'Pick a country from the list.' });
+
+  // ── ENABLED-COUNTRIES REFUSAL (ruling 2026-07-30) ───────────────────────────────────────────────
+  // Shape check above, ADMISSION check here — a code can be a real, fully-profiled, fully-built
+  // country (US, IE) and still not be one we're open in. This is the ONLY writer of
+  // Group.country_code, so this one guard closes the surface, including a direct API call that
+  // bypasses the picker. It refuses BEFORE any write: country_code, the ref re-prefix and the
+  // derived tax identity are all left exactly as they were. Existing non-GB tenants are untouched —
+  // nothing here reads or rewrites a country already recorded.
+  if (!isEnabledCountry(country)) {
+    return res.status(400).json({ code: 'country_not_enabled', message: 'GreaseDesk isn’t open in that country yet.' });
+  }
 
   const supported = isSupportedCountry(country);
 
