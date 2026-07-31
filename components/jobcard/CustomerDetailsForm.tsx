@@ -11,7 +11,13 @@ import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-cli
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
-type Owner = { name: string; phone: string | null; email: string | null; address: string | null };
+// phoneE164 is DERIVED and read-only on this form — shown so staff can see whether the number is
+// actually dialable. smsOptOut/emailOptOut are THREE-STATE: null = no record (unknown), never
+// rendered as "opted in".
+type Owner = {
+  name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null;
+  smsOptOut?: boolean | null; emailOptOut?: boolean | null;
+};
 type Vehicle = {
   registration: string; vin: string | null; mileageIn: number | null;
   make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
@@ -24,12 +30,29 @@ type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boole
 const inputCls = 'w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs uppercase text-muted mb-1';
 
+/**
+ * HONEST-NULL rendering of contact preference. Three states, three different sentences — "no record"
+ * is NEVER shown as "opted in", because nobody has asked this customer anything. Only an explicit
+ * refusal is stated as a refusal.
+ */
+function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boolean | null }, t: (k: string) => string): string {
+  const out: string[] = [];
+  if (o.smsOptOut === true) out.push(t('field.optOutSmsShort'));
+  if (o.emailOptOut === true) out.push(t('field.optOutEmailShort'));
+  if (out.length) return out.join(' · ');
+  return o.smsOptOut == null && o.emailOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
+}
+
 export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
   const [email, setEmail] = useState(owner.email ?? '');
   const [address, setAddress] = useState(owner.address ?? '');
+  // Contact preferences. `?? null` preserves the unknown state — a customer nobody has asked must
+  // not be turned into an explicit "opted in" just by opening the form and saving.
+  const [smsOptOut, setSmsOptOut] = useState<boolean | null>(owner.smsOptOut ?? null);
+  const [emailOptOut, setEmailOptOut] = useState<boolean | null>(owner.emailOptOut ?? null);
   const [registration, setRegistration] = useState(vehicle.registration === '—' ? '' : vehicle.registration);
   const [vin, setVin] = useState(vehicle.vin ?? '');
   const [mileageIn, setMileageIn] = useState(vehicle.mileageIn != null ? String(vehicle.mileageIn) : '');
@@ -94,7 +117,11 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
     const body = {
       source: 'details-form', // names the control in the audit trail
       jobCardId, confirmReg,
-      owner: { name, phone: normalizePhone(phone), email, address }, // store the ONE canonical phone form
+      // PHONE GOES UP RAW, exactly as typed. This used to send normalizePhone(phone), which stripped
+      // the operator's spacing on the CLIENT — "07747 732864" reached the server as "07747732864" and
+      // the form the garage recognises was gone before anything could keep it. The server now stores
+      // the raw string AND derives the dialable form beside it (lib/contact-routes).
+      owner: { name, phone, email, address, sms_opt_out: smsOptOut, email_opt_out: emailOptOut },
       vehicle: {
         registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc,
         ...(mot ? { motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined } : {}),
@@ -136,6 +163,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
           <Row label={t('field.customer')} value={owner.name} />
           <Row label={t('field.phone')} value={owner.phone} />
           <Row label={t('field.email')} value={owner.email} />
+          <Row label={t('field.contactPrefs')} value={contactPrefSummary(owner, t)} />
           <div className="sm:col-span-3"><div className={labelCls}>{t('field.address')}</div><div className="text-ink whitespace-pre-line">{owner.address || '—'}</div></div>
         </div>
         <p className="text-xs text-muted mt-4">{t('field.ownerFromEdge')}</p>
@@ -183,9 +211,36 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
           </div>
         )}
         <div><label className={labelCls}>{t('field.customer')}</label><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div><label className={labelCls}>{t('field.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />{phoneWarn(phone) && <p className="text-[11px] text-warn mt-1">{t('field.phoneWarn')}</p>}</div>
+        <div><label className={labelCls}>{t('field.phone')}</label><input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} data-testid="cust-phone" />
+          {phoneWarn(phone) && <p className="text-[11px] text-warn mt-1">{t('field.phoneWarn')}</p>}
+          {/* The DERIVED dialable form, shown so staff can see at a glance whether this number can
+              actually be texted. Absent = we could not resolve it — stated, never hidden. */}
+          {owner.phone && (
+            <p className="text-[11px] text-muted mt-1" data-testid="cust-phone-e164">
+              {owner.phoneE164 ? `${t('field.phoneDialable')}: +${owner.phoneE164}` : t('field.phoneNotDialable')}
+            </p>
+          )}
+        </div>
         <div><label className={labelCls}>{t('field.email')}</label><input className={inputCls} type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
         <div className="sm:col-span-2"><label className={labelCls}>{t('field.address')}</label><textarea className={`${inputCls} resize-y`} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} /></div>
+        {/* CONTACT PREFERENCES — the garage is controller of this consent, so it is edited here on
+            the customer's own record. Ticking a box records a REFUSAL (true); leaving it clear
+            records nothing at all, so an untouched customer stays "no record" rather than being
+            silently marked as consenting. */}
+        <div className="sm:col-span-2">
+          <div className={labelCls}>{t('field.contactPrefs')}</div>
+          <div className="flex flex-wrap items-center gap-4 text-sm text-ink">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={smsOptOut === true} onChange={(e) => setSmsOptOut(e.target.checked ? true : null)} data-testid="optout-sms" />
+              {t('field.optOutSms')}
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={emailOptOut === true} onChange={(e) => setEmailOptOut(e.target.checked ? true : null)} data-testid="optout-email" />
+              {t('field.optOutEmail')}
+            </label>
+          </div>
+          <p className="text-[11px] text-muted mt-1">{t('field.optOutHint')}</p>
+        </div>
       </div>
       {msg && <div className={`mt-3 rounded-lg p-2 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
       <div className="flex justify-end mt-4">

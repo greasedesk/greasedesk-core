@@ -204,7 +204,17 @@
     "fuel": "Fuel",
     "engineCc": "Engine (cc)",
     "motExpiry": "MOT expiry",
-    "lastMotMileage": "Mileage at last MOT"
+    "lastMotMileage": "Mileage at last MOT",
+    "contactPrefs": "Contact preferences",
+    "optOutSms": "No SMS",
+    "optOutEmail": "No email",
+    "optOutSmsShort": "No SMS",
+    "optOutEmailShort": "No email",
+    "optOutNone": "No restrictions recorded",
+    "optOutNoRecord": "Not recorded",
+    "optOutHint": "Tick to record that the customer has asked not to be contacted this way. Left clear means nothing has been recorded — not that they have agreed.",
+    "phoneDialable": "Dialable",
+    "phoneNotDialable": "Couldn't read this as a dialable number — it's stored as typed."
   },
   "detailsEdit": {
     "dvsaButton": "Look up vehicle details (DVSA)",

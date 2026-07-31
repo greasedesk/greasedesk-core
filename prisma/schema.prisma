@@ -864,10 +864,26 @@ model Customer {
   // Null = the origin site is gone; the customer survives as a group-level record.
   site_id    String?
   name       String
+  // TWO COLUMNS, ONE NUMBER. `phone` stays the OPERATOR'S RAW INPUT, exactly as typed — it is what
+  // the garage recognises on the screen and every display reads it unchanged. `phone_e164` is the
+  // machine-dialable form, derived on write by lib/contact-routes::toE164Digits using the TENANT'S
+  // COUNTRY PROFILE dial code (never a guess from the string alone).
+  // HONEST-NULL: an unparseable number leaves phone_e164 NULL while phone keeps the raw string —
+  // unknown, not absent. Normalising in place would be unrecoverable for a mistyped number, so the
+  // raw is never overwritten. Digits-only, no leading '+', matching what toE164Digits returns.
   phone      String?
+  phone_e164 String?
   email      String?
   address    String? // billing address — source for Invoice.customer_address_snapshot
   notes      String?
+  // ── CONTACT PREFERENCES (per channel — a customer may refuse SMS and still accept email) ────────
+  // The GARAGE is controller of this consent, so it is tenant-scoped customer data, not a platform
+  // record. THREE STATES, deliberately nullable: NULL = no record (unknown), true = opted OUT,
+  // false = explicitly opted IN. Unknown must never render as "opted in"; for service messages
+  // unknown means send. Enforced in lib/notify::sendNotification, which REFUSES rather than filters.
+  sms_opt_out        Boolean?
+  email_opt_out      Boolean?
+  opt_out_updated_at DateTime? // when the preference was last set (who = AuditLog)
   created_at DateTime @default(now())
 
   // +++ CUSTOMER PORTAL LINK ---
@@ -883,6 +899,8 @@ model Customer {
   job_cards  JobCard[]
 
   @@index([group_id, site_id])
+  @@index([group_id, phone_e164])
+  @@index([group_id, email])
 }
 
 model Vehicle {

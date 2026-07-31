@@ -103,7 +103,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     (async () => {
       const ownerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
       const or = ownerId
-        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, email: true, address: true } })
+        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true } })
         : (row.customer ?? null);
       return { edgeOwnerId: ownerId, ownerRow: or };
     })(),
@@ -132,7 +132,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const fin = financeVisibility(vis, perms);
   const priceVisible = fin.seeValues || canEditPricing;
   const costVisible = fin.seeMargin;
-  const owner = { name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null };
+  // phoneE164 is the DERIVED dialable form; smsOptOut/emailOptOut keep their THREE-STATE shape all
+  // the way to the screen (`?? null`, never `?? false`) — unknown must not arrive as consent.
+  const owner = {
+    name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, phoneE164: (ownerRow as any)?.phone_e164 ?? null,
+    email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null,
+    smsOptOut: (ownerRow as any)?.sms_opt_out ?? null, emailOptOut: (ownerRow as any)?.email_opt_out ?? null,
+  };
 
   const booking: CardBooking = (row.resource_id && row.start_at && row.end_at)
     ? {

@@ -39,6 +39,10 @@ export type SendNotificationResult = {
   notificationId: string | null;
   status: 'sent' | 'failed' | 'skipped';
   reason?: string;
+  /** True when a contact preference REFUSED this send. Distinct from every other skip: the message
+   *  was deliverable and we chose not to deliver it. Callers must handle it as a refusal, never as
+   *  a quiet success. */
+  suppressed?: boolean;
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -62,6 +66,43 @@ const ADAPTERS: Record<NotifyChannel, Adapter> = {
     send: async () => false,
   },
 };
+
+/**
+ * ── CONTACT-PREFERENCE SUPPRESSION ────────────────────────────────────────────────────────────────
+ * REFUSES, never filters. Checked HERE and not at the call sites, because there are fourteen of
+ * them and the ones that matter most are the ones nobody remembers to update.
+ *
+ * Matching is by RECIPIENT STRING within the tenant — the caller doesn't have to know it's talking
+ * to a customer, which is the whole point of putting it in the chokepoint. A recipient that matches
+ * no customer (staff, operator, platform enquiry) is never suppressed.
+ *
+ * HONEST-NULL: only `true` suppresses. NULL means no record — unknown — and for the service
+ * messages this system sends (your quote is ready, here is your invoice) unknown means SEND.
+ * A null must never be read, or rendered, as consent.
+ */
+async function isSuppressed(groupId: string | null | undefined, channel: NotifyChannel, recipient: string): Promise<boolean> {
+  if (!groupId) return false; // platform-level send — no tenant customer list to consult
+  const to = recipient.trim();
+  if (!to) return false;
+  try {
+    const where = channel === 'email'
+      ? { group_id: groupId, email: { equals: to, mode: 'insensitive' as const } }
+      // SMS addresses the dialable column first; the raw column is a fallback for rows written
+      // before normalisation existed (and never backfilled).
+      : { group_id: groupId, OR: [{ phone_e164: to }, { phone: to }] };
+    // ANY match refuses, not the first. One number can belong to two customer rows (a couple, a
+    // household, a company handset — TMBS has such a pair today). If either person has asked not to
+    // be contacted, the handset must not buzz: findFirst would have made that a coin toss on row
+    // order. Suppression is the conservative side of an ambiguous match, deliberately.
+    const hits = await prisma.customer.findMany({ where, select: { sms_opt_out: true, email_opt_out: true }, take: 20 });
+    return hits.some((h: { sms_opt_out: boolean | null; email_opt_out: boolean | null }) =>
+      (channel === 'email' ? h.email_opt_out : h.sms_opt_out) === true);
+  } catch {
+    // A lookup failure must not silently suppress (that would drop service messages) and must not
+    // silently send. Sending is the safer default for a SERVICE message; the row records the send.
+    return false;
+  }
+}
 
 /** Record-only helper (also used to log sends made by legacy transports during migration). */
 async function record(args: {
@@ -105,6 +146,14 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (!tpl) {
     const id = await record({ ...common, status: 'failed', error: `unknown template '${args.template}'` });
     return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template' };
+  }
+
+  // CONTACT PREFERENCE — checked before rendering and before any provider call. The row is written
+  // as `skipped` with an explicit reason: a suppressed message is NEVER recorded as sent, and never
+  // silently vanishes either. ok:false + suppressed:true is the caller's signal to surface it.
+  if (await isSuppressed(args.groupId, channel, args.recipient)) {
+    const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
+    return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true };
   }
 
   // Render for the channel. A template with no renderer for this channel is a skip, never a guess.

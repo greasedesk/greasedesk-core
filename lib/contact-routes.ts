@@ -44,6 +44,24 @@ export function toE164Digits(raw: string | null | undefined, defaultCc = DEFAULT
   return d.length >= 11 ? d : null;
 }
 
+/**
+ * THE customer-phone write shape. Both writers of Customer.phone go through this so normalisation
+ * cannot diverge between them: it returns BOTH columns from one raw input.
+ *
+ *   phone      — the operator's raw string, trimmed, exactly as typed (null when blank). Never a
+ *                normalised value: this is what the garage recognises, and normalising a mistyped
+ *                number in place is unrecoverable.
+ *   phone_e164 — the dialable form, or NULL when the input cannot be resolved. Honest-null: an
+ *                unparseable number is UNKNOWN, not absent — the raw survives beside it.
+ *
+ * `dialCode` MUST come from the tenant's country profile (locale-profiles). Never guess a country
+ * from the digits alone; an unrecognised shape stays null rather than being coerced into GB.
+ */
+export function customerPhoneFields(raw: string | null | undefined, dialCode: string): { phone: string | null; phone_e164: string | null } {
+  const phone = (raw ?? '').trim() || null;
+  return { phone, phone_e164: phone ? toE164Digits(phone, dialCode) : null };
+}
+
 /** The wa.me URL for a stored number, or null. */
 export function whatsappUrl(stored: string | null | undefined): string | null {
   const e164 = toE164Digits(stored);

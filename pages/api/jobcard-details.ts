@@ -22,8 +22,10 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
+import { customerPhoneFields } from '@/lib/contact-routes';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
-type OwnerIn = { name?: string; phone?: string; email?: string; address?: string };
+type OwnerIn = { name?: string; phone?: string; email?: string; address?: string; sms_opt_out?: boolean | null; email_opt_out?: boolean | null };
 type VehicleIn = {
   registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
   // MOT metadata (the manual DVSA re-lookup persists these; ISO date strings yyyy-mm-dd)
@@ -93,18 +95,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (other) return res.status(409).json({ code: 'REG_COLLISION', message: 'A vehicle with this registration already exists here. Continue anyway?' });
   }
 
+  // Dial code for phone normalisation comes from the TENANT'S country profile — one read, outside
+  // the transaction, so the write path never guesses a country from the digits.
+  const grpForPhone = owner?.phone !== undefined
+    ? await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { country_code: true, ref: true } })
+    : null;
+  const tenantDialCode = resolveTenantProfile(grpForPhone).dialCode;
+
   // ----- one transaction: owner + vehicle + odometer_in + audit (changed fields only) -----
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (owner && ownerId) {
-        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, email: true, address: true } })) as any;
+        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true } })) as any;
         const next: any = {};
         const diff: any = {};
         const set = (k: string, v: any, curV: any) => { if (v !== undefined && v !== curV) { next[k] = v; diff[k] = { from: curV, to: v }; } };
         if (owner.name !== undefined) set('name', clean(owner.name), cur.name);
-        if (owner.phone !== undefined) set('phone', clean(owner.phone), cur.phone);
+        if (owner.phone !== undefined) {
+          // RAW stays exactly as typed; the dialable form is derived beside it using the TENANT'S
+          // country profile — never guessed from the digits. Unparseable → phone_e164 null, raw kept.
+          const f = customerPhoneFields(owner.phone, tenantDialCode);
+          set('phone', f.phone, cur.phone);
+          set('phone_e164', f.phone_e164, cur.phone_e164);
+        }
         if (owner.email !== undefined) set('email', clean(owner.email), cur.email);
         if (owner.address !== undefined) set('address', clean(owner.address), cur.address);
+        // CONTACT PREFERENCE. Only `true` and `null` are ever stored from this surface: ticking the
+        // box records a refusal, clearing it returns the row to NO RECORD. We never write `false`
+        // here, because a cleared checkbox is not the customer saying yes — it is nobody having
+        // asked. `opt_out_updated_at` moves only when the value actually changes.
+        const pref = (k: 'sms_opt_out' | 'email_opt_out', v: boolean | null | undefined) => {
+          if (v === undefined) return;
+          const norm = v === true ? true : null;
+          if (norm !== cur[k]) { next[k] = norm; diff[k] = { from: cur[k], to: norm }; next.opt_out_updated_at = new Date(); }
+        };
+        pref('sms_opt_out', owner.sms_opt_out);
+        pref('email_opt_out', owner.email_opt_out);
         if (Object.keys(next).length) {
           await tx.customer.update({ where: { id: ownerId }, data: next });
           await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff: { ...diff, via } });

@@ -7,7 +7,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
-import { Resend } from 'resend';
+import { sendNotification } from '@/lib/notify';
 import crypto from 'crypto';
 import { trialEndsFromNow } from '@/lib/trial';
 
@@ -115,74 +115,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const baseUrl = process.env.NEXTAUTH_URL || 'https://greasedesk.com'; 
     const verificationLink = `${baseUrl}/api/auth/verify?token=${token}`;
     
-    // Use the public domain URL for the logo (must be HTTPS)
-    const logoUrl = `${baseUrl}/email-logo.png`; 
-    
-    const html = `
-      <!doctype html>
-      <html lang="en">
-      <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0;">
-          <div style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
-              
-              <div style="background-color: #ffffff; padding: 20px; text-align: center; border-top-left-radius: 8px; border-top-right-radius: 8px;">
-                  <img src="${logoUrl}" alt="GreaseDesk Logo" style="max-height: 40px; width: 150px; height: auto;"/>
-              </div>
-              
-              <div style="padding: 30px; border-top: 5px solid #007bff;">
-                  <p style="font-size: 16px; color: #333333; margin-bottom: 20px;">
-                      Hi ${user.name || 'there'},
-                  </p>
-                  <p style="font-size: 16px; color: #333333; margin-bottom: 30px;">
-                      Thank you for signing up! To activate your **GreaseDesk trial** and continue setting up your garage system, please click the button below to verify your email address.
-                  </p>
-                  
-                  <div style="text-align: center; margin: 30px 0;">
-                      <a href="${verificationLink}" 
-                         style="background-color: #28a745; 
-                                color: #ffffff; 
-                                text-decoration: none; 
-                                padding: 12px 25px; 
-                                border-radius: 5px; 
-                                font-size: 18px; 
-                                font-weight: bold; 
-                                display: inline-block;">
-                          Verify Email Address
-                      </a>
-                  </div>
-                  
-                  <p style="font-size: 14px; color: #666666; margin-top: 25px;">
-                      If the button above does not work, please copy and paste the link below into your web browser:
-                  </p>
-                  <p style="font-size: 12px; color: #999999; word-break: break-all; margin-bottom: 0;">
-                      <a href="${verificationLink}" style="color: #007bff;">${verificationLink}</a>
-                  </p>
-              </div>
-
-              <div style="text-align: center; padding: 15px; font-size: 12px; color: #999999; border-top: 1px solid #eeeeee;">
-                  This email was sent by GreaseDesk.
-              </div>
-          </div>
-      </body>
-      </html>
-    `;
-
-    try {
-      const apiKey = process.env.RESEND_API_KEY;
-      if (apiKey) {
-        const resend = new Resend(apiKey);
-        const { error } = await resend.emails.send({
-          from: 'Onboarding <onboarding@greasedesk.com>',
-          to: [user.email],
-          subject: 'Welcome to GreaseDesk — verify your email',
-          html,
-        });
-        if (error) console.error('Resend send error:', error);
-      } else {
-        console.warn('RESEND_API_KEY not set; skipping email send:', verificationLink);
-      }
-    } catch (mailErr) {
-      console.error('Email send threw:', mailErr);
-    }
+    // THROUGH THE CHOKEPOINT (2026-07-31). This was the last send with its own inline Resend
+    // client and its own hand-rolled HTML — the first email a tenant ever receives, recorded
+    // nowhere. It now names a template and writes a NotificationLog row like everything else.
+    // Non-fatal by design: a signup must never fail because an email didn't go.
+    const notified = await sendNotification({
+      recipient: user.email,
+      template: 'signup_verify',
+      channel: 'email',
+      groupId: group.id,
+      subject: { type: 'user', id: user.id },
+      data: { name: user.name || 'there', link: verificationLink },
+    });
+    if (!notified.ok) console.warn('[register] verification email not sent:', notified.status, notified.reason, verificationLink);
 
     return res.status(201).json({
       ok: true,

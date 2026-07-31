@@ -104,6 +104,39 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  // The invoice/receipt document email. The BODY LINES arrive already localised because the invoice
+  // document owns the tenant's locale (lib/invoice-doc → tServer) and this registry has no locale —
+  // so the caller translates and this template assembles. Everything structural (shell, order,
+  // footer rule) still lives here, which is the point: no caller hand-rolls invoice HTML again.
+  // The PDF rides as an emailOpts attachment, not as template data.
+  invoice_document: {
+    label: 'Invoice / receipt',
+    email: (d) => ({
+      subject: String(d.subject ?? ''),
+      html: shell(`
+        <p>${esc(d.greeting)}</p>
+        <p>${esc(d.body)}</p>
+        ${d.vehicleLine ? `<p>${esc(d.vehicleLine)}</p>` : ''}
+        <p>${esc(d.signoff)}<br/>${esc(d.garageName)}</p>
+        ${d.footerLine ? `<p style="font-size:12px;color:#64748b">${esc(d.footerLine)}</p>` : ''}`),
+    }),
+  },
+
+  // Signup email verification. Previously the ONE send with its own inline Resend client, recorded
+  // nowhere — the first email a tenant ever receives went down a path nothing else used.
+  signup_verify: {
+    label: 'Verify your email (signup)',
+    email: (d) => ({
+      subject: 'Welcome to GreaseDesk — verify your email',
+      html: shell(`
+        <h2 style="margin:0 0 8px">Verify your email address</h2>
+        <p>Hi ${esc(d.name ?? 'there')},</p>
+        <p>Thanks for signing up. Verify your email to activate your GreaseDesk trial and finish setting up your garage.</p>
+        ${button(String(d.link ?? ''), 'Verify email address')}
+        <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your browser:<br/>${esc(d.link)}</p>`),
+    }),
+  },
+
   password_reset: {
     label: 'Password reset',
     email: (d) => ({

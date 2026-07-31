@@ -12,12 +12,12 @@ import { Prisma } from '@prisma/client';
 import { buildInvoiceDoc } from '@/lib/invoice-doc';
 import { renderInvoicePdf } from '@/lib/invoice-pdf';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-import { sendEmail } from '@/lib/email-service';
+import { sendNotification } from '@/lib/notify';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
 import { writeAudit } from '@/lib/audit';
 
-export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'ERROR'; message: string };
+export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'SUPPRESSED' | 'ERROR'; message: string };
 
 export async function sendInvoiceEmail(invoiceId: string, groupId: string, actorUserId: string | null): Promise<InvoiceSendResult> {
   const doc = await buildInvoiceDoc(invoiceId, groupId);
@@ -45,27 +45,45 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
 
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);
   const total = formatMoney(doc.vatRegistered ? doc.totals.grossPennies : doc.totals.netPennies, { currency: doc.currency, locale: doc.locale });
+  // Localised HERE (this path owns the tenant's locale); ASSEMBLED by the template. The body lines
+  // are translated strings, not HTML — the invoice_document template builds the markup.
   const subject = t('email.subject', { number: doc.number, garage: group.group_name });
-  const bodyLines = [
-    `<p>${t('email.greeting', { name: doc.customer.name })}</p>`,
-    `<p>${t('email.body', { garage: group.group_name, number: doc.number, total })}</p>`,
-    doc.vehicle.reg ? `<p>${t('vehicle')}: ${doc.vehicle.reg}${doc.vehicle.desc ? ` (${doc.vehicle.desc})` : ''}</p>` : '',
-    `<p>${t('email.signoff')}<br/>${group.group_name}</p>`,
-    group.invoice_email_footer ? `<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/><p style="font-size:12px;color:#9ca3af">${t('email.footer')}</p>` : '',
-  ].filter(Boolean);
-  const html = `<div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">${bodyLines.join('')}</div>`;
 
   try {
     const pdf = await renderInvoicePdf(doc);
-    // BCC the garage's copy address (Invoicing tab; falls back to billing_email) — skipped when it
-    // IS the recipient. From stays GreaseDesk-owned; only the display name + Reply-To are tenant-set.
-    const ok = await sendEmail(to, subject, html, {
-      fromName: senderName,
-      replyTo,
-      bcc: garageCopyAddr && garageCopyAddr.toLowerCase() !== to.toLowerCase() ? [garageCopyAddr] : undefined,
-      attachments: [{ filename: `${(doc.number || 'invoice').replace(/[^\w.-]/g, '_')}.pdf`, content: pdf }],
+    // THROUGH THE CHOKEPOINT (2026-07-31). This used to call sendEmail directly, which is why the
+    // invoice path wrote an AuditLog row but no NotificationLog row — the one send the "what have we
+    // sent this customer?" question could never answer. Both records now exist; they answer
+    // different questions (audit = who did it to the ledger, notification = what left the building).
+    // Contact-preference suppression now applies here too, for free.
+    const sent = await sendNotification({
+      recipient: to,
+      template: 'invoice_document',
+      channel: 'email',
+      groupId,
+      subject: { type: 'invoice', id: invoiceId },
+      data: {
+        subject,
+        greeting: t('email.greeting', { name: doc.customer.name }),
+        body: t('email.body', { garage: group.group_name, number: doc.number, total }),
+        vehicleLine: doc.vehicle.reg ? `${t('vehicle')}: ${doc.vehicle.reg}${doc.vehicle.desc ? ` (${doc.vehicle.desc})` : ''}` : null,
+        signoff: t('email.signoff'),
+        garageName: group.group_name,
+        footerLine: group.invoice_email_footer ? t('email.footer') : null,
+      },
+      // BCC the garage's copy address (Invoicing tab; falls back to billing_email) — skipped when it
+      // IS the recipient. From stays GreaseDesk-owned; only display name + Reply-To are tenant-set.
+      emailOpts: {
+        fromName: senderName,
+        replyTo,
+        bcc: garageCopyAddr && garageCopyAddr.toLowerCase() !== to.toLowerCase() ? [garageCopyAddr] : undefined,
+        attachments: [{ filename: `${(doc.number || 'invoice').replace(/[^\w.-]/g, '_')}.pdf`, content: pdf }],
+      },
     });
-    if (!ok) return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };
+    // A REFUSAL is not a transport failure and must not read as one — the customer asked not to be
+    // emailed, and the caller is told so plainly rather than being shown "try again shortly".
+    if (sent.suppressed) return { ok: false, code: 'SUPPRESSED', message: 'This customer has opted out of email — the invoice was not sent. Print or hand over the PDF instead.' };
+    if (!sent.ok) return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await writeAudit(tx, { groupId, userId: actorUserId, jobCardId: doc.jobCardId, action: 'invoice.sent', diff: { number: doc.number, to } });
       if (doc.status === 'paid') {

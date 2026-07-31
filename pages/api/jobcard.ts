@@ -23,6 +23,8 @@ import { placeJobCard } from '@/lib/diary-booking';
 import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
 import { detailsMinDataMet } from '@/lib/jobcard-tabs';
 import { writeAudit } from '@/lib/audit';
+import { customerPhoneFields } from '@/lib/contact-routes';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 type CreateJobCardBody = {
   /** 'quote' = created from the Quotes entry point; lets the server auto-complete Customer Details
@@ -112,6 +114,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ message: vis.siteIds.includes(targetSiteId) ? 'That location is archived — restore it before booking new work there.' : 'You are not assigned to this location.' });
     }
 
+    // Dial code for phone normalisation — the TENANT'S country profile, read once before the
+    // transaction. Never inferred from the digits themselves.
+    const grpForPhone = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
+    const tenantDialCode = resolveTenantProfile(grpForPhone).dialCode;
+
     // Optional scheduling (create + place). Resource allocation → manager/admin only.
     const scheduling = !!(body.resourceId && body.startAt && body.endAt);
     let start: Date | null = null, end: Date | null = null;
@@ -150,13 +157,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           select: { id: true },
         });
 
+        // RAW as typed + the dialable form beside it, from the ONE shared shape (lib/contact-routes)
+        // and the TENANT'S country dial code — the same rule as the details writer, so the two
+        // cannot diverge. Unparseable → phone_e164 null, raw kept (honest-null).
+        const phoneFields = customerPhoneFields(body.phone, tenantDialCode);
         const newCustomer = () =>
           tx.customer.create({
             data: {
               group_id: groupId,
               site_id: targetSiteId,
               name: customerName,
-              phone: body.phone?.trim() || null,
+              phone: phoneFields.phone,
+              phone_e164: phoneFields.phone_e164,
               email: body.email?.trim() || null,
             },
             select: { id: true },
