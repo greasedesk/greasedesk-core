@@ -33,6 +33,10 @@ const fmtDay = (iso: string | null, locale: string) =>
 
 export default function MessagesPage({ threads, messages, reach, navCount, locale }: PageProps) {
   const [sel, setSel] = useState<string | null>(threads[0]?.id ?? null);
+  // WHETHER A PERSON CHOSE THIS THREAD. The first thread is auto-selected so the pane isn't empty,
+  // but auto-selection is NOT reading: marking it read on load would clear the badge for a user who
+  // never looked, and attribute the read to them. Only an explicit click counts.
+  const [userPicked, setUserPicked] = useState(false);
   // Live copy per thread, replaced by whatever the send endpoint returns — same discipline as the
   // job card: the screen renders the log, not an optimistic guess.
   const [live, setLive] = useState<Record<string, ConversationMessage[]>>({});
@@ -48,13 +52,13 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
   // OPENING A THREAD IS WHAT CLEARS IT, attributed to whoever opened it. Not a "mark all read"
   // button — that is a control for making a number go away, not for having read anything.
   React.useEffect(() => {
-    if (!sel) return;
+    if (!sel || !userPicked) return;
     const t = threads.find((x) => x.id === sel);
     if (!t || unreadOf(t) === 0) return;
     fetch('/api/messages/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: sel }) })
       .then(() => setRead((p) => new Set(p).add(sel)))
       .catch(() => {});
-  }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel, userPicked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AdminLayout messagesCount={navCount}>
@@ -86,7 +90,7 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
             {shown.map((t) => (
               <li key={t.id}>
                 <button
-                  onClick={() => setSel(t.id)}
+                  onClick={() => { setUserPicked(true); setSel(t.id); }}
                   data-testid="thread-row"
                   className={`w-full text-left border rounded-xl p-3 ${sel === t.id ? 'border-accent bg-accent-soft' : 'border-line bg-surface hover:bg-surface-muted'}`}
                 >
