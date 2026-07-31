@@ -2037,6 +2037,15 @@ model NotificationLog {
   provider_message_id String? // provider's id, for delivery-webhook reconciliation
   error               String? // provider/transport error, when status = failed
 
+  // STAFF-COMPOSED BODY. Null for templated sends — there the template key + data ARE the record and
+  // the body is reproducible. For a free-text message the words a person chose are the only record
+  // of what the customer was told, so they are kept. This does not make the table a free-text log:
+  // `template` still names the shape, and only the free_text template populates this.
+  body         String?
+  // WHO PRESSED SEND. Null = the system emitted it (a quote going out, the receipt cron) — that is
+  // a different act from a person deciding to contact a customer, and the null is the distinction.
+  sent_by_user String?
+
   // What this send was ABOUT, for support ("resend the quote link for card X"). Loose by design —
   // a notification must never own a hard FK that blocks deleting the thing it referred to.
   subject_type String? // 'job_card' | 'user' | 'invoice' | …

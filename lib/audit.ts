@@ -82,6 +82,12 @@ export type ImportAuditAction =
   // printed, and that no number was drawn.
   | 'import.recommitted';  // { external_ref, invoice_number, sequence_value, written, printed, … }
 
+/** Thread events (entity: 'message_thread'). A PERSON deciding to contact a customer is a distinct
+ *  act from the system emitting a quote or a receipt — the system's sends are recorded in
+ *  NotificationLog and nowhere else, deliberately. This records the decision, not the delivery. */
+export type ThreadAuditAction =
+  | 'message.sent_by_staff';  // { channel, recipient, chars, notificationId, status }
+
 export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
   | 'user.deactivated'       // ADMIN suspended the account: login blocked + sessions killed
@@ -104,6 +110,24 @@ export async function writeUserAudit(
       user_id: args.actorUserId ?? null,
       entity: 'user',
       entity_id: args.targetUserId,
+      action: args.action,
+      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+    },
+  });
+}
+
+/** Same table, same discipline, subject = a MESSAGE THREAD. Sibling of writeAudit/writeUserAudit —
+ *  everything still lands in AuditLog through lib/audit, so a trail is read from one place. */
+export async function writeThreadAudit(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; actorUserId?: string | null; threadId: string; action: ThreadAuditAction; diff?: unknown },
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      group_id: args.groupId,
+      user_id: args.actorUserId ?? null,
+      entity: 'message_thread',
+      entity_id: args.threadId,
       action: args.action,
       diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
     },

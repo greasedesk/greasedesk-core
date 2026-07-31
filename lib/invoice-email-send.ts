@@ -16,6 +16,7 @@ import { sendNotification } from '@/lib/notify';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
 import { writeAudit } from '@/lib/audit';
+import { resolveReplyTo } from '@/lib/reply-to';
 
 export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'SUPPRESSED' | 'ERROR'; message: string };
 
@@ -40,7 +41,7 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
   })) as any;
   // Invoicing-tab settings with sensible fallbacks (pre-config tenants behave exactly as before).
   const senderName = (group.invoice_sender_name || '').trim() || group.group_name;
-  const replyTo = (group.invoice_reply_to || '').trim() || group.billing_email || undefined;
+  const replyTo = resolveReplyTo(group); // ONE resolver — see lib/reply-to (was an inline literal here)
   const garageCopyAddr = (group.invoice_bcc || '').trim() || (group.billing_email || '').trim();
 
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);

@@ -18,7 +18,7 @@ import { lineFlags, toPlausible, partsProfit } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
-import ConversationView, { type ConversationMessage } from '@/components/messages/ConversationView';
+import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
@@ -44,8 +44,10 @@ type Props = {
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null };
-  // READ-ONLY message history for this card's (customer, vehicle) thread — server-resolved.
+  // Message history for this card's (customer, vehicle) thread — server-resolved.
   conversation?: ConversationMessage[];
+  threadId?: string | null;
+  reachability?: Reachability | null;
   vehicle: {
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
     make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
@@ -81,6 +83,9 @@ const buildISO = (d: string, t: string) => `${d}T${t}:00.000Z`;
 export default function JobCardWorkspace(p: Props) {
   const { t } = useTranslation('jobcard');
   const router = useRouter();
+  // The thread as the SERVER last returned it. Seeded from props; replaced wholesale by the send
+  // response so the list always shows what the log holds, never a local guess.
+  const [convo, setConvo] = useState<ConversationMessage[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const estimateRef = useRef<EstimateHandle>(null);
@@ -397,7 +402,17 @@ export default function JobCardWorkspace(p: Props) {
 
         {/* THE CONVERSATION — on the customer record, read-only in this slice. */}
         <div className="bg-surface border border-line rounded-xl p-5">
-          <ConversationView messages={p.conversation ?? []} locale={p.locale} heading={t('messages.heading')} dense />
+          <ConversationView
+            messages={convo ?? p.conversation ?? []}
+            locale={p.locale}
+            heading={t('messages.heading')}
+            dense
+            threadId={p.threadId ?? null}
+            jobCardId={p.jobCardId}
+            reachability={p.reachability ?? null}
+            canSend={p.canOperate && !cancelled}
+            onSent={setConvo}
+          />
         </div>
 
         <div className="bg-surface border border-line rounded-xl p-5">

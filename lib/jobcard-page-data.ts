@@ -16,7 +16,7 @@ import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibili
 import { canEditInvoice } from '@/lib/invoice';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-import { conversationForJobCard } from '@/lib/message-threads';
+import { conversationForJobCard, reachabilityForJobCard } from '@/lib/message-threads';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { computeTabs } from '@/lib/jobcard-tabs';
 import { parseBreaks } from '@/lib/occupancy';
@@ -227,9 +227,15 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // The conversation for this card's (customer, vehicle) — READ-ONLY, resolved through the ownership
   // edge by lib/message-threads. An absent thread yields an empty list, never an error.
   const conversation = await conversationForJobCard(prisma, row.id);
+  // Resolved from the CARD, not the thread — a customer with no thread yet must still be writable
+  // to, or the first message could never be sent. Server-side so the box can be closed BEFORE anyone
+  // types rather than accepting the words and failing afterwards.
+  const reachability = await reachabilityForJobCard(prisma, row.id, 'email');
 
   return {
     conversation: conversation.messages,
+    threadId: conversation.threadId,
+    reachability,
     registration: row.vehicle?.registration ?? '—',
     createdAt: row.created_at.toISOString(),
     status: row.status,

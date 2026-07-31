@@ -103,6 +103,58 @@ export async function linkMessageToThread(db: Db, notificationId: string, subjec
   }
 }
 
+/**
+ * CAN WE REACH THIS CUSTOMER ON THIS CHANNEL? Resolved from the thread's customer, per channel.
+ *
+ * HONEST-NULL: "no email on file" is UNKNOWN, not an error and not a fault of the staff member. The
+ * compose box reads this BEFORE it lets anyone type, so nobody writes a message that cannot be sent
+ * — accepting the text and failing afterwards wastes the words and teaches staff to distrust the box.
+ * On TMBS only 36.5% of customers have an email, so this is the common case, not the edge case.
+ */
+export type Reachability =
+  | { ok: true; address: string; customerName: string; channel: NotifyChannelName }
+  | { ok: false; reason: string; customerName: string; channel: NotifyChannelName };
+
+export type NotifyChannelName = 'email' | 'sms';
+
+export async function threadReachability(db: Db, threadId: string, channel: NotifyChannelName = 'email'): Promise<Reachability | null> {
+  const t = await (db as any).messageThread.findUnique({
+    where: { id: threadId },
+    select: { customer: { select: { name: true, email: true, phone_e164: true } } },
+  });
+  if (!t) return null;
+  return reachabilityOf(t.customer, channel);
+}
+
+/**
+ * Reachability for a JOB CARD's current owner, WITHOUT requiring a thread to exist yet.
+ *
+ * This matters more than it looks. A thread is only created when a message is sent, so keying the
+ * compose box on an existing thread would mean you could only write to customers you had already
+ * written to — the first message would be impossible. The card resolves its owner through the
+ * ownership edge exactly as the thread does, so the box opens on the right customer from the start
+ * and the thread is created by the send.
+ */
+export async function reachabilityForJobCard(db: Db, jobCardId: string, channel: NotifyChannelName = 'email'): Promise<Reachability | null> {
+  const key = await threadKeyForJobCard(db, jobCardId);
+  if (!key) return null; // no vehicle, or no current ownership edge — nobody to write to
+  const customer = await (db as any).customer.findUnique({ where: { id: key.customerId }, select: { name: true, email: true, phone_e164: true } });
+  return reachabilityOf(customer, channel);
+}
+
+function reachabilityOf(customer: { name?: string | null; email?: string | null; phone_e164?: string | null } | null, channel: NotifyChannelName): Reachability {
+  const t = { customer };
+  const name = t.customer?.name ?? 'this customer';
+  if (channel === 'email') {
+    const email = (t.customer?.email ?? '').trim();
+    if (!email) return { ok: false, reason: `No email address on file for ${name}. Add one on the Customer Details tab and the message box will open.`, customerName: name, channel };
+    return { ok: true, address: email, customerName: name, channel };
+  }
+  const phone = (t.customer?.phone_e164 ?? '').trim();
+  if (!phone) return { ok: false, reason: `No dialable mobile number on file for ${name}.`, customerName: name, channel };
+  return { ok: true, address: phone, customerName: name, channel };
+}
+
 // ── READ SIDE ─────────────────────────────────────────────────────────────────────────────────────
 
 /** One message as the conversation renders it. */
@@ -116,6 +168,10 @@ export type ThreadMessage = {
   recipient: string;
   subject: string | null;
   error: string | null;
+  /** The words a person wrote (free_text only); null for templated sends. */
+  body: string | null;
+  /** WHO sent it. Null = the system did — a quote, a receipt, the cron. Rendered as such. */
+  sentByName: string | null;
 };
 
 /**
@@ -129,11 +185,18 @@ export async function listThreadMessages(db: Db, threadId: string): Promise<Thre
   const rows = await (db as any).notificationLog.findMany({
     where: { thread_id: threadId },
     orderBy: { created_at: 'asc' },
-    select: { id: true, created_at: true, channel: true, template: true, status: true, recipient: true, subject: true, error: true },
+    select: { id: true, created_at: true, channel: true, template: true, status: true, recipient: true, subject: true, error: true, body: true, sent_by_user: true },
   });
+  // Resolve sender names in one read rather than per row.
+  const ids = [...new Set(rows.map((r: any) => r.sent_by_user).filter(Boolean))] as string[];
+  const users = ids.length
+    ? new Map((await (db as any).user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map((u: any) => [u.id, u.name]))
+    : new Map<string, string>();
   return rows.map((r: any) => ({
     id: r.id, at: r.created_at.toISOString(), channel: r.channel, direction: 'out' as const,
     template: r.template, status: r.status, recipient: r.recipient, subject: r.subject ?? null, error: r.error ?? null,
+    body: r.body ?? null,
+    sentByName: r.sent_by_user ? (users.get(r.sent_by_user) ?? 'A team member') : null,
   }));
 }
 

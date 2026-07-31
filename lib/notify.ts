@@ -17,7 +17,7 @@
 import { prisma } from '@/lib/db';
 import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
-import { linkMessageToThread } from '@/lib/message-threads';
+import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -33,6 +33,14 @@ export type SendNotificationArgs = {
   subject?: { type: string; id: string } | null;
   /** Email-only transport extras (tenant reply-to, garage BCC, invoice PDF). */
   emailOpts?: SendEmailOpts;
+  /** The words a PERSON wrote, for free_text only. Kept on the row because for a composed message
+   *  the body IS the record of what the customer was told. Null for templated sends. */
+  body?: string | null;
+  /** WHO pressed send. Null/absent = the system emitted it — a quote going out, the receipt cron. */
+  sentByUserId?: string | null;
+  /** Attach to THIS thread rather than deriving one from the subject. Used when the caller already
+   *  knows the conversation (composing on a thread); everything else still derives from the subject. */
+  threadId?: string | null;
 };
 
 export type SendNotificationResult = {
@@ -110,6 +118,7 @@ async function record(args: {
   groupId?: string | null; channel: NotifyChannel; template: string; provider: string;
   status: 'queued' | 'sent' | 'failed' | 'skipped'; recipient: string; subject?: string | null;
   error?: string | null; subjectRef?: { type: string; id: string } | null; sentAt?: Date | null;
+  body?: string | null; sentByUserId?: string | null; threadId?: string | null;
 }): Promise<string | null> {
   try {
     const row = await prisma.notificationLog.create({
@@ -125,6 +134,9 @@ async function record(args: {
         subject_type: args.subjectRef?.type ?? null,
         subject_id: args.subjectRef?.id ?? null,
         sent_at: args.sentAt ?? null,
+        body: args.body ?? null,
+        sent_by_user: args.sentByUserId ?? null,
+        thread_id: args.threadId ?? null,
       },
       select: { id: true },
     });
@@ -133,7 +145,9 @@ async function record(args: {
     // threading only the successes would make the thread quietly disagree with the log. Best-effort
     // and non-fatal: the message is already recorded, and a threading error must never turn a
     // delivered message into a reported failure.
-    await linkMessageToThread(prisma, row.id, args.subjectRef?.type ?? null, args.subjectRef?.id ?? null);
+    // A caller that already knows the thread has set it above; only derive when it didn't.
+    if (!args.threadId) await linkMessageToThread(prisma, row.id, args.subjectRef?.type ?? null, args.subjectRef?.id ?? null);
+    else await touchThread(prisma, args.threadId);
     return row.id;
   } catch {
     return null; // logging must never break the send path
@@ -144,7 +158,8 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
   const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; email?: Function; sms?: Function } | undefined;
-  const common = { groupId: args.groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject };
+  const common = { groupId: args.groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
+    body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null };
 
   if (!args.recipient?.trim()) {
     const id = await record({ ...common, status: 'skipped', error: 'no recipient' });

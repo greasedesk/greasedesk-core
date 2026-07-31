@@ -137,6 +137,26 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  // FREE TEXT — the one template whose body a PERSON supplies. Everything structural still lives
+  // here (shell, greeting, sign-off, the garage's name), so a staff member writes a message, not an
+  // email: they cannot inject markup, and every free-text message still looks like the product sent
+  // it. The body is escaped and rendered as plain paragraphs; newlines become line breaks and
+  // nothing else is interpreted.
+  free_text: {
+    label: 'Message from the garage',
+    email: (d) => ({
+      subject: String(d.subject || `Message from ${d.garageName ?? 'your garage'}`),
+      html: shell(`
+        <p>${esc(d.greeting ?? 'Hello')},</p>
+        <div style="white-space:pre-wrap">${esc(d.body)}</div>
+        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
+    }),
+    // Declared so `channel` is a real field rather than decoration: an SMS free-text send renders
+    // here and is then recorded as skipped by the unconfigured SMS adapter — refused for the right
+    // reason (no provider), not silently unsupported.
+    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}` }),
+  },
+
   password_reset: {
     label: 'Password reset',
     email: (d) => ({

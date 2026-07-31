@@ -34,6 +34,8 @@ import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/veh
 type PageProps = {
   // READ-ONLY message history for this card's (customer, vehicle) thread.
   conversation: import('@/components/messages/ConversationView').ConversationMessage[];
+  threadId: string | null;
+  reachability: import('@/components/messages/ConversationView').Reachability | null;
   registration: string;
   createdAt: string;
   status: JobStatus;
@@ -140,6 +142,8 @@ export default function JobCardDetailPage(props: PageProps) {
         isAdmin={props.isAdmin}
         owner={props.owner}
         conversation={props.conversation}
+        threadId={props.threadId}
+        reachability={props.reachability}
         vehicle={props.vehicle}
         flags={props.flags}
         isComeback={props.isComeback}
