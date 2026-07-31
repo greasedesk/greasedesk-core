@@ -32,7 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const result = await sendInvoiceEmail(invoiceId, user.group_id as string, user.id as string);
   if (!result.ok) {
-    const status = result.code === 'NOT_FOUND' ? 404 : result.code === 'NO_RECIPIENT' ? 409 : result.code === 'SEND_FAILED' ? 502 : 500;
+    // SUPPRESSED is a REFUSAL, not a fault — 409, alongside NO_RECIPIENT. It was returning 500,
+    // which reads to the garage (and to any monitoring) as "the system broke", when in fact the
+    // system did exactly what the customer asked. Only a genuine transport failure is a 5xx.
+    const status = result.code === 'NOT_FOUND' ? 404
+      : result.code === 'NO_RECIPIENT' || result.code === 'SUPPRESSED' ? 409
+      : result.code === 'SEND_FAILED' ? 502 : 500;
     return res.status(status).json({ message: result.message });
   }
   return res.status(200).json({ message: 'Invoice sent.' });
