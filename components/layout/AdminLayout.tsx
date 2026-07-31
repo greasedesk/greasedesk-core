@@ -31,9 +31,9 @@ const navItems: NavItemDef[] = [
   { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true, locScope: 'diary' },
   { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true, locScope: 'jobcards' },
   { key: 'quotes', href: '/admin/quotes', icon: '📝', ready: true },
-  // The count is OPEN CONVERSATIONS, not unread messages. `unread` is inbound-driven and structurally
-  // zero (nothing in the product can receive a message), so an unread badge could never be anything
-  // but blank. See lib/message-threads::openThreadCount.
+  // The count is UNREAD inbound messages — as a badge on Messages is supposed to mean. It counted
+  // open conversations while nothing could arrive, because a badge that could only ever read zero
+  // is decoration; inbound made unread a real number. See lib/message-threads::unreadThreadCount.
   { key: 'messages', href: '/admin/messages', icon: '💬', ready: true, countKey: 'messages' },
   { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
@@ -46,7 +46,7 @@ const visibleNavItems = navItems.filter((item) => item.ready);
 
 interface AdminLayoutProps {
   children: React.ReactNode;
-  /** Open-conversation count for the Messages pill. Omitted on pages that don't compute it — an
+  /** UNREAD inbound count for the Messages pill. Omitted on pages that don't compute it — an
    *  absent count renders no pill, which is honest: unknown is not zero. */
   messagesCount?: number;
 }

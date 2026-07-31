@@ -274,6 +274,10 @@ model Group {
   lineSplitTemplates LineSplitTemplate[]
   notifications    NotificationLog[]
   message_threads  MessageThread[]
+  // Per-tenant inbound mailbox token. RANDOM AND ROTATABLE — deliberately NOT derived from `ref`
+  // (sequentially allocated, so an attacker could enumerate every garage) nor from `id` (unguessable
+  // but unrotatable: a leaked address would be unfixable without changing the primary key).
+  inbound_token    String?           @unique
   magicLinks       CustomerMagicLink[]
   countryWaitlist  CountryWaitlist[]
   quoteVersions    QuoteVersion[]
@@ -516,6 +520,18 @@ model StripeEvent {
 // stable consent_id (also carried in the gd_consent cookie), the policy version + region in force, and
 // the per-category choice. A changed choice writes a NEW row with the same consent_id → the trail is
 // the history. Same discipline as the operator audit / rep agreement.
+// Inbound-webhook dedupe ledger. Same shape and same discipline as StripeEvent: the id is written
+// FIRST, so a replay collides on insert and is acknowledged without being processed twice.
+// Keyed on the SVIX DELIVERY ID, never on the payload's `message_id` — that field is the sender's
+// own RFC header and is therefore attacker-controlled; deduping on it would let anyone suppress a
+// genuine inbound message by pre-sending one that claims the same header.
+model InboundEvent {
+  svix_id      String   @id
+  type         String
+  email_id     String?
+  processed_at DateTime @default(now())
+}
+
 model ConsentEvent {
   id             String   @id @default(uuid())
   consent_id     String // the browser's stable consent uuid (mirrors the gd_consent cookie)
@@ -2022,6 +2038,8 @@ enum NotificationStatus {
   delivered // provider later confirmed delivery (webhook)
   bounced   // provider later reported a hard bounce (webhook)
   skipped   // deliberately not sent (provider unconfigured / no recipient) — recorded, not silent
+  received  // INBOUND: it arrived. Not 'sent' — we did not send it, and none of the outbound
+            // statuses describe a message that came the other way.
 }
 
 model NotificationLog {
@@ -2042,9 +2060,19 @@ model NotificationLog {
   // of what the customer was told, so they are kept. This does not make the table a free-text log:
   // `template` still names the shape, and only the free_text template populates this.
   body         String?
+  // The HTML part of an inbound message, kept beside the text. WE persist the body because Resend
+  // discards received mail after 30 DAYS — after that their API cannot answer, so this row is the
+  // only copy of what a customer said.
+  body_html    String?
   // WHO PRESSED SEND. Null = the system emitted it (a quote going out, the receipt cron) — that is
   // a different act from a person deciding to contact a customer, and the null is the distinction.
   sent_by_user String?
+  // 'out' | 'in'. Was derived-and-always-outbound until inbound existed; now a real field, because
+  // the answer varies. Defaults 'out' so every historical row keeps its correct meaning.
+  direction    String  @default("out")
+  // When the message ARRIVED (inbound only). sent_at is meaningless for a message we did not send
+  // and stays null — the absence is the distinction, not a copied timestamp.
+  received_at  DateTime?
 
   // What this send was ABOUT, for support ("resend the quote link for card X"). Loose by design —
   // a notification must never own a hard FK that blocks deleting the thing it referred to.
@@ -2088,14 +2116,23 @@ model MessageThread {
   customer_id String
   vehicle_id  String
 
+  // Per-thread inbound token — the half of the address that makes resolution EXACT. Random and
+  // rotatable for the same reasons as the tenant token.
+  thread_token    String?   @unique
   // Denormalised for the list view — derived from the messages, never authored.
   last_message_at DateTime?
+  // Direction of the MOST RECENT message. Derived in touchThread from the log, never authored.
+  // 'in' here is what "unresponded" means: the customer spoke last and nobody has answered.
+  last_message_direction String?
   // INBOUND messages not yet read. Structurally 0 today: there is no inbound path anywhere in the
   // product (no webhook, no parse route), so nothing can increment this. It is NOT a "no unread"
   // claim dressed up — it is the honest count of a thing that cannot yet happen.
   unread_count    Int       @default(0)
   // 'open' | 'resolved'. No assignment to individual staff in v1 — a thread belongs to the garage.
   state           String    @default("open")
+  // WHO read it last, and when. Clearing unread is an act by a person and is attributed like one.
+  last_read_at    DateTime?
+  last_read_by    String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

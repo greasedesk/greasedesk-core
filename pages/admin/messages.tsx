@@ -18,11 +18,13 @@ import ConversationView, { type ConversationMessage, type Reachability } from '@
 import { getVisibility } from '@/lib/site-visibility';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { listThreadMessages, openThreadCount, threadReachability } from '@/lib/message-threads';
+import { listThreadMessages, unreadThreadCount, threadReachability } from '@/lib/message-threads';
 
 type ThreadRow = {
   id: string; customerName: string; registration: string; lastMessageAt: string | null;
   messageCount: number; state: string; unread: number;
+  /** 'in' = the CUSTOMER spoke last and nobody has answered. This is "unresponded". */
+  lastDirection: string | null;
 };
 type PageProps = { threads: ThreadRow[]; messages: Record<string, ConversationMessage[]>; reach: Record<string, Reachability | null>; navCount: number; locale: string };
 
@@ -34,17 +36,45 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
   // Live copy per thread, replaced by whatever the send endpoint returns — same discipline as the
   // job card: the screen renders the log, not an optimistic guess.
   const [live, setLive] = useState<Record<string, ConversationMessage[]>>({});
+  // UNRESPONDED = the customer spoke last. The filter, and the point of the feature.
+  const [onlyUnresponded, setOnlyUnresponded] = useState(false);
+  // Locally cleared unread, so the list stops shouting the moment a thread is opened; the server
+  // has already been told (below) and a reload agrees with it.
+  const [read, setRead] = useState<Set<string>>(new Set());
+  const shown = onlyUnresponded ? threads.filter((t) => t.lastDirection === 'in') : threads;
   const current = sel ? threads.find((t) => t.id === sel) ?? null : null;
+  const unreadOf = (t: ThreadRow) => (read.has(t.id) ? 0 : t.unread);
+
+  // OPENING A THREAD IS WHAT CLEARS IT, attributed to whoever opened it. Not a "mark all read"
+  // button — that is a control for making a number go away, not for having read anything.
+  React.useEffect(() => {
+    if (!sel) return;
+    const t = threads.find((x) => x.id === sel);
+    if (!t || unreadOf(t) === 0) return;
+    fetch('/api/messages/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: sel }) })
+      .then(() => setRead((p) => new Set(p).add(sel)))
+      .catch(() => {});
+  }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AdminLayout messagesCount={navCount}>
       <Head><title>Messages — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Messages</h1>
       <p className="text-sm text-muted mb-5">
-        Every message the garage has sent a customer, grouped by customer and vehicle. You can write
-        to a customer from here; replies aren&rsquo;t received yet, so they come back to the garage&rsquo;s
-        own inbox rather than appearing in the thread.
+        Every message to and from a customer, grouped by customer and vehicle. Replies from customers
+        arrive here and are copied to the garage&rsquo;s own inbox as well, so nothing stops turning up
+        where staff already read it.
       </p>
+
+      <div className="flex items-center gap-3 mb-4">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" data-testid="filter-unresponded" checked={onlyUnresponded} onChange={(e) => setOnlyUnresponded(e.target.checked)} />
+          Only conversations awaiting a reply
+        </label>
+        <span className="text-xs text-muted" data-testid="unresponded-count">
+          {threads.filter((t) => t.lastDirection === 'in').length} awaiting a reply
+        </span>
+      </div>
 
       {threads.length === 0 ? (
         <p className="text-sm text-muted border border-dashed border-line rounded-xl p-6" data-testid="threads-empty">
@@ -53,7 +83,7 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,22rem)_1fr] gap-5">
           <ol className="space-y-1" data-testid="thread-list">
-            {threads.map((t) => (
+            {shown.map((t) => (
               <li key={t.id}>
                 <button
                   onClick={() => setSel(t.id)}
@@ -63,10 +93,12 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-ink text-sm">{t.registration}</span>
                     <span className="text-xs text-muted truncate">{t.customerName}</span>
+                    {unreadOf(t) > 0 && <span data-testid="thread-unread" className="text-[10px] font-semibold rounded-full px-1.5 py-0.5 bg-accent text-white">{unreadOf(t)}</span>}
                     <span className="ml-auto text-xs text-muted tabular-nums">{fmtDay(t.lastMessageAt, locale)}</span>
                   </div>
                   <div className="text-xs text-muted mt-0.5">
                     {t.messageCount === 1 ? '1 message' : `${t.messageCount} messages`} · {t.state}
+                    {t.lastDirection === 'in' && <span data-testid="thread-unresponded" className="ml-2 text-warn font-semibold">awaiting reply</span>}
                   </div>
                 </button>
               </li>
@@ -78,8 +110,8 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
               <>
                 <div className="mb-3">
                   <h2 className="text-base font-semibold text-ink">{current.registration} · {current.customerName}</h2>
-                  <p className="text-xs text-muted">
-                    Unread {current.unread} — the product has no inbound message path yet, so this stays 0 until replies can be received.
+                  <p className="text-xs text-muted" data-testid="thread-unread-line">
+                    Unread {unreadOf(current)}{current.lastDirection === 'in' ? ' · awaiting a reply' : ''}
                   </p>
                 </div>
                 <ConversationView
@@ -123,6 +155,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     messageCount: t._count.messages,
     state: t.state,
     unread: t.unread_count,
+    lastDirection: t.last_message_direction ?? null,
   }));
   const messages: Record<string, ConversationMessage[]> = {};
   const reach: Record<string, Reachability | null> = {};
@@ -132,5 +165,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   const site = await prisma.site.findFirst({ where: { group_id: groupId }, select: { locale: true } });
-  return { props: { threads, messages, reach, navCount: await openThreadCount(prisma, groupId), locale: site?.locale ?? 'en-GB' } };
+  return { props: { threads, messages, reach, navCount: await unreadThreadCount(prisma, groupId), locale: site?.locale ?? 'en-GB' } };
 };

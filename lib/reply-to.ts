@@ -15,14 +15,34 @@
  * Returning undefined is correct and deliberate — no Reply-To header at all is better than one
  * pointing at a no-reply mailbox nobody watches.
  */
+import { threadAddress, tenantAddress } from '@/lib/inbound-address';
+
 export type ReplyToGroup = {
   invoice_reply_to?: string | null;
   billing_email?: string | null;
+  /** The tenant's inbound mailbox token. Absent = no inbound address exists yet. */
+  inbound_token?: string | null;
 };
 
-export function resolveReplyTo(group: ReplyToGroup | null | undefined): string | undefined {
-  // WHEN INBOUND LANDS: return the tenant's inbound address here (e.g. `t-${group.ref}@in.greasedesk.com`)
-  // and every outbound message starts threading its replies. One line, one file.
+export type ReplyToOpts = {
+  /** ONLY tenants with the inbound entitlement get an inbound reply-to. Without it, replies must
+   *  keep going to the mailbox their staff already watch — flipping that for a tenant who cannot
+   *  see the inbox would silently swallow their customer replies. */
+  inboundEnabled?: boolean;
+  /** When the message belongs to a conversation, the reply comes back to THAT conversation. */
+  threadToken?: string | null;
+};
+
+/**
+ * INBOUND FIRST, when and only when the tenant is entitled and a token exists. Otherwise the
+ * previous behaviour, unchanged: the tenant's configured reply address, then billing, then nothing.
+ */
+export function resolveReplyTo(group: ReplyToGroup | null | undefined, opts: ReplyToOpts = {}): string | undefined {
+  if (opts.inboundEnabled && group?.inbound_token) {
+    return opts.threadToken
+      ? threadAddress(group.inbound_token, opts.threadToken)
+      : tenantAddress(group.inbound_token);
+  }
   const configured = (group?.invoice_reply_to ?? '').trim();
   if (configured) return configured;
   const billing = (group?.billing_email ?? '').trim();

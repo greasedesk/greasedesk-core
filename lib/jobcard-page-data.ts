@@ -16,7 +16,7 @@ import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibili
 import { canEditInvoice } from '@/lib/invoice';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-import { conversationForJobCard, reachabilityForJobCard } from '@/lib/message-threads';
+import { conversationForJobCard, reachabilityForJobCard, ensureThreadToken } from '@/lib/message-threads';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { computeTabs } from '@/lib/jobcard-tabs';
 import { parseBreaks } from '@/lib/occupancy';

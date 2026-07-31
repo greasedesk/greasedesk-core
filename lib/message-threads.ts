@@ -21,6 +21,7 @@
  */
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
+import { mintToken } from '@/lib/inbound-address';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -69,7 +70,9 @@ export async function ensureThread(db: Db, key: ThreadKey): Promise<string> {
   const existing = await (db as any).messageThread.findUnique({ where, select: { id: true } });
   if (existing) return existing.id;
   const row = await (db as any).messageThread.create({
-    data: { group_id: key.groupId, customer_id: key.customerId, vehicle_id: key.vehicleId },
+    // The thread token is minted WITH the thread, so every conversation has a reply address from
+    // the moment it exists — there is no window where a thread cannot be replied to.
+    data: { group_id: key.groupId, customer_id: key.customerId, vehicle_id: key.vehicleId, thread_token: mintToken() },
     select: { id: true },
   });
   return row.id;
@@ -81,9 +84,44 @@ export async function ensureThread(db: Db, key: ThreadKey): Promise<string> {
  */
 export async function touchThread(db: Db, threadId: string): Promise<void> {
   const latest = await (db as any).notificationLog.findFirst({
-    where: { thread_id: threadId }, orderBy: { created_at: 'desc' }, select: { created_at: true },
+    where: { thread_id: threadId }, orderBy: { created_at: 'desc' }, select: { created_at: true, direction: true },
   });
-  await (db as any).messageThread.update({ where: { id: threadId }, data: { last_message_at: latest?.created_at ?? null } });
+  await (db as any).messageThread.update({
+    where: { id: threadId },
+    // BOTH derived from the log, never authored. last_message_direction === 'in' is precisely what
+    // "unresponded" means: the customer spoke last and nobody has answered.
+    data: { last_message_at: latest?.created_at ?? null, last_message_direction: latest?.direction ?? null },
+  });
+}
+
+/**
+ * Clearing unread is AN ACT BY A PERSON and is attributed like one. Opening a thread is what does
+ * it — there is no bulk "mark all read", because that is a button for making a number go away
+ * rather than for having read anything.
+ */
+export async function markThreadRead(db: Db, threadId: string, userId: string): Promise<void> {
+  await (db as any).messageThread.updateMany({
+    where: { id: threadId, unread_count: { gt: 0 } },
+    data: { unread_count: 0, last_read_at: new Date(), last_read_by: userId },
+  });
+}
+
+/** Ensure a tenant has an inbound mailbox token. Idempotent; rotatable by nulling and re-calling. */
+export async function ensureTenantInboundToken(db: Db, groupId: string): Promise<string> {
+  const g = await (db as any).group.findUnique({ where: { id: groupId }, select: { inbound_token: true } });
+  if (g?.inbound_token) return g.inbound_token;
+  const token = mintToken();
+  await (db as any).group.update({ where: { id: groupId }, data: { inbound_token: token } });
+  return token;
+}
+
+/** Ensure a thread has a reply token (older threads predate the column). Idempotent. */
+export async function ensureThreadToken(db: Db, threadId: string): Promise<string> {
+  const t = await (db as any).messageThread.findUnique({ where: { id: threadId }, select: { thread_token: true } });
+  if (t?.thread_token) return t.thread_token;
+  const token = mintToken();
+  await (db as any).messageThread.update({ where: { id: threadId }, data: { thread_token: token } });
+  return token;
 }
 
 /**
@@ -162,7 +200,7 @@ export type ThreadMessage = {
   id: string;
   at: string;            // ISO
   channel: string;       // 'email' | 'sms'
-  direction: 'out';      // see note below
+  direction: 'out' | 'in';
   template: string;
   status: string;        // 'sent' | 'failed' | 'skipped' | 'queued'
   recipient: string;
@@ -175,17 +213,15 @@ export type ThreadMessage = {
 };
 
 /**
- * DIRECTION IS DERIVED, NOT STORED, and it is always 'out'. There is no inbound path anywhere in the
- * product — no provider webhook, no parse route — so every row in NotificationLog is, by
- * construction, something the garage sent. A stored column would carry no information today and
- * would invite a future reader to trust it before anything populates it. When inbound lands, that
- * slice adds the column and this constant goes.
+ * DIRECTION IS NOW A REAL FIELD. It was derived-and-always-outbound while nothing could arrive; the
+ * inbound slice added the column, exactly as that comment said it would. An inbound row is ordered
+ * by received_at, because created_at is when WE wrote the row, not when the customer sent it.
  */
 export async function listThreadMessages(db: Db, threadId: string): Promise<ThreadMessage[]> {
   const rows = await (db as any).notificationLog.findMany({
     where: { thread_id: threadId },
     orderBy: { created_at: 'asc' },
-    select: { id: true, created_at: true, channel: true, template: true, status: true, recipient: true, subject: true, error: true, body: true, sent_by_user: true },
+    select: { id: true, created_at: true, channel: true, template: true, status: true, recipient: true, subject: true, error: true, body: true, sent_by_user: true, direction: true, received_at: true },
   });
   // Resolve sender names in one read rather than per row.
   const ids = [...new Set(rows.map((r: any) => r.sent_by_user).filter(Boolean))] as string[];
@@ -193,7 +229,8 @@ export async function listThreadMessages(db: Db, threadId: string): Promise<Thre
     ? new Map((await (db as any).user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map((u: any) => [u.id, u.name]))
     : new Map<string, string>();
   return rows.map((r: any) => ({
-    id: r.id, at: r.created_at.toISOString(), channel: r.channel, direction: 'out' as const,
+    id: r.id, at: (r.received_at ?? r.created_at).toISOString(), channel: r.channel,
+    direction: (r.direction === 'in' ? 'in' : 'out') as 'in' | 'out',
     template: r.template, status: r.status, recipient: r.recipient, subject: r.subject ?? null, error: r.error ?? null,
     body: r.body ?? null,
     sentByName: r.sent_by_user ? (users.get(r.sent_by_user) ?? 'A team member') : null,
@@ -214,11 +251,23 @@ export async function conversationForJobCard(db: Db, jobCardId: string): Promise
 }
 
 /**
- * The nav count. OPEN THREADS, not unread messages — and the distinction is deliberate. `unread_count`
- * is inbound-driven and structurally 0 (nothing in the product can receive a message), so a badge
- * reading unread could never be anything but blank: decoration pretending to be information. Open
- * conversations is a real number that changes. See the Messages screen, which says which it is.
+ * THE NAV COUNT — now UNREAD, as originally intended.
+ *
+ * It counted open conversations while nothing could arrive, because an unread badge that could only
+ * ever read zero is decoration pretending to be information. Inbound makes unread a real number, so
+ * the badge means what a badge is supposed to mean. This is the change that makes it honest.
  */
+export async function unreadThreadCount(db: Db, groupId: string): Promise<number> {
+  const r = await (db as any).messageThread.aggregate({ where: { group_id: groupId }, _sum: { unread_count: true } });
+  return r._sum.unread_count ?? 0;
+}
+
+/** Conversations where the CUSTOMER spoke last. The point of the whole feature. */
+export async function unrespondedThreadCount(db: Db, groupId: string): Promise<number> {
+  return (db as any).messageThread.count({ where: { group_id: groupId, last_message_direction: 'in' } });
+}
+
+/** Kept for callers that still want it; no longer what the nav shows. */
 export async function openThreadCount(db: Db, groupId: string): Promise<number> {
   return (db as any).messageThread.count({ where: { group_id: groupId, state: 'open', last_message_at: { not: null } } });
 }

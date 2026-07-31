@@ -33,7 +33,7 @@
  */
 import { prisma } from '@/lib/db';
 
-export const MODULES = ['core', 'web'] as const;
+export const MODULES = ['core', 'web', 'inbound'] as const;
 export type ModuleKey = typeof MODULES[number];
 
 export const isModuleKey = (k: string): k is ModuleKey => (MODULES as readonly string[]).includes(k);
@@ -42,7 +42,17 @@ export const isModuleKey = (k: string): k is ModuleKey => (MODULES as readonly s
 export const MODULE_LABELS: Record<ModuleKey, string> = {
   core: 'Core',
   web: 'Web', // white-label site, SEO, customer-facing online booking, customer-facing promo codes
+  inbound: 'Inbound email', // customer replies arrive in GreaseDesk instead of the garage's inbox
 };
+
+/**
+ * CLOSED BY DEFAULT, against the open-by-default rule above, and deliberately so. Enabling inbound
+ * changes where a garage's customer replies LAND: resolveReplyTo starts handing out the inbound
+ * address instead of their own. Defaulting that to ON for every unseeded tenant would silently
+ * redirect real customer mail away from the mailbox their staff watch. Absence of a row must mean
+ * "not switched on", not "switched on because nobody said otherwise".
+ */
+export const CLOSED_BY_DEFAULT: ReadonlySet<string> = new Set(['inbound']);
 
 /**
  * OPEN BY DEFAULT, deliberately, for now. Nothing is on sale as a module yet; a tenant with no row
@@ -94,9 +104,13 @@ export async function hasModule(groupId: string | null | undefined, moduleKey: M
       where: { group_id_feature_key: { group_id: groupId, feature_key: moduleKey } },
       select: { enabled: true },
     });
-    return row ? row.enabled : MODULE_DEFAULT_WHEN_UNSET;
+    if (row) return row.enabled;
+    // A key in CLOSED_BY_DEFAULT is off until something explicitly turns it on.
+    return CLOSED_BY_DEFAULT.has(moduleKey) ? false : MODULE_DEFAULT_WHEN_UNSET;
   } catch {
-    return MODULE_DEFAULT_WHEN_UNSET; // a lookup failure must not lock a paying tenant out
+    // A lookup failure must not lock a paying tenant out of what they already have — but it must
+    // also never switch on something that redirects their mail.
+    return CLOSED_BY_DEFAULT.has(moduleKey) ? false : MODULE_DEFAULT_WHEN_UNSET;
   }
 }
 

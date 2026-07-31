@@ -20,7 +20,8 @@ import { requireCanWrite } from '@/lib/admin-guard';
 import { sendNotification } from '@/lib/notify';
 import { writeThreadAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
-import { listThreadMessages, threadReachability, reachabilityForJobCard, threadKeyForJobCard, ensureThread, type NotifyChannelName } from '@/lib/message-threads';
+import { listThreadMessages, threadReachability, reachabilityForJobCard, threadKeyForJobCard, ensureThread, ensureThreadToken, type NotifyChannelName } from '@/lib/message-threads';
+import { hasModule } from '@/lib/modules';
 
 const MAX_BODY = 2000;
 
@@ -89,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const group = await prisma.group.findUnique({
     where: { id: groupId },
-    select: { group_name: true, trading_name: true, billing_email: true, invoice_reply_to: true, invoice_sender_name: true },
+    select: { group_name: true, trading_name: true, billing_email: true, invoice_reply_to: true, invoice_sender_name: true, inbound_token: true },
   });
   const garageName = (group?.trading_name || group?.group_name || 'Your garage') as string;
 
@@ -110,7 +111,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
     emailOpts: {
       fromName: (group?.invoice_sender_name || '').trim() || garageName,
-      replyTo: resolveReplyTo(group), // ONE resolver — see lib/reply-to
+      // Entitled tenants get the THREAD's own inbound address, so a customer's reply lands back on
+      // this conversation. Unentitled tenants keep their existing reply-to, unchanged.
+      replyTo: resolveReplyTo(group, { inboundEnabled: await hasModule(groupId, 'inbound'), threadToken: await ensureThreadToken(prisma, thread.id) }),
     },
   });
 

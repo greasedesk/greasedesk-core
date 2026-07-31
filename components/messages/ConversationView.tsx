@@ -23,7 +23,7 @@ export type ConversationMessage = {
   id: string;
   at: string;
   channel: string;
-  direction: 'out';
+  direction: 'out' | 'in';
   template: string;
   status: string;
   recipient: string;
@@ -50,6 +50,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   password_reset: 'Password reset',
   signup_verify: 'Email verification',
   free_text: 'Message',
+  inbound_email: 'Customer reply',
+  inbound_forward: 'Copy to the garage',
 };
 
 /**
@@ -66,6 +68,9 @@ function statusChip(status: string): { text: string; cls: string; title: string 
       return { text: 'Failed', cls: 'bg-danger-soft text-danger border-danger', title: 'The provider rejected the message, or the send threw.' };
     case 'queued':
       return { text: 'Queued', cls: 'bg-surface-muted text-muted border-line', title: 'Recorded but not yet handed to a provider.' };
+    case 'received':
+      // INBOUND. "Received" is a fact we witnessed, unlike delivery of anything we send.
+      return { text: 'Received', cls: 'bg-accent-soft text-accent border-accent', title: 'This message arrived from the customer.' };
     default:
       return { text: status, cls: 'bg-surface-muted text-muted border-line', title: status };
   }
@@ -147,21 +152,31 @@ export default function ConversationView({
           {messages.map((m) => {
             const chip = statusChip(m.status);
             return (
-              <li key={m.id} data-testid="conversation-item" data-status={m.status} className="border border-line rounded-xl p-3 bg-surface">
+              <li key={m.id} data-testid="conversation-item" data-status={m.status} data-direction={m.direction}
+                  className={`border rounded-xl p-3 ${m.direction === 'in' ? 'border-accent bg-accent-soft' : 'border-line bg-surface'}`}>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <span className="font-semibold text-ink">{TEMPLATE_LABEL[m.template] ?? m.template}</span>
                   <span className="uppercase tracking-wide text-muted border border-line rounded px-1.5 py-0.5">{m.channel}</span>
-                  {/* Outbound is the only direction the product has. Stated, not implied. */}
-                  <span className="text-muted" title="Sent by the garage. The product has no inbound message path yet.">↗ Outbound</span>
+                  {m.direction === 'in'
+                    ? <span className="text-accent font-semibold" title="This came FROM the customer.">↙ Inbound</span>
+                    : <span className="text-muted" title="Sent by the garage.">↗ Outbound</span>}
                   <span className={`rounded-full border px-2 py-0.5 ${chip.cls}`} title={chip.title} data-testid={`status-${m.status}`}>{chip.text}</span>
                   <span className="ml-auto text-muted tabular-nums" data-testid="conversation-time">{fmt(m.at, locale)}</span>
                 </div>
                 <div className="mt-1 text-xs text-muted break-all">
-                  To {m.recipient}{m.subject ? <> · <span className="text-ink">{m.subject}</span></> : null}
-                  {' · '}
-                  {/* WHO sent it. Null is the system, and it says so — it does not borrow a name. */}
-                  <span data-testid="sent-by">{m.sentByName ? `Sent by ${m.sentByName}` : 'Sent automatically'}</span>
+                  {m.direction === 'in' ? <>From {m.recipient}</> : <>To {m.recipient}</>}
+                  {m.subject ? <> · <span className="text-ink">{m.subject}</span></> : null}
+                  {m.direction === 'out' && <>
+                    {' · '}
+                    {/* WHO sent it. Null is the system, and it says so — it does not borrow a name. */}
+                    <span data-testid="sent-by">{m.sentByName ? `Sent by ${m.sentByName}` : 'Sent automatically'}</span>
+                  </>}
                 </div>
+                {m.direction === 'in' && !m.body && (
+                  <p className="mt-2 text-xs text-warn" data-testid="body-pending">
+                    The message text hasn&rsquo;t been retrieved yet — the arrival is recorded and the text will follow.
+                  </p>
+                )}
                 {m.body && (
                   <p className="mt-2 text-sm text-ink whitespace-pre-wrap border-l-2 border-line pl-3" data-testid="message-body">{m.body}</p>
                 )}

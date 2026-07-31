@@ -37,11 +37,13 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
 
   const group = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { group_name: true, billing_email: true, invoice_email_footer: true, invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true },
+    select: { group_name: true, billing_email: true, invoice_email_footer: true, invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, inbound_token: true },
   })) as any;
   // Invoicing-tab settings with sensible fallbacks (pre-config tenants behave exactly as before).
   const senderName = (group.invoice_sender_name || '').trim() || group.group_name;
-  const replyTo = resolveReplyTo(group); // ONE resolver — see lib/reply-to (was an inline literal here)
+  // ONE resolver — see lib/reply-to. Hands out the inbound address ONLY for entitled tenants.
+  const { hasModule } = await import('@/lib/modules');
+  const replyTo = resolveReplyTo(group, { inboundEnabled: await hasModule(groupId, 'inbound') });
   const garageCopyAddr = (group.invoice_bcc || '').trim() || (group.billing_email || '').trim();
 
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);

@@ -157,6 +157,20 @@ export const NOTIFICATION_TEMPLATES = {
     sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}` }),
   },
 
+  // A COPY of an inbound customer reply, forwarded to the garage's own mailbox so that switching
+  // inbound on never stops mail arriving where staff already read it. Addressed to the tenant's REAL
+  // address, never to the inbound address — that would loop straight back into the pipeline.
+  inbound_forward: {
+    label: 'Customer reply (copy)',
+    email: (d) => ({
+      subject: `Reply from ${d.from ?? 'a customer'}: ${d.subjectLine ?? ''}`,
+      html: shell(`
+        <p style="font-size:13px;color:#475569">${esc(d.from)} replied to ${esc(d.garageName)}. It is on the conversation in GreaseDesk; this is your copy.</p>
+        <p style="font-weight:600">${esc(d.subjectLine)}</p>
+        <div style="white-space:pre-wrap">${esc(d.body)}</div>`),
+    }),
+  },
+
   password_reset: {
     label: 'Password reset',
     email: (d) => ({
