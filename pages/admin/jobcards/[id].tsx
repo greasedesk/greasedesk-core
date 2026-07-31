@@ -32,6 +32,8 @@ import { diaryReturnHref } from '@/lib/diary-return';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type PageProps = {
+  // READ-ONLY message history for this card's (customer, vehicle) thread.
+  conversation: import('@/components/messages/ConversationView').ConversationMessage[];
   registration: string;
   createdAt: string;
   status: JobStatus;
@@ -137,6 +139,7 @@ export default function JobCardDetailPage(props: PageProps) {
         quoteSupersededNoLink={props.quoteSupersededNoLink}
         isAdmin={props.isAdmin}
         owner={props.owner}
+        conversation={props.conversation}
         vehicle={props.vehicle}
         flags={props.flags}
         isComeback={props.isComeback}
