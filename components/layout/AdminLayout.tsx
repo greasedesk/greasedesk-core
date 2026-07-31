@@ -18,7 +18,11 @@ import { useTranslation } from 'next-i18next';
 import BrandLogo from '@/components/BrandLogo';
 
 type Loc = { id: string; site_name: string };
-type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards'; needsInvoicePerm?: boolean; adminOnly?: boolean };
+type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards'; needsInvoicePerm?: boolean; adminOnly?: boolean;
+  /** Optional count rendered as a pill. `countKey` names which count this item reads — the value is
+   *  passed in by the page, because only the page's server side knows it. Absent = no pill, and a
+   *  ZERO renders NOTHING: a badge showing 0 is noise pretending to be information. */
+  countKey?: 'messages' };
 
 // `key` is a stable i18n key (translated via t(`nav.${key}`)); display text lives in locale files.
 // locScope marks sections that expand a per-location sub-menu.
@@ -27,6 +31,10 @@ const navItems: NavItemDef[] = [
   { key: 'diary', href: '/admin/diary', icon: '🗓️', ready: true, locScope: 'diary' },
   { key: 'jobCards', href: '/admin/jobcards', icon: '🛠️', ready: true, locScope: 'jobcards' },
   { key: 'quotes', href: '/admin/quotes', icon: '📝', ready: true },
+  // The count is OPEN CONVERSATIONS, not unread messages. `unread` is inbound-driven and structurally
+  // zero (nothing in the product can receive a message), so an unread badge could never be anything
+  // but blank. See lib/message-threads::openThreadCount.
+  { key: 'messages', href: '/admin/messages', icon: '💬', ready: true, countKey: 'messages' },
   { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
@@ -38,6 +46,9 @@ const visibleNavItems = navItems.filter((item) => item.ready);
 
 interface AdminLayoutProps {
   children: React.ReactNode;
+  /** Open-conversation count for the Messages pill. Omitted on pages that don't compute it — an
+   *  absent count renders no pill, which is honest: unknown is not zero. */
+  messagesCount?: number;
 }
 
 const navLink = (active: boolean) =>
@@ -52,10 +63,11 @@ const subLink = (active: boolean) =>
 
 // Shared nav renderer (desktop sidebar + mobile overlay). onNavigate closes the mobile menu.
 function NavList({
-  pathname, siteQuery, locations, primarySiteId, t, onNavigate, canViewInvoices, isAdmin,
+  pathname, siteQuery, locations, primarySiteId, t, onNavigate, canViewInvoices, isAdmin, messagesCount,
 }: {
   pathname: string; siteQuery: string; locations: Loc[]; primarySiteId: string | null;
   t: (k: string) => string; onNavigate?: () => void; canViewInvoices?: boolean; isAdmin?: boolean;
+  messagesCount?: number;
 }) {
   return (
     <>
@@ -70,6 +82,12 @@ function NavList({
             <Link href={item.href} onClick={onNavigate} className={navLink(active)}>
               <span className="mr-3 text-lg">{item.icon}</span>
               {t(`nav.${item.key}`)}
+              {item.countKey === 'messages' && typeof messagesCount === 'number' && messagesCount > 0 && (
+                <span data-testid="nav-count-messages"
+                  className="ml-auto text-xs font-semibold rounded-full px-2 py-0.5 bg-accent text-white">
+                  {messagesCount}
+                </span>
+              )}
             </Link>
             {showSub && (
               <div className="mt-1 mb-1 ml-4 pl-3 border-l border-sidebar-line space-y-0.5">
@@ -92,7 +110,7 @@ function NavList({
   );
 }
 
-export default function AdminLayout({ children }: AdminLayoutProps) {
+export default function AdminLayout({ children, messagesCount }: AdminLayoutProps) {
   const router = useRouter();
   const { t } = useTranslation('common');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -127,7 +145,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         <div className="mb-8"><BrandLogo /></div>
 
         <nav className="space-y-2">
-          <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} canViewInvoices={canViewInvoices} isAdmin={isAdmin} />
+          <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} canViewInvoices={canViewInvoices} isAdmin={isAdmin} messagesCount={messagesCount} />
         </nav>
 
         {/* Settings (cog) sits at the bottom, directly above Sign Out. */}
@@ -176,6 +194,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               <NavList
                 pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId}
                 t={t} onNavigate={() => setIsSidebarOpen(false)} canViewInvoices={canViewInvoices} isAdmin={isAdmin}
+                messagesCount={messagesCount}
               />
             </nav>
             <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/settings'))}`}>

@@ -17,6 +17,7 @@
 import { prisma } from '@/lib/db';
 import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
+import { linkMessageToThread } from '@/lib/message-threads';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -127,6 +128,12 @@ async function record(args: {
       },
       select: { id: true },
     });
+    // THREADING happens HERE, for EVERY recorded row — sent, failed and skipped alike. A refusal
+    // ("they've opted out of email") is part of the conversation history, not an absence from it;
+    // threading only the successes would make the thread quietly disagree with the log. Best-effort
+    // and non-fatal: the message is already recorded, and a threading error must never turn a
+    // delivered message into a reported failure.
+    await linkMessageToThread(prisma, row.id, args.subjectRef?.type ?? null, args.subjectRef?.id ?? null);
     return row.id;
   } catch {
     return null; // logging must never break the send path

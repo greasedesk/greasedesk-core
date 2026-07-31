@@ -13,7 +13,8 @@
     "signOut": "Sign Out",
     "toggleMenu": "Toggle Menu",
     "allLocations": "All locations",
-    "invoices": "Invoices"
+    "invoices": "Invoices",
+    "messages": "Messages"
   },
   "dashboard": {
     "welcome": "Welcome Back!",

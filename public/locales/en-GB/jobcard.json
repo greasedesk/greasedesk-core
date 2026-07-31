@@ -390,5 +390,8 @@
     "failed": "Could not duplicate this card.",
     "ownerChanged": "This vehicle now belongs to {{current}}. The original card was for {{previous}}.",
     "costsInherited": "Prices and costs were copied from {{reg}} — check supplier costs before quoting."
+  },
+  "messages": {
+    "heading": "Messages"
   }
 }

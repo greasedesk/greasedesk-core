@@ -18,6 +18,7 @@ import { lineFlags, toPlausible, partsProfit } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
+import ConversationView, { type ConversationMessage } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
@@ -42,7 +43,9 @@ type Props = {
   quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
-  owner: { name: string; phone: string | null; email: string | null; address: string | null };
+  owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null };
+  // READ-ONLY message history for this card's (customer, vehicle) thread — server-resolved.
+  conversation?: ConversationMessage[];
   vehicle: {
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
     make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
@@ -391,6 +394,11 @@ export default function JobCardWorkspace(p: Props) {
           locale={p.locale}
           onSaved={refreshCard}
         />
+
+        {/* THE CONVERSATION — on the customer record, read-only in this slice. */}
+        <div className="bg-surface border border-line rounded-xl p-5">
+          <ConversationView messages={p.conversation ?? []} locale={p.locale} heading={t('messages.heading')} dense />
+        </div>
 
         <div className="bg-surface border border-line rounded-xl p-5">
           <h3 className="text-sm font-semibold text-ink mb-3">{t('field.flags')}</h3>

@@ -16,6 +16,7 @@ import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibili
 import { canEditInvoice } from '@/lib/invoice';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
+import { conversationForJobCard } from '@/lib/message-threads';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { computeTabs } from '@/lib/jobcard-tabs';
 import { parseBreaks } from '@/lib/occupancy';
@@ -223,7 +224,12 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     : null;
   const costsInherited = canEditPricing && !!row.costs_inherited;
 
+  // The conversation for this card's (customer, vehicle) — READ-ONLY, resolved through the ownership
+  // edge by lib/message-threads. An absent thread yields an empty list, never an error.
+  const conversation = await conversationForJobCard(prisma, row.id);
+
   return {
+    conversation: conversation.messages,
     registration: row.vehicle?.registration ?? '—',
     createdAt: row.created_at.toISOString(),
     status: row.status,

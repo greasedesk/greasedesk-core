@@ -273,6 +273,7 @@ model Group {
   catalogueAliases CatalogueAlias[]
   lineSplitTemplates LineSplitTemplate[]
   notifications    NotificationLog[]
+  message_threads  MessageThread[]
   magicLinks       CustomerMagicLink[]
   countryWaitlist  CountryWaitlist[]
   quoteVersions    QuoteVersion[]
@@ -897,6 +898,7 @@ model Customer {
   ownerships VehicleOwnership[]
   bookings   Booking[]
   job_cards  JobCard[]
+  threads    MessageThread[]
 
   @@index([group_id, site_id])
   @@index([group_id, phone_e164])
@@ -940,6 +942,7 @@ model Vehicle {
   ownerships VehicleOwnership[]
   bookings   Booking[]
   job_cards  JobCard[]
+  threads    MessageThread[]
 
   @@index([group_id, customer_id])
   @@index([registration])
@@ -2042,11 +2045,59 @@ model NotificationLog {
   created_at DateTime  @default(now())
   sent_at    DateTime? // when the provider accepted it
 
-  group Group? @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  // The conversation this message belongs to. NULLABLE and honestly so: a staff invite, an operator
+  // email or a garage-facing alert is NOT a customer conversation, and a null here says exactly that
+  // — it is not an orphan awaiting repair. NotificationLog remains THE single record of what was
+  // sent; the thread is an index over it, never a second copy.
+  thread_id String?
+
+  group  Group?         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  thread MessageThread? @relation(fields: [thread_id], references: [id], onDelete: SetNull)
 
   @@index([group_id, created_at])
   @@index([provider_message_id])
   @@index([subject_type, subject_id])
+  @@index([thread_id, created_at])
+}
+
+// ── MESSAGE THREADS ───────────────────────────────────────────────────────────────────────────────
+// One conversation per (tenant, customer, vehicle). An INDEX over NotificationLog, not a second log:
+// no message body lives here, and deleting a thread would lose nothing but the grouping.
+//
+// KEYED ON CUSTOMER **AND** VEHICLE, deliberately. Ownership transfer has never been performed in
+// this codebase (no writer sets is_current false or valid_to; 160 edges, 160 current), so today this
+// is indistinguishable from keying on the vehicle alone. It stops being indistinguishable the moment
+// transfer is built: a car changing hands must NOT hand the new owner the old owner's messages.
+// Paying that cost now is cheaper than migrating a mis-keyed thread table later.
+//
+// The customer is resolved the way the JOB CARD resolves it — through the current VehicleOwnership
+// edge (lib/vehicle-identity::getCurrentOwnerId), never through JobCard.customer_id, which is
+// nullable and is not the source of truth for ownership.
+model MessageThread {
+  id          String @id @default(uuid())
+  group_id    String
+  customer_id String
+  vehicle_id  String
+
+  // Denormalised for the list view — derived from the messages, never authored.
+  last_message_at DateTime?
+  // INBOUND messages not yet read. Structurally 0 today: there is no inbound path anywhere in the
+  // product (no webhook, no parse route), so nothing can increment this. It is NOT a "no unread"
+  // claim dressed up — it is the honest count of a thing that cannot yet happen.
+  unread_count    Int       @default(0)
+  // 'open' | 'resolved'. No assignment to individual staff in v1 — a thread belongs to the garage.
+  state           String    @default("open")
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  group    Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  customer Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  vehicle  Vehicle           @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  messages NotificationLog[]
+
+  @@unique([group_id, customer_id, vehicle_id])
+  @@index([group_id, state, last_message_at])
 }
 
 // ── MAGIC-LINK CUSTOMER AUTH (slice-1 B) ──────────────────────────────────────────────────────────
