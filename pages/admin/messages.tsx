@@ -13,12 +13,11 @@ import Head from 'next/head';
 import Link from 'next/link';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
-import AdminLayout from '@/components/layout/AdminLayout';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import { getVisibility } from '@/lib/site-visibility';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { listThreadMessages, unreadThreadCount, threadReachability } from '@/lib/message-threads';
+import { listThreadMessages, threadReachability } from '@/lib/message-threads';
 
 type ThreadRow = {
   id: string; customerName: string; registration: string; lastMessageAt: string | null;
@@ -26,12 +25,15 @@ type ThreadRow = {
   /** 'in' = the CUSTOMER spoke last and nobody has answered. This is "unresponded". */
   lastDirection: string | null;
 };
-type PageProps = { threads: ThreadRow[]; messages: Record<string, ConversationMessage[]>; reach: Record<string, Reachability | null>; navCount: number; locale: string };
+// NO navCount. The admin shell is mounted ONCE in _app for every /admin route; this page must not
+// mount another. Passing the pill count as a prop is what forced it to — and the nav rendered twice.
+// The shell fetches its own count from /api/messages/unread.
+type PageProps = { threads: ThreadRow[]; messages: Record<string, ConversationMessage[]>; reach: Record<string, Reachability | null>; locale: string };
 
 const fmtDay = (iso: string | null, locale: string) =>
   iso ? new Date(iso).toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
-export default function MessagesPage({ threads, messages, reach, navCount, locale }: PageProps) {
+export default function MessagesPage({ threads, messages, reach, locale }: PageProps) {
   const [sel, setSel] = useState<string | null>(threads[0]?.id ?? null);
   // WHETHER A PERSON CHOSE THIS THREAD. The first thread is auto-selected so the pane isn't empty,
   // but auto-selection is NOT reading: marking it read on load would clear the badge for a user who
@@ -61,7 +63,7 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
   }, [sel, userPicked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <AdminLayout messagesCount={navCount}>
+    <>
       <Head><title>Messages — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Messages</h1>
       <p className="text-sm text-muted mb-5">
@@ -135,7 +137,7 @@ export default function MessagesPage({ threads, messages, reach, navCount, local
         Messages about a job card also appear on that card&rsquo;s Customer Details tab.{' '}
         <Link href="/admin/jobcards" className="text-accent hover:underline">Job cards</Link>
       </p>
-    </AdminLayout>
+    </>
   );
 }
 
@@ -169,5 +171,5 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   const site = await prisma.site.findFirst({ where: { group_id: groupId }, select: { locale: true } });
-  return { props: { threads, messages, reach, navCount: await unreadThreadCount(prisma, groupId), locale: site?.locale ?? 'en-GB' } };
+  return { props: { threads, messages, reach, locale: site?.locale ?? 'en-GB' } };
 };

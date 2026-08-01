@@ -46,9 +46,6 @@ const visibleNavItems = navItems.filter((item) => item.ready);
 
 interface AdminLayoutProps {
   children: React.ReactNode;
-  /** UNREAD inbound count for the Messages pill. Omitted on pages that don't compute it — an
-   *  absent count renders no pill, which is honest: unknown is not zero. */
-  messagesCount?: number;
 }
 
 const navLink = (active: boolean) =>
@@ -67,7 +64,7 @@ function NavList({
 }: {
   pathname: string; siteQuery: string; locations: Loc[]; primarySiteId: string | null;
   t: (k: string) => string; onNavigate?: () => void; canViewInvoices?: boolean; isAdmin?: boolean;
-  messagesCount?: number;
+  messagesCount?: number | null;
 }) {
   return (
     <>
@@ -110,7 +107,12 @@ function NavList({
   );
 }
 
-export default function AdminLayout({ children, messagesCount }: AdminLayoutProps) {
+export default function AdminLayout({ children }: AdminLayoutProps) {
+  // THE SHELL OWNS THE PILL COUNT. It used to arrive as a prop from /admin/messages, which forced
+  // that page to mount its own AdminLayout inside this persistent one — two shells, two nav
+  // columns. It also meant the pill appeared ONLY on the Messages page, the one place you don't
+  // need telling. Null until known: absent renders no pill, and unknown is not zero.
+  const [messagesCount, setMessagesCount] = useState<number | null>(null);
   const router = useRouter();
   const { t } = useTranslation('common');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -118,6 +120,16 @@ export default function AdminLayout({ children, messagesCount }: AdminLayoutProp
   const [primarySiteId, setPrimarySiteId] = useState<string | null>(null);
   const [canViewInvoices, setCanViewInvoices] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // Unlike the locations fetch below, this one repeats on navigation: unread changes as you read.
+  useEffect(() => {
+    let live = true;
+    fetch('/api/messages/unread')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d) setMessagesCount(typeof d.unread === 'number' ? d.unread : null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [router.pathname, router.asPath]);
 
   // Fetches ONCE for the whole admin session (this shell is persistent — never remounts on nav).
   useEffect(() => {
