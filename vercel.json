@@ -1,6 +1,15 @@
 {
-  "regions": ["lhr1"],
+  "regions": [
+    "lhr1"
+  ],
   "crons": [
-    { "path": "/api/cron/confirm-paid", "schedule": "0 * * * *" }
+    {
+      "path": "/api/cron/confirm-paid",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/inbound-bodies",
+      "schedule": "15 * * * *"
+    }
   ]
 }

@@ -2064,6 +2064,11 @@ model NotificationLog {
   // discards received mail after 30 DAYS — after that their API cannot answer, so this row is the
   // only copy of what a customer said.
   body_html    String?
+  // WHY the body is missing — provider status code and message. A SEPARATE column from `error`
+  // deliberately: `error` answers "why couldn't this be placed on a conversation", and a body-fetch
+  // failure is an independent axis. Conflating them would make the unresolved view start reporting
+  // fetch faults as resolution faults. Null with a null body = not attempted yet.
+  body_error   String?
   // WHO PRESSED SEND. Null = the system emitted it (a quote going out, the receipt cron) — that is
   // a different act from a person deciding to contact a customer, and the null is the distinction.
   sent_by_user String?

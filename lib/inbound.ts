@@ -98,10 +98,21 @@ export async function resolveInbound(db: PrismaClient, payload: InboundPayload):
   return { groupId: null, threadId: null, resolution: 'unresolved', reason: 'recipient address carries no recognised token' };
 }
 
-/** Fetch the body. Returns nulls on ANY failure — the caller records the row regardless. */
-export async function fetchInboundBody(emailId: string): Promise<{ text: string | null; html: string | null; ok: boolean }> {
+/**
+ * Fetch the body. Returns nulls on ANY failure — the caller records the row regardless — but ALWAYS
+ * returns a REASON when it fails.
+ *
+ * The first genuine inbound message arrived with a null body and nothing anywhere recording why:
+ * the failure went to a console line and was gone. Diagnosing it meant guessing between a
+ * sending-only API key and a not-yet-ready body. A silent absence is the failure mode this project
+ * keeps re-finding, and swallowing the status code is how it happens. Every exit here names itself.
+ */
+export type BodyFetch = { text: string | null; html: string | null; ok: boolean; error: string | null };
+
+export async function fetchInboundBody(emailId: string): Promise<BodyFetch> {
   const key = process.env.RESEND_API_KEY;
-  if (!key || !emailId) return { text: null, html: null, ok: false };
+  if (!key) return { text: null, html: null, ok: false, error: 'no RESEND_API_KEY in this environment' };
+  if (!emailId) return { text: null, html: null, ok: false, error: 'no provider email id on the event' };
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -109,11 +120,19 @@ export async function fetchInboundBody(emailId: string): Promise<{ text: string 
       headers: { Authorization: `Bearer ${key}` }, signal: ctrl.signal,
     });
     clearTimeout(timer);
-    if (!r.ok) return { text: null, html: null, ok: false };
+    if (!r.ok) {
+      // The provider's own words, capped. A 401/403 means the key lacks receiving access; a 404
+      // usually means the content is not ready yet. The distinction is the whole diagnosis, so it
+      // is stored rather than inferred later.
+      const detail = (await r.text().catch(() => '')).slice(0, 300);
+      return { text: null, html: null, ok: false, error: `HTTP ${r.status} ${r.statusText || ''} — ${detail}`.trim() };
+    }
     const j = (await r.json()) as { text?: string; html?: string };
-    return { text: j.text ?? null, html: j.html ?? null, ok: true };
-  } catch {
-    return { text: null, html: null, ok: false };
+    const text = j.text ?? null, html = j.html ?? null;
+    if (text === null && html === null) return { text: null, html: null, ok: false, error: 'HTTP 200 but the response carried neither text nor html' };
+    return { text, html, ok: true, error: null };
+  } catch (e: any) {
+    return { text: null, html: null, ok: false, error: e?.name === 'AbortError' ? 'timed out after 8s' : `fetch threw: ${e?.message ?? e}` };
   }
 }
 
@@ -147,6 +166,7 @@ export async function processInbound(db: PrismaClient, payload: InboundPayload):
       provider_message_id: emailId || null,
       body: body.text,
       body_html: body.html,
+      body_error: body.error,   // null when the body arrived; the provider's reason when it did not
       received_at: receivedAt,
       sent_at: null,                     // we did not send it; a copied timestamp would claim we did
       thread_id: res.threadId,
