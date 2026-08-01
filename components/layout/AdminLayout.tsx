@@ -182,6 +182,12 @@ export default function AdminLayout({ children, messagesCount }: AdminLayoutProp
 
         {/* Page content */}
         <WorkshopNudge t={t} />
+        {/* THE CONTENT CONTAINER, and the one place that decides how a page sits in it: full
+            width, LEFT-ALIGNED. This layout previously expressed no opinion, so pages invented
+            their own — Invoices, Roster and HR each added `max-w-* mx-auto` independently, with
+            three different widths, and centred themselves while the rest of the app did not.
+            A page may cap its own READING WIDTH (a form is not a table); it must not centre
+            itself. `mx-auto` does not belong in a page under /admin. */}
         <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
       </main>
 

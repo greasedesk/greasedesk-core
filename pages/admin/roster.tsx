@@ -236,7 +236,7 @@ export default function RosterPage() {
   return (
     <>
       <Head><title>{t('title')} - GreaseDesk</title></Head>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h1 className="text-xl font-bold text-ink">{t('title')}</h1>
           <div className="flex items-center gap-1.5">

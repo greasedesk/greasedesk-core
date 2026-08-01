@@ -243,7 +243,7 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
   return (
     <>
       <Head><title>{th('title')} - GreaseDesk</title></Head>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
           <h1 className="text-xl font-bold text-ink">{th('title')}</h1>
           {tab === 'current' && !form && (

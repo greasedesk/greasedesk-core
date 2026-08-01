@@ -108,7 +108,7 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
   return (
     <>
       <Head><title>{t('title')} - GreaseDesk</title></Head>
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-ink">{t('title')}</h1>

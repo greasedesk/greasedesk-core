@@ -91,7 +91,7 @@ function ProfitCentreTags({ tags, siteId, testName }: { tags: PcTag[]; siteId: s
   }
 
   return (
-    <div className="max-w-4xl mx-auto bg-surface p-6 rounded-xl border border-line mt-6">
+    <div className="max-w-4xl bg-surface p-6 rounded-xl border border-line mt-6">
       <h2 className={sectionHeaderClass}>Profit Centre Tags (reporting)</h2>
       <p className="text-muted text-sm mb-4">
         Typed tags applied to job cards &amp; bookings for P&amp;L reporting. They are not operational — the
@@ -190,7 +190,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
     <SettingsLayout isAdmin={isAdmin}>
       <Head><title>Financial Settings - GreaseDesk</title></Head>
 
-      <div className="max-w-4xl mx-auto bg-surface p-6 sm:p-8 rounded-xl border border-line">
+      <div className="max-w-4xl bg-surface p-6 sm:p-8 rounded-xl border border-line">
         {sites.length > 1 && (
           <div className="mb-6">
             <label htmlFor="siteSelect" className={labelClass}>Location</label>
