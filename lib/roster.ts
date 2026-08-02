@@ -19,7 +19,7 @@
  */
 import { prisma } from '@/lib/db';
 import type { Visibility } from '@/lib/site-visibility';
-import { rosteredWeekdays, isRosteredOn, dayKey } from '@/lib/capacity';
+import { rosteredWeekdays, isRosteredOn, dayKey, valuesAtWindowEnd, isNullableNumber } from '@/lib/capacity';
 import { DEDUCTS_ALLOWANCE, LeaveTypeKey } from '@/lib/leave-types';
 
 export type RosterLeaveRow = {
@@ -115,9 +115,17 @@ export async function buildRoster(groupId: string, vis: Visibility, year: number
   else if (vis.role === 'SITE_MANAGER') visible = all.filter((p) => inManagedSite(p) || isSelf(p));
   else visible = all.filter(isSelf);
 
+  // ALLOWANCE AS OF THE LEAVE YEAR END, not today's column. Raising someone's entitlement in
+  // December must not retrospectively restate last January's balance. Same resolver, same boundary
+  // as capacity's factor/hours/pattern reads (lib/capacity::valuesAtWindowEnd).
+  const allowanceAt = (await valuesAtWindowEnd<number | null>(
+    visible.map((p: any) => p.id), yearTo, 'allowance', 'annual_leave_allowance_days', isNullableNumber,
+  )).values;
+
   const people: RosterPerson[] = visible.map((p) => {
     const contracted = p.contracted_hours_per_day == null ? null : Number(p.contracted_hours_per_day);
-    const allowance = p.annual_leave_allowance_days == null ? null : Number(p.annual_leave_allowance_days);
+    const resolvedAllowance = allowanceAt.has(p.id) ? allowanceAt.get(p.id)! : p.annual_leave_allowance_days;
+    const allowance = resolvedAllowance == null ? null : Number(resolvedAllowance);
     // taken: full day = 1; hours-override pro-rated against contracted (writes reject an
     // override when contracted is unset, so the fallback below only guards legacy rows).
     // ONLY allowance-deducting types move the balance (lib/leave-types DEDUCTS_ALLOWANCE —

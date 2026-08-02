@@ -12,7 +12,7 @@ import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-pe
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
-import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd } from '@/lib/capacity';
+import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
@@ -219,10 +219,11 @@ export type WageBill = { pennies: number; assumedPayPeople: string[] };
 
 export async function monthlyWageBill(groupId: string, siteIds: string[], window: { from: Date; to: Date }): Promise<WageBill> {
   const people = (await prisma.costPerson.findMany({
-    where: { ...employedDuring(groupId, window), is_chargeable: undefined, cost_type: 'salary' },
+    where: { ...employedDuring(groupId, window), cost_type: 'salary' },
     select: { id: true, name: true, amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
   })) as any[];
-  const paidAt = await valuesAtWindowEnd(people.map((p2) => p2.id), window.to, 'wage', 'amount_pennies');
+  const paid = await valuesAtWindowEnd<number>(people.map((p2) => p2.id), window.to, 'wage', 'amount_pennies', isFiniteNumber);
+  const paidAt = paid.values;
   const assumedPayPeople: string[] = [];
   const pennies = Math.round(people.reduce((a, p2) => {
     const annual = paidAt.get(p2.id);

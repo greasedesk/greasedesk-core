@@ -885,6 +885,12 @@ export default function AdminDashboard(props: PageProps) {
                           {((d as any)?.assumedPayPeople?.length ?? 0) > 0 && (
                             <p className="text-warn" data-testid="assumed-pay">{t('pnl.assumedPay', { names: (d as any).assumedPayPeople.join(', ') })}</p>
                           )}
+                          {/* A dated event exists but its stored value was REFUSED by the validator,
+                              so today's column was used instead. Never silent: that fallback IS the
+                              bug this resolver exists to remove. */}
+                          {(u.malformedEvents?.length ?? 0) > 0 && (
+                            <p className="text-danger" data-testid="malformed-events">{t('pnl.malformedEvents', { names: u.malformedEvents.join(', ') })}</p>
+                          )}
                         </div>
                       </details>
                     </>

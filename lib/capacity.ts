@@ -56,6 +56,9 @@ export type AvailableHours = {
   missingHoursMechanics: string[];   // their names, for the amber flag
   // Included DESPITE an unknown start date — surfaced, never silently counted (see header).
   unknownStartPeople: string[];
+  // People whose dated event carried a value the validator REFUSED. They fell back to today's
+  // column — which is the old bug — so the fallback is NEVER silent.
+  malformedEvents: string[];
   // Popover grain — the arithmetic must be showable, not just the total:
   mechanicCount: number;             // chargeable people contributing (with hours set)
   rosteredDays: number;              // Σ per-person rostered days in the window (config'd people)
@@ -108,11 +111,13 @@ function windowDays(window: CapacityWindow): Array<[string, number]> {
  * rule that will eventually disagree with itself. The daily accrual line MUST select the same
  * people as the total, or the chart and its own callout stop reconciling.
  *
- * Chargeable, active, and EMPLOYED DURING THE WINDOW (overlap; nulls unbounded — see header).
+ * Active and EMPLOYED DURING THE WINDOW (overlap; nulls unbounded — see header). NOT chargeable —
+ * `is_chargeable` is itself an effective-dated attribute now, so it is resolved per window in JS
+ * rather than filtered in SQL, where a historic value cannot be seen.
  */
 export function employedDuring(groupId: string, window: CapacityWindow) {
   return {
-    group_id: groupId, is_active: true, is_chargeable: true,
+    group_id: groupId, is_active: true,
     AND: [
       { OR: [{ start_date: null }, { start_date: { lt: window.to } }] },
       { OR: [{ end_date: null }, { end_date: { gte: window.from } }] },
@@ -127,7 +132,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
       where: employedDuring(groupId, window),
       select: {
         id: true, name: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true,
-        start_date: true, end_date: true,
+        is_chargeable: true, start_date: true, end_date: true,
         allocations: { where: { site_id: siteId }, select: { percent: true } },
       },
     }) as any,
@@ -138,12 +143,32 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   // capacity. The flat column remains the fallback when no change has ever been recorded.
   const openDaysAtT: number[] = await openDaysAtWindowEnd(siteId, window.to, site?.open_days);
 
-  const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
+  // EVERY effective-dated attribute resolved AS OF THE WINDOW, from one resolver. Reading the flat
+  // column here is what put May 2026 on a five-day week and 8.5h when the events said four days
+  // and 8h. `started`/`ended` stay on the flat column deliberately — a start date is a fact being
+  // corrected, not a value that varies over time.
+  const allIds = people.map((p: any) => p.id);
+  const [patternR, hoursR, chargeableR, factorR] = await Promise.all([
+    valuesAtWindowEnd<number[]>(allIds, window.to, 'pattern', 'working_days', isWeekdayArray),
+    valuesAtWindowEnd<number>(allIds, window.to, 'hours', 'contracted_hours_per_day', isFiniteNumber),
+    valuesAtWindowEnd<boolean>(allIds, window.to, 'chargeable', 'is_chargeable', isBooleanValue),
+    valuesAtWindowEnd<number>(allIds, window.to, 'factor', 'utilisation_factor', isFiniteNumber),
+  ]);
+  const nameOfId = new Map<string, string>(people.map((p: any) => [p.id, p.name]));
+  const malformedEvents = [...new Set([...patternR.malformed, ...hoursR.malformed, ...chargeableR.malformed, ...factorR.malformed])]
+    .map((id) => nameOfId.get(id) ?? id);
+  // Per-person resolved reads (event value, else today's column).
+  const hoursOf = (p: any) => { const v = hoursR.values.get(p.id); return v ?? (p.contracted_hours_per_day == null ? null : Number(p.contracted_hours_per_day)); };
+  const patternOf = (p: any) => patternR.values.get(p.id) ?? (p.working_days as number[]);
+  const chargeableOf = (p: any) => chargeableR.values.get(p.id) ?? !!p.is_chargeable;
+
+  const chargeable = people.filter(chargeableOf);
+  const missingHoursMechanics = chargeable.filter((p: any) => hoursOf(p) == null).map((p: any) => p.name);
   // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
-  const unknownStartPeople = people.filter((p: any) => p.start_date == null).map((p: any) => p.name);
-  const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
+  const unknownStartPeople = chargeable.filter((p: any) => p.start_date == null).map((p: any) => p.name);
+  const configured = chargeable.filter((p: any) => hoursOf(p) != null);
   const ids = configured.map((p: any) => p.id);
-  const factorAt = await factorsAtWindowEnd(ids, window.to);
+  const factorAt = factorR.values;
 
   const [leave, phDays] = await Promise.all([
     ids.length ? prisma.leaveRecord.findMany({
@@ -166,8 +191,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   for (const p of configured) {
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
     if (alloc <= 0) continue; // not allocated to this site — contributes nothing here
-    const contracted = Number(p.contracted_hours_per_day);
-    const rostered: number[] = rosteredWeekdays(p.working_days, openDaysAtT);
+    const contracted = Number(hoursOf(p));
+    const rostered: number[] = rosteredWeekdays(patternOf(p), openDaysAtT);
     const myLeave = leaveByPerson.get(p.id);
     let grossC = 0, subC = 0, leaveC = 0, phC = 0;
     const typeC: Record<string, number> = {};
@@ -207,6 +232,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
     unknownStartPeople,
+    malformedEvents,
     mechanicCount: configured.filter((p: any) => p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) > 0).length,
     rosteredDays,
     leaveHours: centiLeave / 100,
@@ -237,14 +263,26 @@ export async function getDailyCapacity(groupId: string, siteIds: string[], windo
         // SAME clause as getAvailableHours — the accrual line must not select a different set of
         // people from the total it is supposed to reach.
         where: employedDuring(groupId, window),
-        select: { id: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true, allocations: { where: { site_id: siteId }, select: { percent: true } } },
+        select: { id: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true, is_chargeable: true, allocations: { where: { site_id: siteId }, select: { percent: true } } },
       }) as any,
     ]);
     const openDaysAtT: number[] = await openDaysAtWindowEnd(siteId, window.to, site?.open_days);
-    const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
+    // THE SAME RESOLUTION as getAvailableHours. The accrual line is documented to reach the total
+    // exactly; resolving one and not the other would make the chart disagree with its own callout.
+    const allIds = people.map((p: any) => p.id);
+    const [patternR, hoursR, chargeableR, factorR] = await Promise.all([
+      valuesAtWindowEnd<number[]>(allIds, window.to, 'pattern', 'working_days', isWeekdayArray),
+      valuesAtWindowEnd<number>(allIds, window.to, 'hours', 'contracted_hours_per_day', isFiniteNumber),
+      valuesAtWindowEnd<boolean>(allIds, window.to, 'chargeable', 'is_chargeable', isBooleanValue),
+      valuesAtWindowEnd<number>(allIds, window.to, 'factor', 'utilisation_factor', isFiniteNumber),
+    ]);
+    const hoursOf = (p: any) => { const v = hoursR.values.get(p.id); return v ?? (p.contracted_hours_per_day == null ? null : Number(p.contracted_hours_per_day)); };
+    const patternOf = (p: any) => patternR.values.get(p.id) ?? (p.working_days as number[]);
+    const chargeableOf = (p: any) => chargeableR.values.get(p.id) ?? !!p.is_chargeable;
+    const configured = people.filter((p: any) => chargeableOf(p) && hoursOf(p) != null);
     const ids = configured.map((p: any) => p.id);
     const [factorAt, leave, phDays] = await Promise.all([
-      factorsAtWindowEnd(ids, window.to),
+      Promise.resolve(factorR.values),
       ids.length ? prisma.leaveRecord.findMany({
         where: { group_id: groupId, cost_person_id: { in: ids }, status: 'approved', date: { gte: window.from, lt: window.to } },
         select: { cost_person_id: true, date: true, hours: true },
@@ -261,8 +299,8 @@ export async function getDailyCapacity(groupId: string, siteIds: string[], windo
     for (const p of configured) {
       const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
       if (alloc <= 0) continue;
-      const contracted = Number(p.contracted_hours_per_day);
-      const rostered: number[] = rosteredWeekdays(p.working_days, openDaysAtT);
+      const contracted = Number(hoursOf(p));
+      const rostered: number[] = rosteredWeekdays(patternOf(p), openDaysAtT);
       const factorPct = factorAt.get(p.id) ?? Number(p.utilisation_factor ?? 70);
       const myLeave = leaveByPerson.get(p.id);
       // Running gross/leave/PH in centihours; at each day the person's cumulative sellable is
@@ -311,9 +349,47 @@ export async function getDailyCapacity(groupId: string, siteIds: string[], windo
  * earliest recorded change. Returns no entry at all when there is no history; the caller decides
  * what an absent entry means, and must say so out loud rather than defaulting silently.
  */
-export async function valuesAtWindowEnd(ids: string[], to: Date, kind: string, field: string): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (!ids.length) return out;
+/**
+ * ── VALIDATORS ───────────────────────────────────────────────────────────────────────────────────
+ * Supplied per kind by the caller. NEVER a cast: `value_json` is loosely-typed JSON, and coercing it
+ * would turn a malformed event into a confident wrong answer. Each one is a type guard, and anything
+ * failing it is REPORTED, not quietly skipped — see the note on `malformed` below.
+ */
+export const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** Allowance is legitimately nullable — "no entitlement recorded" is a value, not a fault. */
+export const isNullableNumber = (v: unknown): v is number | null => v === null || isFiniteNumber(v);
+export const isBooleanValue = (v: unknown): v is boolean => typeof v === 'boolean';
+/** A weekday set: integers 0–6 (getUTCDay), no duplicates. An EMPTY array is valid and meaningful —
+ *  it means "inherit the site's open days" (lib/rostered-days). */
+export const isWeekdayArray = (v: unknown): v is number[] =>
+  Array.isArray(v) && v.every((n) => Number.isInteger(n) && n >= 0 && n <= 6) && new Set(v as number[]).size === v.length;
+
+export type ResolvedValues<T> = {
+  values: Map<string, T>;
+  /** Person ids whose newest applicable event carried a value the validator REFUSED. They are NOT
+   *  silently dropped to the flat column and forgotten: the caller surfaces them, because the
+   *  failure mode of this resolver is invisible — a discarded event leaves the person on today's
+   *  column, which is exactly the bug being fixed, and looks like success. */
+  malformed: string[];
+};
+
+/**
+ * THE value-true-at-time read, for any EmploymentEvent kind and any value shape.
+ *
+ * BOUNDARY, unchanged: `effective_date < to` against an EXCLUSIVE window end — the schema's
+ * `effective_date <= T` rule with T = the window's last instant, proven on a fixture. Do not
+ * reinterpret it.
+ *
+ * Falls back to the FIRST later event's `previous_json` (the value in force before the earliest
+ * recorded change). No entry at all when there is no history — the caller decides what absence
+ * means and must say so out loud.
+ */
+export async function valuesAtWindowEnd<T>(
+  ids: string[], to: Date, kind: string, field: string, validate: (v: unknown) => v is T,
+): Promise<ResolvedValues<T>> {
+  const values = new Map<string, T>();
+  const malformed: string[] = [];
+  if (!ids.length) return { values, malformed };
   const evs = (await prisma.employmentEvent.findMany({
     where: { cost_person_id: { in: ids }, kind: kind as any, voided_at: null },
     orderBy: [{ effective_date: 'asc' }, { created_at: 'asc' }],
@@ -323,19 +399,13 @@ export async function valuesAtWindowEnd(ids: string[], to: Date, kind: string, f
   for (const e of evs) byPerson.set(e.cost_person_id, [...(byPerson.get(e.cost_person_id) ?? []), e]);
   for (const [pid, list] of byPerson) {
     const atOrBefore = list.filter((e) => e.effective_date.getTime() < to.getTime());
-    if (atOrBefore.length) {
-      const v = atOrBefore[atOrBefore.length - 1].value_json?.[field];
-      if (Number.isFinite(Number(v))) out.set(pid, Number(v));
-    } else {
-      const prev = list[0].previous_json?.[field]; // value BEFORE the first (later) change
-      if (Number.isFinite(Number(prev))) out.set(pid, Number(prev));
-    }
+    const raw = atOrBefore.length
+      ? atOrBefore[atOrBefore.length - 1].value_json?.[field]
+      : list[0].previous_json?.[field];
+    if (validate(raw)) values.set(pid, raw);
+    else if (raw !== undefined) malformed.push(pid); // present but unusable — never a silent fallback
   }
-  return out;
-}
-
-async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, number>> {
-  return valuesAtWindowEnd(ids, to, 'factor', 'utilisation_factor');
+  return { values, malformed };
 }
 
 // ---------- Utilisation = hours charged ÷ SELLABLE hours (month × site) ----------
@@ -380,6 +450,7 @@ export type GroupUtilisation = {
   charged: number; rework: number; available: number; rawHours: number; ratio: number | null; // available = SELLABLE
   configComplete: boolean; missingHoursMechanics: string[];
   unknownStartPeople: string[]; // counted DESPITE an unknown start date — surfaced, never silent
+  malformedEvents: string[];    // dated event present but its value was REFUSED by the validator
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
   factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
@@ -419,6 +490,7 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
     unknownStartPeople,
+    malformedEvents: [...new Set(parts.flatMap((u: any) => u.malformedEvents ?? []))],
     mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,
