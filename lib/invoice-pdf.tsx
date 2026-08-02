@@ -93,6 +93,16 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
               when: doc.voidedAt ? doc.voidedAt.toLocaleDateString(doc.locale) : '—',
               reason: doc.voidReason || t('voidNoReason'),
             })}</Text>
+            {/* AMENDED REASONS SHOW BOTH. The retained document must not present a tidied-up
+                explanation as if it were the one recorded at the time. */}
+            {doc.voidReasonOriginal ? (
+              <Text style={{ marginTop: 4, fontSize: 8 }}>
+                {t('voidAmended', {
+                  when: doc.voidAmendedAt ? new Date(doc.voidAmendedAt).toLocaleDateString(doc.locale) : '—',
+                  original: doc.voidReasonOriginal,
+                })}
+              </Text>
+            ) : null}
           </View>
         ) : null}
 

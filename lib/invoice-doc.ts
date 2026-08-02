@@ -15,6 +15,7 @@ import { prisma } from '@/lib/db';
 import { invoiceTotals, InvoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { presignGet } from '@/lib/r2';
+import { readVoidCorrections } from '@/lib/invoice-void';
 
 export type InvoiceDocLine = {
   description: string;
@@ -41,6 +42,11 @@ export type InvoiceDoc = {
    *  otherwise the retained copy is indistinguishable from a live demand for payment. */
   voidedAt: Date | null;
   voidReason: string | null;
+  /** The ORIGINAL wording when the reason has since been amended, else null. Rendered ALONGSIDE
+   *  the current text — an amended reason must never look like the only thing ever written. */
+  voidReasonOriginal: string | null;
+  voidAmendedAt: string | null;
+  voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
   datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)
@@ -68,7 +74,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     where: { id: invoiceId, group_id: groupId },
     select: {
       id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
-      voided_at: true, void_reason: true,
+      voided_at: true, void_reason: true, void_reason_corrections: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
@@ -117,6 +123,9 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     status: inv.status,
     voidedAt: inv.voided_at ?? null,
     voidReason: inv.void_reason ?? null,
+    voidReasonOriginal: (() => { const l = readVoidCorrections(inv.void_reason_corrections); return l.length ? l[0].from : null; })(),
+    voidAmendedAt: (() => { const l = readVoidCorrections(inv.void_reason_corrections); return l.length ? l[l.length - 1].at : null; })(),
+    voidCorrections: readVoidCorrections(inv.void_reason_corrections),
     series: inv.series,
     // The PRINTED issue date = the effective DOCUMENT date (date_issued ?? issued_at) — the same
     // date the P&L recognises revenue by. One truth: the document and the accounts agree.

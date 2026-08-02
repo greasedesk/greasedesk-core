@@ -114,6 +114,17 @@
     "commit": "Void this invoice",
     "working": "Voiding…",
     "back": "Back",
-    "error": "Could not void the invoice."
-  }
+    "error": "Could not void the invoice.",
+    "amendOpen": "Amend the reason",
+    "amendTitle": "Amend the void reason",
+    "amendIntro": "The original wording is kept and stays on the record. This adds a corrected version beside it.",
+    "amendCurrent": "Recorded now",
+    "amendSave": "Save amendment",
+    "amendWorking": "Saving…",
+    "amendError": "Could not amend the void reason.",
+    "historyTitle": "Reason history",
+    "historyOriginal": "Originally recorded",
+    "historyEntry": "Amended {{when}}"
+  },
+  "voidAmended": "Reason amended {{when}}. Originally recorded as: \"{{original}}\""
 }

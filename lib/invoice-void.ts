@@ -93,6 +93,22 @@ export const OFF_LEDGER_STATUSES = ['void'] as const;
 /** Spread into any invoice query that selects BY DATE without naming a status. */
 export const notVoided = { status: { notIn: [...OFF_LEDGER_STATUSES] as string[] } };
 
+/**
+ * One recorded amendment to a void reason: {at, by, from, to} — deliberately the same shape as
+ * EmploymentEvent.correction_json, written by redateEvent/voidEvent. Repeat amendments stack.
+ */
+export type VoidCorrection = { at: string; by: string | null; from: string; to: string };
+
+export function readVoidCorrections(v: unknown): VoidCorrection[] {
+  return Array.isArray(v) ? (v as VoidCorrection[]).filter((c) => c && typeof c.to === 'string') : [];
+}
+
+/** The ORIGINAL wording, whatever it has since become: the first amendment's `from`, else current. */
+export function originalVoidReason(current: string | null, corrections: unknown): string | null {
+  const log = readVoidCorrections(corrections);
+  return log.length ? log[0].from : current;
+}
+
 /** THE resurrection guard, used by every path that could bring a void back to life. One predicate,
  *  so a new path cannot be added that forgets the rule — see the guarded list in the void endpoint. */
 export function refuseIfVoid(inv: { status: string } | null | undefined): { code: string; message: string } | null {

@@ -36,6 +36,7 @@ type PageProps = {
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
   voidedAt: string | null;
   voidReason: string | null;
+  voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
@@ -72,6 +73,8 @@ export default function InvoicePage(props: PageProps) {
   const [voidStage, setVoidStage] = useState<null | 'form' | 'confirm'>(null);
   const [voidCategory, setVoidCategory] = useState<string>('');
   const [voidReason, setVoidReason] = useState('');
+  const [amendOpen, setAmendOpen] = useState(false);
+  const [amendText, setAmendText] = useState('');
   const reg = props.vatRegistered;
   // A warranty document shows NO VAT anywhere (not a supply for consideration — the lines render
   // at net retail and the goodwill line zeroes the total before VAT would arise). Also gates the
@@ -98,6 +101,20 @@ export default function InvoicePage(props: PageProps) {
     } catch { setMsg({ text: t('reissueError'), ok: false }); }
     finally { setBusy(null); }
   }
+  async function doAmend() {
+    setBusy('amend'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-void-amend', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: props.invoiceId, reason: amendText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('void.amendError'), ok: false }); setBusy(null); return; }
+      setAmendOpen(false); setAmendText('');
+      router.replace(router.asPath);
+    } catch { setMsg({ text: t('void.amendError'), ok: false }); setBusy(null); }
+  }
+
   async function doVoid() {
     setBusy('void'); setMsg(null);
     try {
@@ -275,6 +292,50 @@ export default function InvoicePage(props: PageProps) {
         {props.status === 'void' && (
           <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-3" data-testid="detail-void-notice">
             {t('voidNotice', { when: props.voidedAt ?? '—', reason: props.voidReason || t('voidNoReason') })}
+            {/* BOTH TEXTS, ALWAYS. An amended reason must never read as the only wording ever
+                recorded — the original is the first correction's `from` and stays on the page. */}
+            {props.voidCorrections.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-danger/30 text-xs" data-testid="void-history">
+                <p className="font-semibold">{t('void.historyTitle')}</p>
+                <p data-testid="void-history-original">
+                  <span className="opacity-70">{t('void.historyOriginal')}: </span>
+                  <span className="line-through">{props.voidCorrections[0].from}</span>
+                </p>
+                {props.voidCorrections.map((c, i) => (
+                  <p key={i} data-testid="void-history-entry">
+                    <span className="opacity-70">{t('void.historyEntry', { when: new Date(c.at).toLocaleDateString(props.locale) })}: </span>
+                    {c.to}
+                  </p>
+                ))}
+              </div>
+            )}
+            {props.isAdmin && !amendOpen && (
+              <button data-testid="void-amend-open" onClick={() => { setAmendText(props.voidReason ?? ''); setAmendOpen(true); setMsg(null); }}
+                className="mt-2 text-xs underline hover:no-underline">{t('void.amendOpen')}</button>
+            )}
+            {props.isAdmin && amendOpen && (() => {
+              const checked = validateVoidReason(amendText);
+              const changed = amendText.trim() !== (props.voidReason ?? '').trim();
+              return (
+                <div className="mt-3 pt-3 border-t border-danger/30" data-testid="void-amend-panel">
+                  <p className="text-xs font-semibold">{t('void.amendTitle')}</p>
+                  <p className="text-xs opacity-80 mb-2">{t('void.amendIntro')}</p>
+                  <textarea data-testid="void-amend-text" rows={3} maxLength={500} value={amendText}
+                    onChange={(e) => setAmendText(e.target.value)}
+                    className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  <p className={`text-xs mt-1 ${checked.ok ? 'opacity-70' : 'text-warn'}`} data-testid="void-amend-hint">
+                    {checked.ok ? t('void.reasonOk', { n: amendText.trim().length }) : (checked as any).error}
+                  </p>
+                  <div className="flex gap-2 mt-2">
+                    <button data-testid="void-amend-save" disabled={!checked.ok || !changed || busy !== null} onClick={doAmend}
+                      className="text-sm font-semibold rounded-lg px-3 py-1.5 bg-danger text-white disabled:opacity-40">
+                      {busy === 'amend' ? t('void.amendWorking') : t('void.amendSave')}
+                    </button>
+                    <button onClick={() => setAmendOpen(false)} className="text-sm opacity-70 px-2">{t('void.cancel')}</button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
         {/* Freeze-at-issue: frozen lines are the document; an unlocked invoice is under correction. */}
@@ -519,6 +580,7 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
       voidedAt: doc.voidedAt ? doc.voidedAt.toLocaleDateString(doc.locale) : null,
       voidReason: doc.voidReason ?? null,
+      voidCorrections: doc.voidCorrections,
       issuedAt: doc.issuedAt.toLocaleDateString(doc.locale),
       vatRegistered: doc.vatRegistered,
       company: doc.company,

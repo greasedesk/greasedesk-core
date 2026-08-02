@@ -1359,6 +1359,11 @@ model Invoice {
   voided_by               String?   // User.id of the admin who retired it — never a system actor
   void_category           String?   // one of lib/invoice-void VOID_CATEGORIES
   void_reason             String?   // free text, MANDATORY (see lib/invoice-void for why this one is)
+  // APPEND-ONLY correction log for `void_reason`, the SAME shape as EmploymentEvent.correction_json:
+  // [{ at, by, from, to }]. The reason is the record an inspector reads, so a thin one must be
+  // improvable — but never by quietly overwriting it. `void_reason` holds the CURRENT text and the
+  // first entry's `from` holds the original, so both are always recoverable and both are displayed.
+  void_reason_corrections Json?
 
   // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
   company_name_snapshot       String
