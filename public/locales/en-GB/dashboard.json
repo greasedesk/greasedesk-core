@@ -166,5 +166,32 @@
     "malformedEvents": "Unreadable employment history — today’s settings used instead for: {{names}}. Check HR history."
   },
   "allSites": "All sites",
-  "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."
+  "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it.",
+  "manpower": {
+    "heading": "Manpower",
+    "intro": "The people behind the month. Each figure says whether the numbers above actually use it.",
+    "contextOnly": "Context — not used in the figures above",
+    "unknownPeriod": "No employment data for this period — this is before the garage's records begin. Not zero: unknown.",
+    "honesty": "Days are counted the way capacity counts them: only on days someone was rostered to work, with a part-day counted as the fraction of a contracted day it took.",
+    "days": "{{n}} days",
+    "headcount": "Headcount",
+    "headcountValue": "{{employed}} employed · {{counted}} counted in capacity",
+    "headcountSub": "Anyone employed during the month. Capacity counts only chargeable people with hours and a site.",
+    "grossPay": "Gross pay",
+    "grossPaySub": "Gross pay only — before employer NI, pension and levy. Not the cost of employing someone.",
+    "holiday": "Holiday",
+    "holidaySub": "Annual leave taken. The same days capacity subtracted.",
+    "sick": "Sick",
+    "sickSub": "Sickness absence. The same days capacity subtracted.",
+    "nonRostered": "Non-rostered contracted days",
+    "nonRosteredSub": "Open days nobody was rostered for — college day release and part-time patterns together. Capacity withheld these hours; this does not distinguish why.",
+    "hires": "New hires",
+    "hiresSub": "Started this month. Capacity is whole-month, so a hire on the 28th still contributes a full month.",
+    "exits": "Exits",
+    "exitsSub": "Last working day fell this month.",
+    "pilon": "Pay in lieu",
+    "pilonValue": "{{days}} days · {{money}}",
+    "pilonSub": "Paid for, with no output. Part of the gross pay above, not on top of it.",
+    "hourlyExcluded": "Costed at nothing: {{names}}. Hourly-paid people add sellable hours but no gross pay, so margin and capacity are both flattered. Recording their pay needs hours worked, which isn't captured yet."
+  }
 }

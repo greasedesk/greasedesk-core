@@ -13,6 +13,7 @@ import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
+import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
@@ -215,13 +216,25 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
  * names come back so the dashboard can say so. Census at the time of the ruling: 5 of 6 CostPerson
  * rows across all tenants had no wage event at all, so this is the common path, not the edge.
  */
-export type WageBill = { pennies: number; assumedPayPeople: string[] };
+export type WageBill = { pennies: number; assumedPayPeople: string[]; hourlyExcludedPeople: string[] };
 
 export async function monthlyWageBill(groupId: string, siteIds: string[], window: { from: Date; to: Date }): Promise<WageBill> {
+  // BASIS 'pay' — the LAST PAID day bounds cost, not the last working day. Payment in lieu means
+  // the P&L carries someone for a month in which they generated no capacity, and that is correct.
+  const employed = employedDuring(groupId, window, 'pay');
   const people = (await prisma.costPerson.findMany({
-    where: { ...employedDuring(groupId, window), cost_type: 'salary' },
+    where: { ...employed, cost_type: 'salary' },
     select: { id: true, name: true, amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
   })) as any[];
+  // HOURLY PEOPLE ARE COSTED AT NOTHING, and until now nobody was told. `amount_pennies` is an
+  // hourly RATE for them, not an annual salary, so ÷12 would be meaningless and the filter above
+  // drops them — while they still contribute sellable hours to the denominator. Margin and
+  // capacity both inflate. Surfaced, NOT fixed: costing them needs hours worked, which is a
+  // timesheet this product does not have. Named the way assumedPayPeople is named.
+  const hourlyExcludedPeople = ((await prisma.costPerson.findMany({
+    where: { ...employed, cost_type: { not: 'salary' }, allocations: { some: { site_id: { in: siteIds } } } },
+    select: { name: true },
+  })) as any[]).map((p2) => p2.name as string);
   const paid = await valuesAtWindowEnd<number>(people.map((p2) => p2.id), window.to, 'wage', 'amount_pennies', isFiniteNumber);
   const paidAt = paid.values;
   const assumedPayPeople: string[] = [];
@@ -231,7 +244,7 @@ export async function monthlyWageBill(groupId: string, siteIds: string[], window
     const use = annual ?? Number(p2.amount_pennies);
     return a + (use / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100;
   }, 0));
-  return { pennies, assumedPayPeople };
+  return { pennies, assumedPayPeople, hourlyExcludedPeople };
 }
 /** The Overheads register normalised monthly (annual ÷ 12, weekly × 52 ÷ 12), allocation-scaled.
  *  NO name-matching — the register IS the list; wages live in Headcount, never here. */
@@ -360,6 +373,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       adhoc,
     };
   },
+  // MANPOWER — eight people-figures for the month, below the P&L. All maths in lib/manpower, which
+  // reuses employedDuring / getGroupUtilisation / monthlyWageBill rather than recomputing any of
+  // them; each figure carries whether the calculation actually consumes it.
+  manpower: async ({ groupId, siteIds, from, to }) => getManpower(groupId, siteIds, { from, to }),
   pnl: async ({ groupId, siteIds, from, to, months }) => {
     const invoices = await fetchLedgerInvoices({ groupId, siteIds, from, to }); // the ONE ledger read (shared with utilisation)
 

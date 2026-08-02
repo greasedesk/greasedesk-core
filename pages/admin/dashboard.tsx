@@ -983,6 +983,75 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-xs text-muted mt-3">{t('pnl.honesty')}</p>
 
+      {/* ── MANPOWER ROW ───────────────────────────────────────────────────────────────────────
+          Eight people-figures for the month. Each tile states whether the capacity/P&L
+          calculation actually CONSUMES it: headcount, new hires and exits do not (capacity is
+          whole-month and unprorated), and a prominent number that reads as an input but isn't is
+          worse than no number. Honest-null: known-zero is 0, a month outside the tenant's data
+          is an em-dash — never 0. */}
+      {(() => {
+        const mp = tiles?.manpower as any;
+        const cells: Array<{ key: string; value: string | null; sub: string; reconciles: boolean; names?: string[] }> = mp ? [
+          { key: 'headcount', value: mp.headcountEmployed.value == null ? null
+              : t('manpower.headcountValue', { employed: mp.headcountEmployed.value, counted: mp.countedInCapacity.value ?? 0 }),
+            sub: t('manpower.headcountSub'), reconciles: false, names: mp.countedInCapacity.names },
+          { key: 'grossPay', value: mp.grossPayPennies.value == null ? null : fmt.money(mp.grossPayPennies.value),
+            sub: t('manpower.grossPaySub'), reconciles: true },
+          { key: 'holiday', value: mp.holidayDays.value == null ? null : t('manpower.days', { n: mp.holidayDays.value }),
+            sub: t('manpower.holidaySub'), reconciles: true },
+          { key: 'sick', value: mp.sickDays.value == null ? null : t('manpower.days', { n: mp.sickDays.value }),
+            sub: t('manpower.sickSub'), reconciles: true },
+          { key: 'nonRostered', value: mp.nonRosteredDays.value == null ? null : t('manpower.days', { n: mp.nonRosteredDays.value }),
+            sub: t('manpower.nonRosteredSub'), reconciles: true },
+          { key: 'hires', value: mp.newHires.value == null ? null : String(mp.newHires.value),
+            sub: t('manpower.hiresSub'), reconciles: false, names: mp.newHires.names },
+          { key: 'exits', value: mp.exits.value == null ? null : String(mp.exits.value),
+            sub: t('manpower.exitsSub'), reconciles: false, names: mp.exits.names },
+          { key: 'pilon', value: mp.pilonDays.value == null ? null
+              : t('manpower.pilonValue', { days: mp.pilonDays.value, money: fmt.money(mp.pilonPennies.value ?? 0) }),
+            sub: t('manpower.pilonSub'), reconciles: true, names: mp.pilonDays.names },
+        ] : [];
+        return (
+          <div className="mt-8" data-testid="manpower-row">
+            <h2 className="text-sm font-semibold text-ink mb-1">{t('manpower.heading')}</h2>
+            <p className="text-xs text-muted mb-3">{t('manpower.intro')}</p>
+            {mp && !mp.known ? (
+              <p className="text-sm text-muted border border-dashed border-line rounded-xl p-5" data-testid="manpower-unknown">
+                {t('manpower.unknownPeriod')}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {(mp ? cells : Array.from({ length: 8 }, (_, i) => ({ key: `sk${i}`, value: null, sub: '', reconciles: true, names: undefined }))).map((c) => (
+                  <div key={c.key} data-testid={`manpower-${c.key}`} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
+                    <h3 className="text-sm font-semibold text-muted mb-2">{mp ? t(`manpower.${c.key}`) : ''}</h3>
+                    <p className="text-2xl font-bold tabular-nums text-ink" data-testid={`manpower-${c.key}-value`}>
+                      {c.value ?? (loading ? t('loading') : '—')}
+                    </p>
+                    {c.sub && <p className="text-xs text-muted mt-1">{c.sub}</p>}
+                    {/* NOT AN INPUT. Said on the tile, not in a footnote — the number is prominent
+                        and would otherwise read as something the figures above depend on. */}
+                    {mp && !c.reconciles && (
+                      <p className="text-[11px] text-muted mt-1 italic" data-testid={`manpower-${c.key}-context`}>{t('manpower.contextOnly')}</p>
+                    )}
+                    {mp && c.names && c.names.length > 0 && (
+                      <p className="text-[11px] text-muted mt-1">{c.names.join(', ')}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Hourly people add sellable hours and NOTHING to gross pay — margin and capacity both
+                inflate. Surfaced the way assumedPayPeople is, and deliberately not fixed here:
+                costing them needs hours worked, which this product does not record. */}
+            {mp?.hourlyExcludedPeople?.length > 0 && (
+              <p className="text-xs text-warn mt-3" data-testid="hourly-excluded">
+                {t('manpower.hourlyExcluded', { names: mp.hourlyExcludedPeople.join(', ') })}
+              </p>
+            )}
+            <p className="text-xs text-muted mt-3">{t('manpower.honesty')}</p>
+          </div>
+        );
+      })()}
     </>
   );
 }

@@ -34,8 +34,9 @@
  *     come back as `unknownStartPeople` and the dashboard flags them, exactly as it already flags
  *     mechanics missing contracted hours. Census at the time of the ruling: 0 of 4 CostPerson rows
  *     across all tenants had a null start_date, so this is a guard, not a live behaviour change.
- *   NULL end_date    = still employed. That one is not ambiguous.
- * The LEAVER path has never run in production — no CostPerson has ever had an end_date set.
+ *   NULL work_end_date = still employed. That one is not ambiguous.
+ * TWO DATES AT EACH END (2026-08-02): work_end_date drives capacity, pay_end_date drives cost —
+ * payment in lieu is the case a single leaving date cannot express. See employedDuring's `basis`.
  *
  * v1 scope: whole-month capacity, no mid-month proration (banked). NOT PRORATED, deliberately and
  * consistently with that: someone who starts mid-month contributes their WHOLE month. The overlap
@@ -76,6 +77,12 @@ export type AvailableHours = {
   // overstate the opportunity (ruling 2026-07-12, which excludes rework from `charged` too).
   grossHours: number;
   leaveByType: Record<string, number>;
+  // THE SAME absences in DAYS, accumulated in the same loop (see the loop comment). The manpower
+  // row renders these; hours remain the capacity currency. Never re-derive one from the other.
+  leaveDaysByType: Record<string, number>;
+  // Days the site was open and the person employed, but not in their rostered pattern — day
+  // release AND part-time, deliberately not distinguished. Allocation-scaled like everything else.
+  nonRosteredDays: number;
   // FACTOR exposition (computed, never typed): per person, raw × factor = sellable. The factor
   // is resolved AS OF THE WINDOW END from the EmploymentEvent series (value-true-at-time —
   // historic months keep the factor that applied then; changing it today never moves last
@@ -114,17 +121,44 @@ function windowDays(window: CapacityWindow): Array<[string, number]> {
  * rule that will eventually disagree with itself. The daily accrual line MUST select the same
  * people as the total, or the chart and its own callout stop reconciling.
  *
- * Active and EMPLOYED DURING THE WINDOW (overlap; nulls unbounded — see header). NOT chargeable —
+ * EMPLOYED DURING THE WINDOW (overlap; nulls unbounded — see header). NOT chargeable —
  * `is_chargeable` is itself an effective-dated attribute now, so it is resolved per window in JS
  * rather than filtered in SQL, where a historic value cannot be seen.
+ *
+ * ── `is_active` IS NOT HERE, DELIBERATELY (ruling 2026-08-02) ───────────────────────────────────
+ * It used to be, and it made `work_end_date` dead code: marking someone left sets is_active=false,
+ * which failed this clause for EVERY window, so a leaver's capacity and gross pay vanished from
+ * months they demonstrably worked. Proven on the served build before the fix — a ZZ person left on
+ * 31 July deleted 176.00h and £2,000.00 from the previous JUNE. A current-state flag cannot answer
+ * a historic question. It stays on the HR current-employees list and the roster's live view;
+ * NOTHING that computes a historic figure may reference it.
+ *
+ * ── ONE CLAUSE, TWO BASES ──────────────────────────────────────────────────────────────────────
+ * `basis` picks WHICH pair of dates bounds the window and nothing else. Everything that makes this
+ * the shared rule stays common across both: tenant scope, the overlap shape, inclusive at both
+ * ends, null start = unknown = included-and-flagged, month-grained and unprorated.
+ *   'work' → start_date … work_end_date   — CAPACITY. No sellable hours after the last working day.
+ *   'pay'  → pay_start   … pay_end        — COST. The P&L carries them to the last PAID day.
+ * A null pay_* coincides with its work counterpart (a stated default — see the schema), which is
+ * why each side is a two-branch OR rather than a single column read.
  */
-export function employedDuring(groupId: string, window: CapacityWindow) {
+export type EmploymentBasis = 'work' | 'pay';
+
+export function employedDuring(groupId: string, window: CapacityWindow, basis: EmploymentBasis = 'work') {
+  // Started on or before the window END. `pay_start_date ?? start_date` expressed as SQL: either
+  // the payroll date is set and governs, or it is absent and the working date does.
+  const startedBefore = basis === 'pay'
+    ? [{ pay_start_date: { lt: window.to } },
+       { AND: [{ pay_start_date: null }, { OR: [{ start_date: null }, { start_date: { lt: window.to } }] }] }]
+    : [{ start_date: null }, { start_date: { lt: window.to } }];
+  // Not ended before the window START. Unset = still here on that basis.
+  const notEndedBefore = basis === 'pay'
+    ? [{ pay_end_date: { gte: window.from } },
+       { AND: [{ pay_end_date: null }, { OR: [{ work_end_date: null }, { work_end_date: { gte: window.from } }] }] }]
+    : [{ work_end_date: null }, { work_end_date: { gte: window.from } }];
   return {
-    group_id: groupId, is_active: true,
-    AND: [
-      { OR: [{ start_date: null }, { start_date: { lt: window.to } }] },
-      { OR: [{ end_date: null }, { end_date: { gte: window.from } }] },
-    ],
+    group_id: groupId,
+    AND: [{ OR: startedBefore }, { OR: notEndedBefore }],
   };
 }
 
@@ -135,7 +169,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
       where: employedDuring(groupId, window),
       select: {
         id: true, name: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true,
-        is_chargeable: true, start_date: true, end_date: true,
+        is_chargeable: true, start_date: true, work_end_date: true,
         allocations: { where: { site_id: siteId }, select: { percent: true } },
       },
     }) as any,
@@ -193,6 +227,17 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   const days = windowDays(window);
   let centiSellable = 0, centiRaw = 0, centiLeave = 0, centiPh = 0, centiGross = 0, rosteredDays = 0;
   const centiByType: Record<string, number> = {};
+  // DAY-UNIT GRAIN FOR THE MANPOWER ROW, accumulated in THIS loop rather than re-derived in a
+  // second file — the rostered-day test, the PH-wins rule and the part-day clamp are the same
+  // decisions, and a second copy is how they eventually disagree. Days are allocation-scaled for
+  // the same reason hours are: a person split across sites contributes one day in total, not one
+  // per site. milli-days (×1000) so a half-day at a 7.5h contract stays exact under addition.
+  const milliDaysByType: Record<string, number> = {};
+  // The PATTERN GAP: days this site was OPEN and the person employed, but not in their rostered
+  // pattern. This is college day release AND genuine part-time patterns — the tile must not claim
+  // to tell them apart. It is the largest invisible deduction from TMBS sellable hours, and it
+  // never appears as leave because capacity expresses it as the absence of a rostered day.
+  let milliNonRostered = 0;
   const factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }> = [];
   for (const p of configured) {
     const alloc = p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) / 100;
@@ -203,7 +248,12 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     let grossC = 0, subC = 0, leaveC = 0, phC = 0;
     const typeC: Record<string, number> = {};
     for (const [key, weekday] of days) {
-      if (!rostered.includes(weekday)) continue; // rostered-day guard (weekday from windowDays = isRosteredOn's test)
+      if (!rostered.includes(weekday)) {
+        // Open here but not rostered for them = the pattern gap. Public holidays are excluded:
+        // the site is shut, so nobody's pattern could have covered it and it is not a gap.
+        if (openDaysAtT.includes(weekday) && !phDays.has(key)) milliNonRostered += Math.round(1000 * alloc);
+        continue; // rostered-day guard (weekday from windowDays = isRosteredOn's test)
+      }
       rosteredDays += 1;
       grossC += Math.round(contracted * 100);
       if (phDays.has(key)) {
@@ -214,6 +264,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
           const c = Math.round(Math.min(entry.hours ?? contracted, contracted) * 100); // null = full day; clamp ≤ contracted
           leaveC += c;
           typeC[entry.type] = (typeC[entry.type] ?? 0) + c;
+          // The SAME consumed day, counted in days: the fraction of a contracted day it took.
+          milliDaysByType[entry.type] = (milliDaysByType[entry.type] ?? 0) + Math.round((c / (contracted * 100)) * 1000 * alloc);
         }
       }
     }
@@ -246,6 +298,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     phHours: centiPh / 100,
     grossHours: centiGross / 100,
     leaveByType: Object.fromEntries(Object.entries(centiByType).map(([ty, c]) => [ty, c / 100])),
+    leaveDaysByType: Object.fromEntries(Object.entries(milliDaysByType).map(([ty, m]) => [ty, m / 1000])),
+    nonRosteredDays: milliNonRostered / 1000,
     factorParts,
   };
 }
@@ -458,8 +512,9 @@ export type GroupUtilisation = {
   configComplete: boolean; missingHoursMechanics: string[];
   unknownStartPeople: string[]; // counted DESPITE an unknown start date — surfaced, never silent
   malformedEvents: string[];    // dated event present but its value was REFUSED by the validator
-  mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
+  mechanicCount: number; countedPeople: string[]; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
+  leaveDaysByType: Record<string, number>; nonRosteredDays: number; // day-unit grain (manpower row)
   factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
   perSite: Array<{ siteId: string; siteName: string; charged: number; rework: number; available: number; rawHours: number; ratio: number | null; rosteredDays: number; leaveHours: number; phHours: number; mechanicCount: number }>;
 };
@@ -478,7 +533,9 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     [...new Set(parts.flatMap((u: any) => (u[k] ?? []) as string[]))];
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
   let charged = 0, rework = 0, available = 0, rawHours = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
+  let nonRosteredDays = 0;
   const leaveByType: Record<string, number> = {};
+  const leaveDaysByType: Record<string, number> = {};
   const factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }> = [];
   const perSite = siteIds.map((sid, i) => {
     const u = parts[i];
@@ -487,6 +544,8 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     grossHours += u.grossHours;
     factorParts.push(...u.factorParts);
     for (const [ty, h] of Object.entries(u.leaveByType)) leaveByType[ty] = Math.round(((leaveByType[ty] ?? 0) + h) * 100) / 100;
+    for (const [ty, d] of Object.entries(u.leaveDaysByType)) leaveDaysByType[ty] = Math.round(((leaveDaysByType[ty] ?? 0) + d) * 1000) / 1000;
+    nonRosteredDays += u.nonRosteredDays;
     return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, rework: u.rework, available: u.available, rawHours: u.rawHours, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
   charged = Math.round(charged * 100) / 100; rework = Math.round(rework * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
@@ -500,8 +559,10 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     unknownStartPeople: distinct('unknownStartPeople'),
     malformedEvents: distinct('malformedEvents'),
     mechanicCount: distinct('countedPeople').length,
+    countedPeople: distinct('countedPeople'),
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,
+    leaveDaysByType, nonRosteredDays: Math.round(nonRosteredDays * 1000) / 1000,
     factorParts,
     perSite,
   };

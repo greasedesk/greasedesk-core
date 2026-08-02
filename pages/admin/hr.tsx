@@ -60,7 +60,9 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
   const [changes, setChanges] = useState<Ev[] | null>(null);
   const [history, setHistory] = useState<Record<string, Ev[]>>({});
   const [form, setForm] = useState<FormState | null>(null);
-  const [leaving, setLeaving] = useState<{ id: string; endDate: string } | null>(null);
+  // TWO DATES. `payEnd` starts equal to `workEnd` and only diverges when someone says so —
+  // payment in lieu is the exception, not the shape of every leaving.
+  const [leaving, setLeaving] = useState<{ id: string; workEnd: string; payEnd: string; reason: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -164,8 +166,24 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
     if (!leaving) return;
     setBusy(true); setMsg(null);
     try {
-      const res = await fetch('/api/headcount', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: leaving.id, action: 'markLeft', endDate: leaving.endDate }) });
-      const data = await res.json().catch(() => ({}));
+      const send = (confirmDated: boolean) => fetch('/api/headcount', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: leaving.id, action: 'markLeft',
+          workEndDate: leaving.workEnd,
+          payEndDate: leaving.payEnd || leaving.workEnd,
+          reason: leaving.reason.trim() || null,
+          confirmDated,
+        }),
+      });
+      let res = await send(false);
+      let data = await res.json().catch(() => ({}));
+      // The leaving date now passes the same far-past/far-future confirm as every other dated
+      // change — it used to skip the gate entirely and default silently to today.
+      if (res.status === 409 && data?.needsDateConfirm) {
+        if (!window.confirm(`${data.message}\n\n${th('confirmDated')}`)) { setBusy(false); return; }
+        res = await send(true); data = await res.json().catch(() => ({}));
+      }
       if (!res.ok) setMsg({ text: data?.message || t('error'), ok: false });
       else { setLeaving(null); setForm(null); setHistory({}); setChanges(null); await load(); setMsg({ text: th('leftDone'), ok: true }); }
     } catch { setMsg({ text: t('error'), ok: false }); }
@@ -187,7 +205,14 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
       case 'name': return `${p?.name ?? '—'} → ${v.name ?? '—'}`;
       case 'role': return `${p?.role ?? '—'} → ${v.role ?? '—'}`;
       case 'started': return `${p?.start_date ?? '—'} → ${v.start_date ?? '—'}`;
-      case 'ended': return `${v.end_date ?? '—'}`;
+      case 'ended': {
+        // Both dates, and only mention the pay date when it actually differs — otherwise the
+        // history reads as though every leaving were a payment in lieu.
+        const w = v.work_end_date ?? v.end_date ?? '—';   // end_date: rows written before the split
+        const pay = v.pay_end_date ?? null;
+        const dates = pay && pay !== w ? `${w} ${th('workedTo')} · ${pay} ${th('paidTo')}` : `${w}`;
+        return v.reason ? `${dates} — ${v.reason}` : dates;
+      }
       default: return JSON.stringify(v);
     }
   };
@@ -352,13 +377,36 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
               )}
               <button onClick={() => setForm(null)} className="text-muted hover:text-ink rounded-lg px-4 py-2 text-sm">{t('cancel')}</button>
               {form.id && (leaving?.id === form.id ? (
-                <span className="ml-auto flex items-center gap-2 text-sm">
-                  <input type="date" value={leaving.endDate} onChange={(e) => setLeaving({ id: form.id!, endDate: e.target.value })} className="p-1.5 bg-surface border border-line rounded-lg text-ink text-sm" />
-                  <button onClick={markLeft} disabled={busy || !leaving.endDate} className="text-danger font-medium disabled:opacity-50">{th('confirmLeft')}</button>
-                  <button onClick={() => setLeaving(null)} className="text-muted">{t('cancel')}</button>
+                <span className="ml-auto flex flex-wrap items-end gap-3 text-sm">
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-ink">{th('workEndDate')}</span>
+                    {/* Changing the last WORKING day drags the last PAID day with it while the two
+                        are still equal, so the common case needs one edit, not two. */}
+                    <input type="date" data-testid="leave-work-end" value={leaving.workEnd}
+                      onChange={(e) => setLeaving({ ...leaving, workEnd: e.target.value, payEnd: leaving.payEnd === leaving.workEnd ? e.target.value : leaving.payEnd })}
+                      className="p-1.5 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-ink">{th('payEndDate')}</span>
+                    <input type="date" data-testid="leave-pay-end" value={leaving.payEnd} min={leaving.workEnd}
+                      onChange={(e) => setLeaving({ ...leaving, payEnd: e.target.value })}
+                      className="p-1.5 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold text-muted">{th('leaveReason')}</span>
+                    <input type="text" data-testid="leave-reason" value={leaving.reason} maxLength={500}
+                      placeholder={th('leaveReasonPlaceholder')}
+                      onChange={(e) => setLeaving({ ...leaving, reason: e.target.value })}
+                      className="p-1.5 bg-surface border border-line rounded-lg text-ink text-sm w-56" />
+                  </label>
+                  <button onClick={markLeft} data-testid="confirm-left" disabled={busy || !leaving.workEnd} className="text-danger font-medium disabled:opacity-50 pb-1.5">{th('confirmLeft')}</button>
+                  <button onClick={() => setLeaving(null)} className="text-muted pb-1.5">{t('cancel')}</button>
+                  {leaving.payEnd > leaving.workEnd && (
+                    <span className="w-full text-xs text-warn" data-testid="pilon-note">{th('pilonNote')}</span>
+                  )}
                 </span>
               ) : (
-                <button onClick={() => setLeaving({ id: form.id!, endDate: new Date().toISOString().slice(0, 10) })} disabled={busy}
+                <button onClick={() => setLeaving({ id: form.id!, workEnd: '', payEnd: '', reason: '' })} disabled={busy}
                   className="ml-auto text-danger hover:bg-danger-soft rounded-lg px-3 py-2 text-sm">{th('markLeft')}</button>
               ))}
             </div>

@@ -19,6 +19,7 @@ const parseDay = (v: unknown): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 const todayUTC = () => new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+const day = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 
 const COST_TYPES = new Set(['salary', 'hourly']);
 
@@ -53,7 +54,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       select: {
         id: true, name: true, role: true, cost_type: true, amount_pennies: true, is_active: true,
         is_chargeable: true, contracted_hours_per_day: true, working_days: true,
-        annual_leave_allowance_days: true, start_date: true, end_date: true, utilisation_factor: true,
+        annual_leave_allowance_days: true, start_date: true, pay_start_date: true,
+        work_end_date: true, pay_end_date: true, utilisation_factor: true,
         allocations: { select: { site_id: true, percent: true } },
       },
     }) as any;
@@ -67,7 +69,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         contractedHoursPerDay: p.contracted_hours_per_day == null ? null : Number(p.contracted_hours_per_day),
         workingDays: p.working_days ?? [],
         startDate: p.start_date ? p.start_date.toISOString().slice(0, 10) : null,
-        endDate: p.end_date ? p.end_date.toISOString().slice(0, 10) : null,
+        // NULL pay date = coincides with the work date (a stated default, not unknown). Sent as
+        // null so the form can show the disclosure closed until someone genuinely differs.
+        payStartDate: p.pay_start_date ? p.pay_start_date.toISOString().slice(0, 10) : null,
+        workEndDate: p.work_end_date ? p.work_end_date.toISOString().slice(0, 10) : null,
+        payEndDate: p.pay_end_date ? p.pay_end_date.toISOString().slice(0, 10) : null,
         allowanceDays: p.annual_leave_allowance_days == null ? null : Number(p.annual_leave_allowance_days),
         utilisationFactor: p.utilisation_factor,
         allocations: p.allocations.map((a: any) => ({ siteId: a.site_id, percent: Number(a.percent) })),
@@ -86,7 +92,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // DELIBERATE pick (required — no silent today-default; the form ships it empty). POST (new
     // hire) anchors on the start date, so today is a fine fallback there. Far-past/future still
     // needs an explicit confirm — never accepted silently.
-    if (isPatch && body.action !== 'markLeft' && !body.effectiveDate) {
+    // EVERY dated change picks its date, including leaving. markLeft used to be excluded here and
+    // then silently defaulted to today — the one dated write in the product that would invent a
+    // date rather than refuse. A leaving date is a fact, and today is not a good guess at it.
+    if (isPatch && !body.effectiveDate && !(body.action === 'markLeft' && body.workEndDate)) {
       return res.status(400).json({ message: 'Pick the date this change takes effect from.' });
     }
     const effectiveDate = body.effectiveDate ? parseDay(body.effectiveDate) : todayUTC();
@@ -95,18 +104,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({ needsDateConfirm: true, message: 'That effective date is more than a year away — confirm it’s intended.' });
     }
 
-    // ---- Mark as left (Former employees): end_date + deactivate + `ended` event, ONE tx.
-    // History is retained in full — a former employee is never deleted.
+    // ---- Mark as left. History is retained in full — a former employee is never deleted.
+    // TWO DATES, because work and pay do not have to stop together: the last
+    // WORKING day bounds capacity, the last PAID day bounds cost, and payment in lieu is exactly
+    // the case a single date cannot express. They coincide when someone works their notice or
+    // walks out, and the form defaults them together — the split costs nothing when unused.
     if (isPatch && body.action === 'markLeft') {
-      const endDate = parseDay(body.endDate) ?? todayUTC();
-      const person = (await prisma.costPerson.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_active: true, end_date: true } })) as any;
+      // NO SILENT DEFAULT. Both the gate above and this refusal are deliberate: the previous
+      // `?? todayUTC()` would date a leaving event to whenever the request happened to arrive.
+      const workEnd = parseDay(body.workEndDate ?? body.endDate);
+      if (!workEnd) return res.status(400).json({ message: 'Enter the last working day.' });
+      // Absent = coincides with the last working day. A STATED DEFAULT, not unknown — the fact
+      // being recorded is "they left on X", and PILON is the exception that must be entered.
+      const payEnd = body.payEndDate ? parseDay(body.payEndDate) : workEnd;
+      if (!payEnd) return res.status(400).json({ message: 'Enter a valid last paid day.' });
+      if (payEnd.getTime() < workEnd.getTime()) {
+        return res.status(400).json({ message: 'The last paid day cannot be before the last working day.' });
+      }
+      // The far-past/far-future confirm applies to the LEAVING date too — it is dated like any
+      // other change, and was previously only reached via the (unused) effectiveDate branch.
+      if (datedConfirmNeeded(workEnd, todayUTC()) && !body.confirmDated) {
+        return res.status(409).json({ needsDateConfirm: true, message: 'That leaving date is more than a year away — confirm it’s intended.' });
+      }
+      // OPTIONAL, and never validated into being required: a mandatory reason becomes a field
+      // full of "x". Empty stays null so the history says "not recorded", not "".
+      const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim().slice(0, 500) : null;
+      const person = (await prisma.costPerson.findFirst({ where: { id, group_id: groupId }, select: { id: true, is_active: true, work_end_date: true, pay_end_date: true } })) as any;
       if (!person) return res.status(404).json({ message: 'Person not found.' });
       if (!person.is_active) return res.status(409).json({ message: 'They’re already marked as left.' });
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        await tx.costPerson.update({ where: { id }, data: { is_active: false, end_date: endDate } });
+        await tx.costPerson.update({ where: { id }, data: { is_active: false, work_end_date: workEnd, pay_end_date: payEnd } });
         await recordEmploymentEvents(tx, {
-          groupId, costPersonId: id, changedBy: vis.userId ?? null, effectiveDate: endDate,
-          changes: [{ kind: 'ended', value: { end_date: endDate.toISOString().slice(0, 10) }, previous: { end_date: person.end_date ? person.end_date.toISOString().slice(0, 10) : null } }],
+          groupId, costPersonId: id, changedBy: vis.userId ?? null, effectiveDate: workEnd,
+          changes: [{
+            kind: 'ended',
+            value: { work_end_date: day(workEnd), pay_end_date: day(payEnd), reason },
+            previous: { work_end_date: day(person.work_end_date), pay_end_date: day(person.pay_end_date), reason: null },
+          }],
         });
       });
       return res.status(200).json({ message: 'Marked as left.' });
@@ -149,6 +183,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const startDate = body.startDate === undefined ? undefined : (body.startDate ? parseDay(body.startDate) : null);
     if (body.startDate && startDate === null) return res.status(400).json({ message: 'Enter a valid start date.' });
+    // ASYMMETRIC BY DESIGN (ruling 2026-08-02). The column exists so employedDuring's `basis` is
+    // uniform at both ends, but the hiring form asks ONE date: pay preceding work effectively does
+    // not happen, and a second mandatory date would be filled with the same value every time.
+    // Absent = coincides with the start date — a stated default, never "unknown".
+    const payStartDate = body.payStartDate === undefined ? undefined : (body.payStartDate ? parseDay(body.payStartDate) : null);
+    if (body.payStartDate && payStartDate === null) return res.status(400).json({ message: 'Enter a valid payroll start date.' });
 
     // Current shape BEFORE the write (tenant guard + the diff base for the dated history).
     let current: (EmploymentShape & { id: string }) | null = null;
@@ -167,6 +207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const shape: any = { is_chargeable: isChargeable, contracted_hours_per_day: contracted, working_days: workingDays };
       if (factor !== -1) shape.utilisation_factor = factor;
       if (startDate !== undefined) shape.start_date = startDate;
+      if (payStartDate !== undefined) shape.pay_start_date = payStartDate;
       const person = isPatch
         ? await tx.costPerson.update({
             where: { id },
