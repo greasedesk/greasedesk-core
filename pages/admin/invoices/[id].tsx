@@ -29,7 +29,7 @@ type PageProps = {
   isImported: boolean;
   invoiceId: string;
   number: string;
-  status: 'issued' | 'paid_pending' | 'paid' | 'settled';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses

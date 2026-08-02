@@ -29,6 +29,9 @@ export async function getVatSummary(groupId: string, siteIds: string[], from: Da
       group_id: groupId,
       site_id: { in: siteIds },
       series: 'chargeable',                                  // warranty (£0 goodwill) is not a sale
+      // POSITIVE ALLOW-LIST — already excludes 'void' by construction, so it needs no predicate.
+      // Do NOT spread `notVoided` in here: the later `status` key would WIN and widen this to
+      // "anything except void", pulling settled warranty rows into the VAT return.
       status: { in: ['issued', 'paid_pending', 'paid'] },    // has a number; 'settled' = warranty terminal
       ...effectiveIssueDateWhere(from, to),
     },

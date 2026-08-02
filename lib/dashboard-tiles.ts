@@ -15,6 +15,7 @@ import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncoste
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
 import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
+import { notVoided } from '@/lib/invoice-void';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
@@ -90,7 +91,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   // Issued vs paid in the period — count + value each way.
   issuedVsPaid: async ({ groupId, siteIds, from, to }) => {
     const issued = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', ...effectiveIssueDateWhere(from, to) },
+      where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', ...notVoided, ...effectiveIssueDateWhere(from, to) },
       select: { status: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
     const issuedPennies = issued.reduce((a, r) => a + grossOfPaid(r), 0); // frozen lines from mint — one gross for every status
@@ -138,7 +139,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   warranty: async ({ groupId, siteIds, from, to }) => {
     const [rows, rates] = await Promise.all([
       prisma.invoice.findMany({
-        where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...effectiveIssueDateWhere(from, to) },
+        where: { group_id: groupId, site_id: { in: siteIds }, series: 'warranty', ...notVoided, ...effectiveIssueDateWhere(from, to) },
         select: {
           id: true, invoice_number: true, series: true, site_id: true, site: { select: { site_name: true } },
           lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true } },
@@ -353,7 +354,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // — different defect, different fix, never conflated.
   missingHours: async ({ groupId, siteIds, from, to }) => {
     const invs = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
+      where: { group_id: groupId, site_id: { in: siteIds }, ...notVoided, ...effectiveIssueDateWhere(from, to) },
       select: { id: true, invoice_number: true, lines: { select: { item_type: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true, description: true } } },
     })) as any[];
     const byProduct = new Map<string, number>();
@@ -454,7 +455,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
 
     // 2) Billed — charged labour hours dated by effective issue date; total === the "Hours charged" tile.
     const invs = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, ...effectiveIssueDateWhere(from, to) },
+      where: { group_id: groupId, site_id: { in: siteIds }, ...notVoided, ...effectiveIssueDateWhere(from, to) },
       select: { date_issued: true, issued_at: true, series: true, lines: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
     })) as any[];
     const billedByDay = new Map<string, number>();

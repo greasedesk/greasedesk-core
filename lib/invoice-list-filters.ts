@@ -18,10 +18,15 @@ const STATUS_WHERE: Record<ListStatusKey, object> = {
   // historical record that was already settled in the previous system, so it must never appear in
   // the debtors view or be chased. It stays visible in `all`/`paid` — excluded from pursuit, not
   // from the ledger.
+  // Names a status, so a VOID is already excluded — a retired document is not a debt. Do NOT
+  // spread `notVoided` in here: it would clobber `status: 'issued'` and start counting paid ones.
   unpaid: { status: 'issued', series: 'chargeable', is_imported: false }, // the debtors view (point-in-time)
   pending: { status: 'paid_pending' },                // clearance window (point-in-time)
   paid: { status: 'paid' },
   warranty: { series: 'warranty' },
+  // ARRIVAL-ONLY and deliberately status-blind, so this DOES still list voids. That is correct for
+  // a list whose job is "what was raised in this period" — the void filter and the struck-through
+  // row are display work (step 3), not an exclusion. It feeds no money tile.
   issued: { series: 'chargeable' },                   // arrival-only: "issued in period", any status
 };
 

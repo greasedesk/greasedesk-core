@@ -26,7 +26,7 @@ import { formatMoney } from '@/lib/format-money';
 
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
-  status: 'issued' | 'paid_pending' | 'paid' | 'settled'; series: 'chargeable' | 'warranty';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty';
   issuedAt: string; receiptSent: boolean; manualPending?: boolean; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
 };
@@ -42,6 +42,10 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   if (row.series === 'warranty') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-accent-soft text-accent">{row.status === 'settled' ? t('chip.settled') : t('chip.warranty')}</span>;
   if (row.status === 'paid') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('chip.paid')}</span>;
   if (row.status === 'paid_pending') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
+  // STEP 3 (display) OWES A VOID CHIP. This falls through to "unpaid" for any status it does not
+  // name, so a VOIDED invoice currently reads on this list as an outstanding debt — even though it
+  // is correctly excluded from the debtors tile and every money read. Deliberately not fixed here:
+  // this slice is the money reads only.
   return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
 }
 

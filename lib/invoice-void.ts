@@ -74,6 +74,25 @@ export function canVoid(inv: { status: string; lineCount: number }): { ok: true 
   return { ok: true };
 }
 
+/**
+ * ── OFF-LEDGER: THE ONE PLACE THAT SAYS "A VOID IS NOT MONEY" ───────────────────────────────────
+ * Same shape as OFF_DIARY_STATUSES in lib/jobcard-status (a cancelled job keeps its slot data but
+ * stops occupying a lift): a voided invoice keeps its number, lines and snapshots but stops being
+ * money. Six figures hang off fetchLedgerInvoices alone, so this is written ONCE and spread in,
+ * never restated per query. `notIn` rather than `not` so a second off-ledger status is one edit.
+ *
+ * ⚠ ONLY SPREAD THIS INTO A WHERE CLAUSE THAT DOES NOT ALREADY NAME `status`.
+ * `{ status: 'issued', ...notVoided }` does NOT mean "issued and not void" — the later key WINS,
+ * so it silently becomes "anything except void", and the debtors view would start counting PAID
+ * invoices. Queries with a positive allow-list (debtors' `status: 'issued'`, the VAT return's
+ * `status: { in: [...] }`) are ALREADY safe by construction, because 'void' is not in their list.
+ * Leave them alone — see the note at each site.
+ */
+export const OFF_LEDGER_STATUSES = ['void'] as const;
+
+/** Spread into any invoice query that selects BY DATE without naming a status. */
+export const notVoided = { status: { notIn: [...OFF_LEDGER_STATUSES] as string[] } };
+
 /** THE resurrection guard, used by every path that could bring a void back to life. One predicate,
  *  so a new path cannot be added that forgets the rule — see the guarded list in the void endpoint. */
 export function refuseIfVoid(inv: { status: string } | null | undefined): { code: string; message: string } | null {

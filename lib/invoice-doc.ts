@@ -36,7 +36,7 @@ export type InvoiceDoc = {
   jobCardId: string;
   siteId: string;
   number: string;
-  status: 'issued' | 'paid_pending' | 'paid' | 'settled';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
   datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)

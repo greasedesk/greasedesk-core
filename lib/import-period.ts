@@ -21,6 +21,7 @@
  * "absent, not hidden" rule the finance-visibility work established.
  */
 import { prisma } from '@/lib/db';
+import { notVoided } from '@/lib/invoice-void';
 
 export type ImportPeriodState = 'none' | 'in_progress' | 'complete';
 
@@ -65,7 +66,9 @@ export async function periodImportState(
   if (!staged.length) {
     // No batch covers this period — but imported invoices may still sit in it from an older run.
     const imported = await prisma.invoice.count({
-      where: { group_id: groupId, site_id: { in: siteIds }, is_imported: true,
+      // A VOIDED import is not an import that landed — counting it here would suppress this
+      // period's derived figures on the strength of a retired document.
+      where: { group_id: groupId, site_id: { in: siteIds }, is_imported: true, ...notVoided,
         OR: [{ date_issued: { gte: from, lt: to } }, { date_issued: null, issued_at: { gte: from, lt: to } }] },
     });
     return imported > 0

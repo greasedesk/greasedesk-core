@@ -15,6 +15,7 @@
 import { prisma } from '@/lib/db';
 import { effectiveIssueDateWhere, computeInvoiceLinePennies } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
+import { notVoided } from '@/lib/invoice-void';
 
 export type LedgerInvoice = {
   series: string;
@@ -30,7 +31,7 @@ export type LedgerInvoice = {
  *  row by the 2026-07-12 backfill + every new snapshot. */
 export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; from: Date; to: Date }): Promise<LedgerInvoice[]> {
   return prisma.invoice.findMany({
-    where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
+    where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, ...notVoided, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
     select: { series: true, id: true, invoice_number: true, lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true } } },
   }) as unknown as Promise<LedgerInvoice[]>;
 }
