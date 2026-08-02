@@ -30,6 +30,7 @@ export type AuditAction =
   | 'invoice.paid_confirmed'  // clearance window elapsed → confirmed by the cron (system actor)
   | 'invoice.unlocked'      // ADMIN-only escape hatch: frozen (issued/paid/settled) → unlocked for corrections
   | 'invoice.reissued'      // ADMIN re-freeze after an unlock: corrected lines snapshot + re-lock (warranty → settled)
+  | 'invoice.voided'        // ADMIN retires a document issued in error; number + frozen lines RETAINED (VATREC5010)
   | 'invoice.lines_classified' // one-off 2026-07-12: item_type/labour_outsourced backfilled onto existing frozen lines
   | 'invoice.warranty_settled_backfilled' // one-off 2026-07-12: W-series frozen (goodwill shape) + settled
   | 'invoice.renumbered'    // deliberate ledger correction of the rendered number (one-off, admin-approved)

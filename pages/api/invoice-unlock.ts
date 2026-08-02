@@ -20,6 +20,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { writeAudit } from '@/lib/audit';
 import { snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { tServer } from '@/lib/server-i18n';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -42,6 +43,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: { id: true, status: true, series: true, invoice_number: true, job_card_id: true, vat_registered_at_issue: true, job_card: { select: { status: true } }, lines: { select: { id: true }, take: 1 }, site: { select: { locale: true } } },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
+
+  // THE SHARP EDGE. `reissue` gates on the ABSENCE of lines, and this guard sits ABOVE that gate on
+  // purpose: a void keeps its lines, so it would fail the no-lines check for the right reason
+  // today — but the moment anyone unlocks-then-voids, or the precondition changes, re-issue would
+  // read a void as "unlocked, ready to re-freeze" and silently revive a retired document.
+  // Guarding on the status, above both branches, is the version of this that cannot rot.
+  const voided = refuseIfVoid(invoice);
+  if (voided) return res.status(409).json(voided);
 
   if (act === 'reissue') {
     // Re-freeze the corrected card lines and re-lock. Only meaningful while unlocked (no lines).

@@ -48,6 +48,7 @@ import { assertImportedInvoiceMatchesSource, importAssertError } from '@/lib/imp
 import { emitCardItemsFromStaged } from '@/lib/import-emit';
 import { writeImportAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 const GRAIN_FILE = process.env.PAYMENT_GRAIN_FILE
   ?? join(homedir(), 'Developer/import/payment-grain-capture-2026-07-20.json');
@@ -108,6 +109,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'The invoice this staged row points at no longer exists.' });
+  // RESURRECTION GUARD. A void is a retained document, not a draft — nothing may bring it back.
+  const voided = refuseIfVoid(invoice);
+  if (voided) return res.status(409).json(voided);
+
   if (!invoice.is_imported || !invoice.external_ref) {
     return res.status(409).json({ message: 'That invoice is not an imported one — there is no source document to check it against.' });
   }

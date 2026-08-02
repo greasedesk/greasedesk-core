@@ -15,6 +15,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -33,6 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: { id: true, status: true, site_id: true, job_card_id: true, invoice_number: true, payment_method_snapshot: true },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
+  // RESURRECTION GUARD. A void is a retained document, not a draft — nothing may bring it back.
+  const voided = refuseIfVoid(invoice);
+  if (voided) return res.status(409).json(voided);
+
   const vis = await getVisibility(user.id as string);
   if (!canManageSite(vis, invoice.site_id)) return res.status(403).json({ message: 'Only a manager or admin can make this change.' });
   if (invoice.status !== 'paid_pending') {

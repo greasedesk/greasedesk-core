@@ -64,6 +64,14 @@ enum InvoiceStatus {
   paid_pending
   paid
   settled // warranty terminal state: £0, no charge, closed at issue — never collects, never AR
+  // ISSUED IN ERROR AND RETIRED. The document is RETAINED, not deleted: VATREC5010 accepts a break
+  // in a sequential series "as long as you retain the cancelled or spoiled invoice in your
+  // accounting records, or you can provide an explanation for the break in sequence". A void keeps
+  // its number, its frozen lines and its snapshots, and carries the explanation on the row —
+  // which is why voiding requires frozen lines, unlike the empty husk `unlock` leaves behind.
+  // A void is NOT a credit note: a credit note is a countervailing document sent to a customer for
+  // a decrease in consideration (VATREC13040), and needs its own series and particulars.
+  void
 }
 
 // Chargeable vs warranty invoices draw from SEPARATE counters — both independently gapless.
@@ -1345,6 +1353,12 @@ model Invoice {
   payment_method_snapshot String? // method name at mark-paid; renames never rewrite history
   confirm_due_at          DateTime? // paid_pending only: when the clearance window elapses (cron confirms then)
   receipt_sent_at         DateTime? // confirmation receipt delivered; null on a confirmed invoice = visibly "receipt not sent"
+  // --- VOID grain. The explanation VATREC5010 asks for lives ON the document it explains, not in
+  // a side table a reader has to know to join. Set together, in one transaction, or not at all.
+  voided_at               DateTime?
+  voided_by               String?   // User.id of the admin who retired it — never a system actor
+  void_category           String?   // one of lib/invoice-void VOID_CATEGORIES
+  void_reason             String?   // free text, MANDATORY (see lib/invoice-void for why this one is)
 
   // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
   company_name_snapshot       String

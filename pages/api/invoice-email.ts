@@ -12,6 +12,7 @@ import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,8 +26,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { invoiceId } = (req.body || {}) as { invoiceId?: string };
   if (!invoiceId) return res.status(400).json({ message: 'Missing invoiceId.' });
 
-  const invoice = (await prisma.invoice.findFirst({ where: { id: invoiceId, group_id: user.group_id }, select: { site_id: true } })) as any;
+  const invoice = (await prisma.invoice.findFirst({ where: { id: invoiceId, group_id: user.group_id }, select: { site_id: true, status: true } })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
+  // RESURRECTION GUARD. A void is a retained document, not a draft — nothing may bring it back.
+  const voided = refuseIfVoid(invoice);
+  if (voided) return res.status(409).json(voided);
+
   const vis = await getVisibility(user.id as string);
   if (!canManageSite(vis, invoice.site_id)) return res.status(403).json({ message: 'You do not have access to this invoice.' });
 

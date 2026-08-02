@@ -20,6 +20,7 @@ import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -93,6 +94,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let paidDate: Date | null = null; // the chosen DOCUMENT payment date (Xero-style; defaults to now)
   let instantConfirmedInvoiceId: string | null = null;
   if (to === 'paid') {
+    // RESURRECTION GUARD, up front. The re-freeze below only fires on `status === 'issued'`, so a
+    // void is already inert there — but the CARD would still march to `paid`, claiming a payment
+    // against a retired document. Refuse the whole transition instead of half-performing it.
+    const voidCheck = refuseIfVoid(await prisma.invoice.findFirst({
+      where: { job_card_id: jobCardId, group_id: user.group_id as string }, select: { status: true },
+    }));
+    if (voidCheck) return res.status(409).json(voidCheck);
     const hasUnpaidInvoice = (await prisma.invoice.findFirst({
       where: { job_card_id: jobCardId, status: 'issued' },
       select: { id: true, date_issued: true, issued_at: true },
