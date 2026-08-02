@@ -49,37 +49,5 @@
   "periodBanner": "Showing {{label}} · {{from}} – {{to}}",
   "periodClear": "Clear filter",
   "voidBanner": "Voided {{when}} — {{reason}}",
-  "voidReasonLabel": "Voided",
-  "voidBadge": "VOIDED",
-  "voidNotice": "This invoice was voided on {{when}} and is not payable. Reason: {{reason}}",
-  "voidNoReason": "not recorded",
-  "void": {
-    "open": "Void invoice (admin)",
-    "title": "Void this invoice",
-    "categoryLabel": "Why is it being voided?",
-    "categoryPick": "Choose a reason…",
-    "category": {
-      "issued_in_error": "Issued in error",
-      "duplicate": "Duplicate",
-      "wrong_customer": "Wrong customer",
-      "test_or_demo": "Test or demonstration"
-    },
-    "reasonLabel": "What happened?",
-    "reasonPlaceholder": "This is the record that explains the gap in the numbering — write what actually happened.",
-    "reasonOk": "{{n}} characters — that will do.",
-    "addReconstruction": "Note that the lines are a reconstruction",
-    "reconstructionNote": "The original line snapshot was destroyed by an admin unlock, so the retained lines are rebuilt from the job card as it stood.",
-    "review": "Review before voiding",
-    "cancel": "Cancel",
-    "confirmIntro": "Voiding does not delete anything. This is what will be kept:",
-    "keepNumber": "Invoice number {{number}} — kept, exactly as issued",
-    "keepTotal": "The total, {{total}} — kept on the document",
-    "keepLines": "All {{count}} line(s) — kept, frozen as they are",
-    "keepConsumed": "{{number}} stays consumed. It is never reused, and the sequence keeps the gap — which is why the reason above matters.",
-    "confirmReasonLabel": "This will be recorded against the invoice:",
-    "commit": "Void this invoice",
-    "working": "Voiding…",
-    "back": "Back",
-    "error": "Could not void the invoice."
-  }
+  "voidReasonLabel": "Voided"
 }
