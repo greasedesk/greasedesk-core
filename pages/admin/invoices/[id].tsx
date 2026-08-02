@@ -30,6 +30,8 @@ type PageProps = {
   invoiceId: string;
   number: string;
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
+  voidedAt: string | null;
+  voidReason: string | null;
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
   series: 'chargeable' | 'warranty';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
@@ -156,6 +158,14 @@ export default function InvoicePage(props: PageProps) {
         </div>
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
+        {/* RETIRED, AND SAID SO. The document is retained and still renders (VATREC5010), so the
+            screen must carry the fact and the reason — otherwise the retained copy is
+            indistinguishable from a live demand for payment. */}
+        {props.status === 'void' && (
+          <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-3" data-testid="detail-void-notice">
+            {t('voidNotice', { when: props.voidedAt ?? '—', reason: props.voidReason || t('voidNoReason') })}
+          </div>
+        )}
         {/* Freeze-at-issue: frozen lines are the document; an unlocked invoice is under correction. */}
         {props.status === 'issued' && props.hasFrozenLines && <p className="text-xs text-muted mb-3">{t('frozenNote')}</p>}
         {props.status === 'issued' && !props.hasFrozenLines && (
@@ -207,8 +217,19 @@ export default function InvoicePage(props: PageProps) {
                 {props.series === 'warranty' && (
                   <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full bg-warn-soft text-warn">{t('warrantyBadge')}</span>
                 )}
-                <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${props.status === 'paid' ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'}`}>
-                  {props.status === 'paid' ? t('paidBadge') : props.status === 'paid_pending' ? t('pendingBadge') : t('issuedBadge')}
+                {/* SAME FIX AS THE LIST. This ternary used to END in `issuedBadge`, so a status it
+                    had never heard of wore the ISSUED face — a voided invoice announced itself as
+                    live. `issued` is now NAMED; anything unrecognised prints as itself. */}
+                <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                  props.status === 'paid' ? 'bg-ok-soft text-ok'
+                  : props.status === 'void' ? 'bg-danger-soft text-danger'
+                  : props.status === 'paid_pending' || props.status === 'issued' ? 'bg-warn-soft text-warn'
+                  : 'bg-surface-muted text-muted border border-line border-dashed'}`} data-testid="detail-status-badge">
+                  {props.status === 'paid' ? t('paidBadge')
+                    : props.status === 'paid_pending' ? t('pendingBadge')
+                    : props.status === 'void' ? t('voidBadge')
+                    : props.status === 'issued' ? t('issuedBadge')
+                    : props.status}
                 </span>
               </div>
             </div>
@@ -385,6 +406,8 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       datePaid: doc.datePaid ? doc.datePaid.toISOString().slice(0, 10) : null,
       dateIssued: doc.issuedAt.toISOString().slice(0, 10), // effective document date (date_issued ?? issued_at)
       receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
+      voidedAt: doc.voidedAt ? doc.voidedAt.toLocaleDateString(doc.locale) : null,
+      voidReason: doc.voidReason ?? null,
       issuedAt: doc.issuedAt.toLocaleDateString(doc.locale),
       vatRegistered: doc.vatRegistered,
       company: doc.company,

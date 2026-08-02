@@ -57,12 +57,27 @@ export function findTransition(from: JobStatus, to: JobStatus): Transition | nul
 // declined/cancelled — is simply "unpaid": nothing chargeable has been raised.
 // A COMEBACK's invoice settles at issue (£0, terminal — never paid): its card reads `settled`
 // from `invoiced` onward, so a warranty job never looks like outstanding money.
-export type PaymentState = 'unpaid' | 'invoiced' | 'paid' | 'settled';
+export type PaymentState = 'unpaid' | 'invoiced' | 'paid' | 'settled' | 'unknown';
+
+/**
+ * EVERY JobStatus, NAMED. This is a Record<JobStatus, …>, so adding a status to JobStatus FAILS TO
+ * COMPILE until someone decides what it means for money. That is the point of the map: the previous
+ * version ended in a bare `return 'unpaid'`, so a new status would silently have been presented as
+ * an unpaid job — the same fault that made a voided invoice read as £96.00 outstanding on the
+ * Invoices list. Prophylaxis: no void reaches this today, and no existing status changes behaviour.
+ */
+const PAY_STATE_BY_STATUS: Record<JobStatus, PaymentState> = {
+  draft: 'unpaid', quoted: 'unpaid', accepted: 'unpaid', declined: 'unpaid',
+  in_progress: 'unpaid', cancelled: 'unpaid',
+  invoiced: 'invoiced',
+  paid: 'paid', done: 'paid',
+};
+
 export function paymentState(status: JobStatus | string, isComeback = false): PaymentState {
   if (isComeback && (status === 'invoiced' || status === 'paid' || status === 'done')) return 'settled';
-  if (status === 'invoiced') return 'invoiced';
-  if (status === 'paid' || status === 'done') return 'paid';
-  return 'unpaid';
+  // An unrecognised status is UNKNOWN — never a specific financial state. Callers render the raw
+  // status rather than a money label, so it looks unknown instead of looking settled.
+  return PAY_STATE_BY_STATUS[status as JobStatus] ?? 'unknown';
 }
 
 // ---- the four operational stage flags ----

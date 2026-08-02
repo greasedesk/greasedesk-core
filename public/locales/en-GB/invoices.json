@@ -49,5 +49,8 @@
   "periodBanner": "Showing {{label}} · {{from}} – {{to}}",
   "periodClear": "Clear filter",
   "voidBanner": "Voided {{when}} — {{reason}}",
-  "voidReasonLabel": "Voided"
+  "voidReasonLabel": "Voided",
+  "voidBadge": "VOIDED",
+  "voidNotice": "This invoice was voided on {{when}} and is not payable. Reason: {{reason}}",
+  "voidNoReason": "not recorded"
 }

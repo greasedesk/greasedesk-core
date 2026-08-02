@@ -61,12 +61,15 @@ const PAY_TONES: Record<PaymentState, string> = {
   invoiced: 'bg-warn-soft border-warn text-warn',
   paid: 'bg-ok-soft border-ok text-ok',
   settled: 'bg-accent-soft border-accent text-accent', // warranty: closed at £0, never outstanding
+  // Dashed + muted: reads as "this screen doesn't know", not as a financial claim.
+  unknown: 'bg-surface-muted border-line border-dashed text-muted',
 };
 function PayPill({ status, isComeback, t, className }: { status: string; isComeback?: boolean; t: (k: string) => string; className?: string }) {
   const state = paymentState(status, isComeback);
   return (
     <span className={`inline-block shrink-0 rounded-full border px-1.5 font-medium whitespace-nowrap ${PAY_TONES[state]} ${className ?? ''}`}>
-      {t(`finance.payState.${state}`)}
+      {/* Unrecognised → print the status ITSELF. A money label would be a claim we cannot support. */}
+      {state === 'unknown' ? status : t(`finance.payState.${state}`)}
     </span>
   );
 }
