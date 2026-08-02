@@ -176,9 +176,15 @@ export default function InvoicePage(props: PageProps) {
               <Link href={`/admin/jobcards/${props.jobCardId}?tab=quote`} className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-4 py-2 hover:bg-surface">{t('editOnCard')}</Link>
             )}
             <a href={`/api/invoice-pdf?id=${props.invoiceId}`} className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-4 py-2 hover:bg-surface">{t('downloadPdf')}</a>
-            <button onClick={emailInvoice} disabled={busy !== null} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
-              {busy === 'email' ? t('emailSending') : t('emailSend')}
-            </button>
+            {/* Not on a void. The server refuses it (409, step 1) and re-sending a retired
+                document is exactly what must not happen — a button that always fails is a trap,
+                not a safeguard. The PDF link above STAYS: the retained document must remain
+                producible (VATREC5010). */}
+            {props.status !== 'void' && (
+              <button onClick={emailInvoice} disabled={busy !== null} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
+                {busy === 'email' ? t('emailSending') : t('emailSend')}
+              </button>
+            )}
             {props.status === 'paid_pending' && props.canManage && (
               <button onClick={unmarkPaid} disabled={busy !== null} className="text-sm text-warn border border-line rounded-lg px-4 py-2 hover:bg-warn-soft disabled:opacity-50">
                 {busy === 'unmark' ? t('pending.unmarking') : t('pending.unmark')}
@@ -359,7 +365,9 @@ export default function InvoicePage(props: PageProps) {
         {props.status === 'paid' && props.receiptNotSent && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
         )}
-        {props.canManage && (
+        {/* A voided invoice's dates are historical fact — the endpoint refuses the edit, so the
+            editor would only ever produce a 409. */}
+        {props.canManage && props.status !== 'void' && (
           <DateIssuedEditor invoiceId={props.invoiceId} initial={props.dateIssued} t={t} onSaved={() => router.replace(router.asPath)} />
         )}
         {(props.status === 'paid' || props.status === 'paid_pending') && props.canManage && (
