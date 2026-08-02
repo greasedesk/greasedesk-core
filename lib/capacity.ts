@@ -61,6 +61,9 @@ export type AvailableHours = {
   malformedEvents: string[];
   // Popover grain — the arithmetic must be showable, not just the total:
   mechanicCount: number;             // chargeable people contributing (with hours set)
+  // WHO those people are. Carried so the group roll-up can take a DISTINCT union across sites
+  // instead of running its own census — see getGroupUtilisation.
+  countedPeople: string[];
   rosteredDays: number;              // Σ per-person rostered days in the window (config'd people)
   leaveHours: number;                // total subtracted for leave (allocation-scaled, CLOCK time — never factored)
   phHours: number;                   // total subtracted for public holidays (allocation-scaled, CLOCK time)
@@ -167,6 +170,9 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
   const unknownStartPeople = chargeable.filter((p: any) => p.start_date == null).map((p: any) => p.name);
   const configured = chargeable.filter((p: any) => hoursOf(p) != null);
+  const countedPeople = configured
+    .filter((p: any) => p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) > 0)
+    .map((p: any) => p.name as string);
   const ids = configured.map((p: any) => p.id);
   const factorAt = factorR.values;
 
@@ -233,7 +239,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     missingHoursMechanics,
     unknownStartPeople,
     malformedEvents,
-    mechanicCount: configured.filter((p: any) => p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) > 0).length,
+    mechanicCount: countedPeople.length,
+    countedPeople,
     rosteredDays,
     leaveHours: centiLeave / 100,
     phHours: centiPh / 100,
@@ -458,15 +465,17 @@ export type GroupUtilisation = {
 };
 
 export async function getGroupUtilisation(groupId: string, siteIds: string[], window: CapacityWindow): Promise<GroupUtilisation> {
-  const [sites, parts, people] = await Promise.all([
+  // NO SEPARATE CENSUS. This used to run its own costPerson query and re-derive who counts from the
+  // FLAT columns — a fourth copy of the rule, and one that disagreed with the parts the moment any
+  // attribute became effective-dated (it counted non-chargeable people, and read today's hours for a
+  // historic month). The parts already resolved every attribute as of the window; the roll-up's only
+  // job is to make them DISTINCT across sites, which is what the census was for.
+  const [sites, parts] = await Promise.all([
     prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } }) as any,
     Promise.all(siteIds.map((sid) => getUtilisation(groupId, sid, window))),
-    // Distinct-people counts across the visible sites (per-site sums would double-count splits).
-    prisma.costPerson.findMany({
-      where: { ...employedDuring(groupId, window), allocations: { some: { site_id: { in: siteIds } } } },
-      select: { name: true, contracted_hours_per_day: true, start_date: true },
-    }) as any,
   ]);
+  const distinct = (k: 'missingHoursMechanics' | 'unknownStartPeople' | 'countedPeople' | 'malformedEvents') =>
+    [...new Set(parts.flatMap((u: any) => (u[k] ?? []) as string[]))];
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
   let charged = 0, rework = 0, available = 0, rawHours = 0, rosteredDays = 0, leaveHours = 0, phHours = 0, grossHours = 0;
   const leaveByType: Record<string, number> = {};
@@ -481,17 +490,16 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     return { siteId: sid, siteName: nameOf.get(sid) ?? '—', charged: u.charged, rework: u.rework, available: u.available, rawHours: u.rawHours, ratio: u.ratio, rosteredDays: u.rosteredDays, leaveHours: u.leaveHours, phHours: u.phHours, mechanicCount: u.mechanicCount };
   });
   charged = Math.round(charged * 100) / 100; rework = Math.round(rework * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
-  const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
-  // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
-  const unknownStartPeople = people.filter((p: any) => p.start_date == null).map((p: any) => p.name);
+  const missingHoursMechanics = distinct('missingHoursMechanics');
   return {
     charged, rework, available, rawHours,
     ratio: available === 0 ? null : charged / available, // null → "—", never NaN/Infinity; NOT capped
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
-    unknownStartPeople,
-    malformedEvents: [...new Set(parts.flatMap((u: any) => u.malformedEvents ?? []))],
-    mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
+    // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
+    unknownStartPeople: distinct('unknownStartPeople'),
+    malformedEvents: distinct('malformedEvents'),
+    mechanicCount: distinct('countedPeople').length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,
     factorParts,
