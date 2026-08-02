@@ -297,11 +297,25 @@ export async function getDailyCapacity(groupId: string, siteIds: string[], windo
  *  Resolution: latest non-voided `factor` event with effective_date < T → its value; else, if a
  *  LATER event exists, the EARLIEST later event's previous_json (the value that applied before
  *  the first change — true at T); else the flat column (caller's fallback, never changed). */
-async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, number>> {
+/**
+ * THE value-true-at-time read, for any EmploymentEvent kind. Extracted from factorsAtWindowEnd so
+ * pay and factor resolve through ONE implementation — the last four slices each found the same rule
+ * written twice and eventually disagreeing with itself.
+ *
+ * BOUNDARY, unchanged and deliberately so: `effective_date < to` where `to` is the EXCLUSIVE window
+ * end. That is the schema's stated `effective_date <= T` rule with T = the window's last instant, and
+ * it was proven correct on a fixture (a factor dated the 1st applies IN that month, and flipping the
+ * comparison to `<=` applied it a month early). Do not reinterpret it.
+ *
+ * Falls back to the FIRST later event's `previous_json` — the value that was in force before the
+ * earliest recorded change. Returns no entry at all when there is no history; the caller decides
+ * what an absent entry means, and must say so out loud rather than defaulting silently.
+ */
+export async function valuesAtWindowEnd(ids: string[], to: Date, kind: string, field: string): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (!ids.length) return out;
   const evs = (await prisma.employmentEvent.findMany({
-    where: { cost_person_id: { in: ids }, kind: 'factor' as any, voided_at: null },
+    where: { cost_person_id: { in: ids }, kind: kind as any, voided_at: null },
     orderBy: [{ effective_date: 'asc' }, { created_at: 'asc' }],
     select: { cost_person_id: true, effective_date: true, value_json: true, previous_json: true },
   })) as any[];
@@ -310,14 +324,18 @@ async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, 
   for (const [pid, list] of byPerson) {
     const atOrBefore = list.filter((e) => e.effective_date.getTime() < to.getTime());
     if (atOrBefore.length) {
-      const v = atOrBefore[atOrBefore.length - 1].value_json?.utilisation_factor;
+      const v = atOrBefore[atOrBefore.length - 1].value_json?.[field];
       if (Number.isFinite(Number(v))) out.set(pid, Number(v));
     } else {
-      const prev = list[0].previous_json?.utilisation_factor; // value BEFORE the first (later) change
+      const prev = list[0].previous_json?.[field]; // value BEFORE the first (later) change
       if (Number.isFinite(Number(prev))) out.set(pid, Number(prev));
     }
   }
   return out;
+}
+
+async function factorsAtWindowEnd(ids: string[], to: Date): Promise<Map<string, number>> {
+  return valuesAtWindowEnd(ids, to, 'factor', 'utilisation_factor');
 }
 
 // ---------- Utilisation = hours charged ÷ SELLABLE hours (month × site) ----------

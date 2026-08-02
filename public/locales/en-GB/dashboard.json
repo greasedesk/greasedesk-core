@@ -161,7 +161,8 @@
     "wfRework": "warranty rework (hours spent redoing work for free)",
     "hoursWentRework": "+ {{hours}} warranty rework",
     "utilReworkNote": "{{hours}} warranty rework excluded from sold (spent capacity, not sold output)",
-    "utilUnknownStart": "Counted without a known start date (set it in HR): {{names}}"
+    "utilUnknownStart": "Counted without a known start date (set it in HR): {{names}}",
+    "assumedPay": "Pay for this period assumes today’s salary — no pay history recorded for: {{names}}"
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."

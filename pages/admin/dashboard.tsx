@@ -880,6 +880,11 @@ export default function AdminDashboard(props: PageProps) {
                           {(u.unknownStartPeople?.length ?? 0) > 0 && (
                             <p className="text-warn" data-testid="unknown-start">{t('pnl.utilUnknownStart', { names: u.unknownStartPeople.join(', ') })}</p>
                           )}
+                          {/* Pay for this period is today's figure because no wage history exists.
+                              An assumption, stated — not a resolved fact. */}
+                          {((d as any)?.assumedPayPeople?.length ?? 0) > 0 && (
+                            <p className="text-warn" data-testid="assumed-pay">{t('pnl.assumedPay', { names: (d as any).assumedPayPeople.join(', ') })}</p>
+                          )}
                         </div>
                       </details>
                     </>

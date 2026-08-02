@@ -12,7 +12,7 @@ import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-pe
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
-import { getGroupUtilisation, getDailyCapacity, dayKey } from '@/lib/capacity';
+import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd } from '@/lib/capacity';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
@@ -196,15 +196,41 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 //  Plus the operational grain: Hours charged (fixed-service labour_hours + ad-hoc labour qty).
 // ---- THE monthly cost-base reads (extracted from pnl VERBATIM — pnl + costBase both call
 // these; goldens prove the extraction changed nothing) ----
-/** Active SALARIED people only (hourly staff have no hours source until clocking), annual ÷ 12,
- *  scaled by allocation to the visible sites. TODAY'S settings. */
-export async function monthlyWageBill(groupId: string, siteIds: string[]): Promise<number> {
+/**
+ * Active SALARIED people only (hourly staff have no hours source until clocking), annual ÷ 12,
+ *  scaled by allocation to the visible sites — FOR THE GIVEN WINDOW.
+ *
+ * It used to take no window and read TODAY'S flat `amount_pennies`, which was wrong twice over:
+ *   1. It counted people who were not employed in the period. Capacity had already been fixed to
+ *      exclude them, so the NUMERATOR and DENOMINATOR of the same P&L disagreed about who worked
+ *      at the garage — a future starter cost money in a month she generated no capacity for.
+ *   2. `EmploymentEvent kind='wage'` rows were written and never read, so a pay rise today silently
+ *      RESTATED every historic month's labour cost. Closed months must not move.
+ * Both now go through the shared rules: `employedDuring` for who, `valuesAtWindowEnd` for how much.
+ *
+ * NO WAGE HISTORY = UNKNOWN, and unknown falls back to the flat column — but never silently. The
+ * alternative, excluding them, would cost the month at ZERO for that person, overstating profit,
+ * which is the dangerous direction for a figure a garage makes decisions on. The flat figure is the
+ * only defensible number available; it is an ASSUMPTION that today's pay applied then, and the
+ * names come back so the dashboard can say so. Census at the time of the ruling: 5 of 6 CostPerson
+ * rows across all tenants had no wage event at all, so this is the common path, not the edge.
+ */
+export type WageBill = { pennies: number; assumedPayPeople: string[] };
+
+export async function monthlyWageBill(groupId: string, siteIds: string[], window: { from: Date; to: Date }): Promise<WageBill> {
   const people = (await prisma.costPerson.findMany({
-    where: { group_id: groupId, is_active: true, cost_type: 'salary' },
-    select: { amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+    where: { ...employedDuring(groupId, window), is_chargeable: undefined, cost_type: 'salary' },
+    select: { id: true, name: true, amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
   })) as any[];
-  return Math.round(people.reduce((a, p2) =>
-    a + (p2.amount_pennies / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+  const paidAt = await valuesAtWindowEnd(people.map((p2) => p2.id), window.to, 'wage', 'amount_pennies');
+  const assumedPayPeople: string[] = [];
+  const pennies = Math.round(people.reduce((a, p2) => {
+    const annual = paidAt.get(p2.id);
+    if (annual == null) assumedPayPeople.push(p2.name);
+    const use = annual ?? Number(p2.amount_pennies);
+    return a + (use / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100;
+  }, 0));
+  return { pennies, assumedPayPeople };
 }
 /** The Overheads register normalised monthly (annual ÷ 12, weekly × 52 ÷ 12), allocation-scaled.
  *  NO name-matching — the register IS the list; wages live in Headcount, never here. */
@@ -223,7 +249,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // stateable in advance; the residual refinement is DISPLAY arithmetic in the popover from
   // pnl numbers). Per-site: site cost base ÷ that site's LABOUR_HR rate, summed — a site with
   // allocated cost but NO rate is FLAGGED, never guessed.
-  costBase: async ({ groupId, siteIds, months }) => {
+  costBase: async ({ groupId, siteIds, months, from, to }) => {
     const sites = (await prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } })) as any[];
     const rates = (await prisma.serviceCatalogue.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
@@ -233,7 +259,8 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     let wage = 0, over = 0, breakEvenCentihours = 0;
     const perSite: any[] = []; const ratesMissing: string[] = [];
     for (const s2 of sites) {
-      const [w, o] = await Promise.all([monthlyWageBill(groupId, [s2.id]), monthlyOverheads(groupId, [s2.id])]);
+      const [wb, o] = await Promise.all([monthlyWageBill(groupId, [s2.id], { from, to }), monthlyOverheads(groupId, [s2.id])]);
+      const w = wb.pennies;
       const cost = (w + o) * months;
       wage += w * months; over += o * months;
       const rate = rateOf.get(s2.id) ?? null;
@@ -350,7 +377,8 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
 
     // Wage bill + overheads via THE extracted helpers below (also the cost-base tile's reads —
     // one truth, never re-derived).
-    const wageBillMonthly = await monthlyWageBill(groupId, siteIds);
+    const wageRead = await monthlyWageBill(groupId, siteIds, { from, to });
+    const wageBillMonthly = wageRead.pennies;
     const overheadsMonthly = await monthlyOverheads(groupId, siteIds);
 
     // IMPORT SUPPRESSION. A partially imported period charges the FULL month's wages and overheads
@@ -368,6 +396,8 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const labourContribution = grossMargin - wageBill;
     const netProfit = grossMargin - wageBill - operatingCosts; // wages counted ONCE, here
     const base = { revenueNet, partsCost, grossMargin, hoursChargedCentihours, linesMissingHours, months, invoiceCount: invoices.length,
+      // Whose pay for this period is an ASSUMPTION (no wage history — today's figure used).
+      assumedPayPeople: wageRead.assumedPayPeople,
       uncostedPartsLines: uncosted.lines, uncostedPartsRetailPennies: uncosted.retailPennies, uncostedPartsInvoices: uncosted.invoices,
       imported };
     if (imported.suppressDerived) return base; // wageBill/labourContribution/operatingCosts/netProfit WITHHELD
