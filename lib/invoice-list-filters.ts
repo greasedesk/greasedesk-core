@@ -9,7 +9,7 @@
  */
 import { effectiveIssueDateWhere, effectivePaidDate } from '@/lib/invoice';
 
-export const LIST_STATUS_KEYS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'issued'] as const;
+export const LIST_STATUS_KEYS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'issued', 'void'] as const;
 export type ListStatusKey = typeof LIST_STATUS_KEYS[number];
 
 const STATUS_WHERE: Record<ListStatusKey, object> = {
@@ -24,6 +24,9 @@ const STATUS_WHERE: Record<ListStatusKey, object> = {
   pending: { status: 'paid_pending' },                // clearance window (point-in-time)
   paid: { status: 'paid' },
   warranty: { series: 'warranty' },
+  // Retired documents, retained and findable. VATREC5010's first limb is that the cancelled invoice
+  // is kept in the records — a filter that surfaces them is what makes "kept" mean "reachable".
+  void: { status: 'void' },
   // ARRIVAL-ONLY and deliberately status-blind, so this DOES still list voids. That is correct for
   // a list whose job is "what was raised in this period" — the void filter and the struck-through
   // row are display work (step 3), not an exclusion. It feeds no money tile.
@@ -31,7 +34,7 @@ const STATUS_WHERE: Record<ListStatusKey, object> = {
 };
 
 const PERIOD_BASIS: Record<ListStatusKey, 'paid' | 'issue'> = {
-  all: 'issue', unpaid: 'issue', pending: 'issue', warranty: 'issue', issued: 'issue',
+  all: 'issue', unpaid: 'issue', pending: 'issue', warranty: 'issue', issued: 'issue', void: 'issue',
   paid: 'paid',
 };
 

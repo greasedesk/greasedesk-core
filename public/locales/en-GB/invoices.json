@@ -11,7 +11,8 @@
     "pending": "Pending",
     "paid": "Paid",
     "warranty": "Warranty",
-    "issued": "Issued in period"
+    "issued": "Issued in period",
+    "void": "Void"
   },
   "col": {
     "number": "Invoice",
@@ -28,7 +29,9 @@
     "paid": "Paid",
     "warranty": "Warranty £0",
     "pendingManual": "Awaiting confirmation (manual)",
-    "settled": "Settled — no charge"
+    "settled": "Settled — no charge",
+    "void": "Void",
+    "unknownHint": "This invoice has a status this screen does not recognise. It is shown as-is rather than guessed at."
   },
   "action": {
     "view": "View",
@@ -44,5 +47,7 @@
     "noEmail": "This customer has no email address on file — add one on the job card's Customer Details tab first."
   },
   "periodBanner": "Showing {{label}} · {{from}} – {{to}}",
-  "periodClear": "Clear filter"
+  "periodClear": "Clear filter",
+  "voidBanner": "Voided {{when}} — {{reason}}",
+  "voidReasonLabel": "Voided"
 }

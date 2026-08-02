@@ -63,6 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: {
       id: true, invoice_number: true, status: true, series: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, receipt_sent_at: true,
       confirm_due_at: true, payment_method_snapshot: true,
+      voided_at: true, void_reason: true, void_category: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
       job_card: { select: { vehicle_id: true, customer: { select: { email: true } } } },
@@ -83,6 +84,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return {
       id: r.id,
       number: r.invoice_number ?? '',
+      voidedAt: r.voided_at ? r.voided_at.toISOString() : null,
+      voidReason: r.void_reason ?? null,
       customer: r.customer_name_snapshot,
       reg: r.vehicle_reg_snapshot,
       status: r.status,

@@ -29,24 +29,40 @@ type Row = {
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty';
   issuedAt: string; receiptSent: boolean; manualPending?: boolean; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
+  voidedAt?: string | null; voidReason?: string | null;
 };
-const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty'] as const;
+const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'void'] as const;
 // 'issued' is an ARRIVAL-ONLY filter (dashboard "Issued vs paid" tile): chargeable issued-in-period,
 // any status. It has no tab — the period banner names it; picking any tab replaces it.
 type Filter = typeof FILTERS[number] | 'issued';
 type PeriodQS = { preset?: string; from?: string; to?: string } | null;
 const periodToQS = (pd: PeriodQS) => (pd ? (pd.preset ? `&preset=${pd.preset}` : `&from=${pd.from}&to=${pd.to}`) : '');
 
+/**
+ * THE DEFAULT IS THE BUG THIS FIXES. This used to end in a bare `return <unpaid>`, so ANY status it
+ * did not name rendered as an outstanding debt — a voided invoice read on this list as £96.00 owed.
+ * The fault is not that `void` was missing; it is that the fall-through asserted a specific
+ * FINANCIAL STATE about a status it had never heard of, and it would mislabel the next new status
+ * exactly the same way.
+ *
+ * So `unpaid` is now REACHED ONLY BY NAMING `issued`, and the default renders the status as itself
+ * in neutral styling. An unknown status must look unknown: wrong-and-obvious beats wrong-and-
+ * plausible, because only one of them gets reported.
+ */
 function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
+  const base = 'text-xs font-semibold rounded-full px-2.5 py-1';
   // Warranty settles at issue (terminal, £0, never AR) — the chip says CLOSED, not outstanding.
-  if (row.series === 'warranty') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-accent-soft text-accent">{row.status === 'settled' ? t('chip.settled') : t('chip.warranty')}</span>;
-  if (row.status === 'paid') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('chip.paid')}</span>;
-  if (row.status === 'paid_pending') return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
-  // STEP 3 (display) OWES A VOID CHIP. This falls through to "unpaid" for any status it does not
-  // name, so a VOIDED invoice currently reads on this list as an outstanding debt — even though it
-  // is correctly excluded from the debtors tile and every money read. Deliberately not fixed here:
-  // this slice is the money reads only.
-  return <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-surface-muted text-ink border border-line">{t('chip.unpaid')}</span>;
+  if (row.series === 'warranty' && row.status !== 'void') {
+    return <span className={`${base} bg-accent-soft text-accent`}>{row.status === 'settled' ? t('chip.settled') : t('chip.warranty')}</span>;
+  }
+  // RETIRED, NOT OWED. Deliberately the danger tone the cancelled banner uses, so it can never be
+  // mistaken at a glance for a live document.
+  if (row.status === 'void') return <span className={`${base} bg-danger-soft text-danger`} data-testid="chip-void">{t('chip.void')}</span>;
+  if (row.status === 'paid') return <span className={`${base} bg-ok-soft text-ok`}>{t('chip.paid')}</span>;
+  if (row.status === 'paid_pending') return <span className={`${base} bg-warn-soft text-warn`}>{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
+  if (row.status === 'issued') return <span className={`${base} bg-surface-muted text-ink border border-line`}>{t('chip.unpaid')}</span>;
+  // UNRECOGNISED. Says what it is and claims nothing about the money.
+  return <span className={`${base} bg-surface-muted text-muted border border-line border-dashed`} data-testid="chip-unknown" title={t('chip.unknownHint')}>{row.status}</span>;
 }
 
 export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin: boolean; canImport: boolean; taxLabel: string }) {
@@ -170,20 +186,34 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
               ) : rows.length === 0 ? (
                 <tr><td colSpan={7} className="p-6 text-center text-muted">{t('empty')}</td></tr>
               ) : rows.map((r) => (
-                <tr key={r.id} className="border-b border-line/60 hover:bg-surface-muted/50">
-                  <td className="p-3 font-mono text-ink whitespace-nowrap">{r.number}</td>
-                  <td className="p-3 text-ink">{r.customer || '—'}</td>
-                  <td className="p-3 text-ink whitespace-nowrap">{r.reg || '—'}</td>
-                  <td className="p-3 text-right text-ink tabular-nums whitespace-nowrap">{formatMoney(r.grossPennies, { currency: r.currency, locale: r.locale })}</td>
+                <tr key={r.id} data-testid={r.status === 'void' ? 'row-void' : 'row'} className={`border-b border-line/60 hover:bg-surface-muted/50 ${r.status === 'void' ? 'opacity-70' : ''}`}>
+                  {/* STRUCK THROUGH, not hidden. VATREC5010's first limb is that the retired
+                      document is KEPT in the records; striking it says "retained, not owed". */}
+                  <td className={`p-3 font-mono text-ink whitespace-nowrap ${r.status === 'void' ? 'line-through' : ''}`}>{r.number}</td>
+                  <td className={`p-3 text-ink ${r.status === 'void' ? 'line-through' : ''}`}>
+                    {r.customer || '—'}
+                    {r.status === 'void' && r.voidReason && (
+                      <span className="block text-[11px] text-danger no-underline mt-0.5" data-testid="void-reason">
+                        {t('voidBanner', { when: r.voidedAt ? new Date(r.voidedAt).toLocaleDateString(r.locale) : '—', reason: r.voidReason })}
+                      </span>
+                    )}
+                  </td>
+                  <td className={`p-3 text-ink whitespace-nowrap ${r.status === 'void' ? 'line-through' : ''}`}>{r.reg || '—'}</td>
+                  <td className={`p-3 text-right text-ink tabular-nums whitespace-nowrap ${r.status === 'void' ? 'line-through' : ''}`}>{formatMoney(r.grossPennies, { currency: r.currency, locale: r.locale })}</td>
                   <td className="p-3 text-muted whitespace-nowrap">{new Date(r.issuedAt).toLocaleDateString(r.locale)}</td>
                   <td className="p-3"><StatusChip row={r} t={t} /></td>
                   <td className="p-3 text-right whitespace-nowrap">
                     <Link href={`/admin/invoices/${r.id}`} className="text-accent hover:underline text-sm">{t('action.view')}</Link>
                     <Link href={`/admin/jobcards/${r.jobCardId}`} className="text-accent hover:underline text-sm ml-3">{t('action.jobCard')}</Link>
                     <a href={`/api/invoice-pdf?id=${r.id}`} className="text-accent hover:underline text-sm ml-3">{t('action.pdf')}</a>
-                    <button onClick={() => resend(r)} disabled={busy !== null} className="text-accent hover:underline text-sm ml-3 disabled:opacity-50">
-                      {busy === r.id ? t('action.sending') : t('action.resend')}
-                    </button>
+                    {/* No Re-send on a void. The server refuses it (409, step 1); offering the
+                        button anyway would be a trap rather than a safeguard. The PDF link STAYS —
+                        the retained document must remain producible. */}
+                    {r.status !== 'void' && (
+                      <button onClick={() => resend(r)} disabled={busy !== null} className="text-accent hover:underline text-sm ml-3 disabled:opacity-50">
+                        {busy === r.id ? t('action.sending') : t('action.resend')}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

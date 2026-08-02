@@ -35,6 +35,12 @@ const S = StyleSheet.create({
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
   grand: { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 4, fontFamily: 'Helvetica-Bold', fontSize: 12 },
   footer: { position: 'absolute', bottom: 32, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
+  // VOID: a diagonal stamp across the page, and a stated reason under the header. Deliberately
+  // loud — this document is RETAINED and remains producible (VATREC5010), so the copy itself has
+  // to carry the fact that it was retired. Rendering is never refused.
+  voidMark: { position: 'absolute', top: 300, left: 0, right: 0, textAlign: 'center', fontSize: 96,
+              fontFamily: 'Helvetica-Bold', color: '#dc2626', opacity: 0.18, transform: 'rotate(-28deg)' },
+  voidNote: { marginTop: 8, padding: 8, borderWidth: 1, borderColor: '#dc2626', color: '#dc2626', fontSize: 9 },
 });
 
 function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
@@ -49,6 +55,7 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
   return (
     <Document title={`${t('title')} ${(doc as any).displayNumber || doc.number}`}>
       <Page size="A4" style={S.page}>
+        {doc.status === 'void' ? <Text style={S.voidMark} fixed>{t('voidWatermark')}</Text> : null}
         {logo ? (
           // Tenant logo, auto-placed top-centre (no position controls — banked with the designer).
           <View style={{ alignItems: 'center', marginBottom: 14 }}>
@@ -74,8 +81,20 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
             {/* Pending NEVER wears the confirmed PAID face — settlement isn't final yet. */}
             {doc.status === 'paid' ? <Text style={S.badge}>{t('paidBadge')}</Text> : null}
             {doc.status === 'paid_pending' ? <Text style={S.badge}>{t('pendingBadge')}</Text> : null}
+            {doc.status === 'void' ? <Text style={S.badge}>{t('voidBadge')}</Text> : null}
           </View>
         </View>
+
+        {/* THE REASON, on the face of the document. The watermark says it is void; this says why,
+            which is the half VATREC5010 actually asks for. */}
+        {doc.status === 'void' ? (
+          <View style={S.voidNote}>
+            <Text>{t('voidNotice', {
+              when: doc.voidedAt ? doc.voidedAt.toLocaleDateString(doc.locale) : '—',
+              reason: doc.voidReason || t('voidNoReason'),
+            })}</Text>
+          </View>
+        ) : null}
 
         <View style={S.partiesRow}>
           <View style={{ maxWidth: 260 }}>

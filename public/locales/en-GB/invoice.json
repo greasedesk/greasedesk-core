@@ -82,5 +82,9 @@
   "unlockedNote": "UNLOCKED FOR CORRECTION — this invoice’s lines are not frozen and it currently contributes nothing to your figures. Correct the estimate on the job card, then re-issue (or mark paid) to freeze it again.",
   "reissue": "Re-issue (freeze corrections)",
   "reissuing": "Re-issuing…",
-  "reissueError": "Could not re-issue the invoice."
+  "reissueError": "Could not re-issue the invoice.",
+  "voidWatermark": "VOID",
+  "voidBadge": "VOIDED",
+  "voidNotice": "This invoice was voided on {{when}} and is not payable. Reason: {{reason}}",
+  "voidNoReason": "not recorded"
 }

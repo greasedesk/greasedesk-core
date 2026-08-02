@@ -37,6 +37,10 @@ export type InvoiceDoc = {
   siteId: string;
   number: string;
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
+  /** Void grain — printed ON the document. A retained invoice must SAY it was retired and why,
+   *  otherwise the retained copy is indistinguishable from a live demand for payment. */
+  voidedAt: Date | null;
+  voidReason: string | null;
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
   datePaid: Date | null;        // the DOCUMENT fact (editable; defaults from mark-paid)
@@ -64,6 +68,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     where: { id: invoiceId, group_id: groupId },
     select: {
       id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      voided_at: true, void_reason: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
@@ -110,6 +115,8 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       ? (inv.invoice_number ?? null)
       : null,
     status: inv.status,
+    voidedAt: inv.voided_at ?? null,
+    voidReason: inv.void_reason ?? null,
     series: inv.series,
     // The PRINTED issue date = the effective DOCUMENT date (date_issued ?? issued_at) — the same
     // date the P&L recognises revenue by. One truth: the document and the accounts agree.
