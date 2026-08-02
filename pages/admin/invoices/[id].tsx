@@ -18,6 +18,10 @@ import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { buildInvoiceDoc } from '@/lib/invoice-doc';
+// THE SAME rule object the endpoint uses. Pure (no prisma), so the screen offers the control on
+// exactly the invoices the server would accept — never a button that 409s, never a hidden one that
+// would have worked.
+import { canVoid, VOID_CATEGORIES, MIN_REASON_LENGTH, validateVoidReason } from '@/lib/invoice-void';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 
@@ -63,6 +67,11 @@ export default function InvoicePage(props: PageProps) {
   const fmt = (p: number) => formatMoney(p, { currency: props.currency, locale: props.locale });
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  // Void: a two-stage panel. `form` collects, `confirm` shows what will be RETAINED before anything
+  // is written — a void is not undoable through the UI, so the last screen states the consequence.
+  const [voidStage, setVoidStage] = useState<null | 'form' | 'confirm'>(null);
+  const [voidCategory, setVoidCategory] = useState<string>('');
+  const [voidReason, setVoidReason] = useState('');
   const reg = props.vatRegistered;
   // A warranty document shows NO VAT anywhere (not a supply for consideration — the lines render
   // at net retail and the goodwill line zeroes the total before VAT would arise). Also gates the
@@ -89,6 +98,20 @@ export default function InvoicePage(props: PageProps) {
     } catch { setMsg({ text: t('reissueError'), ok: false }); }
     finally { setBusy(null); }
   }
+  async function doVoid() {
+    setBusy('void'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-void', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: props.invoiceId, category: voidCategory, reason: voidReason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('void.error'), ok: false }); setBusy(null); return; }
+      setVoidStage(null);
+      router.replace(router.asPath); // status change — reload the document
+    } catch { setMsg({ text: t('void.error'), ok: false }); setBusy(null); }
+  }
+
   async function unlock() {
     if (!window.confirm(t('unlockConfirm'))) return;
     setBusy('unlock'); setMsg(null);
@@ -149,6 +172,22 @@ export default function InvoicePage(props: PageProps) {
                 {busy === 'unlock' ? t('unlocking') : t('unlock')}
               </button>
             )}
+            {props.isAdmin && props.status !== 'void' && (() => {
+              // ONE RULE, SHARED. `canVoid` is the endpoint's own precondition, imported.
+              const check = canVoid({ status: props.status, lineCount: props.lines.length });
+              // WHERE IT WOULD BE REFUSED, SAY SO. A vanished button teaches nothing; the reason
+              // an unlocked invoice cannot be voided is the instruction for how to void it.
+              if (!check.ok) return (
+                <span className="text-xs text-muted self-center max-w-md" data-testid="void-blocked">{check.message}</span>
+              );
+              return (
+                <button onClick={() => { setVoidStage('form'); setMsg(null); }} disabled={busy !== null}
+                  data-testid="void-open"
+                  className="text-sm text-danger border border-danger/40 rounded-lg px-4 py-2 hover:bg-danger-soft disabled:opacity-50">
+                  {t('void.open')}
+                </button>
+              );
+            })()}
             {props.status === 'issued' && !props.hasFrozenLines && props.isAdmin && (
               <button onClick={reissue} disabled={busy !== null} className="text-sm text-ok border border-ok/40 rounded-lg px-4 py-2 hover:bg-ok-soft disabled:opacity-50">
                 {busy === 'reissue' ? t('reissuing') : t('reissue')}
@@ -161,6 +200,78 @@ export default function InvoicePage(props: PageProps) {
         {/* RETIRED, AND SAID SO. The document is retained and still renders (VATREC5010), so the
             screen must carry the fact and the reason — otherwise the retained copy is
             indistinguishable from a live demand for payment. */}
+        {/* ── VOID PANEL ────────────────────────────────────────────────────────────────────────
+            Two stages on purpose. Stage 1 collects; stage 2 states what SURVIVES, because the
+            thing people get wrong about voiding is assuming it deletes. It does the opposite —
+            the document and its number are kept, which is what makes the gap explainable. */}
+        {voidStage && props.isAdmin && (() => {
+          const checked = validateVoidReason(voidReason);
+          const ready = !!voidCategory && checked.ok;
+          const RECON = t('void.reconstructionNote');
+          return (
+            <div className="border border-danger/40 rounded-xl p-4 mb-4 bg-danger-soft/30" data-testid="void-panel">
+              <h3 className="text-sm font-semibold text-danger mb-2">{t('void.title')}</h3>
+
+              {voidStage === 'form' ? (
+                <>
+                  <label className="block text-xs font-semibold text-ink mb-1">{t('void.categoryLabel')}</label>
+                  <select data-testid="void-category" value={voidCategory} onChange={(e) => setVoidCategory(e.target.value)}
+                    className="w-full sm:max-w-xs p-2 bg-surface border border-line rounded-lg text-ink text-sm mb-3">
+                    <option value="">{t('void.categoryPick')}</option>
+                    {VOID_CATEGORIES.map((c) => <option key={c} value={c}>{t(`void.category.${c}`)}</option>)}
+                  </select>
+
+                  <label className="block text-xs font-semibold text-ink mb-1">{t('void.reasonLabel')}</label>
+                  <textarea data-testid="void-reason" value={voidReason} rows={3} maxLength={500}
+                    onChange={(e) => setVoidReason(e.target.value)} placeholder={t('void.reasonPlaceholder')}
+                    className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  {/* One click to record that the retained lines are a rebuild — the case where the
+                      original snapshot was destroyed by an unlock before the void. */}
+                  {!voidReason.includes(RECON) && (
+                    <button type="button" data-testid="void-add-reconstruction"
+                      onClick={() => setVoidReason((r) => (r.trim() ? r.trim() + ' ' : '') + RECON)}
+                      className="text-xs text-accent hover:underline mt-1">+ {t('void.addReconstruction')}</button>
+                  )}
+                  {/* Mirrors the server's rule so the refusal arrives while typing, not on submit.
+                      The server stays authoritative — this is feedback, not the gate. */}
+                  <p className={`text-xs mt-1 ${checked.ok ? 'text-muted' : 'text-warn'}`} data-testid="void-reason-hint">
+                    {checked.ok ? t('void.reasonOk', { n: voidReason.trim().length }) : (checked as any).error}
+                  </p>
+
+                  <div className="flex gap-2 mt-3">
+                    <button data-testid="void-review" disabled={!ready} onClick={() => setVoidStage('confirm')}
+                      className="text-sm font-semibold rounded-lg px-4 py-2 bg-danger-soft text-danger border border-danger/40 disabled:opacity-40">
+                      {t('void.review')}
+                    </button>
+                    <button onClick={() => setVoidStage(null)} className="text-sm text-muted px-3 py-2">{t('void.cancel')}</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-ink mb-2">{t('void.confirmIntro')}</p>
+                  <ul className="text-sm text-ink space-y-1 mb-3" data-testid="void-retained">
+                    <li>• {t('void.keepNumber', { number: props.number })}</li>
+                    <li>• {t('void.keepTotal', { total: fmt(props.totals.grossPennies) })}</li>
+                    <li>• {t('void.keepLines', { count: props.lines.length })}</li>
+                    <li>• <strong>{t('void.keepConsumed', { number: props.number })}</strong></li>
+                  </ul>
+                  <p className="text-xs text-muted mb-1">{t('void.confirmReasonLabel')}</p>
+                  <p className="text-sm text-ink border border-line rounded-lg p-2 mb-3 bg-surface" data-testid="void-confirm-reason">
+                    {t(`void.category.${voidCategory}`)} — {voidReason.trim()}
+                  </p>
+                  <div className="flex gap-2">
+                    <button data-testid="void-commit" disabled={busy !== null} onClick={doVoid}
+                      className="text-sm font-semibold rounded-lg px-4 py-2 bg-danger text-white disabled:opacity-50">
+                      {busy === 'void' ? t('void.working') : t('void.commit')}
+                    </button>
+                    <button onClick={() => setVoidStage('form')} className="text-sm text-muted px-3 py-2">{t('void.back')}</button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
+
         {props.status === 'void' && (
           <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-3" data-testid="detail-void-notice">
             {t('voidNotice', { when: props.voidedAt ?? '—', reason: props.voidReason || t('voidNoReason') })}
