@@ -875,6 +875,11 @@ export default function AdminDashboard(props: PageProps) {
                             <p key={s2.siteId}>{s2.siteName}: {h(s2.charged)} ÷ {h(s2.available)} = {pct(s2.ratio)}</p>
                           ))}
                           {!u.configComplete && <p className="text-warn">{t('pnl.utilMissingNames', { names: u.missingHoursMechanics.join(', ') })}</p>}
+                          {/* Counted DESPITE an unknown start date. Visible, so the gap can be
+                              closed — an unknown start is not a fact about employment. */}
+                          {(u.unknownStartPeople?.length ?? 0) > 0 && (
+                            <p className="text-warn" data-testid="unknown-start">{t('pnl.utilUnknownStart', { names: u.unknownStartPeople.join(', ') })}</p>
+                          )}
                         </div>
                       </details>
                     </>

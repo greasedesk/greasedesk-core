@@ -24,7 +24,23 @@
  * dates year-round; comparing on the date (never instants) keeps BST boundaries from
  * shifting or dropping a day.
  *
- * v1 scope: whole-month capacity, no mid-month proration (banked). BANKED GAP: a MULTI-SITE
+ * EMPLOYMENT WINDOW (ruling 2026-08-01): a person contributes capacity only for months they were
+ * actually employed. `start_date`/`end_date` existed on CostPerson and were UNREAD — Ta'Harie
+ * Samuels, starting 2026-06-01, was adding 106.40h / £7,980 to MAY. Overlap test, inclusive at both
+ * ends: started on or before the window END, and not ended before the window START.
+ *   NULL start_date  = UNKNOWN, and unknown is INCLUDED — but never silently. Excluding would
+ *     delete a real person's capacity on the strength of a missing field, which under-reports the
+ *     denominator and so FLATTERS utilisation; including over-reports it and is visible. The names
+ *     come back as `unknownStartPeople` and the dashboard flags them, exactly as it already flags
+ *     mechanics missing contracted hours. Census at the time of the ruling: 0 of 4 CostPerson rows
+ *     across all tenants had a null start_date, so this is a guard, not a live behaviour change.
+ *   NULL end_date    = still employed. That one is not ambiguous.
+ * The LEAVER path has never run in production — no CostPerson has ever had an end_date set.
+ *
+ * v1 scope: whole-month capacity, no mid-month proration (banked). NOT PRORATED, deliberately and
+ * consistently with that: someone who starts mid-month contributes their WHOLE month. The overlap
+ * test is month-grained like everything else here; proration is one change, in one place, later.
+ * BANKED GAP: a MULTI-SITE
  * person with EMPTY working_days inherits THIS site's open_days per site — undefined when the
  * sites' open_days differ (both TMBS sites are Mon–Sat, so it doesn't bite). When it arises:
  * require explicit working_days for multi-site people rather than invent a merge rule.
@@ -38,6 +54,8 @@ export type AvailableHours = {
   rawHours: number;                  // pre-factor clock time: rostered × contracted − leave − PH (alloc-scaled)
   configComplete: boolean;           // false iff any chargeable person lacks contracted hours
   missingHoursMechanics: string[];   // their names, for the amber flag
+  // Included DESPITE an unknown start date — surfaced, never silently counted (see header).
+  unknownStartPeople: string[];
   // Popover grain — the arithmetic must be showable, not just the total:
   mechanicCount: number;             // chargeable people contributing (with hours set)
   rosteredDays: number;              // Σ per-person rostered days in the window (config'd people)
@@ -84,13 +102,32 @@ function windowDays(window: CapacityWindow): Array<[string, number]> {
   return out;
 }
 
+/**
+ * WHO COUNTS, in one place. Three separate queries in this file select the contributing people —
+ * getAvailableHours, getDailyCapacity and the group roll-up — and a rule written three times is a
+ * rule that will eventually disagree with itself. The daily accrual line MUST select the same
+ * people as the total, or the chart and its own callout stop reconciling.
+ *
+ * Chargeable, active, and EMPLOYED DURING THE WINDOW (overlap; nulls unbounded — see header).
+ */
+export function employedDuring(groupId: string, window: CapacityWindow) {
+  return {
+    group_id: groupId, is_active: true, is_chargeable: true,
+    AND: [
+      { OR: [{ start_date: null }, { start_date: { lt: window.to } }] },
+      { OR: [{ end_date: null }, { end_date: { gte: window.from } }] },
+    ],
+  };
+}
+
 export async function getAvailableHours(groupId: string, siteId: string, window: CapacityWindow): Promise<AvailableHours> {
   const [site, people] = await Promise.all([
     prisma.site.findFirst({ where: { id: siteId, group_id: groupId }, select: { open_days: true } }) as any,
     prisma.costPerson.findMany({
-      where: { group_id: groupId, is_active: true, is_chargeable: true },
+      where: employedDuring(groupId, window),
       select: {
         id: true, name: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true,
+        start_date: true, end_date: true,
         allocations: { where: { site_id: siteId }, select: { percent: true } },
       },
     }) as any,
@@ -102,6 +139,8 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
   const openDaysAtT: number[] = await openDaysAtWindowEnd(siteId, window.to, site?.open_days);
 
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
+  // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
+  const unknownStartPeople = people.filter((p: any) => p.start_date == null).map((p: any) => p.name);
   const configured = people.filter((p: any) => p.contracted_hours_per_day != null);
   const ids = configured.map((p: any) => p.id);
   const factorAt = await factorsAtWindowEnd(ids, window.to);
@@ -167,6 +206,7 @@ export async function getAvailableHours(groupId: string, siteId: string, window:
     rawHours: centiRaw / 100,
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
+    unknownStartPeople,
     mechanicCount: configured.filter((p: any) => p.allocations.reduce((s: number, a: any) => s + Number(a.percent), 0) > 0).length,
     rosteredDays,
     leaveHours: centiLeave / 100,
@@ -194,7 +234,9 @@ export async function getDailyCapacity(groupId: string, siteIds: string[], windo
     const [site, people] = await Promise.all([
       prisma.site.findFirst({ where: { id: siteId, group_id: groupId }, select: { open_days: true } }) as any,
       prisma.costPerson.findMany({
-        where: { group_id: groupId, is_active: true, is_chargeable: true },
+        // SAME clause as getAvailableHours — the accrual line must not select a different set of
+        // people from the total it is supposed to reach.
+        where: employedDuring(groupId, window),
         select: { id: true, contracted_hours_per_day: true, working_days: true, utilisation_factor: true, allocations: { where: { site_id: siteId }, select: { percent: true } } },
       }) as any,
     ]);
@@ -319,6 +361,7 @@ export async function getUtilisation(groupId: string, siteId: string, window: Ca
 export type GroupUtilisation = {
   charged: number; rework: number; available: number; rawHours: number; ratio: number | null; // available = SELLABLE
   configComplete: boolean; missingHoursMechanics: string[];
+  unknownStartPeople: string[]; // counted DESPITE an unknown start date — surfaced, never silent
   mechanicCount: number; rosteredDays: number; leaveHours: number; phHours: number;
   grossHours: number; leaveByType: Record<string, number>; // waterfall grain (see AvailableHours)
   factorParts: Array<{ name: string; rawHours: number; factorPct: number; sellableHours: number }>;
@@ -331,8 +374,8 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
     Promise.all(siteIds.map((sid) => getUtilisation(groupId, sid, window))),
     // Distinct-people counts across the visible sites (per-site sums would double-count splits).
     prisma.costPerson.findMany({
-      where: { group_id: groupId, is_active: true, is_chargeable: true, allocations: { some: { site_id: { in: siteIds } } } },
-      select: { name: true, contracted_hours_per_day: true },
+      where: { ...employedDuring(groupId, window), allocations: { some: { site_id: { in: siteIds } } } },
+      select: { name: true, contracted_hours_per_day: true, start_date: true },
     }) as any,
   ]);
   const nameOf = new Map<string, string>(sites.map((s: any) => [s.id, s.site_name]));
@@ -350,11 +393,14 @@ export async function getGroupUtilisation(groupId: string, siteIds: string[], wi
   });
   charged = Math.round(charged * 100) / 100; rework = Math.round(rework * 100) / 100; available = Math.round(available * 100) / 100; rawHours = Math.round(rawHours * 100) / 100;
   const missingHoursMechanics = people.filter((p: any) => p.contracted_hours_per_day == null).map((p: any) => p.name);
+  // Counted, but say so. An unknown start is a data gap the garage can close, not a fact.
+  const unknownStartPeople = people.filter((p: any) => p.start_date == null).map((p: any) => p.name);
   return {
     charged, rework, available, rawHours,
     ratio: available === 0 ? null : charged / available, // null → "—", never NaN/Infinity; NOT capped
     configComplete: missingHoursMechanics.length === 0,
     missingHoursMechanics,
+    unknownStartPeople,
     mechanicCount: people.filter((p: any) => p.contracted_hours_per_day != null).length,
     rosteredDays, leaveHours: Math.round(leaveHours * 100) / 100, phHours: Math.round(phHours * 100) / 100,
     grossHours: Math.round(grossHours * 100) / 100, leaveByType,

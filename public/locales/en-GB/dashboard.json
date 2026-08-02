@@ -52,7 +52,7 @@
     "withheld": "Withheld"
   },
   "marginStrip": {
-    "hoursSold": "Hours sold",
+    "hoursSold": "Labour sold",
     "partsSold": "Parts sold",
     "partsBase": "parts revenue",
     "profit": "profit",
@@ -65,8 +65,8 @@
     "note": "Cumulative labour hours across the month — sellable capacity versus what you actually billed.",
     "progress": "{{elapsed}} of {{total}} days",
     "hours": "Hours",
-    "totalSellable": "Total Sellable Hours",
-    "totalSold": "Total Hours Sold",
+    "totalSellable": "Sellable labour value",
+    "totalSold": "Labour value sold",
     "sellableToDate": "Sellable to date",
     "rateCharged": "Labour rate = {{rate}} as charged",
     "rateEffective": "Effective Labour rate over period = {{rate}}",
@@ -160,7 +160,8 @@
     "breakEvenOfSellable": "= {{pct}} of this month’s sellable hours",
     "wfRework": "warranty rework (hours spent redoing work for free)",
     "hoursWentRework": "+ {{hours}} warranty rework",
-    "utilReworkNote": "{{hours}} warranty rework excluded from sold (spent capacity, not sold output)"
+    "utilReworkNote": "{{hours}} warranty rework excluded from sold (spent capacity, not sold output)",
+    "utilUnknownStart": "Counted without a known start date (set it in HR): {{names}}"
   },
   "allSites": "All sites",
   "notTrading": "{{site}} isn’t trading this month — no invoices and no chargeable mechanics. Figures below show any costs apportioned to it."
