@@ -75,7 +75,10 @@ export const NOTIFICATION_TEMPLATES = {
         ${d.link ? button(String(d.link), 'Open the job card') : ''}
         <p style="font-size:13px;color:#475569">Accepted ${esc(d.when)}.</p>`),
     }),
-    sms: (d) => ({ text: `Quote ACCEPTED: ${d.registration ?? 'job'} ${d.total ?? ''} (v${d.version}) — book it in.` }),
+    // ASCII hyphen, not an em dash: this template shipped with U+2014 and was UCS-2 from day one.
+    // lib/sms-text would fold it anyway, but a template that emits a costly character and relies on
+    // something downstream to clean it up is a template that teaches the wrong habit.
+    sms: (d) => ({ text: `Quote ACCEPTED: ${d.registration ?? 'job'} ${d.total ?? ''} (v${d.version}) - book it in.` }),
   },
 
   quote_declined: {

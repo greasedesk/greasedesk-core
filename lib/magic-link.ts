@@ -16,8 +16,25 @@
  * A magic link must NEVER authorise a money movement or a destructive action. Read, and the one
  * bounded decision the purpose names (approve/decline a quote).
  *
- * TOKEN DISCIPLINE — identical to the operator invite (lib/tokens): 32 random bytes, the RAW token
- * travels only in the emailed URL, only its SHA-256 hash is stored. A DB leak yields nothing usable.
+ * TOKEN DISCIPLINE: the RAW token travels only in the URL, only its SHA-256 hash is stored. A DB
+ * leak yields nothing usable.
+ *
+ * ── WHY 96 BITS, AND WHY SHORT (ruling 2026-08-02) ──────────────────────────────────────────────
+ * This credential travels by SMS, where every character is billed. The old 64-hex token (256 bits)
+ * made the URL 89 characters of a 160-character segment, so a quote SMS carrying TMBS's real
+ * trading name and a four-figure total cost TWO segments — and a garage whose name contains a
+ * curly apostrophe paid THREE, for a message a handset shows identically.
+ *
+ * 16 base64url characters = 96 bits, and the URL drops 89 → 41. The length was chosen so the
+ * credential is safe WITH NO RATE LIMITING AT ALL: against 10,000 attacking IPs for the full 14-day
+ * expiry, the expected number of hits on any live link is ~3e-20. That matters because the limiter
+ * (lib/auth-rate-limit, 60/IP/hour) FAILS OPEN on a database error — a token whose safety depends
+ * on it is not safe. At 96 bits the limiter is belt-and-braces; at 48 bits (8 chars) a botnet gets
+ * inside the expiry window in under two days. base64url's alphabet is entirely GSM-7 safe, so the
+ * shorter token costs nothing in encoding.
+ *
+ * The other randomBytes(32) tokens (lib/tokens ×2, register-garage) are DELIBERATELY unchanged —
+ * they travel by email, where length is free and there is no reason to spend entropy.
  */
 import crypto from 'crypto';
 import { prisma } from '@/lib/db';
@@ -34,6 +51,24 @@ export const MAGIC_LIMITS = { perIp: { max: 60, windowMinutes: 60 } };
 
 export type CreatedMagicLink = { id: string; rawToken: string; url: string; expiresAt: Date };
 
+/** 12 random bytes → 16 base64url characters → 96 bits. See the header for why 96. */
+export const MAGIC_TOKEN_CHARS = 16;
+export function newMagicToken(): string {
+  return crypto.randomBytes(12).toString('base64url');
+}
+
+/**
+ * ACCEPTS BOTH SHAPES, deliberately. The validator is WIDENED, not swapped: links minted before
+ * this change are 64 hex characters and are still live in customers' inboxes. Swapping the pattern
+ * would have rejected them at the door, BEFORE hashing, so they would have read as "not found" —
+ * a working credential turned into a broken link by a formatting rule.
+ *
+ * The old shape is a strict subset of the new character class, so this is a length test, not a
+ * loosening: 64-hex tokens keep 256 bits, new tokens have 96, and nothing in between is minted.
+ * The dual window closes by itself — the last old link expires 14 days after the last old mint.
+ */
+const MAGIC_TOKEN_RE = /^[A-Za-z0-9_-]{16}$|^[a-f0-9]{64}$/i;
+
 /**
  * Mint a link. Returns the RAW token exactly once — it is never recoverable afterwards, so the caller
  * must send it immediately (or discard it and mint another).
@@ -46,7 +81,7 @@ export async function createMagicLink(args: {
   createdByUserId?: string | null;
   baseUrl?: string;
 }): Promise<CreatedMagicLink> {
-  const raw = crypto.randomBytes(32).toString('hex');
+  const raw = newMagicToken();
   const expiresAt = new Date(Date.now() + MAGIC_LINK_DAYS * 24 * 60 * 60 * 1000);
   const row = await prisma.customerMagicLink.create({
     data: {
@@ -85,7 +120,7 @@ export async function resolveMagicLink(
     const allowed = await takeToken(`magic:ip:${opts.ip}`, MAGIC_LIMITS.perIp.max, MAGIC_LIMITS.perIp.windowMinutes);
     if (!allowed) return { ok: false, reason: 'rate_limited' };
   }
-  if (!rawToken || !/^[a-f0-9]{64}$/i.test(rawToken)) return { ok: false, reason: 'not_found' };
+  if (!rawToken || !MAGIC_TOKEN_RE.test(rawToken)) return { ok: false, reason: 'not_found' };
 
   const row = await prisma.customerMagicLink.findUnique({
     where: { token_hash: hashToken(rawToken) },

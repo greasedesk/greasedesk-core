@@ -18,6 +18,7 @@ import { prisma } from '@/lib/db';
 import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
 import { linkMessageToThread, touchThread } from '@/lib/message-threads';
+import { smsText } from '@/lib/sms-text';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -194,7 +195,11 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
         const id = await record({ ...common, status: 'skipped', error: 'template has no sms renderer' });
         return { ok: false, notificationId: id, status: 'skipped', reason: 'no sms renderer' };
       }
-      body = (tpl.sms(args.data ?? {}) as { text: string }).text;
+      // ONE transliteration, at the ONE place an SMS body is produced. Typographic characters
+      // force UCS-2 and can triple the segment count for a message that reads identically — see
+      // lib/sms-text. Template authors must not have to remember this, so it is applied here
+      // rather than in each renderer, and it never touches stored data or the email path.
+      body = smsText((tpl.sms(args.data ?? {}) as { text: string }).text);
     }
   } catch (e: any) {
     const id = await record({ ...common, status: 'failed', error: `render failed: ${e?.message ?? e}` });
