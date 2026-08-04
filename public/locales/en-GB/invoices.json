@@ -51,5 +51,6 @@
   "periodBanner": "Showing {{label}} · {{from}} – {{to}}",
   "periodClear": "Clear filter",
   "voidBanner": "Voided {{when}} — {{reason}}",
-  "voidReasonLabel": "Voided"
+  "voidReasonLabel": "Voided",
+  "importHistorical": "Import a historical invoice"
 }

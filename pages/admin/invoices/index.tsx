@@ -139,11 +139,22 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
                 /admin/invoices/import (and the /admin/settings/import redirect), just not surfaced
                 from here. canImport/importableSiteIds retained; re-add the Link to restore it. */}
           </div>
+          {/* AN ACTION, NOT A FILTER — so it sits by the heading and NOT in the filter row below.
+              A seventh chip beside All/Unpaid/Paid would read as "show me the historical ones",
+              which is what the Historical FILTER already does. This starts a different job.
+              Admin only, and the route refuses a non-admin server-side too (its gssp redirects) —
+              hiding a control is a courtesy, not a permission. */}
+          {isAdmin && (
+            <Link href="/admin/invoices/historical" data-testid="import-historical"
+              className="text-sm font-semibold rounded-lg px-3 py-2 border border-accent text-accent hover:bg-accent-soft">
+              {t('importHistorical')}
+            </Link>
+          )}
           {cur && <span className="text-sm text-muted">{t('totalShown')}: <span className="text-ink font-semibold tabular-nums">{formatMoney(totalShown, { currency: cur.currency, locale: cur.locale })}</span></span>}
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mb-4">
-          <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]">
+          <div data-testid="invoice-filters" className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]">
             {FILTERS.map((f) => (
               <button key={f} onClick={() => setFilterAndLoad(f)}
                 className={`shrink-0 text-sm rounded-lg px-3 py-2 border ${filter === f ? 'bg-accent text-white border-accent font-semibold' : 'bg-surface text-ink border-line hover:bg-surface-muted'}`}>
