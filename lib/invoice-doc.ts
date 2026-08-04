@@ -56,7 +56,7 @@ export type InvoiceDoc = {
   footerText: string | null;    // payment terms / footer block (multi-line)
   logoUrl: string | null;       // presigned GET for the tenant logo (15-min; render-time use)
   logoFormat: 'png' | 'jpg' | null;
-  series: 'chargeable' | 'warranty';
+  series: 'chargeable' | 'warranty' | 'historical';
   issuedAt: Date;
   paidAt: Date | null;
   vatRegistered: boolean;

@@ -38,7 +38,7 @@ type PageProps = {
   voidReason: string | null;
   voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
-  series: 'chargeable' | 'warranty';
+  series: 'chargeable' | 'warranty' | 'historical';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
   paymentMethod: string | null;
   manualPending: boolean;
@@ -180,7 +180,7 @@ export default function InvoicePage(props: PageProps) {
                 document is exactly what must not happen — a button that always fails is a trap,
                 not a safeguard. The PDF link above STAYS: the retained document must remain
                 producible (VATREC5010). */}
-            {props.status !== 'void' && (
+            {props.status !== 'void' && props.series !== 'historical' && (
               <button onClick={emailInvoice} disabled={busy !== null} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
                 {busy === 'email' ? t('emailSending') : t('emailSend')}
               </button>
@@ -367,7 +367,8 @@ export default function InvoicePage(props: PageProps) {
         )}
         {/* A voided invoice's dates are historical fact — the endpoint refuses the edit, so the
             editor would only ever produce a 409. */}
-        {props.canManage && props.status !== 'void' && (
+        {/* A historical record's printed date is a fact about someone else's document. */}
+        {props.canManage && props.status !== 'void' && props.series !== 'historical' && (
           <DateIssuedEditor invoiceId={props.invoiceId} initial={props.dateIssued} t={t} onSaved={() => router.replace(router.asPath)} />
         )}
         {(props.status === 'paid' || props.status === 'paid_pending') && props.canManage && (

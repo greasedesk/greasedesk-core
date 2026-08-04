@@ -211,7 +211,7 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
                     {/* No Re-send on a void. The server refuses it (409, step 1); offering the
                         button anyway would be a trap rather than a safeguard. The PDF link STAYS —
                         the retained document must remain producible. */}
-                    {r.status !== 'void' && (
+                    {r.status !== 'void' && r.series !== 'historical' && (
                       <button onClick={() => resend(r)} disabled={busy !== null} className="text-accent hover:underline text-sm ml-3 disabled:opacity-50">
                         {busy === r.id ? t('action.sending') : t('action.resend')}
                       </button>
