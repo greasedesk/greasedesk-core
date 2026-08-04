@@ -19,13 +19,13 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { Prisma } from '@prisma/client';
-import { assignInvoiceNumber, assignWarrantyNumber, formatInvoiceNumber } from '@/lib/invoice-number';
+import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
 
 const CARD_SELECT = {
   site_id: true,
   odometer_in: true,
-  group: { select: { group_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true } },
+  group: { select: { group_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true } },
   vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
@@ -35,17 +35,21 @@ async function createInvoiceRow(
   tx: Prisma.TransactionClient,
   jobCardId: string,
   groupId: string,
-  series: 'chargeable' | 'warranty',
+  series: 'chargeable' | 'warranty' | 'historical',
 ): Promise<string> {
   const card = (await tx.jobCard.findUnique({ where: { id: jobCardId }, select: CARD_SELECT })) as any;
   if (!card) throw new Error('CARD_NOT_FOUND');
 
   const identity = resolveCompanyIdentity(card.group, card.site);
   const issuedAt = new Date();
-  const seq = series === 'warranty' ? await assignWarrantyNumber(tx, groupId) : await assignInvoiceNumber(tx, groupId);
+  const seq = series === 'warranty' ? await assignWarrantyNumber(tx, groupId)
+    : series === 'historical' ? await assignHistoricalNumber(tx, groupId)
+    : await assignInvoiceNumber(tx, groupId);
   const number = formatInvoiceNumber(
     {
-      prefix: series === 'warranty' ? card.group.invoice_warranty_prefix : card.group.invoice_prefix,
+      prefix: series === 'warranty' ? card.group.invoice_warranty_prefix
+        : series === 'historical' ? card.group.invoice_historical_prefix
+        : card.group.invoice_prefix,
       padWidth: card.group.invoice_pad_width,
       fyDigits: card.group.invoice_fy_digits,
       fyStartMonth: card.group.fy_start_month,
@@ -87,6 +91,18 @@ export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardI
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'chargeable');
   const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
   await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' }); // texts unused on the chargeable branch
+  return id;
+}
+
+/**
+ * Record an invoice issued under a PREVIOUS system. Draws from the historical counter — the
+ * chargeable series is never touched — and freezes the lines exactly like any other issue, because
+ * the frozen snapshot IS the ledger everywhere downstream.
+ */
+export async function issueHistoricalInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
+  const id = await createInvoiceRow(tx, jobCardId, groupId, 'historical');
+  const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
+  await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' });
   return id;
 }
 

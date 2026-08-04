@@ -28,6 +28,22 @@ export async function assignInvoiceNumber(tx: Prisma.TransactionClient, groupId:
   return Number(rows[0].last_value);
 }
 
+/**
+ * The THIRD counter: records of invoices issued elsewhere. Same guarantees as the other two and
+ * fully independent of both — recording history must never advance the chargeable counter, which
+ * is what spent 177 VAT numbers on documents nobody holds.
+ */
+export async function assignHistoricalNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
+  const rows = await tx.$queryRaw<Array<{ historical_last_value: number | bigint }>>`
+    INSERT INTO "InvoiceSequence" ("group_id", "historical_last_value")
+    VALUES (${groupId}, 1)
+    ON CONFLICT ("group_id") DO UPDATE
+      SET "historical_last_value" = "InvoiceSequence"."historical_last_value" + 1, "updated_at" = now()
+    RETURNING "historical_last_value";
+  `;
+  return Number(rows[0].historical_last_value);
+}
+
 export async function assignWarrantyNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
   const rows = await tx.$queryRaw<Array<{ warranty_last_value: number | bigint }>>`
     INSERT INTO "InvoiceSequence" ("group_id", "warranty_last_value")

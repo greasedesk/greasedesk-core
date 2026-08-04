@@ -12,7 +12,8 @@
     "paid": "Paid",
     "warranty": "Warranty",
     "issued": "Issued in period",
-    "void": "Void"
+    "void": "Void",
+    "historical": "Historical"
   },
   "col": {
     "number": "Invoice",
@@ -31,7 +32,8 @@
     "pendingManual": "Awaiting confirmation (manual)",
     "settled": "Settled — no charge",
     "void": "Void",
-    "unknownHint": "This invoice has a status this screen does not recognise. It is shown as-is rather than guessed at."
+    "unknownHint": "This invoice has a status this screen does not recognise. It is shown as-is rather than guessed at.",
+    "historical": "Historical"
   },
   "action": {
     "view": "View",

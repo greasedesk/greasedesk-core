@@ -26,12 +26,12 @@ import { formatMoney } from '@/lib/format-money';
 
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
-  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty' | 'historical';
   issuedAt: string; receiptSent: boolean; manualPending?: boolean; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
   voidedAt?: string | null; voidReason?: string | null;
 };
-const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'void'] as const;
+const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'historical', 'void'] as const;
 // 'issued' is an ARRIVAL-ONLY filter (dashboard "Issued vs paid" tile): chargeable issued-in-period,
 // any status. It has no tab — the period banner names it; picking any tab replaces it.
 type Filter = typeof FILTERS[number] | 'issued';
@@ -58,6 +58,8 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   // RETIRED, NOT OWED. Deliberately the danger tone the cancelled banner uses, so it can never be
   // mistaken at a glance for a live document.
   if (row.status === 'void') return <span className={`${base} bg-danger-soft text-danger`} data-testid="chip-void">{t('chip.void')}</span>;
+  // A RECORD, NOT A DOCUMENT. Muted and dashed — visibly not one of the live series.
+  if (row.series === 'historical') return <span className={`${base} bg-surface-muted text-muted border border-line border-dashed`} data-testid="chip-historical">{t('chip.historical')}</span>;
   if (row.status === 'paid') return <span className={`${base} bg-ok-soft text-ok`}>{t('chip.paid')}</span>;
   if (row.status === 'paid_pending') return <span className={`${base} bg-warn-soft text-warn`}>{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
   if (row.status === 'issued') return <span className={`${base} bg-surface-muted text-ink border border-line`}>{t('chip.unpaid')}</span>;

@@ -31,6 +31,7 @@ export type AuditAction =
   | 'invoice.unlocked'      // ADMIN-only escape hatch: frozen (issued/paid/settled) → unlocked for corrections
   | 'invoice.reissued'      // ADMIN re-freeze after an unlock: corrected lines snapshot + re-lock (warranty → settled)
   | 'invoice.voided'        // ADMIN retires a document issued in error; number + frozen lines RETAINED (VATREC5010)
+  | 'historical.recorded'    // an invoice issued under a PREVIOUS system, recorded (never minted chargeable)
   | 'invoice.void_reason_amended' // ADMIN improves the wording; APPEND-ONLY — the original survives in the log
   | 'invoice.lines_classified' // one-off 2026-07-12: item_type/labour_outsourced backfilled onto existing frozen lines
   | 'invoice.warranty_settled_backfilled' // one-off 2026-07-12: W-series frozen (goodwill shape) + settled

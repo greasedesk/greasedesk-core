@@ -79,6 +79,14 @@ enum InvoiceStatus {
 enum InvoiceSeries {
   chargeable
   warranty
+  // HISTORICAL: a record of an invoice issued under a PREVIOUS system. It is not a document
+  // anyone holds — the customer's copy carries the old system's number, kept in external_ref.
+  // Its own number comes from a THIRD, independent counter so recording history never spends a
+  // VAT number. 177 TMBS entries were hand-keyed through the chargeable path before this existed,
+  // which is exactly what it prevents. Excluded from the VAT return BY CONSTRUCTION: every VAT
+  // read names `series: 'chargeable'`, so a historical entry can never re-declare output tax
+  // already declared elsewhere.
+  historical
 }
 
 // Payment-method clearance behaviour: instant = no window (cash in the till); windowed = the
@@ -191,6 +199,9 @@ model Group {
   fy_start_month            Int      @default(4) // 1-12; UK default April
   // Warranty-series prefix (comeback £0 invoices) — the filter key for the future comebacks tile.
   invoice_warranty_prefix   String   @default("W")
+  // Historical-series prefix. Deliberately distinct so a historical number can never be mistaken
+  // for a VAT invoice number at a glance, in the list or on a document.
+  invoice_historical_prefix String   @default("H")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
   invoice_email_footer      Boolean  @default(true)
   // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
@@ -1463,6 +1474,9 @@ model InvoiceSequence {
   group_id            String   @id // one row per tenant
   last_value          Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
   warranty_last_value Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
+  // HISTORICAL counter — the third independent series. Recording an invoice raised elsewhere must
+  // never advance the chargeable counter; that is the whole reason this column exists.
+  historical_last_value Int    @default(0)
   updated_at          DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
