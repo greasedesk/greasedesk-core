@@ -74,12 +74,35 @@ function parseDate(s: string): Date | null {
 }
 
 /** Read a labelled value that Xero prints on the line BELOW its label. */
-function valueUnderLabel(lines: string[], label: RegExp, within = 4): string | null {
+/**
+ * Find a value printed UNDER a label, by SHAPE rather than by position.
+ *
+ * ── WHY NOT FIRST-NON-BLANK ─────────────────────────────────────────────────────────────────────
+ * This used to return the first non-blank line beneath the label. On the Xero layout the customer
+ * address block INTERLEAVES with the header columns, so under "Invoice Number" the next non-blank
+ * line is the customer, and the number is one further down:
+ *
+ *     Invoice Number                     Tipton
+ *     Mr Webb - NJ65FNN            ← what first-non-blank returned
+ *     100002353                    DY4 7LH      ← the actual number
+ *
+ * The result was `externalNumber: null` on 42 of 42 real invoices — a total, silent failure of the
+ * one field that matters most, because an imported invoice exists to keep its ORIGINAL number.
+ * Everything else parsed perfectly, which is exactly why it went unnoticed.
+ *
+ * Passing `want` scans the window for the first line whose CONTENT matches, which is immune to
+ * however many address lines the block happens to have. Without `want` the old behaviour is kept
+ * for any caller that genuinely means "the next line".
+ */
+function valueUnderLabel(lines: string[], label: RegExp, want?: RegExp, within = 6): string | null {
   for (let i = 0; i < lines.length; i++) {
     if (label.test(lines[i])) {
       for (let j = i + 1; j < Math.min(i + within, lines.length); j++) {
         const t = lines[j].trim();
-        if (t) return t;
+        if (!t) continue;
+        if (!want) return t;
+        const m = t.match(want);
+        if (m) return m[0];
       }
     }
   }
@@ -129,11 +152,13 @@ export function parseInvoiceText(text: string): ParsedInvoice {
 
   // The date is printed UNDER its label. NOTE: do NOT derive it from Due Date minus the payment
   // terms — that inference was wrong on this very set (it put invoices in April that are in May).
-  const dateStr = valueUnderLabel(lines, /\bInvoice Date\b/);
+  // Both are matched by SHAPE. The date happened to work on first-non-blank because "Invoice Date"
+  // is the first header line and the date lands beside it — luck of layout, not a rule, and one
+  // more address line would have broken it the same way the number was broken.
+  const dateStr = valueUnderLabel(lines, /\bInvoice Date\b/, /\d{1,2} \w{3,} \d{4}/);
   const issueDate = dateStr ? parseDate(dateStr) : null;
 
-  const numStr = valueUnderLabel(lines, /\bInvoice Number\b/);
-  const externalNumber = numStr ? (numStr.match(/\d{6,}/)?.[0] ?? null) : null;
+  const externalNumber = valueUnderLabel(lines, /\bInvoice Number\b/, /\b\d{6,}\b/);
 
   const regLine = lines.find((l) => /^\s*Registration:/i.test(l));
   const registration = regLine ? (regLine.split(':')[1]?.trim().split(/\s{2,}/)[0] ?? null) : null;
