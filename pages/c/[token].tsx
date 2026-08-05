@@ -126,6 +126,16 @@ export default function CustomerQuotePage(props: Props) {
             </div>
           </div>
 
+          {/* WHY THE PRICE MOVED. The customer arrived from an email they may have skimmed, so the
+              explanation has to be on the page they land on — not only in the message. Above the
+              work description, and visually distinct from it: this is the new information. */}
+          {d.revisionNote && (
+            <div className="mb-3 rounded-lg border-l-4 border-warn bg-warn-soft p-3" data-testid="revision-note">
+              <p className="text-xs uppercase tracking-wide text-warn mb-1">What&rsquo;s changed</p>
+              <p className="text-ink whitespace-pre-line">{d.revisionNote}</p>
+            </div>
+          )}
+
           {d.jobDescription && (
             <div className="pb-2 text-sm">
               <p className="text-xs uppercase tracking-wide text-muted mb-1">Work</p>

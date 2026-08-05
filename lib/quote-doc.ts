@@ -49,6 +49,8 @@ export type QuoteDoc = {
   customer: { name: string };
   vehicle: { reg: string | null; desc: string | null; mileage: number | null };
   jobDescription: string | null;
+  /** The operator's explanation of THIS revision. Shown above the work description. */
+  revisionNote: string | null;
   lines: DocLine[];
   totals: InvoiceTotals;
   currency: string;
@@ -60,7 +62,7 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
     where: { id: quoteVersionId },
     select: {
       id: true, job_card_id: true, version: true, status: true, sent_at: true,
-      vat_registered: true, tax_label: true,
+      vat_registered: true, tax_label: true, note: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true, phone: true, whatsapp: true } },
       job_card: {
@@ -119,6 +121,7 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       mileage: v.job_card?.odometer_in ?? veh?.mileage_at_create ?? null,
     },
     jobDescription: v.job_card?.garage_notes || null,
+    revisionNote: (v as any).note || null,
     lines,
     totals,
     currency: v.job_card?.site?.currency_code ?? 'GBP',

@@ -33,7 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, email: rawEmail } = (req.body ?? {}) as Record<string, string>;
+  const { jobCardId, email: rawEmail, note: rawNote } = (req.body ?? {}) as Record<string, string>;
+  // OPTIONAL, ALWAYS. Empty or whitespace is stored as null — a blank note is no note, not an
+  // empty paragraph on the customer's quote page.
+  const note = typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, 1000) : null;
   if (!jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
 
   const card = await prisma.jobCard.findFirst({
@@ -88,6 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const recipient = (rawEmail || card.customer?.email || '').trim();
+  // The note belongs to the version it explains, so it is written onto the row just frozen.
+  if (note) await prisma.quoteVersion.update({ where: { id: frozen.id }, data: { note } }).catch(() => {});
+
   const link = await createMagicLink({
     groupId: card.group_id,
     jobCardId: card.id,
@@ -113,6 +119,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         garageName,
         registration: card.vehicle?.registration ?? null,
         total: formatMoney(frozen.grossPennies, { currency: card.site?.currency_code ?? 'GBP', locale: card.site?.locale ?? 'en-GB' }),
+        // EMAIL ONLY — the sms renderer ignores it. Any useful note breaks the one-segment budget,
+        // and a truncated explanation is worse than none; the link carries it instead.
+        note,
         link: link.url,
         expiryDays: MAGIC_LINK_DAYS,
       },
@@ -140,6 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       emailed,
       sentTo: recipient || null,
       handedOver: !recipient, // no address on file — the link was offered instead of a send
+      // WHAT WAS SAID, on the card's own history. The note goes to the customer; staff need to be
+      // able to see afterwards what they were told, without opening the customer's link.
+      note,
     },
   }).catch(() => {});
 

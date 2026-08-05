@@ -948,7 +948,7 @@ function QuoteActions(props: {
           an unrelated guard staying that way.) */}
       {!props.quoteFrozen && !props.cancelled && (
         <SendQuote jobCardId={jobCardId} disabled={busy !== null} beforeSend={commitEstimate}
-          revision={props.quoteHasAcceptedVersion} />
+          revision={props.quoteHasAcceptedVersion} currency={props.currency} locale={props.locale} />
       )}
 
       {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
@@ -991,8 +991,26 @@ function AcceptVerbal({ jobCardId, disabled }: { jobCardId: string; disabled: bo
   );
 }
 
-function SendQuote({ jobCardId, disabled, beforeSend, revision }: { jobCardId: string; disabled: boolean; beforeSend?: () => Promise<unknown>; revision?: boolean }) {
+function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale }: { jobCardId: string; disabled: boolean; beforeSend?: () => Promise<unknown>; revision?: boolean; currency: string; locale: string }) {
   const [sending, setSending] = React.useState(false);
+  const [panel, setPanel] = React.useState<any>(null);
+  const [note, setNote] = React.useState('');
+  const fmt = (p: number) => formatMoney(p, { currency, locale });
+
+  /** Flush any pending estimate edit FIRST, then read the diff — the prefill must describe what is
+   *  actually about to be frozen, not what was on screen when the page loaded. */
+  async function openPanel() {
+    setErr(null);
+    await beforeSend?.().catch(() => {});
+    try {
+      const r = await fetch(`/api/quote-revision-prefill?jobCardId=${encodeURIComponent(jobCardId)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.revision) { await send(); return; } // no accepted version after all — send as normal
+      setPanel(d);
+      setNote(d.email ? String(d.prefill ?? '') : '');
+    } catch { await send(); }
+  }
+
   const [result, setResult] = React.useState<{ url: string; emailed: boolean; sentTo: string | null; version: number; expiresAt: string } | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
@@ -1006,24 +1024,68 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision }: { jobCardId: s
       await beforeSend?.().catch(() => {});
       const r = await fetch('/api/quote-send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId }),
+        body: JSON.stringify({ jobCardId, note: panel?.email ? (note.trim() || null) : null }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(d?.message || 'Could not send the quote.'); return; }
       setResult({ url: d.url, emailed: !!d.emailed, sentTo: d.sentTo ?? null, version: d.version, expiresAt: d.expiresAt });
+      setPanel(null); setNote('');
     } catch { setErr('Could not send the quote.'); }
     finally { setSending(false); } // never strand the busy flag
   }
 
   return (
     <div className="mt-4 pt-4 border-t border-line">
-      <button type="button" disabled={disabled || sending} onClick={send}
+      <button type="button" disabled={disabled || sending} onClick={revision ? openPanel : send}
         className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
         {/* THE WORDING FOLLOWS THE STATE. Once a version has been accepted the customer has agreed
             to a different figure, and the point of this send is that it CHANGED — "your quote is
-            ready" would bury exactly the fact they need. */}
+            ready" would bury exactly the fact they need. A revision REVIEWS before it sends. */}
         {sending ? 'Sending…' : revision ? 'Send the updated price' : 'Send quote to customer'}
       </button>
+
+      {/* ── REVIEW BEFORE SENDING A REVISION ────────────────────────────────────────────────────
+          Both totals, the difference, and an editable note. OPTIONAL ALWAYS — clearing it and
+          sending behaves exactly as a send does today. */}
+      {panel && (
+        <div className="mt-3 rounded-lg border border-warn bg-warn-soft/40 p-3" data-testid="revision-panel">
+          <p className="text-sm font-semibold text-ink">
+            Agreed {fmt(panel.agreedPennies)} (v{panel.agreedVersion}) → sending {fmt(panel.sendingPennies)}
+            {' — '}{panel.differencePennies >= 0 ? '+' : '−'}{fmt(Math.abs(panel.differencePennies))}
+          </p>
+          {panel.email ? (
+            <>
+              <label className="block text-xs font-semibold text-ink mt-2">
+                Add a note (optional) — sent with the email and shown on their quote page
+              </label>
+              <textarea data-testid="revision-note" rows={4} maxLength={1000} value={note}
+                onChange={(e) => setNote(e.target.value)}
+                className="w-full mt-1 p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+              {/* The operator must know WHY they got the short version — not conclude there was
+                  nothing to say. */}
+              {!panel.diffComplete && (
+                <p className="text-[11px] text-warn mt-1" data-testid="revision-diff-incomplete">
+                  {panel.diffReason === 'duplicate_descriptions'
+                    ? 'Two lines share a description, so the individual changes could not be listed automatically.'
+                    : 'The approved version has no saved lines, so the individual changes could not be listed automatically.'}
+                </p>
+              )}
+            </>
+          ) : (
+            // The note is email-only. Do not show a box that will not be delivered.
+            <p className="text-xs text-muted mt-2" data-testid="revision-no-email">
+              No email address on file — you'll get a link to pass on. A note can only be sent by email.
+            </p>
+          )}
+          <div className="flex gap-2 mt-3">
+            <button type="button" data-testid="revision-send" disabled={sending} onClick={send}
+              className="text-sm font-semibold rounded-lg px-4 py-2 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+            <button type="button" onClick={() => setPanel(null)} className="text-sm text-muted px-3 py-2">Cancel</button>
+          </div>
+        </div>
+      )}
       {err && <p className="mt-2 text-sm text-danger">{err}</p>}
       {result && (
         <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">

@@ -49,6 +49,7 @@ export const NOTIFICATION_TEMPLATES = {
       html: shell(`
         <h2 style="margin:0 0 8px">The price has changed</h2>
         <p>${esc(d.garageName)} has updated the price${d.registration ? ` for <strong>${esc(d.registration)}</strong>` : ''}${d.total ? ` to <strong>${esc(d.total)}</strong>` : ''} since you approved the earlier quote.</p>
+        ${d.note ? `<div style="margin:12px 0;padding:12px;border-left:3px solid #f59e0b;background:#fffbeb"><p style="margin:0;white-space:pre-line">${esc(d.note)}</p></div>` : ''}
         <p>Please have a look and let us know you're happy before we carry on.</p>
         ${button(String(d.link ?? ''), 'View the updated price')}
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it, so please don't forward it.</p>`),

@@ -2285,6 +2285,11 @@ model QuoteVersion {
 
   sent_at         DateTime  @default(now())
   sent_to         String? // the address it was emailed to; null = link handed over by hand
+  // The operator's note explaining THIS revision — why the price moved. Belongs to the version
+  // because it explains that version: v4's note must never surface on v6. Optional, always.
+  // EMAIL + the customer's quote page only; deliberately never in the SMS, where any useful note
+  // breaks the one-segment budget and a truncated explanation is worse than none.
+  note            String?
   magic_link_id   String? // the credential minted for THIS version
   created_by_user String?
 
