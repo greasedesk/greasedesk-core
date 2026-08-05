@@ -487,6 +487,10 @@ export default function AdminDashboard(props: PageProps) {
            read — no new financial calculation. ---- */}
       {(() => {
         const cap = tiles?.capacity as any;
+        // No capacity tile → no chart. It used to render the shell, the heading and the axes off
+        // `cap?.`, which for a period the tenant never traded drew a sellable-hours curve for a
+        // month in which there was no garage. Same guard the P&L block above already uses.
+        if (cap == null) return null;
         const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
         // Whole-pound (no pence) figure for the on-chart end labels — floored, currency-aware.
         const whole = (p: number | null) => (p == null ? '—' : formatMoney(Math.floor(p / 100) * 100, { currency: props.currency, locale: props.locale, maximumFractionDigits: 0 }));
