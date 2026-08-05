@@ -13,6 +13,7 @@ import { useTranslation } from 'next-i18next';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import { isCatalogueUsed, catalogueDeleteRefusal } from '@/lib/catalogue-retire';
 import { displayCurrency } from '@/lib/display-currency';
 import PromotionsSection from '@/components/products/PromotionsSection';
 
@@ -21,6 +22,7 @@ type Comp = { description: string; qty: number; unitCostExVat: number };
 type TierPrice = { tierId: string; priceExVat: number | null };
 type Item = {
   id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number | null; unitPrice: number; vatRate: number; active: boolean;
+  usage?: { jobLines: number; promoTargets: number };
   basePriceExVat: number | null; labourHours: number | null; labourOutsourced?: boolean; components: Comp[]; tierPrices: TierPrice[];
 };
 type Tier = { id: string; name: string; position: number; active: boolean };
@@ -162,8 +164,24 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
     } catch { setMsg({ text: t('error'), ok: false }); }
     setBusy(false);
   }
+  /** The endpoint's own sentence, resolved client-side so the screen never invents its own wording. */
+  const usageReason = (i: Item) =>
+    catalogueDeleteRefusal(i.usage ?? { jobLines: 0, promoTargets: 0 })?.message ?? '';
+
   async function setActive(i: Item, active: boolean) { setBusy(true); try { const r = await fetch('/api/catalogue', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: i.id, active }) }); if (r.ok) await load(); } finally { setBusy(false); } }
-  async function hardDelete(i: Item) { if (!confirm(t('confirmDelete'))) return; setBusy(true); try { const r = await fetch(`/api/catalogue?id=${encodeURIComponent(i.id)}`, { method: 'DELETE' }); if (r.ok) { await load(); setForm(null); } } finally { setBusy(false); } }
+  // The endpoint is the authority; this reads the SAME predicate only to decide which control to
+  // offer. A refusal is SHOWN, never swallowed — a button that silently does nothing is worse than
+  // one that explains itself.
+  async function hardDelete(i: Item) {
+    if (!confirm(t('confirmDelete'))) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/catalogue?id=${encodeURIComponent(i.id)}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({} as any));
+      if (r.ok) { await load(); setForm(null); setMsg({ text: d.message ?? t('deleted'), ok: true }); }
+      else setMsg({ text: d.message ?? t('deleteFailed'), ok: false });
+    } finally { setBusy(false); }
+  }
 
   // ---- tiers CRUD ----
   async function addTier() { if (!newTier.trim()) return; setBusy(true); try { const r = await fetch('/api/service-tiers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newTier.trim() }) }); if (r.ok) { setNewTier(''); await load(); } } finally { setBusy(false); } }
@@ -359,7 +377,14 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
             <div className="mt-5 flex items-center gap-2">
               <button onClick={save} disabled={busy || !canSave} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? t('saving') : t('save')}</button>
               <button onClick={close} className="text-muted hover:text-ink rounded-lg px-4 py-2 text-sm">{t('cancel')}</button>
-              {form.id && <button onClick={() => hardDelete(items.find((x) => x.id === form.id)!)} disabled={busy} className="ml-auto text-danger hover:bg-danger-soft rounded-lg px-3 py-2 text-sm">{t('delete')}</button>}
+              {form.id && (() => {
+                const it = items.find((x) => x.id === form.id);
+                if (!it) return null;
+                // Same predicate as the row and the endpoint — three readers, one rule.
+                return isCatalogueUsed(it.usage ?? { jobLines: 0, promoTargets: 0 })
+                  ? <span className="ml-auto text-xs text-muted max-w-sm text-right">{usageReason(it)}</span>
+                  : <button onClick={() => hardDelete(it)} disabled={busy} className="ml-auto text-danger hover:bg-danger-soft rounded-lg px-3 py-2 text-sm">{t('delete')}</button>;
+              })()}
             </div>
           </div>
         )}
@@ -390,7 +415,7 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
                       <span className="font-mono text-xs bg-surface-muted border border-line rounded px-1.5 py-0.5 mr-2">{i.code}</span>{i.name}
                       {uncosted && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-warn-soft text-warn">{t('uncosted.badge')}</span>}
                       {i.labourOutsourced && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent-soft text-accent">{t('outsourcedBadge')}</span>}
-                      {!i.active && <span className="ml-2 text-[10px] uppercase tracking-wide text-muted">{t('archived')}</span>}
+                      {!i.active && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 bg-surface-muted text-muted" data-testid={`chip-retired-${i.code}`}>{t('archived')}</span>}
                     </div>
                     <div className="text-xs text-muted mt-0.5">
                       {typeLabel(i.itemType)} · {isFx ? t('basePrice') : t('price')} {money(price)} {t('exVat')}
@@ -402,8 +427,14 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
                   </div>
                   <button onClick={() => openEdit(i)} className="text-sm text-accent hover:underline">{t('edit')}</button>
                   {i.active
-                    ? <button onClick={() => setActive(i, false)} disabled={busy} className="text-sm text-muted hover:text-ink">{t('archive')}</button>
-                    : <button onClick={() => setActive(i, true)} disabled={busy} className="text-sm text-accent hover:underline">{t('restore')}</button>}
+                    ? <button onClick={() => setActive(i, false)} disabled={busy} data-testid={`retire-${i.code}`} className="text-sm text-muted hover:text-ink">{t('archive')}</button>
+                    : <button onClick={() => setActive(i, true)} disabled={busy} data-testid={`restore-${i.code}`} className="text-sm text-accent hover:underline">{t('restore')}</button>}
+                  {/* USED vs UNUSED — the ONE predicate, resolved here only to choose the control.
+                      A service that has priced a line is offered Retire and told why, rather than a
+                      Delete that will 409. */}
+                  {isCatalogueUsed(i.usage ?? { jobLines: 0, promoTargets: 0 })
+                    ? <span className="text-xs text-muted" title={usageReason(i)} data-testid={`why-${i.code}`}>{t('deleteBlocked')}</span>
+                    : <button onClick={() => hardDelete(i)} disabled={busy} data-testid={`delete-${i.code}`} className="text-sm text-danger hover:underline">{t('delete')}</button>}
                 </li>
               );
             })}

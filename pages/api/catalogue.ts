@@ -16,6 +16,8 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { fixedMirror, ComponentInput } from '@/lib/catalogue';
+import { catalogueDeleteRefusal } from '@/lib/catalogue-retire';
+import { writeAudit } from '@/lib/audit';
 
 const TYPES = new Set(['labour', 'part', 'misc', 'fixed']);
 const dec = (v: unknown): number | null => { const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -44,6 +46,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }) as Promise<any[]>,
       prisma.serviceTier.findMany({ where: { group_id: groupId }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true, position: true, active: true } }) as Promise<any[]>,
     ]);
+    // USAGE, so the screen can offer Retire-or-Delete per row from the SAME predicate the DELETE
+    // handler enforces. Two grouped counts, not a count per item.
+    const [jobLineCounts, promoCounts] = await Promise.all([
+      prisma.jobCardItem.groupBy({ by: ['catalogue_item_id'], where: { catalogue_item_id: { not: null }, catalogue: { group_id: groupId } }, _count: true }) as any,
+      prisma.promoTarget.groupBy({ by: ['catalogue_item_id'], where: { item: { group_id: groupId } }, _count: true }) as any,
+    ]);
+    const jobLinesOf = new Map<string, number>((jobLineCounts as any[]).map((r) => [r.catalogue_item_id as string, r._count as number]));
+    const promosOf = new Map<string, number>((promoCounts as any[]).map((r) => [r.catalogue_item_id as string, r._count as number]));
     return res.status(200).json({
       defaultVatRate: vat.defaultRate,
       vatRegistered: vat.registered,
@@ -54,6 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         basePriceExVat: i.base_price_ex_vat == null ? null : Number(i.base_price_ex_vat),
         labourHours: i.labour_hours == null ? null : Number(i.labour_hours),
         labourOutsourced: !!i.labour_outsourced,
+        usage: { jobLines: jobLinesOf.get(i.id) ?? 0, promoTargets: promosOf.get(i.id) ?? 0 },
         components: i.components.map((c: any) => ({ description: c.description, qty: Number(c.qty), unitCostExVat: Number(c.unit_cost_ex_vat) })),
         tierPrices: i.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
       })),
@@ -224,8 +235,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'DELETE') {
     const id = typeof req.query.id === 'string' ? req.query.id : (req.body?.id as string) || '';
     if (!id) return res.status(400).json({ message: 'Missing id.' });
-    const del = await prisma.catalogueItem.deleteMany({ where: { id, group_id: groupId } }); // components/tiers cascade; line links SetNull
-    if (del.count === 0) return res.status(404).json({ message: 'Item not found.' });
+    const item = (await prisma.catalogueItem.findFirst({
+      where: { id, group_id: groupId }, select: { id: true, code: true, name: true, item_type: true, active: true },
+    })) as { id: string; code: string; name: string; item_type: string; active: boolean } | null;
+    if (!item) return res.status(404).json({ message: 'Item not found.' });
+
+    // COUNT BEFORE DESTROYING. JobCardItem.catalogue_item_id is SetNull and PromoTarget cascades,
+    // so a delete here rewrites history in two directions at once. One predicate, shared with the
+    // screen, so the button and the endpoint cannot disagree about what is removable.
+    const [jobLines, promoTargets] = await Promise.all([
+      prisma.jobCardItem.count({ where: { catalogue_item_id: id } }),
+      prisma.promoTarget.count({ where: { catalogue_item_id: id } }),
+    ]);
+    const refusal = catalogueDeleteRefusal({ jobLines, promoTargets });
+    if (refusal) return res.status(409).json({ code: refusal.code, message: refusal.message, usage: refusal.usage });
+
+    // SELF-DESCRIBING: the row has to say what was removed, because after this the item is gone and
+    // nothing else records that it ever existed. Deleting a price-list entry left NO record at all
+    // before this.
+    await prisma.$transaction(async (tx: any) => {
+      await writeAudit(tx, {
+        groupId, userId: vis.userId ?? null, action: 'catalogue.deleted',
+        entity: 'catalogue_item', entityId: id,
+        diff: { code: item.code, name: item.name, itemType: item.item_type, active: item.active, jobLines, promoTargets },
+      });
+      await tx.catalogueItem.delete({ where: { id } }); // components / tiers / aliases cascade
+    });
     return res.status(200).json({ message: 'Item deleted.' });
   }
 

@@ -20,12 +20,12 @@
   "vatRate": "VAT rate (%)",
   "margin": "Margin",
   "active": "Active",
-  "archived": "Archived",
+  "archived": "Retired",
   "showArchived": "Show archived",
-  "archive": "Archive",
+  "archive": "Retire",
   "restore": "Restore",
   "delete": "Delete",
-  "confirmDelete": "Delete this product permanently? Historic job-card lines keep their values; only the link is cleared.",
+  "confirmDelete": "Delete this item permanently? Nothing has used it, so there is no history to lose.",
   "save": "Save",
   "saving": "Saving…",
   "cancel": "Cancel",
@@ -80,5 +80,8 @@
     "showAll": "Show all",
     "badge": "No cost",
     "noCost": "No cost recorded — set a cost so margin is real"
-  }
+  },
+  "deleteBlocked": "In use — retire instead",
+  "deleted": "Item deleted.",
+  "deleteFailed": "Could not delete that item."
 }

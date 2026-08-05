@@ -58,6 +58,11 @@ export type AuditAction =
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
+  | 'catalogue.deleted'  // a price-list entry was REMOVED — only ever possible when nothing had
+                         // used it (lib/catalogue-retire). SELF-DESCRIBING: after this the item is
+                         // gone and this row is the only record it existed:
+                         // { code, name, itemType, active, jobLines, promoTargets }
+  | 'catalogue.retired'  // active flipped — history untouched, gone from the estimate picker
   | 'card.duplicated'    // created by copying a source card's estimate — SELF-DESCRIBING: the diff
                          // carries { source_card_id, source_registration, ... } so the row stays
                          // searchable even after the duplicated_from edge is SetNull'd by a purge
@@ -162,16 +167,27 @@ export async function writeImportAudit(
   });
 }
 
+/**
+ * Most audit rows are about a JOB CARD, which is why `jobCardId` is the common shape. A few are
+ * about something else entirely — deleting a price-list entry leaves nothing else behind, so the
+ * row has to name the catalogue item. The union keeps the common call unchanged and makes the
+ * other form spell out what it is describing, rather than smuggling a foreign id into a field
+ * every reader assumes is a job card.
+ */
+export type AuditTarget =
+  | { jobCardId: string; entity?: undefined; entityId?: undefined }
+  | { jobCardId?: undefined; entity: string; entityId: string };
+
 export async function writeAudit(
   tx: Prisma.TransactionClient,
-  args: { groupId: string; userId?: string | null; jobCardId: string; action: AuditAction; diff?: unknown },
+  args: { groupId: string; userId?: string | null; action: AuditAction; diff?: unknown } & AuditTarget,
 ): Promise<void> {
   await tx.auditLog.create({
     data: {
       group_id: args.groupId,
       user_id: args.userId ?? null,
-      entity: 'job_card',
-      entity_id: args.jobCardId,
+      entity: args.entity ?? 'job_card',
+      entity_id: args.entityId ?? (args.jobCardId as string),
       action: args.action,
       diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
     },
