@@ -1005,7 +1005,10 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision }: { jobCardId: s
           <p className="text-sm text-ink">
             {result.emailed
               ? <>{revision ? 'Updated price' : 'Quote'} v{result.version} emailed to <span className="font-medium">{result.sentTo}</span>.</>
-              : <>Quote v{result.version} is ready. {result.sentTo
+              // BOTH branches follow the state. The no-email branch is the one the gate hit, and it
+              // still said "Quote … is ready" for a revision — the exact wording this slice exists
+              // to stop, surviving in the path a customer with no address on file takes.
+              : <>{revision ? 'Updated price' : 'Quote'} v{result.version} is ready. {result.sentTo
                   ? <span className="text-warn">The email didn’t send — pass the link on instead.</span>
                   : <>No email address on file — pass this link on instead.</>}</>}
           </p>
