@@ -46,6 +46,7 @@ type PageProps = {
   quoteFrozen: boolean;
   quoteSupersededNoLink: boolean;
   quoteHasAcceptedVersion: boolean;
+  priceUnconfirmed: { agreedVersion: number; agreedPennies: number; sentVersion: number; sentPennies: number; differencePennies: number } | null;
   canIssueInvoice: boolean;
   priceVisible: boolean;
   costVisible: boolean;
@@ -141,6 +142,7 @@ export default function JobCardDetailPage(props: PageProps) {
         quoteFrozen={props.quoteFrozen}
         quoteSupersededNoLink={props.quoteSupersededNoLink}
         quoteHasAcceptedVersion={props.quoteHasAcceptedVersion}
+        priceUnconfirmed={props.priceUnconfirmed}
         isAdmin={props.isAdmin}
         owner={props.owner}
         conversation={props.conversation}

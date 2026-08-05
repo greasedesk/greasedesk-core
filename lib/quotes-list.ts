@@ -62,6 +62,47 @@ export function deriveQuoteStatus(
 }
 
 /**
+ * ── THE CUSTOMER AGREED TO ONE PRICE AND HAS BEEN SENT ANOTHER ─────────────────────────────────
+ * Acceptance belongs to the VERSION (ruling 2026-08-05), so a card can carry an accepted v1 and a
+ * sent v4 at the same time: the work is agreed and booked, and the figure they agreed to is not the
+ * figure now on offer. That gap is money the garage is exposed to, and it stays recoverable right
+ * up until the car leaves — so it needs saying out loud, on every surface a person might be at.
+ *
+ * ONE RULE, THREE READERS: the job card, the diary and the quotes list all call this. None of them
+ * may re-derive it — a count and a list expressing the same rule differently is the fault that
+ * started this thread.
+ *
+ * NARROW BY DESIGN. Only `sent` counts as the outstanding offer:
+ *   • latest `superseded` → the customer was never told; that is the "Needs re-sending" queue.
+ *   • latest `declined`   → they answered, and answered no; a different conversation.
+ * Both are real states with their own homes. Folding them in would make this mean "something is
+ * unresolved" rather than "they have not agreed to THIS price".
+ */
+export type PriceUnconfirmed = {
+  agreedVersion: number; agreedPennies: number;
+  sentVersion: number; sentPennies: number;
+  /** sent − agreed. NEGATIVE when the revision came down — still unagreed, just not exposure. */
+  differencePennies: number;
+};
+
+export function quotePriceUnconfirmed(
+  versions: Array<{ version: number; status: string; gross_pennies: number }>,
+): PriceUnconfirmed | null {
+  if (!versions.length) return null;
+  const byVersion = [...versions].sort((a, b) => b.version - a.version);
+  const latest = byVersion[0];
+  if (latest.status !== 'sent') return null;
+  const agreed = byVersion.find((v) => v.status === 'accepted'); // the HIGHEST accepted version
+  if (!agreed || agreed.version === latest.version) return null;
+  return {
+    agreedVersion: agreed.version, agreedPennies: agreed.gross_pennies,
+    sentVersion: latest.version, sentPennies: latest.gross_pennies,
+    differencePennies: latest.gross_pennies - agreed.gross_pennies,
+  };
+}
+
+
+/**
  * ── CARD STATES IN WHICH A QUOTE CAN NEVER BE ANSWERED ──────────────────────────────────────────
  * Was `DELIVERED_STATUSES` and lived inside the `accepted` filter branch, so it applied to the ROWS
  * and not to the COUNTS — the Accepted chip said 5 while the list showed 3. It is now applied once,
@@ -88,6 +129,8 @@ export type QuoteRow = {
   verbal: boolean;
   /** In the diary: a lift AND a planned time. Read from the card via isBookedCard — never a status. */
   booked: boolean;
+  /** Agreed one price, sent another — see quotePriceUnconfirmed. Null when there is no gap. */
+  priceUnconfirmed: PriceUnconfirmed | null;
   registration: string | null;
   customerName: string | null;
   grossPennies: number;
@@ -135,6 +178,13 @@ export async function listQuotes(args: {
 
   // ONE ROW PER CARD: the ordering above puts each card's highest version first, so the first
   // sighting of a card_id wins and later (older) versions are skipped.
+  // Every version, grouped by card — the unconfirmed-price rule needs the WHOLE series, not just
+  // the latest, so it is computed here from the rows already fetched rather than re-queried.
+  const byCard = new Map<string, Array<{ version: number; status: string; gross_pennies: number }>>();
+  for (const v of versions) {
+    byCard.set(v.job_card_id, [...(byCard.get(v.job_card_id) ?? []), { version: v.version, status: v.status, gross_pennies: v.gross_pennies }]);
+  }
+
   const seen = new Set<string>();
   const rows: QuoteRow[] = [];
   for (const v of versions) {
@@ -147,6 +197,7 @@ export async function listQuotes(args: {
       version: v.version,
       verbal: false,
       booked,
+      priceUnconfirmed: quotePriceUnconfirmed(byCard.get(v.job_card_id) ?? []),
       registration: v.job_card?.vehicle?.registration ?? null,
       customerName: v.job_card?.customer?.name ?? null,
       grossPennies: v.gross_pennies,
@@ -183,6 +234,7 @@ export async function listQuotes(args: {
       version: null,
       verbal: true,
       booked: isBookedCard(c),
+      priceUnconfirmed: null, // no versions at all — nothing was ever sent, so nothing is unagreed
       registration: c.vehicle?.registration ?? null,
       customerName: c.customer?.name ?? null,
       grossPennies: gross,

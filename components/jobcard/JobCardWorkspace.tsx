@@ -27,6 +27,8 @@ import { TAB_KEYS, TabKey, TabState, computeTabs } from '@/lib/jobcard-tabs';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
+import type { PriceUnconfirmed } from '@/lib/quotes-list';
+import { formatMoney } from '@/lib/format-money';
 
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
@@ -42,6 +44,7 @@ type Props = {
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
   quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
   quoteHasAcceptedVersion: boolean; // a version was ACCEPTED → the next send is a revision, not a quote
+  priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null };
@@ -644,11 +647,12 @@ export default function JobCardWorkspace(p: Props) {
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={eff.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
-            resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
+            resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} currency={p.currency} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
             quoteHasAcceptedVersion={p.quoteHasAcceptedVersion}
             quoteFrozen={p.quoteFrozen}
+            priceUnconfirmed={p.priceUnconfirmed}
           />
           {/* THE UI'S OWN STATEMENT, from its own flag — not the 409 body echoed back. Before this
               the only "frozen" wording in the app lived in the API refusal, so the page could not
@@ -732,6 +736,8 @@ function QuoteActions(props: {
   quoteSupersededNoLink: boolean;
   quoteHasAcceptedVersion: boolean;
   quoteFrozen: boolean;
+  priceUnconfirmed: PriceUnconfirmed | null;
+  currency: string;
 }) {
   const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
   const { openHour, closeHour, openDays, breaks } = siteHours;
@@ -823,6 +829,7 @@ function QuoteActions(props: {
   }
 
   if (!canManage) return null;
+  const fmtMoney = (pennies: number) => formatMoney(pennies, { currency: props.currency, locale: props.locale });
   const canCancel = !['done', 'cancelled'].includes(status);
   const btn = 'text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50';
 
@@ -908,6 +915,24 @@ function QuoteActions(props: {
           supersedes the quote and revokes the customer's link, and the screen said nothing at all —
           no notice and no remedy. `quoteFrozen` is the honest boundary: once the invoice exists the
           lines are locked and there is nothing left to re-quote. */}
+      {/* ── AGREED ONE PRICE, SENT ANOTHER ────────────────────────────────────────────────────
+          The exposure, in figures, beside the superseded warning. "Awaiting approval" would state
+          nothing; the two totals and the difference state exactly what is at risk, and it is
+          recoverable until the car leaves. Derived ONCE in lib/quotes-list — never here. */}
+      {props.priceUnconfirmed && (
+        <div className="mt-4 rounded-lg border border-warn bg-warn-soft p-3" data-testid="price-unconfirmed">
+          <p className="text-sm font-semibold text-warn">
+            Agreed {fmtMoney(props.priceUnconfirmed.agreedPennies)} (v{props.priceUnconfirmed.agreedVersion}),
+            {' '}sent {fmtMoney(props.priceUnconfirmed.sentPennies)} (v{props.priceUnconfirmed.sentVersion})
+            {' — '}{props.priceUnconfirmed.differencePennies >= 0 ? '+' : '−'}
+            {fmtMoney(Math.abs(props.priceUnconfirmed.differencePennies))} not yet agreed.
+          </p>
+          <p className="text-xs text-warn mt-0.5">
+            The customer has not answered the new price. Worth settling before the car goes back.
+          </p>
+        </div>
+      )}
+
       {!props.quoteFrozen && !props.cancelled && props.quoteSupersededNoLink && (
         <p className="mt-4 text-sm text-warn">
           {props.quoteHasAcceptedVersion

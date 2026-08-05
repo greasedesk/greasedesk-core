@@ -26,6 +26,7 @@ import type { PromoLite } from '@/lib/promo';
 import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { isBookedCard } from '@/lib/jobcard-status';
+import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -95,10 +96,15 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // accepted on a card that has since moved on. So the question "has this customer already agreed to
   // a price?" is answered by the versions, and it decides whether the next send is a QUOTE or a
   // REVISION — which changes both the button and the message the customer gets.
-  const quoteHasAcceptedVersion = await prisma.quoteVersion
-    .count({ where: { job_card_id: cardId, status: 'accepted' as any } })
-    .then((n: number) => n > 0)
-    .catch(() => false);
+  // The WHOLE version series — the accepted-vs-latest question needs all of them, and the same
+  // read answers "has anything been accepted?".
+  const allVersions = (await prisma.quoteVersion.findMany({
+    where: { job_card_id: cardId },
+    select: { version: true, status: true, gross_pennies: true },
+  }).catch(() => [])) as Array<{ version: number; status: string; gross_pennies: number }>;
+  const quoteHasAcceptedVersion = allVersions.some((v) => v.status === 'accepted');
+  // ONE RULE, shared with the diary and the quotes list — never re-derived here.
+  const priceUnconfirmed = quotePriceUnconfirmed(allVersions);
 
   // Wave 3 — row-keyed queries, fired together. The owner chain keeps its internal order:
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
@@ -253,6 +259,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
     quoteSupersededNoLink,
     quoteHasAcceptedVersion,
+    priceUnconfirmed,
     isAdmin: vis.isAdmin,
     currency: site?.currency_code ?? 'GBP',
     locale: site?.locale ?? 'en-GB',

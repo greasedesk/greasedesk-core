@@ -21,6 +21,9 @@ export function fetchDayBookings(siteId: string, rangeStart: Date, rangeEnd: Dat
       id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true, held_on_lift: true,
       resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
       items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
+      // The version series, so the board can say when the customer has NOT agreed to the price it
+      // is about to do the work at. Derived through lib/quotes-list — never re-derived here.
+      quoteVersions: { select: { version: true, status: true, gross_pennies: true } },
     },
   }) as Promise<any[]>;
 }

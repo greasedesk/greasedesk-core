@@ -140,6 +140,16 @@ export default function QuotesPage(props: Props) {
                         was superseded. A one-click send would email a price nobody has looked at
                         since it moved, which is worse than not sending. So: review, then send with
                         the control already on that tab. */}
+                    {/* AGREED ONE PRICE, SENT ANOTHER. A row marker rather than a seventh tab —
+                        it is a fact about a card that already belongs under Accepted or Accepted &
+                        booked, and a tab would split the accepted work in two. Both figures, because
+                        "awaiting approval" states nothing. */}
+                    {r.priceUnconfirmed && (
+                      <span className="block mt-1 text-[11px] font-medium text-warn" data-testid="price-unconfirmed-row">
+                        Agreed {formatMoney(r.priceUnconfirmed.agreedPennies, { currency: props.currency, locale: props.locale })} (v{r.priceUnconfirmed.agreedVersion}),
+                        {' '}sent {formatMoney(r.priceUnconfirmed.sentPennies, { currency: props.currency, locale: props.locale })} (v{r.priceUnconfirmed.sentVersion}) — not yet agreed
+                      </span>
+                    )}
                     {r.status === 'needs_resending' && (
                       <Link href={`/admin/jobcards/${r.jobCardId}?tab=quote`} data-testid="quote-resend"
                         className="block mt-1 text-xs font-semibold text-accent hover:underline">

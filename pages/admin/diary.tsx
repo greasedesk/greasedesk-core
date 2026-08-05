@@ -47,6 +47,7 @@ import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/l
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
 import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
+import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { resolveLeaveColours } from '@/lib/leave-types';
 import { paymentState, PaymentState } from '@/lib/jobcard-status';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
@@ -75,7 +76,7 @@ function PayPill({ status, isComeback, t, className }: { status: string; isComeb
 }
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; valuePennies: number; segments: Segment[] };
+type DiaryCard = { priceUnconfirmed?: { agreedPennies: number; sentPennies: number; differencePennies: number; agreedVersion: number; sentVersion: number } | null; id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type DiaryView = 'day' | 'week' | 'month' | 'year';
@@ -622,6 +623,17 @@ export default function DiaryPage(props: PageProps) {
             "No charge" (£0 outcome). Everywhere else it duplicated the band word ("Paid"/"Paid",
             "Invoiced" vs "Complete, unpaid") and collided with the inline band pill on short blocks. */}
         {finance.canSeeValues && height > 28 && paymentState(c.status, c.isComeback) === 'settled' && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
+        {/* PRICE NOT AGREED. Information, not a warning — the mechanic reading the board cannot fix
+            it, but whoever hands the keys back can, and only while the car is still here. It carries
+            the DIFFERENCE because a block has no room for two totals and "+£162 unapproved" says
+            more than a neutral marker would. Shown on booked and in-progress blocks alike. */}
+        {finance.canSeeValues && c.priceUnconfirmed && (
+          <span data-testid="price-unconfirmed-chip" data-card-reg={c.reg}
+            title={`Agreed ${formatMoney(c.priceUnconfirmed.agreedPennies, { currency, locale })} (v${c.priceUnconfirmed.agreedVersion}), sent ${formatMoney(c.priceUnconfirmed.sentPennies, { currency, locale })} (v${c.priceUnconfirmed.sentVersion}) — not yet agreed`}
+            className="absolute bottom-0.5 right-1 text-[9px] font-medium rounded-full border px-1 whitespace-nowrap bg-warn-soft border-warn text-warn">
+            {c.priceUnconfirmed.differencePennies >= 0 ? '+' : '−'}{formatMoney(Math.abs(c.priceUnconfirmed.differencePennies), { currency, locale })} unapproved
+          </span>
+        )}
       </div>
     );
   }
@@ -1002,6 +1014,7 @@ export default function DiaryPage(props: PageProps) {
                     quoteFrozen={pane.data.quoteFrozen}
                     quoteSupersededNoLink={pane.data.quoteSupersededNoLink}
                     quoteHasAcceptedVersion={pane.data.quoteHasAcceptedVersion}
+                    priceUnconfirmed={pane.data.priceUnconfirmed}
                     canIssueInvoice={pane.data.canIssueInvoice}
                     isAdmin={pane.data.isAdmin}
                     priceVisible={pane.data.priceVisible} costVisible={pane.data.costVisible}
@@ -1718,6 +1731,9 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       // Block value (EX-VAT): normal job = ex-VAT revenue; comeback = the DRAIN = −(ex-VAT parts cost),
       // matching what the margin total subtracts. Totals compute from `totals` directly, unaffected.
       valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
+      // Agreed one price, sent another. Gated with the other money grain: a chip naming two totals
+      // is a money disclosure, so it follows the same see-values permission as the block value.
+      priceUnconfirmed: fin.seeValues ? quotePriceUnconfirmed(c.quoteVersions ?? []) : null,
       segments: fp.segments,
     };
   });
