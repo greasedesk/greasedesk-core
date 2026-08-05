@@ -11,6 +11,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { validateAllocations } from '@/lib/cost-allocation';
 import { diffEmploymentShape, recordEmploymentEvents, datedConfirmNeeded, EmploymentShape } from '@/lib/employment-events';
+import { readPersonalDetails, toColumns, fromColumns } from '@/lib/hr-personal';
 
 const parseDay = (v: unknown): Date | null => {
   const ds = String(v || '').trim();
@@ -55,6 +56,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         id: true, name: true, role: true, cost_type: true, amount_pennies: true, is_active: true,
         is_chargeable: true, contracted_hours_per_day: true, working_days: true,
         annual_leave_allowance_days: true, start_date: true, pay_start_date: true,
+        date_of_birth: true, home_address: true, personal_email: true, personal_phone: true,
+        emergency_contact_name: true, emergency_contact_relationship: true, emergency_contact_phone: true,
+        gender: true, pronouns: true,
         work_end_date: true, pay_end_date: true, utilisation_factor: true,
         allocations: { select: { site_id: true, percent: true } },
       },
@@ -77,6 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         allowanceDays: p.annual_leave_allowance_days == null ? null : Number(p.annual_leave_allowance_days),
         utilisationFactor: p.utilisation_factor,
         allocations: p.allocations.map((a: any) => ({ siteId: a.site_id, percent: Number(a.percent) })),
+        // Optional personal block — every value may be null and null means NOT ASKED.
+        personal: fromColumns(p),
       })),
     });
   }
@@ -208,6 +214,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (factor !== -1) shape.utilisation_factor = factor;
       if (startDate !== undefined) shape.start_date = startDate;
       if (payStartDate !== undefined) shape.pay_start_date = payStartDate;
+      // NOTHING HERE IS REQUIRED. readPersonalDetails turns blanks into nulls, so clearing a field
+      // genuinely clears it and an unusable value never blocks a save of the rest.
+      Object.assign(shape, toColumns(readPersonalDetails(body)));
       const person = isPatch
         ? await tx.costPerson.update({
             where: { id },

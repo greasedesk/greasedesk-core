@@ -20,6 +20,7 @@ import { formatMoney } from '@/lib/format-money';
 import { displayCurrency } from '@/lib/display-currency';
 import AllocationEditor, { AllocRow, allocIsValid } from '@/components/settings/AllocationEditor';
 import { rosteredWeekdays } from '@/lib/rostered-days';
+import { GENDER_OPTIONS, GENDER_LABELS, personalDetailsEmpty, type PersonalDetails } from '@/lib/hr-personal';
 
 type SiteOpt = { id: string; name: string; isActive: boolean; openDays?: number[] };
 type Alloc = { siteId: string; percent: number };
@@ -29,6 +30,7 @@ type Person = {
   startDate: string | null; endDate: string | null; allowanceDays: number | null;
   utilisationFactor: number;
   allocations: Alloc[];
+  personal: PersonalDetails;
 };
 type Ev = { id: string; personId: string; personName: string; kind: string; effectiveDate: string; value: any; previous: any; changedBy: string | null; at: string; corrections?: Array<{ at: string; by: string | null; from: string; to: string }>; voided?: boolean };
 
@@ -37,6 +39,7 @@ type FormState = {
   isChargeable: boolean; contractedHours: string; workingDays: number[]; startDate: string;
   utilisationFactor: string;
   effectiveDate: string; confirmDated: boolean;
+  personal: PersonalDetails;
 };
 
 const emptyForm = (): FormState => ({
@@ -44,7 +47,15 @@ const emptyForm = (): FormState => ({
   isChargeable: false, contractedHours: '', workingDays: [], startDate: '',
   utilisationFactor: '70',
   effectiveDate: new Date().toISOString().slice(0, 10), confirmDated: false,
+  // EVERY field null — nothing here is answered until someone answers it. Gender and pronouns in
+  // particular start UNSELECTED, never at a guess.
+  personal: EMPTY_PERSONAL,
 });
+const EMPTY_PERSONAL: PersonalDetails = {
+  dateOfBirth: null, homeAddress: null, personalEmail: null, personalPhone: null,
+  emergencyContactName: null, emergencyContactRelationship: null, emergencyContactPhone: null,
+  gender: null, pronouns: null,
+};
 const poundsToPennies = (s: string): number => Math.round((Number(s) || 0) * 100);
 const penniesToInput = (p: number): string => (p / 100).toFixed(2);
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -106,8 +117,14 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
       // DELIBERATE pick: edits append dated history, so the effective date starts EMPTY and the
       // save stays disabled until it's chosen — never a silent "today".
       effectiveDate: '', confirmDated: false,
+      personal: p.personal ?? EMPTY_PERSONAL,
     });
   }
+
+  /** One setter for the whole optional block — blank always becomes null, so clearing a field
+   *  clears it rather than storing an empty string that reads as "asked, answered nothing". */
+  const setPersonal = (patch: Partial<PersonalDetails>) =>
+    setForm((f) => (f ? { ...f, personal: { ...f.personal, ...patch } } : f));
 
   const hoursOk = !form || form.contractedHours === '' || (Number.isFinite(Number(form.contractedHours)) && Number(form.contractedHours) >= 0 && Number(form.contractedHours) <= 24);
   const canSave = !!form && form.name.trim() !== '' && Number(form.amount) >= 0 && form.amount !== '' && allocIsValid(form.rows) && hoursOk
@@ -126,6 +143,7 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
       workingDays: form.workingDays,
       utilisationFactor: form.utilisationFactor === '' ? 70 : Number(form.utilisationFactor),
       startDate: form.startDate || null,
+      ...form.personal, // optional throughout — blanks are normalised to null server-side
       effectiveDate: form.effectiveDate,
       confirmDated: confirmDated || form.confirmDated,
     };
@@ -358,6 +376,75 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
               </div>
             </div>
 
+            {/* ── PERSONAL DETAILS — ALL OPTIONAL ──────────────────────────────────────────────
+                Not effective-dated, deliberately: EmploymentEvent exists so a PAST month's figure
+                cannot restate, and none of this feeds a figure. An address change corrects a
+                current fact rather than recording a value that was true from a date. */}
+            <details className="mt-5 rounded-lg border border-line" data-testid="personal-details">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-ink">
+                {th('personal.title')}
+                <span className="ml-2 text-xs font-normal text-muted">{th('personal.allOptional')}</span>
+              </summary>
+              <div className="p-3 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.dob')}</span>
+                  <input type="date" data-testid="pd-dob" className={inputClass} value={form.personal.dateOfBirth ?? ''}
+                    onChange={(e) => setPersonal({ dateOfBirth: e.target.value || null })} />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.phone')}</span>
+                  <input data-testid="pd-phone" className={inputClass} value={form.personal.personalPhone ?? ''}
+                    onChange={(e) => setPersonal({ personalPhone: e.target.value || null })} />
+                </label>
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.address')}</span>
+                  <textarea rows={2} data-testid="pd-address" className={inputClass} value={form.personal.homeAddress ?? ''}
+                    onChange={(e) => setPersonal({ homeAddress: e.target.value || null })} />
+                </label>
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.email')}</span>
+                  <input type="email" data-testid="pd-email" className={inputClass} value={form.personal.personalEmail ?? ''}
+                    onChange={(e) => setPersonal({ personalEmail: e.target.value || null })} />
+                  <span className="block text-[11px] text-muted mt-0.5">{th('personal.emailHint')}</span>
+                </label>
+
+                <p className="sm:col-span-2 text-xs font-semibold text-ink mt-1">{th('personal.emergency')}</p>
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.ecName')}</span>
+                  <input data-testid="pd-ec-name" className={inputClass} value={form.personal.emergencyContactName ?? ''}
+                    onChange={(e) => setPersonal({ emergencyContactName: e.target.value || null })} />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.ecRelationship')}</span>
+                  <input data-testid="pd-ec-rel" className={inputClass} value={form.personal.emergencyContactRelationship ?? ''}
+                    onChange={(e) => setPersonal({ emergencyContactRelationship: e.target.value || null })} />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.ecPhone')}</span>
+                  <input data-testid="pd-ec-phone" className={inputClass} value={form.personal.emergencyContactPhone ?? ''}
+                    onChange={(e) => setPersonal({ emergencyContactPhone: e.target.value || null })} />
+                </label>
+
+                {/* UNSELECTED BY DEFAULT. The empty option is the initial state and stays available,
+                    so a person is never recorded as something nobody asked them. The purpose is
+                    stated here because these two, together, can reveal more than they name. */}
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.gender')}</span>
+                  <select data-testid="pd-gender" className={inputClass} value={form.personal.gender ?? ''}
+                    onChange={(e) => setPersonal({ gender: (e.target.value || null) as any })}>
+                    <option value="">{th('personal.unselected')}</option>
+                    {GENDER_OPTIONS.map((g) => <option key={g} value={g}>{GENDER_LABELS[g]}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-semibold text-ink">{th('personal.pronouns')}</span>
+                  <input data-testid="pd-pronouns" className={inputClass} placeholder={th('personal.pronounsPh')}
+                    value={form.personal.pronouns ?? ''} onChange={(e) => setPersonal({ pronouns: e.target.value || null })} />
+                </label>
+                <p className="sm:col-span-2 text-[11px] text-muted">{th('personal.sensitiveNote')}</p>
+              </div>
+            </details>
+
             {/* Commit block: the effective date lives WITH Save (one action) — flow reads
                 edit the fields → state when the change took effect → Save. */}
             {form.id && (
@@ -431,7 +518,9 @@ export default function HrPage({ currency, locale }: { currency: string; locale:
                   {tab === 'current' && <button onClick={(e) => { e.preventDefault(); openEdit(p); }} className="text-sm text-accent hover:underline">{t('edit')}</button>}
                 </summary>
                 <div className="px-3 pb-3 border-t border-line/60">
-                  <div className="text-xs font-semibold text-muted uppercase tracking-wide pt-2 pb-1">{th('historyHeading')}</div>
+                  <div className="text-xs font-semibold text-muted uppercase tracking-wide pt-2 pb-1">{th('personal.title')}</div>
+                  <PersonalBlock d={p.personal} th={th} />
+                  <div className="text-xs font-semibold text-muted uppercase tracking-wide pt-3 pb-1">{th('historyHeading')}</div>
                   {!history[p.id] ? <p className="text-sm text-muted py-1">{th('loading')}</p>
                     : history[p.id].length === 0 ? <p className="text-sm text-muted py-1">{th('noHistory')}</p>
                     : history[p.id].map((e) => <EvRow key={e.id} e={e} />)}
@@ -460,3 +549,35 @@ export const getServerSideProps = withI18n(['hr', 'headcount'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   return { props: { ...(await displayCurrency(gate.vis.primarySiteId)) } };
 });
+
+/**
+ * Read display for the optional block. It renders ONLY what has been recorded: a label with nothing
+ * beside it is worse than saying nothing, because it reads as a fact that went missing rather than
+ * a question nobody asked. When the whole block is empty it says so in one line.
+ */
+function PersonalBlock({ d, th }: { d: PersonalDetails | null | undefined; th: (k: string) => string }) {
+  const p = d ?? EMPTY_PERSONAL;
+  if (personalDetailsEmpty(p)) return <p className="text-sm text-muted py-1">{th('personal.none')}</p>;
+
+  const ec = [p.emergencyContactName, p.emergencyContactRelationship ? `(${p.emergencyContactRelationship})` : null, p.emergencyContactPhone]
+    .filter(Boolean).join(' ');
+  const rows: Array<[string, string | null]> = [
+    [th('personal.dob'), p.dateOfBirth],
+    [th('personal.phone'), p.personalPhone],
+    [th('personal.email'), p.personalEmail],
+    [th('personal.address'), p.homeAddress],
+    [th('personal.emergency'), ec || null],
+    [th('personal.gender'), p.gender ? GENDER_LABELS[p.gender] : null],
+    [th('personal.pronouns'), p.pronouns],
+  ];
+  return (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-1 text-sm">
+      {rows.filter(([, v]) => !!v).map(([label, v]) => (
+        <React.Fragment key={label}>
+          <dt className="text-muted">{label}</dt>
+          <dd className="text-ink whitespace-pre-line">{v}</dd>
+        </React.Fragment>
+      ))}
+    </dl>
+  );
+}

@@ -54,5 +54,24 @@
   "leaveReasonPlaceholder": "Leave blank if you'd rather not say",
   "pilonNote": "Paid past the last working day — capacity stops on the working day, gross pay continues to the paid day.",
   "workedTo": "worked to",
-  "paidTo": "paid to"
+  "paidTo": "paid to",
+  "personal": {
+    "title": "Personal details",
+    "allOptional": "All optional",
+    "dob": "Date of birth",
+    "phone": "Phone number",
+    "address": "Home address",
+    "email": "Personal email",
+    "emailHint": "Their own address — separate from any login they may have.",
+    "emergency": "Emergency contact",
+    "ecName": "Name",
+    "ecRelationship": "Relationship",
+    "ecPhone": "Phone",
+    "gender": "Gender",
+    "pronouns": "Pronouns",
+    "pronounsPh": "e.g. she/her",
+    "unselected": "Not stated",
+    "sensitiveNote": "Gender and pronouns are recorded only if the person tells you. Leave them blank otherwise — blank means not asked, not unknown.",
+    "none": "No personal details recorded."
+  }
 }

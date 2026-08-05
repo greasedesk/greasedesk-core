@@ -1681,6 +1681,30 @@ model CostPerson {
   // still selects it. Nothing reads it; it is all-null across every tenant and drops in a
   // follow-up migration once no running build references it.
   end_date                    DateTime?
+  // --- PERSONAL DETAILS. All OPTIONAL, none defaulted, none effective-dated ---------------------
+  // NOT EventS: EmploymentEvent exists because a PAST month's figure must not restate when a value
+  // changes (pay, hours, pattern, factor). Nothing here feeds capacity, cost or VAT, and an address
+  // change is a CORRECTION of a current fact rather than a new value that was true from a date —
+  // the same reasoning already recorded for start_date.
+  //
+  // These live on CostPerson, not User, because User is "people who log in" and CostPerson is
+  // "people you employ" — and NOT ONE CostPerson in either live tenant is linked to a User, so the
+  // equivalent User columns are unreachable from HR. personal_email is a SEPARATE column from
+  // User.email deliberately: that one is a @unique credential, this one is contact data that two
+  // people may legitimately share.
+  date_of_birth               DateTime? @db.Date
+  home_address                String?
+  personal_email              String?
+  personal_phone              String?
+  emergency_contact_name         String?
+  emergency_contact_relationship String?
+  emergency_contact_phone        String?
+  // UNSELECTED BY DEFAULT, both of them. Null means "not asked / not answered" and must never be
+  // rendered as a guess. Neither is Article 9 data on its own — the Art 9(1) list does not include
+  // gender identity — but together they can REVEAL gender reassignment and therefore health, so
+  // they are handled as if they were: optional, explained at the point of entry, never inferred.
+  gender                      String?
+  pronouns                    String?
   start_date                  DateTime? // first WORKING day (see above)
   pay_start_date              DateTime? // NULL = same as start_date
   work_end_date               DateTime? // last WORKING day — capacity stops here
