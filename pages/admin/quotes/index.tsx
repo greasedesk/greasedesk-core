@@ -109,28 +109,43 @@ export default function QuotesPage(props: Props) {
             <tbody>
               {props.rows.map((r) => (
                 <tr key={r.jobCardId} className="border-b border-line/60 hover:bg-surface-muted">
-                  <td className="py-0 px-0" colSpan={7}>
+                  {/* SIX columns inside the row link, STATUS in its own cell — the action below is a
+                      link too, and an <a> cannot legally nest inside another <a>. */}
+                  <td className="py-0 px-0" colSpan={6}>
                     {/* A quote is a job card in waiting — the row opens the card, same as Job Cards. */}
-                    <Link href={`/admin/jobcards/${r.jobCardId}`} className="grid grid-cols-[1fr_1fr_1fr_auto_1fr_1fr_1fr] items-center">
+                    <Link href={`/admin/jobcards/${r.jobCardId}`} className="grid grid-cols-[1fr_1fr_1fr_auto_1fr_1fr] items-center">
                       <span className="py-3 px-4 font-semibold text-ink">{r.registration ?? '—'}</span>
                       <span className="py-3 px-4 text-ink">{r.customerName ?? '—'}</span>
                       <span className="py-3 px-4 text-right text-ink tabular-nums">{formatMoney(r.grossPennies, { currency: props.currency, locale: props.locale })}</span>
                       <span className="py-3 px-2 text-center text-muted tabular-nums">{r.version ? `v${r.version}` : '—'}</span>
                       <span className="py-3 px-4 text-muted">{r.sentAt ? fmtDate(r.sentAt) : '—'}</span>
                       <span className="py-3 px-4 text-muted">{r.expiresAt ? fmtDate(r.expiresAt) : '—'}</span>
-                      <span className="py-3 px-4">
-                        {/* A verbal quote has no send, no clock and no customer-side record — say so
-                            plainly rather than dressing it as a sent quote with blank dates. A
-                            superseded latest = the estimate was materially edited and never re-sent,
-                            so the customer's link is dead: state the fact AND the remedy, without
-                            implying the garage did anything wrong. */}
-                        {r.verbal
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line">Quoted verbally — not sent</span>
-                          : r.supersededNoLink
-                            ? <span className="text-xs text-warn">Superseded — customer can no longer view this quote. Send a new one.</span>
-                            : <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>}
-                      </span>
                     </Link>
+                  </td>
+                  <td className="py-3 px-4 align-middle">
+                    {/* A verbal quote has no send, no clock and no customer-side record — say so
+                        plainly rather than dressing it as a sent quote with blank dates. A
+                        superseded latest = the estimate was materially edited and never re-sent,
+                        so the customer's link is dead: state the fact AND the remedy, without
+                        implying the garage did anything wrong. */}
+                    {r.verbal
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line">Quoted verbally — not sent</span>
+                      : r.supersededNoLink
+                        ? <span className="text-xs text-warn">Superseded — customer can no longer view this quote.</span>
+                        : <span className={`text-xs px-2 py-0.5 rounded-full ${TONE[r.status]}`}>{LABELS[r.status]}</span>}
+                    {/* ── THE ACTION THE TAB NAMES ──────────────────────────────────────────────
+                        It opens the card AT THE QUOTE rather than sending. Re-sending mints a NEW
+                        version from the estimate AS IT STANDS (quote-send → freezeQuoteVersion),
+                        and the estimate is exactly what changed — that edit is why the last version
+                        was superseded. A one-click send would email a price nobody has looked at
+                        since it moved, which is worse than not sending. So: review, then send with
+                        the control already on that tab. */}
+                    {r.status === 'needs_resending' && (
+                      <Link href={`/admin/jobcards/${r.jobCardId}?tab=quote`} data-testid="quote-resend"
+                        className="block mt-1 text-xs font-semibold text-accent hover:underline">
+                        Review the price and send a new quote →
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}
