@@ -13,6 +13,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
+import { getTenantDataStart, precedesData } from '@/lib/tenant-data-start';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -51,6 +52,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     siteIds = [siteId];
   }
   const now = new Date();
+  // ── DOES THIS PERIOD PREDATE THE TENANT ENTIRELY? ────────────────────────────────────────────
+  // Asked BEFORE the tiles are computed, and answered instead of them: computing a window nobody
+  // lived through yields zeros that read as findings. The client renders the tiles' existing
+  // unknown state rather than a second kind of empty.
+  const dataStart = await getTenantDataStart(user.group_id as string);
+  const beforeData = precedesData(range.to, dataStart) && precedesData(monthSpan.to, dataStart);
+  if (beforeData) {
+    return res.status(200).json({
+      tiles: {}, from: range.from.toISOString(), to: range.to.toISOString(),
+      monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
+      monthInProgress: false, daysElapsed: 0, daysInMonth: 0,
+      dataStart: dataStart ? dataStart.toISOString() : null, beforeData: true,
+    });
+  }
   const base = { groupId: user.group_id as string, siteIds, now }; // now reaches every compute (point-in-time ageing + in-progress-month window)
   const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
   // In-progress period (month, quarter OR financial year — any span containing `now`) → "N of M days,
@@ -66,5 +81,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tiles, from: range.from.toISOString(), to: range.to.toISOString(),
     monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
     monthInProgress, daysElapsed, daysInMonth,
+    dataStart: dataStart ? dataStart.toISOString() : null, beforeData: false,
   });
 }

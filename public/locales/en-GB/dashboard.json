@@ -18,11 +18,11 @@
     "lastMonthNamed": "Last month ({{month}})",
     "thisFyRange": "This financial year ({{range}})",
     "lastFyRange": "Last financial year ({{range}})",
-    "groupMonths": "Months",
     "groupQuarters": "Quarters",
     "groupFy": "Financial year",
     "groupOther": "Other",
-    "custom": "Custom range…"
+    "custom": "Custom range…",
+    "groupMonthsYear": "Months — {{year}}"
   },
   "tiles": {
     "revenue": "Revenue (paid)",
@@ -193,5 +193,10 @@
     "pilonValue": "{{days}} days · {{money}}",
     "pilonSub": "Paid for, with no output. Part of the gross pay above, not on top of it.",
     "hourlyExcluded": "Costed at nothing: {{names}}. Hourly-paid people add sellable hours but no gross pay, so margin and capacity are both flattered. Recording their pay needs hours worked, which isn't captured yet."
+  },
+  "noData": {
+    "title": "No records for this period.",
+    "startsAt": "Your records begin in {{month}}. Nothing was measured before then, so there are no figures to show — not zero ones.",
+    "nothingYet": "Nothing has been recorded in GreaseDesk yet, so there is nothing to measure for this period."
   }
 }

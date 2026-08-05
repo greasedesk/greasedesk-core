@@ -176,16 +176,38 @@ function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string):
 // ---- Period-picker labels (client clock; the SERVER resolves the actual windows — these are text only) ----
 const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
   new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
-// month−2 … month−5 as named-month options (This month = 0 and Last month = −1 are separate presets) —
-// a rolling six-month window that regenerates each month.
+// month−2 … month−11 as named-month options (This month = 0 and Last month = −1 are separate
+// presets that keep their own labels) — a rolling TWELVE-month window that regenerates each month,
+// so a full year is reachable without a custom range.
 function rollingMonths(now: Date, locale: string): Array<{ value: string; label: string }> {
   const out: Array<{ value: string; label: string }> = [];
-  for (let i = 2; i <= 5; i++) {
+  for (let i = 2; i <= 11; i++) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     out.push({ value: `m:${ym}`, label: monthNameOf(d.getUTCFullYear(), d.getUTCMonth(), locale) });
   }
   return out;
+}
+
+/**
+ * The month group as YEARS. Twelve entries in one flat list is a wall; the natural break is the
+ * calendar year the months belong to, and grouping never removes an option the way truncating
+ * would. `this_month`/`last_month` keep their existing preset values and their own wording — only
+ * where they SIT in the list changes, so nothing downstream has to learn a new selection.
+ */
+function monthGroups(now: Date, locale: string, t: (k: string, o?: any) => string): Array<{ year: number; options: Array<{ value: string; label: string }> }> {
+  const head = [
+    { value: 'this_month', label: t('period.thisMonthNamed', { month: monthNameOf(now.getUTCFullYear(), now.getUTCMonth(), locale) }), offset: 0 },
+    { value: 'last_month', label: t('period.lastMonthNamed', { month: monthNameOf(now.getUTCFullYear(), now.getUTCMonth() - 1, locale) }), offset: 1 },
+  ];
+  const rest = rollingMonths(now, locale).map((m, i) => ({ ...m, offset: i + 2 }));
+  const groups = new Map<number, Array<{ value: string; label: string }>>();
+  for (const e of [...head, ...rest]) {
+    const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - e.offset, 1)).getUTCFullYear();
+    if (!groups.has(y)) groups.set(y, []);
+    groups.get(y)!.push({ value: e.value, label: e.label });
+  }
+  return [...groups.entries()].map(([year, options]) => ({ year, options }));
 }
 // FY range label from Group.fy_start_month, e.g. "Apr 2026 – Mar 2027". offset 0 = this FY, −1 = last.
 function fyRangeLabel(now: Date, fyStartMonth: number, offset: number, locale: string): string {
@@ -239,6 +261,7 @@ export default function AdminDashboard(props: PageProps) {
   // The month window the SERVER resolved for the P&L (echoed back) — drives the loud label.
   const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
   // In-progress SINGLE month meta (server-authoritative): drives the to-date labels + net-profit reframe.
+  const [noData, setNoData] = useState<{ dataStart: string | null } | null>(null);
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
   const [loading, setLoading] = useState(true);
   // Persist ONLY the period selection (a view preference — no money path) in localStorage, keyed per
@@ -277,7 +300,11 @@ export default function AdminDashboard(props: PageProps) {
       const res = await fetch(`/api/dashboard-tiles?${cashQS}&${monthQS}${siteQS}`, { cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
-        setTiles(d.tiles);
+        // A window that closes before the tenant's first record has no tiles to show. Clearing
+        // them puts every tile into its EXISTING unknown state ("—") rather than inventing a
+        // second kind of blank — zero and never-measured must not look alike.
+        setNoData(d.beforeData ? { dataStart: d.dataStart ?? null } : null);
+        setTiles(d.beforeData ? null : d.tiles);
         setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
         setMonthMeta({ inProgress: !!d.monthInProgress, daysElapsed: d.daysElapsed ?? 0, daysInMonth: d.daysInMonth ?? 0 });
       }
@@ -333,11 +360,11 @@ export default function AdminDashboard(props: PageProps) {
           )}
           <select value={preset} onChange={(e) => setPreset(e.target.value)}
             className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
-            <optgroup label={t('period.groupMonths')}>
-              <option value="this_month">{t('period.thisMonthNamed', { month: monthNameOf(pickerNow.getUTCFullYear(), pickerNow.getUTCMonth(), props.locale) })}</option>
-              <option value="last_month">{t('period.lastMonthNamed', { month: monthNameOf(pickerNow.getUTCFullYear(), pickerNow.getUTCMonth() - 1, props.locale) })}</option>
-              {rollingMonths(pickerNow, props.locale).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </optgroup>
+            {monthGroups(pickerNow, props.locale, t).map((g) => (
+              <optgroup key={g.year} label={t('period.groupMonthsYear', { year: g.year })}>
+                {g.options.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </optgroup>
+            ))}
             <optgroup label={t('period.groupQuarters')}>
               <option value="this_quarter">{t('period.this_quarter')}</option>
               <option value="last_quarter">{t('period.last_quarter')}</option>
@@ -362,6 +389,20 @@ export default function AdminDashboard(props: PageProps) {
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
       <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} />
+
+      {/* NOTHING WAS MEASURED IN THIS PERIOD — said plainly, and said INSTEAD of figures. The
+          twelve-month picker reaches back further than most tenants have existed, and a computed
+          £0.00 for a month before the garage opened reads as a finding rather than an absence. */}
+      {noData && (
+        <div className="rounded-xl border border-line bg-surface-muted p-4 mb-6" data-testid="dash-no-data">
+          <p className="text-sm font-semibold text-ink">{t('noData.title')}</p>
+          <p className="text-sm text-muted mt-1">
+            {noData.dataStart
+              ? t('noData.startsAt', { month: monthNameOf(new Date(noData.dataStart).getUTCFullYear(), new Date(noData.dataStart).getUTCMonth(), props.locale) })
+              : t('noData.nothingYet')}
+          </p>
+        </div>
+      )}
 
       {/* ---- Headline gross-profit COMPOSITION: a list of contributing streams + the total, above the
            Capacity chart. Read STRAIGHT from existing chokepoints (pnl + capacity) — no new calculation.
