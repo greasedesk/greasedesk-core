@@ -112,3 +112,61 @@ export function monthParamsForSelection(
   const m = customTo.slice(0, 7);
   return { mfrom: m, mto: m, degraded: true }; // containing month of the range END
 }
+
+// ---------- LABELS (pure) ----------
+// Shared by every screen that offers the picker. They live beside presetRange because they describe
+// the SAME windows — a label that drifts from the range it names is the bug this file exists to
+// prevent.
+
+export const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
+  new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
+
+/** month−2 … month−11 as named-month options; `this_month`/`last_month` are separate presets. */
+export function rollingMonths(now: Date, locale: string): Array<{ value: string; label: string }> {
+  const out: Array<{ value: string; label: string }> = [];
+  for (let i = 2; i <= 11; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    out.push({ value: `m:${key}`, label: monthNameOf(d.getUTCFullYear(), d.getUTCMonth(), locale) });
+  }
+  return out;
+}
+
+/** The month group split by calendar year — twelve in one flat list is a wall, and grouping never
+ *  drops an option the way truncating would. */
+export function monthGroups(
+  now: Date, locale: string, label: { thisMonth: (m: string) => string; lastMonth: (m: string) => string },
+): Array<{ year: number; options: Array<{ value: string; label: string }> }> {
+  const head = [
+    { value: 'this_month', label: label.thisMonth(monthNameOf(now.getUTCFullYear(), now.getUTCMonth(), locale)), offset: 0 },
+    { value: 'last_month', label: label.lastMonth(monthNameOf(now.getUTCFullYear(), now.getUTCMonth() - 1, locale)), offset: 1 },
+  ];
+  const rest = rollingMonths(now, locale).map((m, i) => ({ ...m, offset: i + 2 }));
+  const groups = new Map<number, Array<{ value: string; label: string }>>();
+  for (const e of [...head, ...rest]) {
+    const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - e.offset, 1)).getUTCFullYear();
+    if (!groups.has(y)) groups.set(y, []);
+    groups.get(y)!.push({ value: e.value, label: e.label });
+  }
+  return [...groups.entries()].map(([year, options]) => ({ year, options }));
+}
+
+/** FY range label from Group.fy_start_month, e.g. "Apr 2026 – Mar 2027". offset 0 = this FY. */
+export function fyRangeLabel(now: Date, fyStartMonth: number, offset: number, locale: string): string {
+  const fy0 = Math.min(12, Math.max(1, Math.trunc(fyStartMonth) || 1)) - 1;
+  const m0 = now.getUTCMonth(), y = now.getUTCFullYear();
+  const startYear = (m0 >= fy0 ? y : y - 1) + offset;
+  const from = new Date(Date.UTC(startYear, fy0, 1));
+  const toIncl = new Date(Date.UTC(startYear + 1, fy0, 0));
+  return `${monthNameOf(from.getUTCFullYear(), from.getUTCMonth(), locale, 'short')} – ${monthNameOf(toIncl.getUTCFullYear(), toIncl.getUTCMonth(), locale, 'short')}`;
+}
+
+/** A named month `m:YYYY-MM` → the cash-range querystring. The ONE place that expansion happens. */
+export function namedMonthRangeQS(preset: string): string | null {
+  if (!preset.startsWith('m:')) return null;
+  const key = preset.slice(2);
+  const [y, mo] = key.split('-').map(Number);
+  if (!y || !mo) return null;
+  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  return `from=${key}-01&to=${key}-${String(last).padStart(2, '0')}`;
+}

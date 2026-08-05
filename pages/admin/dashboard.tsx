@@ -23,7 +23,8 @@ import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { monthParamsForSelection } from '@/lib/dashboard-periods';
+import { monthParamsForSelection, monthNameOf, rollingMonths } from '@/lib/dashboard-periods';
+import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
 
 type PageProps = {
@@ -174,51 +175,6 @@ function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string):
 }
 
 // ---- Period-picker labels (client clock; the SERVER resolves the actual windows — these are text only) ----
-const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
-  new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
-// month−2 … month−11 as named-month options (This month = 0 and Last month = −1 are separate
-// presets that keep their own labels) — a rolling TWELVE-month window that regenerates each month,
-// so a full year is reachable without a custom range.
-function rollingMonths(now: Date, locale: string): Array<{ value: string; label: string }> {
-  const out: Array<{ value: string; label: string }> = [];
-  for (let i = 2; i <= 11; i++) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-    out.push({ value: `m:${ym}`, label: monthNameOf(d.getUTCFullYear(), d.getUTCMonth(), locale) });
-  }
-  return out;
-}
-
-/**
- * The month group as YEARS. Twelve entries in one flat list is a wall; the natural break is the
- * calendar year the months belong to, and grouping never removes an option the way truncating
- * would. `this_month`/`last_month` keep their existing preset values and their own wording — only
- * where they SIT in the list changes, so nothing downstream has to learn a new selection.
- */
-function monthGroups(now: Date, locale: string, t: (k: string, o?: any) => string): Array<{ year: number; options: Array<{ value: string; label: string }> }> {
-  const head = [
-    { value: 'this_month', label: t('period.thisMonthNamed', { month: monthNameOf(now.getUTCFullYear(), now.getUTCMonth(), locale) }), offset: 0 },
-    { value: 'last_month', label: t('period.lastMonthNamed', { month: monthNameOf(now.getUTCFullYear(), now.getUTCMonth() - 1, locale) }), offset: 1 },
-  ];
-  const rest = rollingMonths(now, locale).map((m, i) => ({ ...m, offset: i + 2 }));
-  const groups = new Map<number, Array<{ value: string; label: string }>>();
-  for (const e of [...head, ...rest]) {
-    const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - e.offset, 1)).getUTCFullYear();
-    if (!groups.has(y)) groups.set(y, []);
-    groups.get(y)!.push({ value: e.value, label: e.label });
-  }
-  return [...groups.entries()].map(([year, options]) => ({ year, options }));
-}
-// FY range label from Group.fy_start_month, e.g. "Apr 2026 – Mar 2027". offset 0 = this FY, −1 = last.
-function fyRangeLabel(now: Date, fyStartMonth: number, offset: number, locale: string): string {
-  const fy0 = Math.min(12, Math.max(1, Math.trunc(fyStartMonth) || 1)) - 1;
-  const m0 = now.getUTCMonth(), y = now.getUTCFullYear();
-  const startYear = (m0 >= fy0 ? y : y - 1) + offset;
-  const from = new Date(Date.UTC(startYear, fy0, 1));
-  const toIncl = new Date(Date.UTC(startYear + 1, fy0, 0)); // last day of the FY
-  return `${monthNameOf(from.getUTCFullYear(), from.getUTCMonth(), locale, 'short')} – ${monthNameOf(toIncl.getUTCFullYear(), toIncl.getUTCMonth(), locale, 'short')}`;
-}
-
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
@@ -358,32 +314,13 @@ export default function AdminDashboard(props: PageProps) {
               {props.sites.map((s2) => <option key={s2.id} value={s2.id}>{s2.name}</option>)}
             </select>
           )}
-          <select value={preset} onChange={(e) => setPreset(e.target.value)}
-            className="p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent">
-            {monthGroups(pickerNow, props.locale, t).map((g) => (
-              <optgroup key={g.year} label={t('period.groupMonthsYear', { year: g.year })}>
-                {g.options.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </optgroup>
-            ))}
-            <optgroup label={t('period.groupQuarters')}>
-              <option value="this_quarter">{t('period.this_quarter')}</option>
-              <option value="last_quarter">{t('period.last_quarter')}</option>
-            </optgroup>
-            <optgroup label={t('period.groupFy')}>
-              <option value="this_fy">{t('period.thisFyRange', { range: fyRangeLabel(pickerNow, props.fyStartMonth, 0, props.locale) })}</option>
-              <option value="last_fy">{t('period.lastFyRange', { range: fyRangeLabel(pickerNow, props.fyStartMonth, -1, props.locale) })}</option>
-            </optgroup>
-            <optgroup label={t('period.groupOther')}>
-              <option value="custom">{t('period.custom')}</option>
-            </optgroup>
-          </select>
-          {preset === 'custom' && (
-            <>
-              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
-              <span className="text-muted text-sm">→</span>
-              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
-            </>
-          )}
+          <PeriodPicker
+            value={{ preset, customFrom, customTo }}
+            onChange={(v) => { setPreset(v.preset); setCustomFrom(v.customFrom); setCustomTo(v.customTo); }}
+            fyStartMonth={props.fyStartMonth}
+            locale={props.locale}
+            storageKey={null} /* the dashboard persists this itself — see the restore effect below, which also gates the first fetch */
+          />
         </div>
       </div>
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
@@ -1101,7 +1038,7 @@ export default function AdminDashboard(props: PageProps) {
   );
 }
 
-export const getServerSideProps = withI18n(['dashboard'])(async (ctx) => {
+export const getServerSideProps = withI18n(['dashboard', 'period'])(async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) {
