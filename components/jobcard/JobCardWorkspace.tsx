@@ -41,6 +41,7 @@ type Props = {
   canEditPricing: boolean;
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
   quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
+  quoteHasAcceptedVersion: boolean; // a version was ACCEPTED → the next send is a revision, not a quote
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null };
@@ -646,6 +647,8 @@ export default function JobCardWorkspace(p: Props) {
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
+            quoteHasAcceptedVersion={p.quoteHasAcceptedVersion}
+            quoteFrozen={p.quoteFrozen}
           />
           {/* THE UI'S OWN STATEMENT, from its own flag — not the 409 body echoed back. Before this
               the only "frozen" wording in the app lived in the API refusal, so the page could not
@@ -727,6 +730,8 @@ function QuoteActions(props: {
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
   quoteSupersededNoLink: boolean;
+  quoteHasAcceptedVersion: boolean;
+  quoteFrozen: boolean;
 }) {
   const { status, canManage, resources, booking, siteHours, siteId, locale, jobCardId, busy, setBusy, setErr, onDone, navigate, t, commitEstimate } = props;
   const { openHour, closeHour, openDays, breaks } = siteHours;
@@ -898,11 +903,28 @@ function QuoteActions(props: {
       {/* DEAD-QUOTE FLAG: the estimate was materially edited after sending and never re-sent, so the
           customer's link no longer opens. State the fact and the remedy; it clears when a fresh quote
           is sent. Not shown once the card has moved on to accepted/onwards. */}
-      {!isAcceptedOnwards && props.quoteSupersededNoLink && (
-        <p className="mt-4 text-sm text-warn">Superseded — customer can no longer view this quote. Send a new one.</p>
+      {/* SHOWN WHEREVER THE ESTIMATE IS STILL EDITABLE. It used to be hidden once the card reached
+          `accepted`, which is precisely when it matters most: parts get added mid-job, the edit
+          supersedes the quote and revokes the customer's link, and the screen said nothing at all —
+          no notice and no remedy. `quoteFrozen` is the honest boundary: once the invoice exists the
+          lines are locked and there is nothing left to re-quote. */}
+      {!props.quoteFrozen && !props.cancelled && props.quoteSupersededNoLink && (
+        <p className="mt-4 text-sm text-warn">
+          {props.quoteHasAcceptedVersion
+            ? 'The price changed after this was agreed — the customer’s link no longer opens. Send them the new price.'
+            : 'Superseded — customer can no longer view this quote. Send a new one.'}
+        </p>
       )}
 
-      {!isAcceptedOnwards && <SendQuote jobCardId={jobCardId} disabled={busy !== null} beforeSend={commitEstimate} />}
+      {/* NOT gated on card status. A quote can be re-sent for as long as the estimate can change —
+          up to the invoice, which freezes the lines. A CANCELLED card is the other end: the job is
+          dead, so offering to send a price for it is worse than an accepted card refusing to.
+          (The whole panel is already hidden when cancelled; stated here so it does not depend on
+          an unrelated guard staying that way.) */}
+      {!props.quoteFrozen && !props.cancelled && (
+        <SendQuote jobCardId={jobCardId} disabled={busy !== null} beforeSend={commitEstimate}
+          revision={props.quoteHasAcceptedVersion} />
+      )}
 
       {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
           captures WHO on staff marked it and that it was verbal, and deliberately records NO ip or
@@ -944,7 +966,7 @@ function AcceptVerbal({ jobCardId, disabled }: { jobCardId: string; disabled: bo
   );
 }
 
-function SendQuote({ jobCardId, disabled, beforeSend }: { jobCardId: string; disabled: boolean; beforeSend?: () => Promise<unknown> }) {
+function SendQuote({ jobCardId, disabled, beforeSend, revision }: { jobCardId: string; disabled: boolean; beforeSend?: () => Promise<unknown>; revision?: boolean }) {
   const [sending, setSending] = React.useState(false);
   const [result, setResult] = React.useState<{ url: string; emailed: boolean; sentTo: string | null; version: number; expiresAt: string } | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -972,14 +994,17 @@ function SendQuote({ jobCardId, disabled, beforeSend }: { jobCardId: string; dis
     <div className="mt-4 pt-4 border-t border-line">
       <button type="button" disabled={disabled || sending} onClick={send}
         className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
-        {sending ? 'Sending…' : 'Send quote to customer'}
+        {/* THE WORDING FOLLOWS THE STATE. Once a version has been accepted the customer has agreed
+            to a different figure, and the point of this send is that it CHANGED — "your quote is
+            ready" would bury exactly the fact they need. */}
+        {sending ? 'Sending…' : revision ? 'Send the updated price' : 'Send quote to customer'}
       </button>
       {err && <p className="mt-2 text-sm text-danger">{err}</p>}
       {result && (
         <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">
           <p className="text-sm text-ink">
             {result.emailed
-              ? <>Quote v{result.version} emailed to <span className="font-medium">{result.sentTo}</span>.</>
+              ? <>{revision ? 'Updated price' : 'Quote'} v{result.version} emailed to <span className="font-medium">{result.sentTo}</span>.</>
               : <>Quote v{result.version} is ready. {result.sentTo
                   ? <span className="text-warn">The email didn’t send — pass the link on instead.</span>
                   : <>No email address on file — pass this link on instead.</>}</>}

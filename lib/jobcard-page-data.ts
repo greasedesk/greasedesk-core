@@ -90,6 +90,15 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // No live customer link: the latest version is superseded (clears the moment a fresh quote is sent,
   // as the new `sent` version becomes the latest).
   const quoteSupersededNoLink = latestQuote?.status === 'superseded';
+  // ACCEPTANCE BELONGS TO THE VERSION, not the card (ruling 2026-08-05). A card can be `accepted`
+  // with no accepted version (marked accepted by phone against a verbal quote), and a version can be
+  // accepted on a card that has since moved on. So the question "has this customer already agreed to
+  // a price?" is answered by the versions, and it decides whether the next send is a QUOTE or a
+  // REVISION — which changes both the button and the message the customer gets.
+  const quoteHasAcceptedVersion = await prisma.quoteVersion
+    .count({ where: { job_card_id: cardId, status: 'accepted' as any } })
+    .then((n: number) => n > 0)
+    .catch(() => false);
 
   // Wave 3 — row-keyed queries, fired together. The owner chain keeps its internal order:
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
@@ -243,6 +252,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     jobCardId: row.id,
     canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
     quoteSupersededNoLink,
+    quoteHasAcceptedVersion,
     isAdmin: vis.isAdmin,
     currency: site?.currency_code ?? 'GBP',
     locale: site?.locale ?? 'en-GB',

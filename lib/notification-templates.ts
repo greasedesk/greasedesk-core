@@ -35,6 +35,29 @@ const button = (href: string, label: string): string =>
 
 export const NOTIFICATION_TEMPLATES = {
   // ── Customer-facing (magic-link bearing) ────────────────────────────────────────────────────────
+  /**
+   * A REVISION, not a fresh quote. Sent when the customer has ALREADY ACCEPTED a version and the
+   * price has since changed — parts added mid-job is the common case. "Your quote is ready" would
+   * bury the one fact they need, so the wording leads with the change and names the new total.
+   * The SMS is deliberately short: it must stay inside ONE GSM-7 segment (160 septets) with a
+   * 41-character link and a real garage name — see lib/sms-text and the segment budget.
+   */
+  quote_revised: {
+    label: 'Updated price after a change',
+    email: (d) => ({
+      subject: `Updated price from ${d.garageName ?? 'your garage'}${d.registration ? ` — ${d.registration}` : ''}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">The price has changed</h2>
+        <p>${esc(d.garageName)} has updated the price${d.registration ? ` for <strong>${esc(d.registration)}</strong>` : ''}${d.total ? ` to <strong>${esc(d.total)}</strong>` : ''} since you approved the earlier quote.</p>
+        <p>Please have a look and let us know you're happy before we carry on.</p>
+        ${button(String(d.link ?? ''), 'View the updated price')}
+        <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it, so please don't forward it.</p>`),
+    }),
+    sms: (d) => ({
+      text: `${d.garageName ?? 'Your garage'}: the price for ${d.registration ?? 'your vehicle'} has changed${d.total ? ` to ${d.total}` : ''}. Please approve: ${d.link}`,
+    }),
+  },
+
   quote_ready: {
     label: 'Quote ready for approval',
     email: (d) => ({

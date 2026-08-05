@@ -61,6 +61,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!card._count.items) return res.status(400).json({ message: 'Add at least one line to the estimate before sending it.' });
 
+  // IS THIS A REVISION? Answered by the VERSIONS, not the card status: acceptance belongs to the
+  // version (ruling 2026-08-05). A customer who has already agreed to a figure is being told the
+  // price CHANGED, which is a different message from a first quote — so this is read BEFORE the
+  // freeze, while the accepted version is still the newest thing on record.
+  const isRevision = (await prisma.quoteVersion.count({
+    where: { job_card_id: card.id, status: 'accepted' },
+  })) > 0;
+
   // A NEW send supersedes anything already out AND kills its link, before the new one exists — an
   // old set of figures must never be acceptable once a newer offer has been made.
   await revokeMagicLinksForCard(card.id);
@@ -97,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (recipient) {
     const sent = await sendNotification({
       recipient,
-      template: 'quote_ready',
+      template: isRevision ? 'quote_revised' : 'quote_ready',
       channel: 'email',
       groupId: card.group_id,
       subject: { type: 'job_card', id: card.id },
