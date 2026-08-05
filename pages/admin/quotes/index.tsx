@@ -36,6 +36,8 @@ const LABELS: Record<QuoteFilter, string> = {
   awaiting: 'Awaiting response',
   accepted: 'Accepted',
   declined: 'Declined',
+  // The garage never asked, as distinct from the customer never answering.
+  needs_resending: 'Needs re-sending',
   expired: 'Expired',
 };
 
@@ -43,6 +45,8 @@ const TONE: Record<QuoteFilter, string> = {
   awaiting: 'bg-accent-soft text-accent',
   accepted: 'bg-ok-soft text-ok',
   declined: 'bg-surface-muted text-muted',
+  // Amber like expired — both are "no live offer" — but its own tab, because the ACTION differs.
+  needs_resending: 'bg-warn-soft text-warn',
   expired: 'bg-warn-soft text-warn',
 };
 

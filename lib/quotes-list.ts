@@ -18,7 +18,7 @@
 import { prisma } from '@/lib/db';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 
-export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'expired'] as const;
+export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired'] as const;
 export type QuoteFilter = typeof QUOTE_FILTERS[number];
 export const isQuoteFilter = (v: string): v is QuoteFilter => (QUOTE_FILTERS as readonly string[]).includes(v);
 
@@ -34,9 +34,15 @@ export type DerivedQuoteStatus = QuoteFilter;
  *  accepted / declined — the customer answered; terminal, and both stay visible under their filter
  *    (a declined quote is a follow-up opportunity, not a dead record).
  *  awaiting — still out, still inside its window. The chase list.
- *  expired — out of time with no answer. ALSO where a `superseded` latest lands: the garage edited
- *    the estimate and never re-sent, so there is no live offer — it needs re-sending exactly like
- *    one that timed out.
+ *  expired — out of time with NO ANSWER. The customer had their chance and didn't take it.
+ *  needs_resending — the LATEST version is `superseded`: the garage materially edited the estimate
+ *    after sending and never re-sent, so there is no live link and the customer cannot see a price.
+ *    This used to collapse into `expired`, which says the OPPOSITE of what happened — expired is
+ *    the customer not answering; this is the garage never asking. One is a follow-up, the other is
+ *    an outstanding task on our side, and they belong in different queues.
+ *    NOTE the "no successor" half is free: listQuotes keeps only each card's HIGHEST version, so a
+ *    superseded version that HAS been replaced is already invisible here (its successor is latest).
+ *    Reaching this branch therefore means there is no successor.
  */
 export function deriveQuoteStatus(
   v: { status: string; sent_at: Date },
@@ -44,12 +50,28 @@ export function deriveQuoteStatus(
 ): DerivedQuoteStatus {
   if (v.status === 'accepted') return 'accepted';
   if (v.status === 'declined') return 'declined';
-  if (v.status === 'superseded') return 'expired';
+  if (v.status === 'superseded') return 'needs_resending';
   return quoteExpiry(v.sent_at).getTime() <= now.getTime() ? 'expired' : 'awaiting';
 }
 
-/** Card statuses that mean the work has moved ON from being a quote. */
-export const DELIVERED_STATUSES = ['invoiced', 'paid', 'done'] as const;
+/**
+ * ── CARD STATES IN WHICH A QUOTE CAN NEVER BE ANSWERED ──────────────────────────────────────────
+ * Was `DELIVERED_STATUSES` and lived inside the `accepted` filter branch, so it applied to the ROWS
+ * and not to the COUNTS — the Accepted chip said 5 while the list showed 3. It is now applied once,
+ * in the derivation, before any filtering, so a count and a list cannot express it differently.
+ *
+ * `invoiced`/`paid`/`done` — delivered work; it lives in Job Cards and Invoices now.
+ * `cancelled` — the job will never happen, so the quote will never be answered. It was excluded
+ *   NOWHERE before, so a cancelled card's quote sat in Accepted permanently, unactionable and
+ *   accumulating.
+ * `declined` is DELIBERATELY ABSENT (ruling 2026-08-05): this file already holds that a declined
+ *   quote is a follow-up opportunity rather than a dead record, and a declined CARD is the same
+ *   fact one level up. It stays listed under Declined.
+ *
+ * The card already records all of this. Reading it here — rather than mirroring it into a quote
+ * status — is what stops the two drifting apart.
+ */
+export const QUOTE_CLOSED_CARD_STATUSES = ['invoiced', 'paid', 'done', 'cancelled'] as const;
 
 export type QuoteRow = {
   jobCardId: string;
@@ -158,13 +180,10 @@ export async function listQuotes(args: {
     });
   }
 
-  let filtered = args.filter ? rows.filter((r) => r.status === args.filter) : rows;
-  // ACCEPTED IS BOUNDED BY STATE, NOT DATE: once a card is invoiced/paid/done it is delivered work
-  // and lives in Job Cards + Invoices. Accepted then settles at "accepted but not yet delivered" —
-  // a working list rather than an archive, with no arbitrary cutoff to explain.
-  if (args.filter === 'accepted') {
-    filtered = filtered.filter((r) => !(DELIVERED_STATUSES as readonly string[]).includes(r.cardStatus));
-  }
+  // BOUNDED BY CARD STATE, BEFORE ANY FILTERING — so the counts and the rows read one rule.
+  // Applying this inside the `accepted` branch is what let the chip and the list disagree.
+  const open = rows.filter((r) => !(QUOTE_CLOSED_CARD_STATUSES as readonly string[]).includes(r.cardStatus));
+  let filtered = args.filter ? open.filter((r) => r.status === args.filter) : open;
   filtered.sort((a, b) =>
     args.filter === 'awaiting'
       // Soonest to lapse first; verbal quotes have no clock, so they sort after the timed ones.
@@ -174,7 +193,14 @@ export async function listQuotes(args: {
   return filtered;
 }
 
-/** Counts for the filter chips — computed from the same derivation, so they always agree. */
+/**
+ * Counts for the filter chips. This USED to claim they "always agree" with the rows — a comment
+ * asserting a property nothing verified, and it was false: the delivered-work exclusion ran only
+ * when a filter was passed, and this calls with `filter: null`. They agree now because the
+ * exclusion happens in listQuotes BEFORE filtering, so both callers see the same set by
+ * construction — not because a comment says so. The gate asserts chip === rendered rows on EVERY
+ * tab, which is the only thing that actually holds the property.
+ */
 export async function quoteFilterCounts(args: { groupId: string; siteIds: string[]; now?: Date }) {
   const all = await listQuotes({ ...args, filter: null });
   return QUOTE_FILTERS.reduce((acc, f) => {
