@@ -27,6 +27,7 @@ import type { PrismaClient } from '@prisma/client';
 import { parseInboundAddress, pickOurAddresses } from '@/lib/inbound-address';
 import { touchThread } from '@/lib/message-threads';
 import { sendNotification } from '@/lib/notify';
+import { resolveOpsEmail, OPS_EMAIL_SELECT } from '@/lib/ops-email';
 
 export type InboundPayload = {
   type?: string;
@@ -197,8 +198,10 @@ export async function processInbound(db: PrismaClient, payload: InboundPayload):
  */
 async function forwardToTenant(db: PrismaClient, groupId: string | null, payload: InboundPayload, text: string | null): Promise<boolean> {
   if (!groupId) return false;
-  const g = await db.group.findUnique({ where: { id: groupId }, select: { group_name: true, trading_name: true, billing_email: true, invoice_reply_to: true } });
-  const to = (g?.invoice_reply_to || g?.billing_email || '').trim();
+  const g = await db.group.findUnique({ where: { id: groupId }, select: { group_name: true, trading_name: true, ...OPS_EMAIL_SELECT } });
+  // The same chain this used to spell out by hand, now the ONE resolver — so a tenant that sets an
+  // ops address gets its forwarded mail there too, and the two paths cannot drift.
+  const to = resolveOpsEmail(g).address;
   if (!to) return false;
   const d = payload.data ?? {};
   const r = await sendNotification({

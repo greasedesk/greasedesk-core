@@ -20,7 +20,7 @@ import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { presignGet } from '@/lib/r2';
 
 type PageProps = {
-  replyTo: string; senderName: string; bcc: string; footerText: string;
+  replyTo: string; senderName: string; bcc: string; footerText: string; opsEmail: string;
   emailFooter: boolean; logoUrl: string | null;
   invoicePrefix: string; invoicePadWidth: string; invoiceFyDigits: string; fyStartMonth: string;
   warrantyPrefix: string; nextNumber: string; canSeed: boolean; warrantyLocked: boolean; paidWindowHours: string;
@@ -98,6 +98,7 @@ function PaymentMethodsSection({ t }: { t: (k: string, o?: any) => string }) {
 export default function InvoicingSettings(props: PageProps) {
   const { t } = useTranslation('company');
   const [replyTo, setReplyTo] = useState(props.replyTo);
+  const [opsEmail, setOpsEmail] = useState(props.opsEmail);
   const [senderName, setSenderName] = useState(props.senderName);
   const [bcc, setBcc] = useState(props.bcc);
   const [footerText, setFooterText] = useState(props.footerText);
@@ -129,6 +130,7 @@ export default function InvoicingSettings(props: PageProps) {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           invoice_reply_to: replyTo, invoice_sender_name: senderName, invoice_bcc: bcc, invoice_footer_text: footerText,
+          ops_email: opsEmail,
           invoice_email_footer: footer,
           ...(props.canSeed ? {
             invoice_prefix: invPrefix, invoice_pad_width: Number(invPad || 0),
@@ -186,6 +188,15 @@ export default function InvoicingSettings(props: PageProps) {
               <span className={labelClass}>{t('invoicing.replyTo')}</span>
               <input type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder={props.billingEmail} className={inputClass} />
               <span className="text-xs text-muted mt-0.5 block">{t('invoicing.replyToHint')}</span>
+            </label>
+            {/* THREE ADDRESSES, THREE JOBS — and the hints have to say which is which, because the
+                only reason this field exists is that operational mail was going to the signup
+                address while the garage's real one sat in Reply-to, unused. */}
+            <label className="block sm:col-span-2">
+              <span className={labelClass}>{t('invoicing.opsEmail')}</span>
+              <input type="email" value={opsEmail} onChange={(e) => setOpsEmail(e.target.value)}
+                placeholder={props.replyTo || props.billingEmail} className={inputClass} data-testid="ops-email" />
+              <span className="text-xs text-muted mt-0.5 block">{t('invoicing.opsEmailHint')}</span>
             </label>
             <label className="block sm:col-span-2">
               <span className={labelClass}>{t('invoicing.bcc')}</span>
@@ -292,7 +303,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
     where: { id: gate.vis.groupId as string },
     select: {
       group_name: true, billing_email: true,
-      invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, invoice_footer_text: true, invoice_email_footer: true, logo_r2_key: true,
+      invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, invoice_footer_text: true, invoice_email_footer: true, logo_r2_key: true, ops_email: true,
       invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, paid_confirm_window_hours: true, country_code: true, ref: true,
       invoice_sequence: { select: { last_value: true } },
     },
@@ -304,6 +315,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       groupName: g?.group_name ?? '',
       billingEmail: g?.billing_email ?? '',
       replyTo: g?.invoice_reply_to ?? '',
+      opsEmail: g?.ops_email ?? '',
       senderName: g?.invoice_sender_name ?? '',
       bcc: g?.invoice_bcc ?? '',
       footerText: g?.invoice_footer_text ?? '',

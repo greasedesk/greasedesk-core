@@ -129,7 +129,6 @@ export async function computeQuotesMetrics(args: {
   for (const c of cards) {
     const vs = byCard.get(c.id) ?? [];
     const acceptedV = [...vs].reverse().find((v) => v.status === 'accepted') ?? null;
-    const declinedV = [...vs].reverse().find((v) => v.status === 'declined') ?? null;
 
     if ((ACCEPTED_ONWARD as readonly string[]).includes(c.status)) {
       const at = resolveAcceptedAt(c, acceptedV?.responded_at ?? null, auditAt.get(c.id) ?? null);
@@ -144,9 +143,24 @@ export async function computeQuotesMetrics(args: {
       }
     }
 
-    if (c.status === 'declined' && inWindow(declinedV?.responded_at ?? null)) {
-      m.declinedPennies += declinedV!.gross_pennies; m.declinedCount += 1;
-    }
+  }
+
+  // ── DECLINED — FROM THE VERSION, NEVER THE CARD ───────────────────────────────────────────────
+  // This used to sit in the card loop above, gated on `c.status === 'declined'`, and reported
+  // £0.00 while the Declined tab showed a row. Declining DELIBERATELY leaves the card where it is
+  // ("the garage decides what to do next" — quote-respond), so a declined quote's card is usually
+  // still `quoted` and never entered that query at all. Acceptance moves the card, so the same
+  // shape worked there and hid the difference. Decline is a fact about the VERSION and is read
+  // from the version, exactly as deriveQuoteStatus does for the tab.
+  //
+  // Counted per DECLINED VERSION, not per card: if a customer declined v1 in August and the garage
+  // re-quoted, that decline still happened in August. Filing it under the card's latest version
+  // would make a historic figure move when a new quote is sent — the failure this module exists to
+  // avoid. Same grain as Expired, which is also per version.
+  for (const v of versions) {
+    if (v.status !== 'declined') continue;
+    if (!inWindow(v.responded_at)) continue;
+    m.declinedPennies += v.gross_pennies; m.declinedCount += 1;
   }
 
   // ── EXPIRED — derived, never stored. Versions still `sent` whose window closed in the period. ──

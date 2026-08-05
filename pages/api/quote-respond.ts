@@ -16,6 +16,7 @@ import { prisma } from '@/lib/db';
 import { resolveMagicLink, revokeMagicLinksForCard } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { sendNotification } from '@/lib/notify';
+import { resolveOpsEmail, OPS_EMAIL_SELECT } from '@/lib/ops-email';
 import { formatMoney } from '@/lib/format-money';
 import { writeAudit } from '@/lib/audit';
 import { acceptQuote } from '@/lib/quote-acceptance';
@@ -61,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       customer: { select: { name: true } },
       vehicle: { select: { registration: true } },
       site: { select: { currency_code: true, locale: true } },
-      group: { select: { group_name: true, trading_name: true, billing_email: true } },
+      group: { select: { group_name: true, trading_name: true, ...OPS_EMAIL_SELECT } },
     },
   });
   if (!card) return res.status(404).json({ message: 'This quote is no longer available.' });
@@ -100,8 +101,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const garageName = card.group.trading_name || card.group.group_name || 'your garage';
   const total = formatMoney(version.gross_pennies, { currency: card.site?.currency_code ?? 'GBP', locale: card.site?.locale ?? 'en-GB' });
-  await sendNotification({
-    recipient: card.group.billing_email,
+  // THE GARAGE'S OWN ADDRESS, not the billing identity. This used to read billing_email directly —
+  // the address captured from whoever filled in the signup form — so a real tenant's acceptance
+  // notifications went to a personal inbox while its configured address sat unused.
+  const ops = resolveOpsEmail(card.group);
+  if (ops.address) await sendNotification({
+    recipient: ops.address,
     template: accepted ? 'quote_accepted' : 'quote_declined',
     channel: 'email',
     groupId: card.group_id,

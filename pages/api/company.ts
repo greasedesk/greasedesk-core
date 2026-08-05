@@ -36,13 +36,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
-    invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp,
+    invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp, ops_email,
   } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
-    invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string;
+    invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string; ops_email?: string;
     phone?: string; whatsapp?: string;
   };
 
@@ -100,6 +100,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const v = String(invoice_reply_to).trim();
     if (v && !emailish(v)) return res.status(400).json({ message: 'The Reply-To address doesn’t look like an email address.' });
     data.invoice_reply_to = v || null;
+  }
+  // Blank CLEARS it back to the fallback chain (lib/ops-email) rather than storing an empty string
+  // — "not set" and "set to nothing" must not be different states.
+  if (ops_email !== undefined) {
+    const v = String(ops_email).trim();
+    if (v && !emailish(v)) return res.status(400).json({ message: 'The notifications address doesn’t look like an email address.' });
+    data.ops_email = v || null;
   }
   if (invoice_bcc !== undefined) {
     const v = String(invoice_bcc).trim();

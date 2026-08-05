@@ -57,7 +57,7 @@
     "senderName": "Sender display name",
     "senderNameHint": "Shown as the sender of invoice emails. The sending address stays GreaseDesk-owned for deliverability.",
     "replyTo": "Reply-To email",
-    "replyToHint": "Customer replies go here — your business address, not the login email.",
+    "replyToHint": "What your CUSTOMERS see and reply to on quotes and invoices. Leave blank to use your account email.",
     "bcc": "Copy (BCC) address",
     "bccHint": "Every invoice email is silently copied here so you keep a record.",
     "footerText": "Payment terms / invoice footer",
@@ -80,6 +80,8 @@
     "pmRestore": "Restore",
     "pmNamePh": "e.g. Warranty company",
     "pmAdd": "Add method",
-    "pmError": "Could not save the payment method."
+    "pmError": "Could not save the payment method.",
+    "opsEmail": "Notifications to your garage",
+    "opsEmailHint": "Where we email YOU when something happens — a customer accepts or declines a quote, or a reply arrives. Never shown to customers. Leave blank to use the Reply-to address below, or failing that your account email."
   }
 }

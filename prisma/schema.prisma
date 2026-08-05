@@ -208,6 +208,13 @@ model Group {
   // cron confirms and sends the receipt. Flat window; working-day-aware is a banked refinement.
   paid_confirm_window_hours Int      @default(24)
   // --- Invoicing tab settings (ADMIN; Settings → Invoicing) ---
+  // WHERE GARAGE-FACING OPERATIONAL NOTIFICATIONS GO — "a customer accepted a quote", "an email
+  // arrived". NOT billing (billing_email is an IDENTITY key: onboarding upserts by it and
+  // update-rates recovers group_id from it, so it must not be repurposed). NOT the customer-facing
+  // reply address (invoice_reply_to is what a customer sees and replies to). Three addresses,
+  // three jobs. NULL = fall back through lib/ops-email to invoice_reply_to then billing_email, so
+  // an existing tenant keeps exactly today's behaviour until someone sets this deliberately.
+  ops_email                 String?
   invoice_reply_to          String? // business Reply-To on invoice emails (fallback: billing_email)
   invoice_sender_name       String? // display name on the GreaseDesk-owned From (fallback: group_name)
   invoice_footer_text       String? // payment terms / footer block — multi-line, rendered on the document
