@@ -39,6 +39,8 @@ const LABELS: Record<QuoteFilter, string> = {
   // The garage never asked, as distinct from the customer never answering.
   needs_resending: 'Needs re-sending',
   expired: 'Expired',
+  // Agreed AND in the diary. Last, because it is the only tab needing no action.
+  accepted_booked: 'Accepted & booked',
 };
 
 const TONE: Record<QuoteFilter, string> = {
@@ -48,6 +50,7 @@ const TONE: Record<QuoteFilter, string> = {
   // Amber like expired — both are "no live offer" — but its own tab, because the ACTION differs.
   needs_resending: 'bg-warn-soft text-warn',
   expired: 'bg-warn-soft text-warn',
+  accepted_booked: 'bg-ok-soft text-ok',
 };
 
 export default function QuotesPage(props: Props) {
@@ -139,7 +142,10 @@ export default function QuotesPage(props: Props) {
       <p className="text-xs text-muted mt-4">
         Expiry is worked out from the send date — a quote past its window shows as Expired whether or not anything has run.
         Quotes given verbally have no send date and never lapse; they stay here until answered.
-        Accepted shows work that hasn’t been delivered yet — once a job is invoiced it moves to Job Cards.
+        Accepted is the to-do list: the customer said yes and nobody has put it in the diary yet.
+        Accepted &amp; booked is the same work once it has a lift and a date. Both leave when the job is
+        invoiced. Needs re-sending means the price changed after the quote went out and a new one was
+        never sent — the customer cannot see a quote at all, which is the opposite of Expired.
       </p>
     </>
   );

@@ -17,8 +17,9 @@
  */
 import { prisma } from '@/lib/db';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
+import { isBookedCard } from '@/lib/jobcard-status';
 
-export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired'] as const;
+export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
 export type QuoteFilter = typeof QUOTE_FILTERS[number];
 export const isQuoteFilter = (v: string): v is QuoteFilter => (QUOTE_FILTERS as readonly string[]).includes(v);
 
@@ -31,8 +32,12 @@ export type DerivedQuoteStatus = QuoteFilter;
 
 /**
  * The status a row is FILED UNDER.
- *  accepted / declined — the customer answered; terminal, and both stay visible under their filter
- *    (a declined quote is a follow-up opportunity, not a dead record).
+ *  accepted — the customer said yes and NOBODY HAS BOOKED IT. This is the to-do list, and it is the
+ *    gap nothing else in the product catches: an accepted job with no lift and no date is invisible
+ *    on the diary and finished on the quotes list, so it can sit indefinitely.
+ *  accepted_booked — said yes AND in the diary. Agreed work, scheduled, not yet invoiced. It leaves
+ *    when the card is invoiced, via the same closed-card predicate as everything else.
+ *  declined — the customer answered no; stays visible (a follow-up opportunity, not a dead record).
  *  awaiting — still out, still inside its window. The chase list.
  *  expired — out of time with NO ANSWER. The customer had their chance and didn't take it.
  *  needs_resending — the LATEST version is `superseded`: the garage materially edited the estimate
@@ -45,10 +50,12 @@ export type DerivedQuoteStatus = QuoteFilter;
  *    Reaching this branch therefore means there is no successor.
  */
 export function deriveQuoteStatus(
-  v: { status: string; sent_at: Date },
+  v: { status: string; sent_at: Date; booked?: boolean },
   now: Date = new Date(),
 ): DerivedQuoteStatus {
-  if (v.status === 'accepted') return 'accepted';
+  // The ONLY place the booking fact matters: it splits `accepted` in two and touches nothing else.
+  // A superseded or expired version stays what it is whether or not a lift was pencilled in.
+  if (v.status === 'accepted') return v.booked ? 'accepted_booked' : 'accepted';
   if (v.status === 'declined') return 'declined';
   if (v.status === 'superseded') return 'needs_resending';
   return quoteExpiry(v.sent_at).getTime() <= now.getTime() ? 'expired' : 'awaiting';
@@ -79,6 +86,8 @@ export type QuoteRow = {
   version: number | null;
   /** TRUE when the card is marked quoted but nothing was ever sent. */
   verbal: boolean;
+  /** In the diary: a lift AND a planned time. Read from the card via isBookedCard — never a status. */
+  booked: boolean;
   registration: string | null;
   customerName: string | null;
   grossPennies: number;
@@ -115,6 +124,8 @@ export async function listQuotes(args: {
       job_card: {
         select: {
           status: true, site_id: true,
+          // The booking fact, read from the card itself — see isBookedCard.
+          resource_id: true, start_at: true, end_at: true,
           vehicle: { select: { registration: true } },
           customer: { select: { name: true } },
         },
@@ -129,17 +140,19 @@ export async function listQuotes(args: {
   for (const v of versions) {
     if (seen.has(v.job_card_id)) continue;
     seen.add(v.job_card_id);
+    const booked = v.job_card ? isBookedCard(v.job_card) : false;
     rows.push({
       jobCardId: v.job_card_id,
       quoteVersionId: v.id,
       version: v.version,
       verbal: false,
+      booked,
       registration: v.job_card?.vehicle?.registration ?? null,
       customerName: v.job_card?.customer?.name ?? null,
       grossPennies: v.gross_pennies,
       sentAt: v.sent_at.toISOString(),
       expiresAt: quoteExpiry(v.sent_at).toISOString(),
-      status: deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now),
+      status: deriveQuoteStatus({ status: v.status, sent_at: v.sent_at, booked }, now),
       supersededNoLink: v.status === 'superseded',
       cardStatus: v.job_card?.status ?? '',
       siteId: v.job_card?.site_id ?? '',
@@ -151,6 +164,7 @@ export async function listQuotes(args: {
     where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: 'quoted', id: { notIn: [...seen] } },
     select: {
       id: true, status: true, site_id: true, created_at: true,
+      resource_id: true, start_at: true, end_at: true,
       vehicle: { select: { registration: true } },
       customer: { select: { name: true } },
       items: { select: { qty: true, unit_price: true, vat_amount: true } },
@@ -168,6 +182,7 @@ export async function listQuotes(args: {
       quoteVersionId: null,
       version: null,
       verbal: true,
+      booked: isBookedCard(c),
       registration: c.vehicle?.registration ?? null,
       customerName: c.customer?.name ?? null,
       grossPennies: gross,

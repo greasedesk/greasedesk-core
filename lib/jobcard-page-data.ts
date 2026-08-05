@@ -25,6 +25,7 @@ import type { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/
 import type { PromoLite } from '@/lib/promo';
 import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
+import { isBookedCard } from '@/lib/jobcard-status';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -141,7 +142,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     smsOptOut: (ownerRow as any)?.sms_opt_out ?? null, emailOptOut: (ownerRow as any)?.email_opt_out ?? null,
   };
 
-  const booking: CardBooking = (row.resource_id && row.start_at && row.end_at)
+  const booking: CardBooking = isBookedCard(row as any)
     ? {
         resourceId: row.resource_id,
         startAt: (row.start_at as Date).toISOString(),

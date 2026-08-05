@@ -30,6 +30,25 @@ export const INVOICE_DONE_STATUSES: JobStatus[] = ['invoiced', 'paid', 'done'];
 // where the job had been booked survives — but it no longer blocks the lift or shows on the board.)
 export const OFF_DIARY_STATUSES: JobStatus[] = ['cancelled', 'declined'];
 
+/**
+ * IS THIS CARD IN THE DIARY? The booking fact is `resource_id + start_at + end_at` — a lift and a
+ * planned time. It is NOT a status and must never become one: the card already holds it, and a
+ * second copy is a second thing to keep in step.
+ *
+ * `booking.moved` audit rows are HISTORY, not state — they record that a booking changed, not that
+ * one exists, so they are deliberately not consulted.
+ *
+ * The same three fields are the test in lib/jobcard-page-data (the card's "Booked" chip) and, in
+ * SQL form, in lib/diary-day and lib/diary-booking (`resource_id: { not: null }` + an overlapping
+ * start_at/end_at range). Those two cannot literally call this — one is a Prisma where clause —
+ * but they must agree with it, so any change here is a change to all three. `end_at` is included
+ * because it is what the diary actually renders against; a card with a start and no end has no
+ * footprint to occupy.
+ */
+export function isBookedCard(card: { resource_id: string | null; start_at: Date | null; end_at: Date | null }): boolean {
+  return !!card.resource_id && !!card.start_at && !!card.end_at;
+}
+
 const TRANSITIONS: Record<JobStatus, Transition[]> = {
   draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }],
   quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],
