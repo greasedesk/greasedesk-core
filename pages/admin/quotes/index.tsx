@@ -310,6 +310,21 @@ export default function QuotesPage(props: Props) {
                 </tr>
               ))}
             </tbody>
+            {/* TOTALS THE TAB, and the tab IS the visible rows — listQuotes returns every row for
+                the filter and nothing paginates or truncates it, so there is no second number to
+                disagree with. If pagination ever lands, this must say which one it is rather than
+                quietly becoming the page total. */}
+            <tfoot>
+              <tr className="border-t-2 border-line font-semibold text-ink">
+                <td className="py-3 px-4 text-xs uppercase tracking-wide text-muted" colSpan={2}>
+                  {LABELS[props.filter]} — {props.rows.length} {props.rows.length === 1 ? 'quote' : 'quotes'}
+                </td>
+                <td className="py-3 px-4 text-right tabular-nums" data-testid="value-total">
+                  {formatMoney(props.rows.reduce((sum, r) => sum + r.grossPennies, 0), { currency: props.currency, locale: props.locale })}
+                </td>
+                <td colSpan={4} />
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}

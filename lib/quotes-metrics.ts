@@ -172,7 +172,7 @@ export async function computeQuotesMetrics(args: {
 
   const spanDays = Math.round((args.to.getTime() - args.from.getTime()) / dayMs);
   const monthly = spanDays > 62;
-  const buckets = new Map<string, { label: string; quoted: number; accepted: number; endMs: number }>();
+  const buckets = new Map<string, { label: string; quoted: number; accepted: number; startMs: number; endMs: number }>();
   const bucketFor = (d: Date) => {
     if (monthly) {
       const k = ym(d);
@@ -186,7 +186,7 @@ export async function computeQuotesMetrics(args: {
   for (let t = args.from.getTime(); t < args.to.getTime();) {
     const d = new Date(t);
     const b = bucketFor(d);
-    if (!buckets.has(b.k)) buckets.set(b.k, { label: b.label, quoted: 0, accepted: 0, endMs: b.end });
+    if (!buckets.has(b.k)) buckets.set(b.k, { label: b.label, quoted: 0, accepted: 0, startMs: t, endMs: b.end });
     t = b.end;
   }
 
@@ -194,7 +194,7 @@ export async function computeQuotesMetrics(args: {
     if (!inWindow(f.sentAt)) continue;
     m.cohortSentCount += 1;
     const b = bucketFor(f.sentAt);
-    const row = buckets.get(b.k) ?? { label: b.label, quoted: 0, accepted: 0, endMs: b.end };
+    const row = buckets.get(b.k) ?? { label: b.label, quoted: 0, accepted: 0, startMs: f.sentAt.getTime(), endMs: b.end };
     row.quoted += f.gross;
     if (acceptedCards.has(cardId)) {
       m.cohortAcceptedCount += 1;
@@ -204,11 +204,24 @@ export async function computeQuotesMetrics(args: {
   }
   m.conversionPct = m.cohortSentCount ? Math.round((m.cohortAcceptedCount / m.cohortSentCount) * 1000) / 10 : null;
 
-  // A bucket whose end is inside the expiry window has quotes that have not had their 14 days.
-  const incompleteBefore = now.getTime() - MAGIC_LINK_DAYS * dayMs;
+  // ── MATURITY, AND THE DIFFERENCE BETWEEN "OPEN" AND "HASN'T HAPPENED" ────────────────────────
+  // A bucket is INCOMPLETE when quotes were sent into it but it has not yet had the full expiry
+  // window to be answered. A bucket that lies entirely in the FUTURE is neither incomplete nor
+  // empty — nothing has happened in it yet, and it is not a cohort at all. Selecting the current
+  // month used to hatch every remaining day of it, filling most of the plot with texture that read
+  // as a rendering fault and said nothing true. Future buckets are DROPPED, not drawn flat: a zero
+  // bar for next Tuesday asserts a measurement nobody has taken.
+  const nowMs = now.getTime();
+  const matureBefore = nowMs - MAGIC_LINK_DAYS * dayMs;
   m.series = [...buckets.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, v]) => ({ key, label: v.label, quotedPennies: v.quoted, acceptedPennies: v.accepted, incomplete: v.endMs > incompleteBefore }));
+    .filter(([, v]) => v.startMs <= nowMs)   // the bucket has begun
+    .map(([key, v]) => ({
+      key, label: v.label, quotedPennies: v.quoted, acceptedPennies: v.accepted,
+      // Only a bucket that has STARTED can be immature, and only while its end is still inside the
+      // window. A closed month from last year is complete; this week is not.
+      incomplete: v.endMs > matureBefore,
+    }));
 
   // ── AVERAGE DAYS SEND → RESPONSE — formal quotes only, and said so on screen. ─────────────────
   const gaps: number[] = [];
