@@ -140,6 +140,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await tx.vehicleOwnership.create({ data: { vehicle_id: vehicle.id, customer_id: customerId, is_current: true } });
       }
 
+      // ── NOT AN ACCEPTANCE — deliberately does NOT call lib/quote-acceptance. ──────────────
+      // This card is a record of work that was COMPLETED under a previous system. Nobody quoted it
+      // through GreaseDesk and nobody accepted it here, so `accepted_at` stays NULL: that is the
+      // honest answer, not a gap. It is born at `accepted` only because the lifecycle has to start
+      // somewhere past quoting for a job that is already done.
       // 2) CARD — flagged imported so the chaser and dashboards can tell.
       const card = await tx.jobCard.create({
         data: {

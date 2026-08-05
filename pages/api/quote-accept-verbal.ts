@@ -24,7 +24,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { requireCanWrite } from '@/lib/admin-guard';
-import { writeAudit } from '@/lib/audit';
+import { acceptQuote } from '@/lib/quote-acceptance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -52,50 +52,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ message: `A ${card.status} job can’t be marked accepted.` });
   }
 
-  // The live offer, if one was ever sent. Only a `sent` version can be accepted — an already
-  // accepted/declined one has an answer, and a superseded one is no longer the offer.
-  const live = await prisma.quoteVersion.findFirst({
-    where: { job_card_id: card.id, status: 'sent' },
-    orderBy: { version: 'desc' },
-    select: { id: true, version: true, gross_pennies: true },
-  });
-
   const now = new Date();
-  await prisma.$transaction(async (tx: any) => {
-    if (live) {
-      await tx.quoteVersion.update({
-        where: { id: live.id },
-        data: {
-          status: 'accepted',
-          responded_at: now,
-          responded_by_user: user.id as string, // GARAGE-RECORDED
-          // responded_ip / responded_user_agent stay NULL on purpose — see the header.
-        },
-      });
-    }
-    await tx.jobCard.update({ where: { id: card.id }, data: { status: 'accepted' } });
-    await writeAudit(tx, {
-      groupId: card.group_id,
-      userId: user.id as string, // the STAFF actor — unlike the customer path, which has no user
-      jobCardId: card.id,
-      action: 'quote.accepted_verbal',
-      diff: {
-        via: 'phone_or_counter',
-        attested: false, // NOT customer-attested; the distinction the audit exists to preserve
-        version: live?.version ?? null,
-        grossPennies: live?.gross_pennies ?? null,
-        frozenVersion: !!live, // false = no version existed; the invoice will use live JobCardItem
-        at: now.toISOString(),
-      },
-    });
-  });
+  // ONE acceptance rule. The `if (live)` branch that used to sit here is gone: acceptQuote handles
+  // both shapes, and the versionless case — which is the COMMON one — now records the fact on the
+  // card instead of only in an audit row. No version is minted; see lib/quote-acceptance.
+  const result = await prisma.$transaction(async (tx: any) =>
+    acceptQuote(tx, {
+      groupId: card.group_id, jobCardId: card.id, via: 'counter',
+      actorUserId: user.id as string,
+      attested: null, // GARAGE-RECORDED — no ip/ua, because no customer was on the other end of one
+      at: now,
+    }),
+  );
 
   return res.status(200).json({
     ok: true,
-    frozenVersion: !!live,
-    version: live?.version ?? null,
-    message: live
-      ? `Accepted — quote v${live.version} is frozen as the agreed figures.`
-      : 'Accepted — no quote was sent, so the invoice will use the current estimate.',
+    frozenVersion: !!result.versionId,
+    version: result.version,
+    // The wording follows what actually happened, and the versionless branch says out loud which
+    // figures the invoice will use — the whole reason no version is minted here.
+    message: result.alreadyAccepted
+      ? 'This job was already accepted.'
+      : result.version != null
+        ? `Accepted — quote v${result.version} is frozen as the agreed figures.`
+        : 'Accepted — no quote was sent, so the invoice will use the current estimate.',
   });
 }

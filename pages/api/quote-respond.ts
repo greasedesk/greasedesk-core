@@ -18,6 +18,7 @@ import { clientIp } from '@/lib/auth-rate-limit';
 import { sendNotification } from '@/lib/notify';
 import { formatMoney } from '@/lib/format-money';
 import { writeAudit } from '@/lib/audit';
+import { acceptQuote } from '@/lib/quote-acceptance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -69,26 +70,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const accepted = action === 'accept';
 
   await prisma.$transaction(async (tx: any) => {
-    // THE audit-grade record: version + when + from where + with what.
+    if (accepted) {
+      // ONE acceptance rule for every door — version, card, accepted_at and audit, in this tx.
+      // The ip/ua go in as `attested`: this is the only path where a CUSTOMER is the actor.
+      await acceptQuote(tx, {
+        groupId: card.group_id, jobCardId: card.id, via: 'link',
+        actorUserId: null, attested: { ip, userAgent: ua }, at: now,
+      });
+      return;
+    }
+    // DECLINING is not acceptance and keeps its own shape: the version records the answer and the
+    // card stays exactly where it is — the garage decides what happens next.
     await tx.quoteVersion.update({
       where: { id: version.id },
-      data: {
-        status: accepted ? 'accepted' : 'declined',
-        responded_at: now,
-        responded_ip: ip,
-        responded_user_agent: ua,
-      },
+      data: { status: 'declined', responded_at: now, responded_ip: ip, responded_user_agent: ua },
     });
-    // Accepting moves the card on. Declining leaves the card where it is (the garage decides what
-    // to do next) but the offer is closed.
-    if (accepted && (card.status === 'quoted' || card.status === 'draft')) {
-      await tx.jobCard.update({ where: { id: card.id }, data: { status: 'accepted' } });
-    }
     await writeAudit(tx, {
       groupId: card.group_id,
-      userId: null, // the CUSTOMER acted, not a staff user — attribution is the ip/ua on the version
+      userId: null, // the CUSTOMER acted — attribution is the ip/ua on the version
       jobCardId: card.id,
-      action: accepted ? 'quote.accepted' : 'quote.declined',
+      action: 'quote.declined',
       diff: { version: version.version, grossPennies: version.gross_pennies, at: now.toISOString(), ip, userAgent: ua },
     });
   });

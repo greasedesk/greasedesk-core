@@ -1126,6 +1126,13 @@ model JobCard {
   archived_at            DateTime?
   signed_off_by_customer Boolean       @default(false)
   signed_off_at          DateTime?
+  // WHEN THE CUSTOMER SAID YES. Written ONLY by lib/quote-acceptance, by every acceptance path,
+  // whether or not a QuoteVersion exists — 96% of real quoting is verbal and mints no version, so
+  // the version could never be the home for this. Deliberately NOT a minted version: `status:
+  // 'accepted'` on a QuoteVersion is load-bearing in lib/invoice-issue, where an accepted version
+  // makes the invoice a column copy of its FROZEN lines. Minting one on a verbal acceptance would
+  // silently bill the estimate as it stood at the handshake and drop anything found afterwards.
+  accepted_at            DateTime?
   created_at             DateTime      @default(now())
 
   // --- SLICE 1: flags (main tab) ---

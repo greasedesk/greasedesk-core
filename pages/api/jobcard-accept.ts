@@ -19,6 +19,7 @@ import { canManageSite } from '@/lib/admin-guard';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { placeJobCard } from '@/lib/diary-booking';
 import { writeAudit } from '@/lib/audit';
+import { acceptQuote } from '@/lib/quote-acceptance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -63,12 +64,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 1) book first — throws CLASH:<reg> / CROSS_SITE / RESOURCE_NOT_FOUND → rolls the whole thing back
       await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds }); // booking on accept = new work
-      // 2) only then advance the lifecycle
-      await tx.jobCard.update({ where: { id: jobCardId }, data: { status: 'accepted' } });
-      // 3) record the combined event in the same tx
+      // 2) only then advance the lifecycle — through the ONE acceptance rule. This used to write
+      //    the card status directly and never touch QuoteVersion, so accepting a card that had a
+      //    live quote out left that version reading `sent` forever: orphaned, and still listed as
+      //    Awaiting. acceptQuote answers the version, stamps accepted_at and writes the audit row.
+      await acceptQuote(tx, {
+        groupId: user.group_id as string, jobCardId, via: 'booked',
+        actorUserId: user.id as string,
+        attested: null, // a manager booking the work is not the customer clicking a link
+        at: new Date(),
+      });
+      // 3) the BOOKING is a separate fact from the acceptance and keeps its own row — the diary
+      //    placement is what this endpoint uniquely did, and it must stay legible in the history.
       await writeAudit(tx, {
         groupId: user.group_id as string, userId: user.id as string, jobCardId,
-        action: 'accept.booked', diff: { resourceId, startAt, workingMinutes, from: card.status, to: 'accepted' },
+        action: 'booking.placed', diff: { resourceId, startAt, workingMinutes, from: card.status, via: 'accept_and_book' },
       });
     });
   } catch (e: any) {

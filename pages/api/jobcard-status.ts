@@ -14,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite, canManageSite, requireCanWrite } from '@/lib/admin-guard';
 import { canIssueInvoice } from '@/lib/permissions';
+import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
@@ -128,8 +129,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   //  - paid: freeze the invoice (status=paid, paid_at) → canEditInvoice flips to false.
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
-      await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
+      if (to === 'accepted') {
+        // ACCEPTANCE IS NOT A GENERIC TRANSITION. It answers a live quote, stamps accepted_at and
+        // writes `quote.accepted` — none of which a plain status write does. Every other target
+        // below is untouched. (This branch has never fired in production: `status.accepted` has 0
+        // rows in every group. It is wired anyway, because a route that exists will be taken.)
+        await acceptQuote(tx, {
+          groupId: user.group_id as string, jobCardId, via: 'counter',
+          actorUserId: user.id as string, attested: null, at: new Date(),
+        });
+      } else {
+        await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
+        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
+      }
       if (to === 'invoiced') {
         // COMEBACK NUMBERING GUARD (locked): a comeback mints a £0 invoice from the SEPARATE
         // warranty series — never the chargeable customer-facing sequence. Both counters stay

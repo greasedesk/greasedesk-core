@@ -14,7 +14,13 @@ import type { Prisma } from '@prisma/client';
 export type AuditAction =
   | `status.${string}`      // status.accepted, status.invoiced, status.paid, status.declined, …
   | `stage.${string}`       // stage.intake.done / stage.intake.undone, …
+  // RETIRED 2026-08-05, RETAINED FOR HISTORY. No longer written: acceptance is one action
+  // (`quote.accepted`, with `via` in the diff) through lib/quote-acceptance. The existing rows are
+  // the ONLY dated evidence for the acceptances that predate that file, so any reader looking
+  // further back than 2026-08-05 must take the UNION of accept.booked, quote.accepted_verbal and
+  // quote.accepted. AuditLog is append-only; these are never deleted.
   | 'accept.booked'
+  | 'booking.placed'     // the DIARY placement made by accept-and-book — the acceptance is its own row
   | 'booking.moved'
   | 'booking.removed'
   | 'owner.edited'
@@ -46,11 +52,12 @@ export type AuditAction =
   | 'quote.sent'         // a frozen QuoteVersion went to the customer: { version, lines, emailed, sentTo }
   | 'quote.superseded'   // the estimate was MATERIALLY edited while a quote was out — old version + link killed: { superseded }
   | 'quote.edit_immaterial' // an estimate write reproduced the live version's customer-visible figures — quote LEFT LIVE: { version }
-  | 'quote.accepted'     // CUSTOMER accepted, via magic link: { version, grossPennies, at, ip, userAgent }
+  | 'quote.accepted'     // THE acceptance action, every door: { via:'link'|'counter'|'booked',
+                         // attested, versionId, version, grossPennies, frozenVersion, from, at }.
+                         // `attested` false = garage-recorded; only via:'link' carries ip/user-agent.
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
-  | 'quote.accepted_verbal' // GARAGE recorded an acceptance taken by phone/counter. Distinct from
-                            // quote.accepted ON PURPOSE: { attested:false, via, version, frozenVersion }.
-                            // Only quote.accepted is customer-attested (ip + user-agent captured).
+  | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
+                            // Superseded by quote.accepted with via:'counter', attested:false.
   | 'card.duplicated'    // created by copying a source card's estimate — SELF-DESCRIBING: the diff
                          // carries { source_card_id, source_registration, ... } so the row stays
                          // searchable even after the duplicated_from edge is SetNull'd by a purge
