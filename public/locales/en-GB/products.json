@@ -21,7 +21,7 @@
   "margin": "Margin",
   "active": "Active",
   "archived": "Retired",
-  "showArchived": "Show archived",
+  "showArchived": "Show retired services",
   "archive": "Retire",
   "restore": "Restore",
   "delete": "Delete",
@@ -83,5 +83,6 @@
   },
   "deleteBlocked": "In use — retire instead",
   "deleted": "Item deleted.",
-  "deleteFailed": "Could not delete that item."
+  "deleteFailed": "Could not delete that item.",
+  "showArchivedCount": "Show retired services ({{count}})"
 }

@@ -219,6 +219,7 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
 
   const typeLabel = (ty: ItemType) => t(ty);
   const uncostedCount = items.filter((i) => i.active && isUncosted(i)).length; // active items only
+  const retiredCount = items.filter((i) => !i.active).length;
   const shown = items.filter((i) => (showArchived || i.active) && (!showUncostedOnly || isUncosted(i)));
   const rate = form ? Number(form.vatRate || 0) : Number(defaultVatRate);
 
@@ -396,7 +397,12 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
             <span className="ml-1 underline">{showUncostedOnly ? t('uncosted.showAll') : t('uncosted.showThese')}</span>
           </button>
         )}
-        <label className="flex items-center gap-2 text-sm text-muted mb-3"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> {t('showArchived')}</label>
+        {/* Retiring is now the ONLY way to remove a used service, so retired entries must be
+            findable — a count on the toggle is the difference between "hidden" and "gone". */}
+        <label className="flex items-center gap-2 text-sm text-muted mb-3" data-testid="show-retired">
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          {retiredCount > 0 ? t('showArchivedCount', { count: retiredCount }) : t('showArchived')}
+        </label>
 
         {shown.length === 0 ? (
           <p className="text-sm text-muted">{t('empty')}</p>
