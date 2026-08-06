@@ -9,7 +9,8 @@
  *   amount + currency asserted against the profile's monthlyPrice — a misconfigured Price (the
  *   £35 drift) refuses loudly instead of showing one figure and charging another.
  *   payment_method_collection:'always' → a card is required to start the trial (no card, no trial).
- *   Stripe Tax is enabled ONLY when GreaseDesk Ltd is VAT-registered (GARAGE_VAT_REGISTERED).
+ *   Stripe Tax is enabled ONLY when GreaseDesk Ltd is VAT-registered (NEXT_PUBLIC_GARAGE_VAT_
+ *   REGISTERED). The billing ADDRESS is collected either way — see below.
  *   client_reference_id = group_id → the webhook maps the subscription back with zero trust in the
  *   redirect. The redirect writes NOTHING; the webhook is the ledger.
  * Idempotency key = group_id + site count, so a double-submit reuses one session.
@@ -18,7 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
-import { GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
+import { garageVatRegistered } from '@/lib/billing-pricing';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -96,9 +97,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
       },
       payment_method_collection: 'always',
-      // Stripe Tax ONLY when GreaseDesk Ltd is VAT-registered — tax-exclusive prices until then.
-      ...(GARAGE_VAT_REGISTERED
-        ? { automatic_tax: { enabled: true }, billing_address_collection: 'required' as const, tax_id_collection: { enabled: true } }
+      // ── COLLECT THE ADDRESS ALWAYS, REGISTERED OR NOT ─────────────────────────────────────────
+      // Stripe Tax cannot compute UK VAT without a customer address, and a customer created without
+      // one keeps no address at all. Back-filling across a live base after registering means either
+      // asking every customer to go and enter it, or guessing from what we hold — our Group.address
+      // is a single free-text line, not Stripe's structured line1/city/postal_code/country, so
+      // "guessing" means parsing addresses, which is how addresses go wrong. Collecting one we do
+      // not yet need costs a field on a form we already show.
+      billing_address_collection: 'required' as const,
+      // Stripe Tax + VAT-ID capture ONLY when registered — tax-exclusive prices until then.
+      ...(garageVatRegistered()
+        ? { automatic_tax: { enabled: true }, tax_id_collection: { enabled: true } }
         : {}),
       client_reference_id: groupId,
       ...(billing?.stripe_customer_id

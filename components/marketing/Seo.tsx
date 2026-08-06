@@ -6,7 +6,7 @@
  */
 import Head from 'next/head';
 import { COMPANY, absoluteUrl, officeOneLine } from '@/lib/company-info';
-import { MONTHLY_PRICE_POUNDS, GARAGE_VAT_REGISTERED } from '@/lib/billing-pricing';
+import { MONTHLY_PRICE_POUNDS, garageVatRegistered } from '@/lib/billing-pricing';
 
 type Props = {
   title: string;         // full <title> (page-specific)
@@ -51,7 +51,7 @@ const softwareAppLd = () => ({
     price: String(MONTHLY_PRICE_POUNDS),
     priceCurrency: 'GBP',
     // Price shown is per location, per month. VAT excluded while GreaseDesk Ltd is not registered.
-    ...(GARAGE_VAT_REGISTERED ? {} : { valueAddedTaxIncluded: false }),
+    ...(garageVatRegistered() ? {} : { valueAddedTaxIncluded: false }),
   },
   publisher: { '@type': 'Organization', name: COMPANY.legalName },
 });
