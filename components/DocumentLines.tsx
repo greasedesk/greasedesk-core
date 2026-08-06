@@ -11,6 +11,7 @@
  */
 import React from 'react';
 import { formatMoney } from '@/lib/format-money';
+import { showVatTotalLine } from '@/lib/invoice';
 
 export type DocumentLine = {
   description: string;
@@ -88,9 +89,11 @@ export default function DocumentLines({ lines, totals, showVat, currency, locale
             <>
               <div className="flex justify-between"><span className="text-muted">{labels.subtotal}</span><span className="text-ink tabular-nums">{fmt(totals.netPennies)}</span></div>
               {totals.breakdown.map((b) => (
-                <div key={b.rate} className="flex justify-between"><span className="text-muted">{labels.vatAt(b.rate)}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
+                <div key={b.rate} data-testid="vat-rate-line" className="flex justify-between"><span className="text-muted">{labels.vatAt(b.rate)}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
               ))}
-              <div className="flex justify-between"><span className="text-muted">{labels.totalVat}</span><span className="text-ink tabular-nums">{fmt(totals.vatPennies)}</span></div>
+              {showVatTotalLine(totals) && (
+                <div data-testid="vat-total-line" className="flex justify-between"><span className="text-muted">{labels.totalVat}</span><span className="text-ink tabular-nums">{fmt(totals.vatPennies)}</span></div>
+              )}
               <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{labels.grandTotal}</span><span className="text-ink tabular-nums">{fmt(totals.grossPennies)}</span></div>
             </>
           ) : (

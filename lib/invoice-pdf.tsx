@@ -10,6 +10,7 @@ import { Document, Page, Text, View, StyleSheet, Image, renderToBuffer } from '@
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
+import { showVatTotalLine } from '@/lib/invoice';
 
 const S = StyleSheet.create({
   page: { padding: 48, fontSize: 10, fontFamily: 'Helvetica', color: '#111827' },
@@ -153,7 +154,9 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
                 {doc.totals.breakdown.map((b) => (
                   <View key={b.rate} style={S.totalRow}><Text style={S.muted}>{t('vatAt', { rate: b.rate, label: doc.taxLabel })}</Text><Text>{fmt(b.vatPennies)}</Text></View>
                 ))}
-                <View style={S.totalRow}><Text style={S.muted}>{t('totalVat', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.vatPennies)}</Text></View>
+                {showVatTotalLine(doc.totals) && (
+                  <View style={S.totalRow}><Text style={S.muted}>{t('totalVat', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.vatPennies)}</Text></View>
+                )}
                 <View style={[S.totalRow, S.grand]}><Text>{t('grandTotal')}</Text><Text>{fmt(doc.totals.grossPennies)}</Text></View>
               </>
             ) : (

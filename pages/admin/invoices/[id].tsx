@@ -24,6 +24,7 @@ import { buildInvoiceDoc } from '@/lib/invoice-doc';
 import { canVoid, VOID_CATEGORIES, MIN_REASON_LENGTH, validateVoidReason } from '@/lib/invoice-void';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import { showVatTotalLine } from '@/lib/invoice';
 
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
@@ -474,9 +475,11 @@ export default function InvoicePage(props: PageProps) {
                 <>
                   <div className="flex justify-between"><span className="text-muted">{t('subtotal', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
                   {props.totals.breakdown.map((b) => (
-                    <div key={b.rate} className="flex justify-between"><span className="text-muted">{t('vatAt', { rate: b.rate, label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
+                    <div key={b.rate} data-testid="vat-rate-line" className="flex justify-between"><span className="text-muted">{t('vatAt', { rate: b.rate, label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(b.vatPennies)}</span></div>
                   ))}
-                  <div className="flex justify-between"><span className="text-muted">{t('totalVat', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.vatPennies)}</span></div>
+                  {showVatTotalLine(props.totals) && (
+                    <div data-testid="vat-total-line" className="flex justify-between"><span className="text-muted">{t('totalVat', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.vatPennies)}</span></div>
+                  )}
                   <div className="flex justify-between text-base font-semibold border-t border-line pt-1"><span className="text-ink">{t('grandTotal')}</span><span className="text-ink tabular-nums">{fmt(props.totals.grossPennies)}</span></div>
                 </>
               ) : (

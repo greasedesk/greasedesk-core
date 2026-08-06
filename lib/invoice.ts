@@ -84,6 +84,25 @@ export type InvoiceTotals = {
   netPennies: number; vatPennies: number; grossPennies: number;
 };
 
+/**
+ * SHOW THE "Total VAT" LINE ONLY WHEN IT SAYS SOMETHING THE RATE LINES DON'T.
+ *
+ * On a single-rate invoice the per-rate line and the total are the same number twice —
+ * "VAT at 20% £16.67" then "Total VAT £16.67" — which reads as a fault in the document rather
+ * than as arithmetic. With two or more rates the total is genuinely new information: a 20% labour
+ * line beside a zero-rated MOT needs both the split (so the customer can see WHICH part was
+ * zero-rated) and the sum.
+ *
+ * The per-rate lines always render. Dropping THEM instead and keeping the total would lose the
+ * rate, which is the part a customer might need to reclaim against.
+ *
+ * One rule, three readers — the admin invoice page, the PDF and the customer-facing document each
+ * render their own markup (React DOM, react-pdf primitives, and the shared DocumentLines
+ * component), so this is the only thing they can share, and it is the thing that must not drift.
+ */
+export const showVatTotalLine = (totals: Pick<InvoiceTotals, 'breakdown'>): boolean =>
+  totals.breakdown.length > 1;
+
 export function invoiceTotals(lines: InvoiceLineLike[]): InvoiceTotals {
   const agg = aggregateFrozenTax(lines.map((l) => ({
     rateBp: Math.round(Number(l.vat_rate) * 100),
