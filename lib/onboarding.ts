@@ -10,8 +10,14 @@
  *   (A) site          — the tenant has at least one Site
  *   (B) rates         — that Site has default_labour_rate (nullable, no default → genuine signal)
  *   (C) tax           — Group.tax_default_rate_bp is set (Int?, NULL until the tax step writes it)
- *   (D) subscription  — GroupBilling.subscription_status ∈ {trialing, active}
+ *   (D) subscription  — GroupBilling.subscription_status ∈ {trialing, active, past_due}
  *                       (webhook/confirm-written mirror of Stripe's truth; a real trial/sub exists)
+ *                       past_due COUNTS AS DONE (2026-08-06): the step asks "has this tenant ever
+ *                       set billing up", not "is the money currently arriving". A tenant whose card
+ *                       has just failed HAS completed checkout, and bouncing them back into the
+ *                       wizard would put them behind a setup screen instead of in their diary —
+ *                       which is the opposite of the grace rule (full functionality for seven days).
+ *                       What they may DO while past_due is lib/billing's job, not this gate's.
  *
  * None of these columns carry a value until its step runs, so "done" is inferred from data alone.
  * (C) shares the column the banked rate-bp backfill fills — running that backfill marks EXISTING
@@ -25,8 +31,9 @@ export type OnboardingStep = 'country' | 'site' | 'rates' | 'tax' | 'checkout';
 /** The wizard order — also the order the gate evaluates completion in. */
 export const ONBOARDING_ORDER: OnboardingStep[] = ['country', 'site', 'rates', 'tax', 'checkout'];
 
-/** A live trial or paid subscription — the only statuses that count as "billing done". */
-const SUBSCRIBED = new Set(['trialing', 'active']);
+/** Billing has been SET UP. Not the same question as "is it paid" — see the header. A lapsed
+ *  tenant is deliberately absent: they must pass back through checkout to resubscribe. */
+const SUBSCRIBED = new Set(['trialing', 'active', 'past_due']);
 
 /** The wizard page each step lives on (single place the step→URL mapping is defined). */
 export function stepPath(step: OnboardingStep): string {
