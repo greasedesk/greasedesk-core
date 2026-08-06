@@ -402,14 +402,25 @@ export default function AdminDashboard(props: PageProps) {
 
       {/* OPTIONAL post-signup setup (item-13): a compact progress nudge to the full /admin/setup panel
           + guided walkthrough. NOT in the required gate; vanishes once everything applicable is done.
-          Derived from setup-signals — no stored "done" flag. */}
+          Derived from setup-signals — no stored "done" flag.
+
+          AMBER, AND OUTLINED (2026-08-06). It used to wear the accent, like every other panel on the
+          page, so a job with work left in it read as a fact rather than a prompt. `warn` is the
+          honest severity: nothing is broken — something is unfinished. `danger` would overstate it
+          and would compete with the billing banner, which IS about something going wrong. The
+          heavier border is what actually separates it from the flat panels; the colour alone did
+          not. It still disappears the moment `outstanding` hits zero. */}
       {props.setup.outstanding > 0 && (
-        <Link href="/admin/setup-wizard" className="flex items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft p-4 mb-4 hover:brightness-[0.98]">
+        <Link
+          href="/admin/setup-wizard"
+          data-testid="setup-nudge"
+          className="flex items-center justify-between gap-3 rounded-xl border-2 border-warn bg-warn-soft p-4 mb-4 hover:brightness-[0.98]"
+        >
           <span className="text-sm">
-            <span className="text-ink font-semibold">{t('setup.title')}</span>
-            <span className="text-muted"> — {t('setup.progress', { done: props.setup.done, total: props.setup.total })}</span>
+            <span className="text-warn font-semibold">{t('setup.title')}</span>
+            <span className="text-warn/80"> — {t('setup.progress', { done: props.setup.done, total: props.setup.total })}</span>
           </span>
-          <span className="shrink-0 text-sm font-medium text-accent whitespace-nowrap">{t('setup.cta')} →</span>
+          <span className="shrink-0 text-sm font-semibold text-warn whitespace-nowrap">{t('setup.cta')} →</span>
         </Link>
       )}
       {siteId !== 'all' && tiles && (tiles.pnl as any)?.invoiceCount === 0 && (tiles.utilisation as any)?.mechanicCount === 0 && ((tiles.utilisation as any)?.missingHoursMechanics?.length ?? 0) === 0 && (
