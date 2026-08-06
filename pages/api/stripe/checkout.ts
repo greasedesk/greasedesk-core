@@ -19,6 +19,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { createHash } from 'node:crypto';
+import type Stripe from 'stripe';
+import { writeAudit } from '@/lib/audit';
 import { garageVatRegistered } from '@/lib/billing-pricing';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
@@ -81,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : `${base}/admin/settings/licences?billing=cancelled`;
 
   try {
-    const session = await stripe.checkout.sessions.create({
+    const params: Stripe.Checkout.SessionCreateParams = {
       mode: 'subscription',
       // Selects the currency option on the multi-currency Price — verified above to exist and to
       // match the profile's displayed amount.
@@ -115,11 +118,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : { customer_email: group.billing_email ?? undefined }),
       success_url: successUrl,
       cancel_url: cancelUrl,
-    }, { idempotencyKey: `checkout:${groupId}:${quantity}` });
+    };
+
+    // ── THE KEY MUST DESCRIBE THE REQUEST, NOT JUST THE TENANT ────────────────────────────────
+    // It used to be `checkout:${groupId}:${quantity}`, which says nothing about the SESSION. Stripe
+    // rejects a reused idempotency key whose parameters differ, and the window is 24 hours — so any
+    // change to the session shape (a new field, a different success_url, enabling Stripe Tax) made
+    // the next call 502 for a whole day, for exactly the tenants who were mid-signup when it
+    // deployed. Hashing the parameters means a changed shape is simply a NEW key, while an
+    // unchanged one still replays — which is the double-click protection the key existed for.
+    const shape = createHash('sha256').update(JSON.stringify(params)).digest('hex').slice(0, 16);
+    const session = await stripe.checkout.sessions.create(params, {
+      idempotencyKey: `checkout:${groupId}:${quantity}:${shape}`,
+    });
 
     return res.status(200).json({ url: session.url });
   } catch (e: any) {
-    console.error('[stripe] checkout error', e?.message);
-    return res.status(502).json({ message: 'Could not start checkout.' });
+    // ── SAY WHY, SOMEWHERE REACHABLE ─────────────────────────────────────────────────────────────
+    // This used to be log-only, so an outsider — including us, without a Stripe key — saw a bare
+    // "Could not start checkout." and nothing else. The customer still gets the plain sentence; the
+    // reason goes into the response for the authenticated admin who triggered it, and into an audit
+    // row so the NEXT occurrence is diagnosable after the fact rather than in the moment.
+    const detail = String(e?.message ?? 'unknown error').slice(0, 300);
+    const stripeCode = e?.code ?? e?.type ?? null;
+    const requestId = e?.requestId ?? e?.raw?.request_id ?? null;   // the id Stripe support asks for
+    console.error('[stripe] checkout error', { detail, stripeCode, requestId, groupId });
+    await writeAudit(prisma as any, {
+      groupId, userId: vis.userId ?? null,
+      action: 'checkout.failed', entity: 'group', entityId: groupId,
+      diff: { detail, stripeCode, requestId, quantity, currency: wantCurrency },
+    }).catch(() => { /* never let the audit write mask the original failure */ });
+    return res.status(502).json({ message: 'Could not start checkout.', code: stripeCode, detail, requestId });
   }
 }

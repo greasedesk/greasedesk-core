@@ -58,6 +58,9 @@ export type AuditAction =
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
+  | 'checkout.failed'     // Stripe refused to create a Checkout session. Carries Stripe's own
+                         // message, code and REQUEST ID — without these the 502 is undiagnosable
+                         // from outside: { detail, stripeCode, requestId, quantity, currency }
   | 'catalogue.deleted'  // a price-list entry was REMOVED — only ever possible when nothing had
                          // used it (lib/catalogue-retire). SELF-DESCRIBING: after this the item is
                          // gone and this row is the only record it existed:
