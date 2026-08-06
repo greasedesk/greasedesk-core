@@ -453,33 +453,7 @@ export default function AdminDashboard(props: PageProps) {
         return (
           <div className={`bg-surface p-5 rounded-xl border border-line mb-6 ${loading ? 'opacity-60' : ''}`}>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-              <h2 className="text-lg font-bold text-ink flex items-center gap-2">
-                {/* THE TRAFFIC LIGHT. Judged on the chart's OWN point — sold-to-date over
-                    available-to-date at the same elapsed day the graph is drawn to — so the colour
-                    and the line beside it can never tell different stories. Deliberately carries NO
-                    figure: the percentage is already in the utilisation tile, and a second copy is
-                    a second thing to keep in step. Absent, not grey, when there is nothing to
-                    judge. */}
-                {(() => {
-                  const pt = cap.series?.find((s2: any) => s2.day === elapsed) ?? null;
-                  const light = utilisationLight(
-                    pt ? { soldToDate: pt.billed, availableToDate: pt.capacity } : null,
-                    utilThresholds,
-                  );
-                  if (!light) return null;
-                  const tone = light.colour === 'green' ? 'bg-ok' : light.colour === 'amber' ? 'bg-warn' : 'bg-danger';
-                  return (
-                    <span
-                      data-testid="util-light"
-                      data-colour={light.colour}
-                      title={t(`capacity.light.${light.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow })}
-                      aria-label={t(`capacity.light.${light.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow })}
-                      className={`inline-block w-3.5 h-3.5 rounded-full shrink-0 ${tone}`}
-                    />
-                  );
-                })()}
-                {t('capacity.title')}
-              </h2>
+              <h2 className="text-lg font-bold text-ink">{t('capacity.title')}</h2>
               {monthWindow && (
                 <span className="text-sm text-muted">
                   {monthLabel(monthWindow, props.locale)}
@@ -492,6 +466,20 @@ export default function AdminDashboard(props: PageProps) {
               <>
                 <CapacityChart series={cap.series} daysInMonth={daysInMonth} elapsed={elapsed} maxY={maxY} locale={props.locale}
                   hoursLabel={t('capacity.hours')}
+                  /* THE JUDGEMENT IS MADE HERE, rendered there. Same point the chart is drawn to —
+                     sold-to-date over available-to-date at `elapsed` — so the lamp, the headline and
+                     the lines beside them cannot tell different stories. Undefined when there is
+                     nothing to judge, which is how the housing disappears rather than greying out. */
+                  light={(() => {
+                    const pt = cap.series?.find((s2: any) => s2.day === elapsed) ?? null;
+                    const l = utilisationLight(pt ? { soldToDate: pt.billed, availableToDate: pt.capacity } : null, utilThresholds);
+                    if (!l) return undefined;
+                    return {
+                      colour: l.colour,
+                      label: t(`capacity.light.${l.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow }),
+                      figure: `${l.pct.toLocaleString(props.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`,
+                    };
+                  })()}
                   ends={{
                     capacity: { title: t('capacity.totalSellable'), value: withheld ? '—' : whole(cap.potentialPennies) },
                     billed: { title: t('capacity.totalSold'), value: withheld ? '—' : whole(cap.actualPennies) },

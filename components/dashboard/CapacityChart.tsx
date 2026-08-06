@@ -10,6 +10,8 @@
 import React from 'react';
 
 export type CapacitySeriesPoint = { day: number; capacity: number; billed: number };
+/** The judgement, already made (lib/utilisation-light) — the chart renders it, never decides it. */
+export type CapacityLight = { colour: 'red' | 'amber' | 'green'; label: string; figure: string };
 type EndLabel = { title: string; value: string };
 type Props = {
   series: CapacitySeriesPoint[];
@@ -20,6 +22,9 @@ type Props = {
   ends: { capacity: EndLabel; billed: EndLabel };
   // In-month only: a muted reference label at the capacity line's TODAY point (sellable accrued so far).
   todayLabel?: { day: number; capacityHours: number; title: string; value: string };
+  /** Omitted when there is nothing to judge — no accrued capacity, or a period before the tenant's
+   *  records. Absent, never a grey housing: a dark light is still a claim. */
+  light?: CapacityLight;
   locale: string;
 };
 
@@ -27,7 +32,7 @@ const W = 720, H = 260, padL = 44, padR = 140, padT = 14, padB = 28;
 const plotW = W - padL - padR, plotH = H - padT - padB;
 const plotRight = padL + plotW;
 
-export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hoursLabel, ends, todayLabel, locale }: Props) {
+export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hoursLabel, ends, todayLabel, light, locale }: Props) {
   if (!series.length || maxY <= 0) return null;
   const x = (day: number) => padL + (daysInMonth <= 1 ? 0 : ((day - 1) / (daysInMonth - 1)) * plotW);
   const y = (v: number) => padT + plotH - (Math.max(0, Math.min(v, maxY)) / maxY) * plotH;
@@ -61,6 +66,16 @@ export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hour
       <text x={plotRight + 8} y={cy + 9} className={`${tone} fill-current text-[15px] font-bold`}>{value}</text>
     </g>
   );
+
+  // ── THE TRAFFIC LIGHT ────────────────────────────────────────────────────────────────────────
+  // Inside the plot, top left. Three lamps ALWAYS drawn; the live one at full strength, the other
+  // two dimmed to a low opacity of the same hue family so the housing reads as a traffic light
+  // rather than as two empty holes. Sized to be read across a workshop, not to sit in a status bar.
+  const LX = padL + 14, LY = padT + 8;         // housing top-left, clear of the y-axis labels
+  const LW = 40, LH = 108, R = 13;             // housing, and lamp radius
+  const lampCY = [LY + 24, LY + 54, LY + 84];  // red, amber, green — top to bottom, as they are
+  const lampTone = ['text-danger', 'text-warn', 'text-ok'];
+  const litIndex = light ? ({ red: 0, amber: 1, green: 2 } as const)[light.colour] : -1;
 
   return (
     <div className="w-full overflow-x-auto">
@@ -99,6 +114,26 @@ export default function CapacityChart({ series, daysInMonth, elapsed, maxY, hour
         {/* end labels (right gutter) */}
         <EndTag cy={capC} title={ends.capacity.title} value={ends.capacity.value} tone="text-ink" />
         <EndTag cy={billC} title={ends.billed.title} value={ends.billed.value} tone="text-ok" />
+      
+        {/* Drawn last: on top of the lines, which may otherwise run through it. */}
+        {light && (
+          <g role="img" aria-label={light.label}>
+            <title>{light.label}</title>
+            <rect x={LX} y={LY} width={LW} height={LH} rx={10}
+              className="text-ink fill-current" opacity="0.10" />
+            <rect x={LX} y={LY} width={LW} height={LH} rx={10}
+              className="text-line stroke-current" fill="none" strokeWidth="1.5" />
+            {lampCY.map((cy, i) => (
+              <circle key={i} cx={LX + LW / 2} cy={cy} r={R}
+                className={`${lampTone[i]} fill-current`}
+                opacity={i === litIndex ? 1 : 0.16} />
+            ))}
+            {/* THE HEADLINE FIGURE, beside the housing. The P&L strip keeps its own; both read the
+                same point, so they agree by construction rather than by being kept in step. */}
+            <text x={LX + LW + 14} y={LY + 46} className="text-muted fill-current text-[11px] uppercase tracking-wide">Utilisation</text>
+            <text x={LX + LW + 14} y={LY + 74} className="text-ink fill-current text-[26px] font-extrabold">{light.figure}</text>
+          </g>
+        )}
       </svg>
     </div>
   );
