@@ -6,6 +6,12 @@
  * to Stripe's CURRENT truth), so a replay is a no-op even beyond the dedupe.
  *
  * Raw body required for signature verification → bodyParser OFF.
+ *
+ * EVENTS THIS ENDPOINT MUST BE SUBSCRIBED TO IN THE STRIPE DASHBOARD:
+ *   checkout.session.completed, customer.subscription.{created,updated,deleted,paused,resumed},
+ *   invoice.paid, invoice.payment_failed, charge.refunded,
+ *   customer.updated  ← ADDED 2026-08-06 for the country-mismatch check; without it a country
+ *                       corrected in the Portal is never compared again.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
@@ -13,6 +19,8 @@ import { prisma } from '@/lib/db';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
 import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
+import { countryMismatch } from '@/lib/billing-country';
+import { writeAudit } from '@/lib/audit';
 
 export const config = { api: { bodyParser: false } };
 
@@ -28,6 +36,27 @@ function readRaw(req: NextApiRequest): Promise<Buffer> {
     });
     req.on('error', reject);
   });
+}
+
+/**
+ * ONE place the comparison is made and reported. An AuditLog row rather than a console line,
+ * because the console is unreadable after the fact and this is the kind of fault that is only ever
+ * noticed later — the row names both countries and the event that revealed them.
+ * Never throws: a reporting failure must not fail a webhook Stripe will then retry forever.
+ */
+async function reportCountryMismatch(groupId: string | null, stripeCountry: string | null, via: string): Promise<void> {
+  try {
+    if (!groupId) return;
+    const g = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
+    const m = countryMismatch(g?.country_code, stripeCountry);
+    if (!m) return;
+    console.warn(`[stripe] COUNTRY MISMATCH ${g?.ref}: GreaseDesk says ${m.groupCountry}, Stripe says ${m.stripeCountry} (via ${via})`);
+    await writeAudit(prisma as any, {
+      groupId, userId: null, action: 'billing.country_mismatch',
+      entity: 'group', entityId: groupId,
+      diff: { groupCountry: m.groupCountry, stripeCountry: m.stripeCountry, via },
+    });
+  } catch { /* never let this fail the webhook */ }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -65,7 +94,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Seed the customer link so later subscription.* events map by customer id.
           await prisma.groupBilling.update({ where: { group_id: groupId }, data: { stripe_customer_id: customerId, stripe_subscription_id: subId ?? undefined } }).catch(() => {});
         }
+        // WHAT COUNTRY DID STRIPE ACTUALLY RECORD? It is on the session already
+        // (customer_details.address.country) — no extra API call — and it is the first moment the
+        // payer's answer exists. A disagreement with Group.country_code decides the wrong TAX
+        // REGIME once automatic_tax is on, so it must surface here rather than in a tax return.
+        await reportCountryMismatch(groupId, s.customer_details?.address?.country ?? null, 'checkout.session.completed');
         if (subId) { const sub = await stripe.subscriptions.retrieve(subId); await applyStripeSubscriptionToCache(sub, groupId); }
+        break;
+      }
+      // The address can change AFTER checkout — a correction in the Portal, or an update we make.
+      // Same comparison, same reporter, so a later divergence is caught by the same rule.
+      case 'customer.updated': {
+        const c = event.data.object as Stripe.Customer;
+        const row = await prisma.groupBilling.findFirst({ where: { stripe_customer_id: c.id }, select: { group_id: true } });
+        await reportCountryMismatch(row?.group_id ?? null, c.address?.country ?? null, 'customer.updated');
         break;
       }
       case 'customer.subscription.created':

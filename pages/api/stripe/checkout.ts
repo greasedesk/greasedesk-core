@@ -69,6 +69,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('[stripe] price retrieve failed', e?.message);
     return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
   }
+  // ── THE CUSTOMER IS OURS TO CREATE, AND OURS TO PUT A COUNTRY ON ────────────────────────────
+  // Left to Checkout, the customer's country came from the payer's browser/IP, falling back to our
+  // own Stripe account's country — so a US tenant signed up from a UK connection was recorded as
+  // GB. We already resolved that country to pick the currency two lines above; sending it costs
+  // nothing and makes it the value the payer SEES prefilled rather than one they have to notice is
+  // wrong. Idempotency-keyed on the group, so a retried or failed checkout cannot spawn duplicates.
+  let customerId = billing?.stripe_customer_id ?? null;
+  if (!customerId) {
+    try {
+      const customer = await stripe.customers.create({
+        email: group.billing_email ?? undefined,
+        name: group.group_name ?? undefined,
+        address: { country: profile.countryCode },   // the ONLY field we assert; the rest is theirs
+        metadata: { group_id: groupId, group_ref: group.ref ?? '' },
+      }, { idempotencyKey: `customer:${groupId}` });
+      customerId = customer.id;
+      // Persist immediately: the webhook also writes this, but a customer we created and then
+      // forgot would be an orphan of exactly the kind purgeTenant cannot reach.
+      await prisma.groupBilling.update({ where: { group_id: groupId }, data: { stripe_customer_id: customerId } }).catch(() => {});
+    } catch (e: any) {
+      console.error('[stripe] customer create failed', e?.message);
+      // Fall through with a null customer — Checkout will create one from customer_email as before.
+      // A missing country is worse than a failed checkout, but not worse than no checkout at all.
+      customerId = null;
+    }
+  }
+
   const quantity = Math.max(1, siteCount);
   const base = appBaseUrl();
 
@@ -113,8 +140,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? { automatic_tax: { enabled: true }, tax_id_collection: { enabled: true } }
         : {}),
       client_reference_id: groupId,
-      ...(billing?.stripe_customer_id
-        ? { customer: billing.stripe_customer_id }
+      ...(customerId
+        ? {
+            customer: customerId,
+            // REQUIRED the moment automatic_tax turns on: Stripe REFUSES a session that passes an
+            // existing customer without it, and that day is chosen by HMRC rather than by us. It
+            // also means an address corrected at Checkout or in the Portal lands on the customer
+            // record Stripe Tax actually reads, instead of only on the session.
+            customer_update: { address: 'auto' as const },
+          }
         : { customer_email: group.billing_email ?? undefined }),
       success_url: successUrl,
       cancel_url: cancelUrl,

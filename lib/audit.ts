@@ -58,6 +58,9 @@ export type AuditAction =
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
+  | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.
+                                // Decides the TAX REGIME once automatic_tax is on, so it is
+                                // recorded, not logged: { groupCountry, stripeCountry, via }
   | 'checkout.failed'     // Stripe refused to create a Checkout session. Carries Stripe's own
                          // message, code and REQUEST ID — without these the 502 is undiagnosable
                          // from outside: { detail, stripeCode, requestId, quantity, currency }
