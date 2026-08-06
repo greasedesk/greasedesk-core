@@ -3,7 +3,9 @@
  * SuperAdmin tenant lifecycle: archive (soft, reversible), un-archive, and PURGE (hard, ordered).
  *
  * PURGE is an ORDERED TRANSACTION, never a cascade (step-0 blast-radius rules):
- *   1. Cancel the Stripe subscription FIRST (idempotent) — a deleted tenant must never still bill.
+ *   1. Cancel the Stripe subscription FIRST **and CONFIRM it** — a deleted tenant must never still
+ *      bill. An UNCONFIRMED cancel ABORTS the purge (see below); nothing else has run at that point,
+ *      so the tenant is left exactly as it was.
  *   2. R2: delete every object under `${groupId}/` (list + batched delete).
  *   3. DB innermost-first past the NoAction FKs (Booking / JobCard / Invoice block a bare cascade):
  *        Invoice (→InvoiceLine cascade) → Booking → JobCard (→photos/items cascade)
@@ -13,11 +15,40 @@
  *        → group.delete() (cascades the entire remainder: Sites+children, catalogue, promos,
  *          cost, leave, invoices-seq, roles, billing, …).
  *   4. Write a SuperAdminAudit row (its own table — survives the purge).
+ *
+ * ── WHY AN UNCONFIRMED CANCEL MUST ABORT ────────────────────────────────────────────────────────
+ * `Group.billing.stripe_subscription_id` is the ONLY route from the product to the subscription.
+ * Once the Group row is gone the subscription is unreachable forever: nothing can list it, stop it,
+ * or even discover it. This used to record the failure in `stripe.note` and delete anyway, which in
+ * test mode left nine orphans and in live would be nine real cards charged monthly for tenants that
+ * no longer exist — invisible until a chargeback nobody can trace.
+ *
+ * CONFIRMED means exactly two things: Stripe returned status `canceled`, or Stripe said
+ * `resource_missing` (it is already gone). Everything else — an API error, a network failure, an
+ * unconfigured client, or a cancel that returned some other status — is UNCONFIRMED and throws,
+ * naming the subscription id so an operator can finish the job in the Stripe dashboard and re-run.
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { deleteByPrefix } from '@/lib/r2';
+
+/**
+ * Thrown INSTEAD of purging when the subscription cannot be confirmed stopped. Carries the
+ * subscription id because that id is about to become the only way to find the thing, and if the
+ * purge went ahead it would be lost with the row that holds it.
+ */
+export class PurgeAbortedError extends Error {
+  readonly code = 'purge_aborted_stripe';
+  readonly subscriptionId: string;
+  // Written out rather than as a TS parameter property: this file is exercised by a plain node
+  // harness in the gate, and strip-only type removal cannot desugar parameter properties.
+  constructor(subscriptionId: string, reason: string) {
+    super(`Purge aborted: subscription ${subscriptionId} could not be confirmed cancelled — ${reason} Cancel it in the Stripe dashboard, then purge again. Nothing has been deleted.`);
+    this.name = 'PurgeAbortedError';
+    this.subscriptionId = subscriptionId;
+  }
+}
 
 export type PurgeResult = {
   groupId: string;
@@ -116,15 +147,28 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
   if (!g) throw new Error('Tenant not found.');
   const before = await countTenantRows(groupId);
 
-  // 1. Stripe FIRST — a purged tenant must never still bill. Idempotent.
+  // 1. Stripe FIRST — cancel AND CONFIRM. Nothing below this point runs unless the subscription is
+  // provably stopped, because after step 3 there is no way back to it (see the header).
   const subId = g.billing?.stripe_subscription_id ?? null;
   const stripeResult = { subscriptionId: subId, canceled: false, note: undefined as string | undefined };
   if (subId) {
     const stripe = getStripe();
-    if (stripe) {
-      try { const s = await stripe.subscriptions.cancel(subId); stripeResult.canceled = s.status === 'canceled'; }
-      catch (e: any) { stripeResult.note = e?.code === 'resource_missing' ? 'already gone' : (e?.message || 'cancel error'); stripeResult.canceled = e?.code === 'resource_missing'; }
-    } else { stripeResult.note = 'stripe not configured'; }
+    if (!stripe) {
+      throw new PurgeAbortedError(subId, 'Stripe is not configured on this deployment, so the subscription cannot be cancelled or confirmed.');
+    }
+    try {
+      const s = await stripe.subscriptions.cancel(subId);
+      if (s.status !== 'canceled') {
+        // Cancelled without ending: a schedule or a pending update can leave it live. Not confirmed.
+        throw new PurgeAbortedError(subId, `Stripe returned status "${s.status}" rather than "canceled".`);
+      }
+      stripeResult.canceled = true;
+    } catch (e: any) {
+      if (e instanceof PurgeAbortedError) throw e;
+      // ALREADY GONE is the one failure that IS a confirmation — there is nothing left to bill.
+      if (e?.code === 'resource_missing') { stripeResult.canceled = true; stripeResult.note = 'already gone'; }
+      else throw new PurgeAbortedError(subId, e?.message || 'the cancel request failed');
+    }
   }
 
   // 2. R2 — every object under the tenant prefix.

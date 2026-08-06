@@ -9,7 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
 import { requireOperatorApi } from '@/lib/operator-auth';
-import { purgeTenant } from '@/lib/tenant-purge';
+import { purgeTenant, PurgeAbortedError } from '@/lib/tenant-purge';
 
 export const config = { maxDuration: 60 };
 
@@ -37,6 +37,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await purgeTenant(op.userId, groupId);
     return res.status(200).json({ ok: true, ...result });
   } catch (e: any) {
+    // An unconfirmed Stripe cancel is a REFUSAL, not a server fault: nothing was deleted and the
+    // operator has a specific, actionable next step. 409 so the UI can show the message rather than
+    // a generic failure, and so it reads differently from a genuine 500.
+    if (e instanceof PurgeAbortedError) {
+      console.warn('[superadmin] purge aborted —', e.message);
+      return res.status(409).json({ code: e.code, subscriptionId: e.subscriptionId, message: e.message });
+    }
     console.error('[superadmin] purge error', e?.message);
     return res.status(500).json({ message: 'Purge failed.', detail: e?.message });
   }
