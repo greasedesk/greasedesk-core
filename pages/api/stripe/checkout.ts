@@ -78,20 +78,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let customerId = billing?.stripe_customer_id ?? null;
   if (!customerId) {
     try {
-      const customer = await stripe.customers.create({
+      const customerParams: Stripe.CustomerCreateParams = {
         email: group.billing_email ?? undefined,
         name: group.group_name ?? undefined,
         address: { country: profile.countryCode },   // the ONLY field we assert; the rest is theirs
         metadata: { group_id: groupId, group_ref: group.ref ?? '' },
-      }, { idempotencyKey: `customer:${groupId}` });
+      };
+      // The key carries the PARAMETERS, for the same reason the session key does: a group-only key
+      // is rejected by Stripe the moment anything about the customer differs — and the first thing
+      // that differs is the country, which is the whole point of this call. Caught by the gate: a
+      // tenant that moved US → GB got no customer and no country at all, silently.
+      // Duplicate protection is not weakened: the `if (!customerId)` check above reads the id we
+      // persist immediately, so the normal path never reaches here twice.
+      const cShape = createHash('sha256').update(JSON.stringify(customerParams)).digest('hex').slice(0, 16);
+      const customer = await stripe.customers.create(customerParams, { idempotencyKey: `customer:${groupId}:${cShape}` });
       customerId = customer.id;
       // Persist immediately: the webhook also writes this, but a customer we created and then
       // forgot would be an orphan of exactly the kind purgeTenant cannot reach.
       await prisma.groupBilling.update({ where: { group_id: groupId }, data: { stripe_customer_id: customerId } }).catch(() => {});
     } catch (e: any) {
-      console.error('[stripe] customer create failed', e?.message);
-      // Fall through with a null customer — Checkout will create one from customer_email as before.
-      // A missing country is worse than a failed checkout, but not worse than no checkout at all.
+      // FALLING THROUGH LOSES THE COUNTRY, which is the fault this whole path exists to fix — so it
+      // is recorded, not just logged. Checkout still proceeds via customer_email: a guessed country
+      // beats no checkout, but nobody should have to infer from silence that it happened.
+      console.error('[stripe] customer create failed — country not sent', e?.message);
+      await writeAudit(prisma as any, {
+        groupId, userId: vis.userId ?? null,
+        action: 'billing.country_not_sent', entity: 'group', entityId: groupId,
+        diff: { intendedCountry: profile.countryCode, detail: String(e?.message ?? '').slice(0, 200), stripeCode: e?.code ?? null },
+      }).catch(() => {});
       customerId = null;
     }
   }

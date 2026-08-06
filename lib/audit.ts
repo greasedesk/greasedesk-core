@@ -58,6 +58,8 @@ export type AuditAction =
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
+  | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
+                                // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.
                                 // Decides the TAX REGIME once automatic_tax is on, so it is
                                 // recorded, not logged: { groupCountry, stripeCountry, via }
