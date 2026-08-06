@@ -80,6 +80,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // clawback. Both go through lib/commission-billing → the commission engine (never computed here).
       // Idempotent twice over: this event.id (StripeEvent, above) AND the ledger's source_ref
       // (invoice/refund id), so a re-delivery or a duplicate-typed event can't double-write.
+      // RECORDED, NOT ANCHORED (ruling 2026-08-06). A single decline is often transient and clears
+      // on the next retry; anchoring here would show a seven-day countdown that then vanishes,
+      // which is worse than none. The clock starts when Stripe reaches past_due, in the
+      // subscription cases above. This exists so the failure is visible in the event log at all —
+      // before today nothing reacted to it whatsoever.
+      case 'invoice.payment_failed': {
+        const inv = event.data.object as Stripe.Invoice;
+        const subId = typeof (inv as any).subscription === 'string' ? (inv as any).subscription : (inv as any).subscription?.id;
+        console.warn(`[stripe] invoice.payment_failed invoice=${inv.id} subscription=${subId ?? 'none'} attempt=${(inv as any).attempt_count ?? '?'} — recorded; the grace clock starts at past_due, not here`);
+        break;
+      }
       case 'invoice.paid': {
         const r = await accrueFromInvoicePaid(prisma, event.data.object as Stripe.Invoice);
         console.log('[stripe] invoice.paid →', JSON.stringify(r));

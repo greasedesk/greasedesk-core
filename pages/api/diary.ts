@@ -74,6 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
+      if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
       if (m.startsWith('CLASH:')) {
         return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. Double-booking refused.', clash: true });
       }

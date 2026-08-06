@@ -268,6 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'FORBIDDEN_SITE') return res.status(403).json({ message: 'You do not have permission to use this site.' });
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
+      if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
       if (m.startsWith('CLASH:')) return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
       console.error('Job Card Create Error:', error); // real detail stays in the server log, never the user
       return res.status(500).json({ message: 'Something went wrong — please try again.' });

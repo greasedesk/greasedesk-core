@@ -17,7 +17,6 @@ import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
 import { writeAudit } from '@/lib/audit';
 import { getTenantVat } from '@/lib/tenant-vat';
-import { requireCanWrite } from '@/lib/admin-guard';
 import { supersedeOnMaterialEdit } from '@/lib/quote-version';
 import { canEditInvoice } from '@/lib/invoice';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
@@ -61,7 +60,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (card.invoice && !canEditInvoice({ status: card.invoice.status, hasFrozenLines: (card.invoice.lines?.length ?? 0) > 0 })) {
     return res.status(409).json({ message: 'This job is invoiced and its lines are frozen. An admin can unlock it to make corrections.' });
   }
-  if (!(await requireCanWrite(user.group_id as string, res))) return; // lapsed = read-only; saving an estimate is new work
+  // NOT GATED (2026-08-06). This endpoint saves the estimate — which is BOTH quoting and "a
+  // mechanic found a seized caliper on a car already on the ramp". Both must survive restriction:
+  // a garage has to finish and bill what is in the workshop, and has to be able to take an enquiry.
+  // The old comment here said "saving an estimate is new work"; it was the fault that would have
+  // stopped a mechanic mid-job. New work is a BOOKING, and that is gated at placeJobCard.
 
   // Master switch + company default rate (the fallback when the client omits a rate).
   const vat = await getTenantVat(user.group_id as string);

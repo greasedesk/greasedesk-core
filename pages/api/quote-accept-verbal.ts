@@ -23,7 +23,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
-import { requireCanWrite } from '@/lib/admin-guard';
 import { acceptQuote } from '@/lib/quote-acceptance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,7 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You don’t have access to that job card.' });
-  if (!(await requireCanWrite(user.group_id as string, res))) return;
+  // NOT GATED (2026-08-06): recording that a customer said yes over the counter is continuing
+  // work on an enquiry that already exists. It takes no workshop slot.
 
   if (!['draft', 'quoted', 'declined'].includes(card.status)) {
     return res.status(409).json({ message: `A ${card.status} job can’t be marked accepted.` });

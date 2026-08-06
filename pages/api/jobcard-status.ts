@@ -87,7 +87,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // BILLING GATE: issuing an invoice mints NEW financial work → blocked for a lapsed tenant. Marking
   // PAID is deliberately NOT gated — recording that a customer paid is reality on existing work, and
   // a lapsed garage must still be able to keep its book straight.
-  if (to === 'invoiced' && !(await requireCanWrite(user.group_id as string, res))) return;
+  // ISSUING AN INVOICE IS NEVER GATED (2026-08-06). This was the sharpest edge of the old rule: a
+  // garage whose payment had failed could finish the job and then not bill for it — the one action
+  // that gets them the money to pay us. Billing always continues.
 
   // Marking PAID requires a payment method (the grain) — validated against THIS tenant's active
   // list before the tx. No silent default: misrecorded grain is worse than a second click.

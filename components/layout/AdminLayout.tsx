@@ -16,6 +16,7 @@ import { useRouter } from 'next/router';
 import { signOut, useSession } from 'next-auth/react';
 import { useTranslation } from 'next-i18next';
 import BrandLogo from '@/components/BrandLogo';
+import BillingBanner from '@/components/layout/BillingBanner';
 
 type Loc = { id: string; site_name: string };
 type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards'; needsInvoicePerm?: boolean; adminOnly?: boolean;
@@ -200,6 +201,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             three different widths, and centred themselves while the rest of the app did not.
             A page may cap its own READING WIDTH (a form is not a table); it must not centre
             itself. `mx-auto` does not belong in a page under /admin. */}
+        {/* ABOVE the content and inside the scroll region, so it is the first thing on every admin
+            page rather than something only Settings → Licence ever showed. */}
+        <BillingBanner />
         <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
       </main>
 

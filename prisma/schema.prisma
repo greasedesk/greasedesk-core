@@ -641,6 +641,20 @@ model GroupBilling {
   subscription_status    String? // raw Stripe subscription.status
   current_period_end     DateTime? // Stripe's period end (renewal/charge date), webhook-maintained
 
+  // ── THE GRACE CLOCK. Written ONCE, when the tenant first enters a grace-worthy state, and never
+  // overwritten while non-null — otherwise every Stripe retry would reset the countdown and the
+  // tenant would never restrict. The END is DERIVED (anchor + GRACE_DAYS) in lib/billing, never
+  // stored, so changing the window is a constant and not a migration.
+  //
+  // DELIBERATELY NOT current_period_end: Stripe ADVANCES that on retry, so a countdown keyed to it
+  // silently extends itself while the tenant sits unpaid — the exact failure this replaces.
+  //
+  // The reason is carried because the two populations need different words for the same rule: a
+  // trial that ended never intended to pay; a past_due subscription is a customer whose card
+  // stopped working. Telling a two-year customer their trial ended would be insulting.
+  grace_started_at       DateTime?
+  grace_reason           String?   // 'trial_ended' | 'payment_failed'
+
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
 

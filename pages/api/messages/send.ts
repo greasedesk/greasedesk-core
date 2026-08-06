@@ -16,7 +16,6 @@ import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { requireCanWrite } from '@/lib/admin-guard';
 import { sendNotification } from '@/lib/notify';
 import { writeThreadAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
@@ -75,7 +74,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method !== 'POST') { res.setHeader('Allow', 'GET, POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
-  if (!(await requireCanWrite(groupId, res))) return;
+  // NOT GATED (2026-08-06): talking to a customer is continuing work. A garage that cannot answer
+  // its own customers is not restricted, it is broken.
 
   const channel = ((req.body ?? {}).channel === 'sms' ? 'sms' : 'email') as NotifyChannelName;
   const body = String((req.body ?? {}).body ?? '').trim();

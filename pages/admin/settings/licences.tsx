@@ -13,6 +13,7 @@ import SettingsLayout from '@/components/layout/SettingsLayout';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
 import { resolveTenantProfile, formatProfileDate } from '@/lib/locale-profiles';
+import { isLapsedStatus } from '@/lib/billing';
 
 type PageProps = {
   groupName: string;
@@ -34,7 +35,6 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const LAPSED = new Set(['canceled', 'unpaid', 'incomplete_expired', 'paused']);
 const STATUS_LABEL: Record<string, string> = {
   trialing: 'Trial', active: 'Active', past_due: 'Payment retrying', canceled: 'Lapsed',
   unpaid: 'Lapsed', paused: 'Paused', incomplete: 'Awaiting payment', incomplete_expired: 'Lapsed',
@@ -44,7 +44,7 @@ export default function LicencesSettings(props: PageProps) {
   const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const lapsed = !!subscriptionStatus && LAPSED.has(subscriptionStatus);
+  const lapsed = isLapsedStatus(subscriptionStatus); // the ONE vocabulary (lib/billing)
   const subscribed = subscriptionStatus === 'trialing' || subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
 
   async function go(path: string) {

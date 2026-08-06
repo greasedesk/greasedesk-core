@@ -10,7 +10,6 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-import { requireCanWrite } from '@/lib/admin-guard';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
@@ -58,7 +57,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!canManageSite(vis, card.site_id)) {
     return res.status(403).json({ message: 'Only a manager or admin can accept and book a job.' });
   }
-  if (!(await requireCanWrite(user.group_id as string, res))) return; // lapsed = read-only; booking a job is new work
+  // NOT GATED HERE (2026-08-06). Accepting is continuing work — the enquiry already exists and the
+  // customer has just said yes. The BOOKING half of this endpoint is gated where every other
+  // booking path is, inside placeJobCard, which throws BILLING_RESTRICTED and is caught below.
+  // The old comment said "booking a job is new work" — true, but it gated the acceptance too.
 
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -83,6 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (e: any) {
     const msg = String(e?.message ?? '');
+    if (msg === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
     if (msg.startsWith('CLASH:')) {
       return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. The quote stays quoted.' });
     }

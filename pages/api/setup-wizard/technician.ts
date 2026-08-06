@@ -13,7 +13,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
-import { requireAdminApi, requireCanWrite } from '@/lib/admin-guard';
+import { requireAdminApi } from '@/lib/admin-guard';
 import { recordEmploymentEvents } from '@/lib/employment-events';
 import { makeInviteToken } from '@/lib/tokens';
 import { sendNotification } from '@/lib/notify';
@@ -32,7 +32,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = vis.groupId as string;
   const siteId = vis.primarySiteId;
   if (!siteId) return res.status(400).json({ message: 'No location yet.' });
-  if (!(await requireCanWrite(groupId, res))) return;
+  // NOT GATED (ruling 2026-08-06): hiring is not workshop work, and stopping a garage adding a
+  // mechanic is punitive without being persuasive.
 
   const b = (req.body || {}) as any;
   const name = String(b.name ?? '').trim();

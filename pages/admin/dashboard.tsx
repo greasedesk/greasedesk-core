@@ -26,6 +26,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { monthParamsForSelection, monthNameOf, rollingMonths } from '@/lib/dashboard-periods';
 import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
+import { isLapsedStatus } from '@/lib/billing';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
@@ -179,11 +180,10 @@ function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string):
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
 function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string }) {
-  const LAPSED = new Set(['canceled', 'unpaid', 'incomplete_expired', 'paused']);
   const endLabel = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : null;
   const perMonth = perMonthLabel; // country-profile pricing, computed server-side (£75 / $100 / €90)
 
-  if (subscriptionStatus && LAPSED.has(subscriptionStatus)) {
+  if (isLapsedStatus(subscriptionStatus)) {
     return <div className="rounded-xl border p-4 mb-6 bg-warn-soft border-warn text-warn">Your subscription has lapsed — your records are safe and fully exportable. Resubscribe from Settings → Licence to add new work.</div>;
   }
   if (subscriptionStatus === 'trialing' || (status === 'trial' && (daysLeft(trialEndsAt) ?? 1) > 0)) {

@@ -9,11 +9,23 @@
  * Used by /api/diary, /api/jobcard-accept and /api/jobcard so there is one guard, never a copy. Runs
  * inside a caller-provided transaction; the caller checks authority (canManageSite) first.
  *
+ * ── AND THE BILLING GATE (2026-08-06) ───────────────────────────────────────────────────────────
+ * "No new job cards after grace" means NO NEW BOOKINGS, not no new rows. Taking a workshop slot is
+ * what the subscription buys, so the gate lives HERE rather than on card creation: a card raised
+ * from the quote entry point carries no resource and no start time, occupies nothing, and stays
+ * allowed. That lets a restricted garage keep taking enquiries and quoting for them.
+ *
+ * Putting it here also settles an inconsistency that was already live: /api/jobcard-accept refused
+ * a booking when lapsed while /api/diary — the drag path — did not, so the same act had two
+ * answers. Four callers, one function, one rule.
+ *
  * Throws: CARD_NOT_FOUND | RESOURCE_NOT_FOUND | CROSS_SITE | EMPTY_FOOTPRINT | CLASH:<reg>
+ *       | BILLING_RESTRICTED
  */
 import { Prisma } from '@prisma/client';
 import { computeFootprint, footprintsClash, parseBreaks } from '@/lib/occupancy';
 import { OFF_DIARY_STATUSES } from '@/lib/jobcard-status';
+import { canBook, gateFromRow, BILLING_GATE_SELECT } from '@/lib/billing';
 
 export type PlaceParams = {
   jobCardId: string;
@@ -30,8 +42,14 @@ export type PlaceParams = {
 const PREFILTER_LOOKBACK_MS = 14 * 24 * 3600000;
 
 export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams): Promise<void> {
-  const card = await tx.jobCard.findFirst({ where: { id: p.jobCardId, site_id: { in: p.siteIds } }, select: { id: true, site_id: true } });
+  const card = await tx.jobCard.findFirst({ where: { id: p.jobCardId, site_id: { in: p.siteIds } }, select: { id: true, site_id: true, group_id: true } });
   if (!card) throw new Error('CARD_NOT_FOUND');
+
+  // MAY THIS TENANT TAKE A SLOT? Asked before any clash maths — a restricted tenant gets the same
+  // answer whether or not the lift happens to be free, and the reason names billing rather than
+  // availability.
+  const billing = await tx.groupBilling.findUnique({ where: { group_id: card.group_id }, select: BILLING_GATE_SELECT });
+  if (!canBook(gateFromRow(billing as any))) throw new Error('BILLING_RESTRICTED');
 
   const resource = await tx.resource.findFirst({ where: { id: p.resourceId, site_id: { in: p.siteIds } }, select: { id: true, site_id: true } });
   if (!resource) throw new Error('RESOURCE_NOT_FOUND');

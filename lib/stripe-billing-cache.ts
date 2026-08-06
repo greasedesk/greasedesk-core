@@ -40,6 +40,12 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
     .filter((x): x is string => !!x);
   const entitled = modulesFromPriceIds(priceIds);
 
+  // Read the anchor BEFORE writing: "written once, never overwritten while non-null" needs to know
+  // whether one is already there.
+  const existing = await prisma.groupBilling.findUnique({
+    where: { group_id: groupId }, select: { grace_started_at: true, subscription_status: true },
+  });
+
   await prisma.$transaction(async (tx: any) => {
     await tx.groupBilling.update({
       where: { group_id: groupId },
@@ -49,6 +55,17 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
         subscription_status: sub.status,
         current_period_end: periodEnd,
         status: billingStatusFromStripe(sub.status), // coarse projection for display
+        // ── THE GRACE ANCHOR: written ONCE, on the transition INTO past_due, and never again while
+        // non-null. Stripe fires subscription.updated on every retry; overwriting here would push
+        // the countdown forward each time and the tenant would never restrict.
+        // Anchored on past_due rather than the first invoice.payment_failed (ruling 2026-08-06): a
+        // single decline is often transient, and a seven-day countdown that appears and vanishes is
+        // worse than none.
+        ...(sub.status === 'past_due' && !existing?.grace_started_at
+          ? { grace_started_at: new Date(), grace_reason: trialEnd || existing?.subscription_status === 'trialing' ? 'trial_ended' : 'payment_failed' }
+          : {}),
+        // Recovered: the money arrived. Clear the anchor so a LATER failure starts a fresh clock.
+        ...(sub.status === 'active' || sub.status === 'trialing' ? { grace_started_at: null, grace_reason: null } : {}),
       },
     });
     await applyStripeModules(tx as any, groupId, entitled);
