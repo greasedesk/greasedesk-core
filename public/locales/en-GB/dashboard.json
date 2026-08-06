@@ -55,7 +55,12 @@
     "rateEffective": "Effective Labour rate over period = {{rate}}",
     "rateEffectiveToDate": "Effective Labour rate to date = {{rate}}",
     "howTitle": "How to read this",
-    "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Billed is the hours actually charged, dated by invoice date. The gap between the two is capacity that didn't turn into billed work — hours that went unsold or aren't yet invoiced."
+    "explainer": "Capacity pace is your sellable hours accruing day by day, reaching the month's total on the last working day (flat on weekends, bank holidays and closed days). Billed is the hours actually charged, dated by invoice date. The gap between the two is capacity that didn't turn into billed work — hours that went unsold or aren't yet invoiced.",
+    "light": {
+      "red": "Utilisation is below {{red}}% of the hours available so far.",
+      "amber": "Utilisation is between {{red}}% and {{amber}}% of the hours available so far.",
+      "green": "Utilisation is at or above {{amber}}% of the hours available so far."
+    }
   },
   "pnl": {
     "title": "Profit & loss",

@@ -27,6 +27,7 @@ import { monthParamsForSelection, monthNameOf, rollingMonths } from '@/lib/dashb
 import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
 import { isLapsedStatus } from '@/lib/billing';
+import { utilisationLight, thresholdsFromGroup, defaultThresholds, type UtilisationThresholds } from '@/lib/utilisation-light';
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
@@ -218,6 +219,7 @@ export default function AdminDashboard(props: PageProps) {
   const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
   // In-progress SINGLE month meta (server-authoritative): drives the to-date labels + net-profit reframe.
   const [noData, setNoData] = useState<{ dataStart: string | null } | null>(null);
+  const [utilThresholds, setUtilThresholds] = useState<UtilisationThresholds>(defaultThresholds());
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
   const [loading, setLoading] = useState(true);
   // Persist ONLY the period selection (a view preference — no money path) in localStorage, keyed per
@@ -263,6 +265,7 @@ export default function AdminDashboard(props: PageProps) {
         setTiles(d.beforeData ? null : d.tiles);
         setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
         setMonthMeta({ inProgress: !!d.monthInProgress, daysElapsed: d.daysElapsed ?? 0, daysInMonth: d.daysInMonth ?? 0 });
+        if (d.utilThresholds) setUtilThresholds(d.utilThresholds);
       }
     } catch { /* tiles keep last values */ }
     setLoading(false);
@@ -450,7 +453,33 @@ export default function AdminDashboard(props: PageProps) {
         return (
           <div className={`bg-surface p-5 rounded-xl border border-line mb-6 ${loading ? 'opacity-60' : ''}`}>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-              <h2 className="text-lg font-bold text-ink">{t('capacity.title')}</h2>
+              <h2 className="text-lg font-bold text-ink flex items-center gap-2">
+                {/* THE TRAFFIC LIGHT. Judged on the chart's OWN point — sold-to-date over
+                    available-to-date at the same elapsed day the graph is drawn to — so the colour
+                    and the line beside it can never tell different stories. Deliberately carries NO
+                    figure: the percentage is already in the utilisation tile, and a second copy is
+                    a second thing to keep in step. Absent, not grey, when there is nothing to
+                    judge. */}
+                {(() => {
+                  const pt = cap.series?.find((s2: any) => s2.day === elapsed) ?? null;
+                  const light = utilisationLight(
+                    pt ? { soldToDate: pt.billed, availableToDate: pt.capacity } : null,
+                    utilThresholds,
+                  );
+                  if (!light) return null;
+                  const tone = light.colour === 'green' ? 'bg-ok' : light.colour === 'amber' ? 'bg-warn' : 'bg-danger';
+                  return (
+                    <span
+                      data-testid="util-light"
+                      data-colour={light.colour}
+                      title={t(`capacity.light.${light.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow })}
+                      aria-label={t(`capacity.light.${light.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow })}
+                      className={`inline-block w-3.5 h-3.5 rounded-full shrink-0 ${tone}`}
+                    />
+                  );
+                })()}
+                {t('capacity.title')}
+              </h2>
               {monthWindow && (
                 <span className="text-sm text-muted">
                   {monthLabel(monthWindow, props.locale)}

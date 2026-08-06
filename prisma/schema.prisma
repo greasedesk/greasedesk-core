@@ -261,6 +261,14 @@ model Group {
   // Managers/admins always; this extends it to STANDARD.
   perm_standard_view_invoices Boolean @default(false)
 
+  // ── UTILISATION TRAFFIC LIGHT (dashboard capacity panel) ──────────────────────────────────────
+  // Percentages, tenant-configurable. red BELOW util_red_below, amber up to util_amber_below, green
+  // at or above it. NULLABLE with defaults applied in lib/utilisation-light so a half-configured row
+  // cannot produce a half-broken light. The writer refuses red >= amber — an inverted pair leaves no
+  // amber band and looks like a working light that isn't.
+  util_red_below               Int? @default(50)
+  util_amber_below             Int? @default(75)
+
   billing            GroupBilling?
   features           GroupFeature[]
   sites              Site[]

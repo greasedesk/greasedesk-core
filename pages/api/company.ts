@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { validateThresholds, thresholdsFromGroup } from '@/lib/utilisation-light';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -37,12 +38,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
     invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp, ops_email,
+    util_red_below, util_amber_below,
   } = (req.body || {}) as {
     group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
     invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string; ops_email?: string;
+    util_red_below?: number; util_amber_below?: number;
     phone?: string; whatsapp?: string;
   };
 
@@ -107,6 +110,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const v = String(ops_email).trim();
     if (v && !emailish(v)) return res.status(400).json({ message: 'The notifications address doesn’t look like an email address.' });
     data.ops_email = v || null;
+  }
+  // ── UTILISATION THRESHOLDS: BOTH OR NEITHER, AND RED BELOW AMBER ─────────────────────────────
+  // Validated as a PAIR against what will be stored, not against what was sent: changing one alone
+  // must still be checked against the other's existing value, or a single-field edit could invert
+  // them without ever presenting both numbers together.
+  if (util_red_below !== undefined || util_amber_below !== undefined) {
+    const current = await prisma.group.findUnique({ where: { id: groupId }, select: { util_red_below: true, util_amber_below: true } });
+    const th = thresholdsFromGroup(current);
+    const nextRed = util_red_below !== undefined ? Number(util_red_below) : th.redBelow;
+    const nextAmber = util_amber_below !== undefined ? Number(util_amber_below) : th.amberBelow;
+    const refusal = validateThresholds(nextRed, nextAmber);
+    if (refusal) return res.status(400).json({ code: refusal.code, message: refusal.message });
+    data.util_red_below = Math.round(nextRed);
+    data.util_amber_below = Math.round(nextAmber);
   }
   if (invoice_bcc !== undefined) {
     const v = String(invoice_bcc).trim();

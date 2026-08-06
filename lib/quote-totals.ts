@@ -15,7 +15,8 @@
  *  - Per-line VATable flag: only VATable lines contribute to VAT.
  *  - VAT = round( (sum of VATable line totals) × vatRate / 100 )  — sum-then-multiply, one rounding.
  */
-import { computeTax, taxOnBasePennies, exFromIncPennies, TaxApplyLine } from '@/lib/tax';
+import { computeTax, taxOnBasePennies, exFromIncPennies } from '@/lib/tax';
+import type { TaxApplyLine } from '@/lib/tax';
 
 export type QuoteItemType = 'labour' | 'part' | 'misc' | 'fixed';
 

@@ -14,6 +14,7 @@ import { canAccessSite } from '@/lib/admin-guard';
 import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
 import { getTenantDataStart, precedesData } from '@/lib/tenant-data-start';
+import { thresholdsFromGroup } from '@/lib/utilisation-light';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -29,7 +30,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ message: 'You do not have permission to view the dashboard.' });
   }
 
-  const grp = (await prisma.group.findUnique({ where: { id: user.group_id }, select: { fy_start_month: true } })) as any;
+  const grp = (await prisma.group.findUnique({
+    where: { id: user.group_id },
+    select: { fy_start_month: true, util_red_below: true, util_amber_below: true },
+  })) as any;
   const range = resolveRange(
     { preset: req.query.preset ? String(req.query.preset) : undefined, from: req.query.from ? String(req.query.from) : undefined, to: req.query.to ? String(req.query.to) : undefined },
     grp?.fy_start_month ?? 4,
@@ -82,5 +86,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
     monthInProgress, daysElapsed, daysInMonth,
     dataStart: dataStart ? dataStart.toISOString() : null, beforeData: false,
+    // The tenant's own thresholds travel with the figures, so the light and the numbers it judges
+    // arrive together and cannot be resolved from two different reads.
+    utilThresholds: thresholdsFromGroup(grp),
   });
 }

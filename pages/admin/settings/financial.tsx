@@ -135,13 +135,15 @@ function ProfitCentreTags({ tags, siteId, testName }: { tags: PcTag[]; siteId: s
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial, countryName, tzOptions, tzFixed, fyDefaultMonth, testName }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number }) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial, utilRedInitial, utilAmberInitial, countryName, tzOptions, tzFixed, fyDefaultMonth, testName }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number; utilRedInitial?: number; utilAmberInitial?: number }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const rateSym = currencySymbol({ currency: settings.currencyCode, locale }); // labour-rate unit label, from the tenant currency
   const [isSaving, setIsSaving] = useState(false);
   const [taxLabel, setTaxLabel] = useState(taxLabelInitial ?? 'VAT');
   const [fyStartMonth, setFyStartMonth] = useState(String(fyStartMonthInitial ?? 4)); // business-wide (Group), like the tax label
+  const [utilRed, setUtilRed] = useState(String(utilRedInitial ?? 50));
+  const [utilAmber, setUtilAmber] = useState(String(utilAmberInitial ?? 75));
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
 
   // Switching location reloads SSR with that site's settings (?site=<id>).
@@ -177,7 +179,11 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to save settings.');
       // Tax LABEL + FY start are business-wide (Group) — saved via the admin company API alongside site settings.
-      await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth) }) }).catch(() => {});
+      // The thresholds share this write. Its refusal is SURFACED, not swallowed — an inverted pair
+      // must not save silently and leave a light that looks like it works.
+      const cRes = await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth), util_red_below: Number(utilRed), util_amber_below: Number(utilAmber) }) });
+      if (!cRes.ok) { const cd = await cRes.json().catch(() => ({})); throw new Error(cd?.message || 'Could not save the business-wide settings.'); }
       setMessage({ text: 'Settings saved successfully!', type: 'success' });
     } catch (err: any) {
       setMessage({ text: err?.message || 'Failed to save settings.', type: 'error' });
@@ -236,6 +242,18 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                 <label htmlFor="taxLabel" className={labelClass}>Tax Label</label>
                 <input id="taxLabel" value={taxLabel} maxLength={20} onChange={(e) => setTaxLabel(e.target.value)} className={inputClass} placeholder="VAT" />
                 <p className="text-xs text-muted mt-1">How your sales tax appears on invoices. Set from your country at signup ({countryName}); rename it here if your paperwork uses a different term.</p>
+              </div>
+              <div>
+                <label htmlFor="utilRed" className={labelClass}>Utilisation light — red below</label>
+                <input id="utilRed" data-testid="util-red" type="number" min={0} max={100} value={utilRed}
+                  onChange={(e) => setUtilRed(e.target.value)} className={inputClass} />
+                <p className="text-xs text-muted mt-0.5">The dashboard capacity panel shows a red light below this, amber up to the next figure, green at or above it. Judged on hours sold against hours available so far, not against the whole month.</p>
+              </div>
+              <div>
+                <label htmlFor="utilAmber" className={labelClass}>Utilisation light — amber below</label>
+                <input id="utilAmber" data-testid="util-amber" type="number" min={0} max={100} value={utilAmber}
+                  onChange={(e) => setUtilAmber(e.target.value)} className={inputClass} />
+                <p className="text-xs text-muted mt-0.5">Must be above the red threshold.</p>
               </div>
               <div>
                 <label htmlFor="fyStartMonth" className={labelClass}>Financial year starts</label>
@@ -324,12 +342,14 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true } })) as any;
+  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true, util_red_below: true, util_amber_below: true } })) as any;
   return { props: {
     initial, profitCentres, sites, selectedSiteId, isAdmin: true,
     locale: (site as any)?.locale ?? profile.locale,
     taxLabelInitial: grpTax?.tax_label ?? profile.taxLabel,
     fyStartMonthInitial: grpTax?.fy_start_month ?? profile.fyStartMonth,
+    utilRedInitial: grpTax?.util_red_below ?? 50,
+    utilAmberInitial: grpTax?.util_amber_below ?? 75,
     countryName: profile.name, tzOptions: choices.options, tzFixed: choices.fixed,
     fyDefaultMonth: profile.fyStartMonth, testName: profile.roadworthiness_test_name,
   } };
