@@ -24,7 +24,6 @@ import { listQuotes, quoteFilterCounts, QUOTE_FILTERS, isQuoteFilter, DEFAULT_QU
 import { formatMoney } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
 import PeriodPicker, { type PeriodSelection } from '@/components/PeriodPicker';
-import ConversionChart from '@/components/quotes/ConversionChart';
 import { namedMonthRangeQS } from '@/lib/dashboard-periods';
 import type { QuotesMetrics } from '@/lib/quotes-metrics';
 
@@ -110,120 +109,6 @@ export default function QuotesPage(props: Props) {
         >
           + New quote
         </Link>
-      </div>
-
-      {/* ── SUMMARY PANEL ─────────────────────────────────────────────────────────────────────── */}
-      <div className="bg-surface border border-line rounded-xl p-4 mb-5" data-testid="quotes-summary">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h2 className="text-lg font-bold text-ink">Summary</h2>
-          <PeriodPicker
-            value={period} onChange={setPeriod}
-            fyStartMonth={props.fyStartMonth} locale={props.locale} storageKey={PERIOD_KEY}
-          />
-        </div>
-
-        {/* AWAITING IS A STOCK. It is rendered OUTSIDE the period-dependent block on purpose: a
-            period that predates the tenant does not make today's outstanding quotes unknown. */}
-        <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 ${busy ? 'opacity-60' : ''}`}>
-          <div className="rounded-lg border border-dashed border-accent p-3" data-testid="tile-awaiting">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-muted">Awaiting response</span>
-              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent text-white">As of today</span>
-            </div>
-            <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="awaiting-value">
-              {data ? money(data.awaitingPennies) : '—'}
-            </p>
-            <p className="text-xs text-muted mt-1">
-              {data ? `${data.awaitingCount} quote${data.awaitingCount === 1 ? '' : 's'} out now` : ''}
-              {data && data.awaitingVerbalCount > 0 ? `, ${data.awaitingVerbalCount} given verbally` : ''}
-            </p>
-            <p className="text-[11px] text-muted mt-1 italic">What is outstanding right now — the period above does not change it.</p>
-          </div>
-
-          {data?.beforeData ? (
-            <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-line bg-surface-muted p-3" data-testid="quotes-no-data">
-              <p className="text-sm font-semibold text-ink">No records for this period.</p>
-              <p className="text-sm text-muted mt-1">
-                {data.dataStart
-                  ? `Your records begin in ${monthName(data.dataStart)}. Nothing was measured before then, so there are no figures to show — not zero ones.`
-                  : 'Nothing has been recorded in GreaseDesk yet, so there is nothing to measure for this period.'}
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="rounded-lg border border-line p-3" data-testid="tile-accepted">
-                <span className="text-xs font-semibold text-muted">Accepted</span>
-                <p className="text-2xl font-bold text-ok tabular-nums mt-1" data-testid="accepted-value">{m ? money(m.acceptedPennies) : '—'}</p>
-                <p className="text-xs text-muted mt-1">{m ? `${m.acceptedCount} quote${m.acceptedCount === 1 ? '' : 's'}` : ''}
-                  {m && m.acceptedVerbalCount > 0 ? `, ${m.acceptedVerbalCount} verbal` : ''}</p>
-                {/* SUBSET, worded so it can never be added to the figure above. */}
-                <p className="text-xs text-muted mt-1" data-testid="accepted-booked">
-                  {m ? `of which ${m.acceptedBookedCount} ${m.acceptedBookedCount === 1 ? 'is' : 'are'} booked in (${money(m.acceptedBookedPennies)}) — part of the figure above, not extra` : ''}
-                </p>
-              </div>
-
-              <div className="rounded-lg border border-line p-3" data-testid="tile-declined">
-                <span className="text-xs font-semibold text-muted">Declined</span>
-                <p className="text-2xl font-bold text-ink tabular-nums mt-1">{m ? money(m.declinedPennies) : '—'}</p>
-                <p className="text-xs text-muted mt-1">{m ? `${m.declinedCount} quote${m.declinedCount === 1 ? '' : 's'}, by the date the customer answered` : ''}</p>
-              </div>
-
-              <div className="rounded-lg border border-line p-3" data-testid="tile-expired">
-                <span className="text-xs font-semibold text-muted">Expired</span>
-                <p className="text-2xl font-bold text-warn tabular-nums mt-1">{m ? money(m.expiredPennies) : '—'}</p>
-                <p className="text-xs text-muted mt-1">{m ? `${m.expiredCount} lapsed unanswered in this period` : ''}</p>
-                <p className="text-[11px] text-muted mt-1 italic">Verbal quotes never expire — nothing was sent, so nothing lapses.</p>
-              </div>
-            </>
-          )}
-        </div>
-
-        {!data?.beforeData && m && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-            <div className="rounded-lg border border-line p-3">
-              <span className="text-xs font-semibold text-muted">Conversion rate</span>
-              <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="conversion-rate">
-                {m.conversionPct == null ? '—' : `${m.conversionPct}%`}
-              </p>
-              <p className="text-xs text-muted mt-1">
-                {m.cohortAcceptedCount} of {m.cohortSentCount} quotes SENT in this period were accepted. Verbal quotes have no send date, so they are not in this figure.
-              </p>
-            </div>
-            <div className="rounded-lg border border-line p-3">
-              <span className="text-xs font-semibold text-muted">Average days to answer</span>
-              <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="avg-days">
-                {m.avgDaysToResponse == null ? '—' : m.avgDaysToResponse}
-              </p>
-              <p className="text-xs text-muted mt-1">
-                {m.avgDaysSample > 0 ? `From ${m.avgDaysSample} answered quote${m.avgDaysSample === 1 ? '' : 's'} — sent quotes only, since a verbal quote has no send date.` : 'No answered quotes in this period.'}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* THE CHART — guarded HERE, before its wrapper, not inside the component. Two slices in a
-            row found a block drawing its shell, heading and axes around absent data. */}
-        {!data?.beforeData && m && m.series.length > 0 && (
-          <div className="mt-4 border-t border-line pt-3" data-testid="quotes-chart">
-            <h3 className="text-sm font-semibold text-ink">Quoted vs accepted, by the month the quote was sent</h3>
-            <p className="text-xs text-muted mb-2">
-              Each bar pair is a COHORT: quotes sent in that month, and how much of that was accepted whenever the answer came.
-              The tiles above are dated by when the OUTCOME happened, so the two are bucketed differently by design and will not add up to each other.
-            </p>
-            <ConversionChart
-              series={m.series} money={money}
-              labels={{ quoted: 'Quoted', accepted: 'Accepted', incomplete: 'Still open — not had 14 days yet' }}
-            />
-          </div>
-        )}
-
-        {/* THE HISTORY BOUNDARY, said out loud rather than quietly under-reported. */}
-        {!data?.beforeData && m && m.historicDatedCount > 0 && (
-          <p className="text-[11px] text-muted mt-3 italic" data-testid="history-note">
-            {m.historicDatedCount} of the {m.acceptedCount} acceptances in this period predate 5 August 2026 and are dated from the audit trail
-            rather than the acceptance record, because the acceptance date was not stored as a field before then. The dates are real; the source is older.
-          </p>
-        )}
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
@@ -328,6 +213,105 @@ export default function QuotesPage(props: Props) {
           </table>
         </div>
       )}
+
+      {/* ── SUMMARY PANEL — BELOW the list, deliberately. The list is the work someone came here to
+             do; the tiles are the context they read afterwards. ─────────────────────────────────── */}
+      <div className="bg-surface border border-line rounded-xl p-4 mb-5" data-testid="quotes-summary">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h2 className="text-lg font-bold text-ink">Summary</h2>
+          <PeriodPicker
+            value={period} onChange={setPeriod}
+            fyStartMonth={props.fyStartMonth} locale={props.locale} storageKey={PERIOD_KEY}
+          />
+        </div>
+
+        {/* AWAITING IS A STOCK. It is rendered OUTSIDE the period-dependent block on purpose: a
+            period that predates the tenant does not make today's outstanding quotes unknown. */}
+        <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 ${busy ? 'opacity-60' : ''}`}>
+          <div className="rounded-lg border border-dashed border-accent p-3" data-testid="tile-awaiting">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-muted">Awaiting response</span>
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide rounded-full px-2 py-0.5 bg-accent text-white">As of today</span>
+            </div>
+            <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="awaiting-value">
+              {data ? money(data.awaitingPennies) : '—'}
+            </p>
+            <p className="text-xs text-muted mt-1">
+              {data ? `${data.awaitingCount} quote${data.awaitingCount === 1 ? '' : 's'} out now` : ''}
+              {data && data.awaitingVerbalCount > 0 ? `, ${data.awaitingVerbalCount} given verbally` : ''}
+            </p>
+            <p className="text-[11px] text-muted mt-1 italic">What is outstanding right now — the period above does not change it.</p>
+          </div>
+
+          {data?.beforeData ? (
+            <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-line bg-surface-muted p-3" data-testid="quotes-no-data">
+              <p className="text-sm font-semibold text-ink">No records for this period.</p>
+              <p className="text-sm text-muted mt-1">
+                {data.dataStart
+                  ? `Your records begin in ${monthName(data.dataStart)}. Nothing was measured before then, so there are no figures to show — not zero ones.`
+                  : 'Nothing has been recorded in GreaseDesk yet, so there is nothing to measure for this period.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg border border-line p-3" data-testid="tile-accepted">
+                <span className="text-xs font-semibold text-muted">Accepted</span>
+                <p className="text-2xl font-bold text-ok tabular-nums mt-1" data-testid="accepted-value">{m ? money(m.acceptedPennies) : '—'}</p>
+                <p className="text-xs text-muted mt-1">{m ? `${m.acceptedCount} quote${m.acceptedCount === 1 ? '' : 's'}` : ''}
+                  {m && m.acceptedVerbalCount > 0 ? `, ${m.acceptedVerbalCount} verbal` : ''}</p>
+                {/* SUBSET, worded so it can never be added to the figure above. */}
+                <p className="text-xs text-muted mt-1" data-testid="accepted-booked">
+                  {m ? `of which ${m.acceptedBookedCount} ${m.acceptedBookedCount === 1 ? 'is' : 'are'} booked in (${money(m.acceptedBookedPennies)}) — part of the figure above, not extra` : ''}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-line p-3" data-testid="tile-declined">
+                <span className="text-xs font-semibold text-muted">Declined</span>
+                <p className="text-2xl font-bold text-ink tabular-nums mt-1">{m ? money(m.declinedPennies) : '—'}</p>
+                <p className="text-xs text-muted mt-1">{m ? `${m.declinedCount} quote${m.declinedCount === 1 ? '' : 's'}, by the date the customer answered` : ''}</p>
+              </div>
+
+              <div className="rounded-lg border border-line p-3" data-testid="tile-expired">
+                <span className="text-xs font-semibold text-muted">Expired</span>
+                <p className="text-2xl font-bold text-warn tabular-nums mt-1">{m ? money(m.expiredPennies) : '—'}</p>
+                <p className="text-xs text-muted mt-1">{m ? `${m.expiredCount} lapsed unanswered in this period` : ''}</p>
+                <p className="text-[11px] text-muted mt-1 italic">Verbal quotes never expire — nothing was sent, so nothing lapses.</p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {!data?.beforeData && m && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+            <div className="rounded-lg border border-line p-3">
+              <span className="text-xs font-semibold text-muted">Conversion rate</span>
+              <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="conversion-rate">
+                {m.conversionPct == null ? '—' : `${m.conversionPct}%`}
+              </p>
+              <p className="text-xs text-muted mt-1">
+                {m.cohortAcceptedCount} of {m.cohortSentCount} quotes SENT in this period were accepted. Verbal quotes have no send date, so they are not in this figure.
+              </p>
+            </div>
+            <div className="rounded-lg border border-line p-3">
+              <span className="text-xs font-semibold text-muted">Average days to answer</span>
+              <p className="text-2xl font-bold text-ink tabular-nums mt-1" data-testid="avg-days">
+                {m.avgDaysToResponse == null ? '—' : m.avgDaysToResponse}
+              </p>
+              <p className="text-xs text-muted mt-1">
+                {m.avgDaysSample > 0 ? `From ${m.avgDaysSample} answered quote${m.avgDaysSample === 1 ? '' : 's'} — sent quotes only, since a verbal quote has no send date.` : 'No answered quotes in this period.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* THE HISTORY BOUNDARY, said out loud rather than quietly under-reported. */}
+        {!data?.beforeData && m && m.historicDatedCount > 0 && (
+          <p className="text-[11px] text-muted mt-3 italic" data-testid="history-note">
+            {m.historicDatedCount} of the {m.acceptedCount} acceptances in this period predate 5 August 2026 and are dated from the audit trail
+            rather than the acceptance record, because the acceptance date was not stored as a field before then. The dates are real; the source is older.
+          </p>
+        )}
+      </div>
 
       <p className="text-xs text-muted mt-4">
         Expiry is worked out from the send date — a quote past its window shows as Expired whether or not anything has run.

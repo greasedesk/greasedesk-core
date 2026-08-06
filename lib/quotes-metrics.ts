@@ -2,6 +2,10 @@
  * File: lib/quotes-metrics.ts
  * PERIOD figures for the quotes panel. Deliberately NOT built on listQuotes.
  *
+ * The quoted-vs-accepted bar chart this once fed has been removed; the COHORT counting it shared
+ * with the conversion rate stays, because that rate is still cohort-based (accepted ÷ sent, both by
+ * send date) and is the one figure a garage can act on.
+ *
  * ── WHY NOT listQuotes ──────────────────────────────────────────────────────────────────────────
  * listQuotes answers "what is on my plate right now": one row per card at its LATEST version, with
  * delivered work (invoiced/paid/done/cancelled) excluded. Both properties are right for a worklist
@@ -28,7 +32,6 @@
  */
 import { prisma } from '@/lib/db';
 import { quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
-import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { isBookedCard } from '@/lib/jobcard-status';
 
 /** Card states that mean the customer said yes, whatever happened afterwards. */
@@ -49,15 +52,11 @@ export type QuotesMetrics = {
   cohortSentCount: number; cohortAcceptedCount: number; conversionPct: number | null;
   /** Formal quotes only — a verbal quote has no send date to measure from. */
   avgDaysToResponse: number | null; avgDaysSample: number;
-  /** Cohort buckets for the chart, oldest first. */
-  series: Array<{ key: string; label: string; quotedPennies: number; acceptedPennies: number; incomplete: boolean }>;
   /** How many figures in this period lean on the pre-cutover audit fallback. Drives the on-screen note. */
   historicDatedCount: number;
 };
 
 const dayMs = 86_400_000;
-const ym = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
 /**
  * ONE resolver for "when was this card accepted". Precedence is fixed and total:
@@ -84,7 +83,7 @@ export async function computeQuotesMetrics(args: {
     acceptedPennies: 0, acceptedCount: 0, acceptedBookedPennies: 0, acceptedBookedCount: 0, acceptedVerbalCount: 0,
     declinedPennies: 0, declinedCount: 0, expiredPennies: 0, expiredCount: 0,
     cohortSentCount: 0, cohortAcceptedCount: 0, conversionPct: null,
-    avgDaysToResponse: null, avgDaysSample: 0, series: [], historicDatedCount: 0,
+    avgDaysToResponse: null, avgDaysSample: 0, historicDatedCount: 0,
   };
   if (!args.siteIds.length) return empty;
 
@@ -123,7 +122,7 @@ export async function computeQuotesMetrics(args: {
   const liveGross = (items: Array<{ qty: any; unit_price: any; vat_amount: any }>) =>
     items.reduce((s, it) => s + Math.round(Number(it.qty) * Number(it.unit_price) * 100) + Math.round(Number(it.vat_amount) * 100), 0);
 
-  const m: QuotesMetrics = { ...empty, series: [] };
+  const m: QuotesMetrics = { ...empty };
 
   // ── ACCEPTED / DECLINED — outcome-dated, verbal included ──────────────────────────────────────
   for (const c of cards) {
@@ -181,61 +180,13 @@ export async function computeQuotesMetrics(args: {
   const firstByCard = new Map<string, { sentAt: Date; gross: number }>();
   for (const v of versions) if (!firstByCard.has(v.job_card_id)) firstByCard.set(v.job_card_id, { sentAt: v.sent_at, gross: v.gross_pennies });
   const acceptedCards = new Set(cards.filter((c: any) => (ACCEPTED_ONWARD as readonly string[]).includes(c.status)).map((c: any) => c.id));
-  const acceptedValueOf = new Map<string, number>();
-  for (const v of versions) if (v.status === 'accepted') acceptedValueOf.set(v.job_card_id, v.gross_pennies);
-
-  const spanDays = Math.round((args.to.getTime() - args.from.getTime()) / dayMs);
-  const monthly = spanDays > 62;
-  const buckets = new Map<string, { label: string; quoted: number; accepted: number; startMs: number; endMs: number }>();
-  const bucketFor = (d: Date) => {
-    if (monthly) {
-      const k = ym(d);
-      const end = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
-      return { k, label: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 7), end };
-    }
-    const k = ymd(d);
-    return { k, label: k, end: Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) };
-  };
-  // Pre-seed every bucket in the window so an empty month plots as a TRUE zero rather than a gap.
-  for (let t = args.from.getTime(); t < args.to.getTime();) {
-    const d = new Date(t);
-    const b = bucketFor(d);
-    if (!buckets.has(b.k)) buckets.set(b.k, { label: b.label, quoted: 0, accepted: 0, startMs: t, endMs: b.end });
-    t = b.end;
-  }
 
   for (const [cardId, f] of firstByCard) {
     if (!inWindow(f.sentAt)) continue;
     m.cohortSentCount += 1;
-    const b = bucketFor(f.sentAt);
-    const row = buckets.get(b.k) ?? { label: b.label, quoted: 0, accepted: 0, startMs: f.sentAt.getTime(), endMs: b.end };
-    row.quoted += f.gross;
-    if (acceptedCards.has(cardId)) {
-      m.cohortAcceptedCount += 1;
-      row.accepted += acceptedValueOf.get(cardId) ?? f.gross;
-    }
-    buckets.set(b.k, row);
+    if (acceptedCards.has(cardId)) m.cohortAcceptedCount += 1;
   }
   m.conversionPct = m.cohortSentCount ? Math.round((m.cohortAcceptedCount / m.cohortSentCount) * 1000) / 10 : null;
-
-  // ── MATURITY, AND THE DIFFERENCE BETWEEN "OPEN" AND "HASN'T HAPPENED" ────────────────────────
-  // A bucket is INCOMPLETE when quotes were sent into it but it has not yet had the full expiry
-  // window to be answered. A bucket that lies entirely in the FUTURE is neither incomplete nor
-  // empty — nothing has happened in it yet, and it is not a cohort at all. Selecting the current
-  // month used to hatch every remaining day of it, filling most of the plot with texture that read
-  // as a rendering fault and said nothing true. Future buckets are DROPPED, not drawn flat: a zero
-  // bar for next Tuesday asserts a measurement nobody has taken.
-  const nowMs = now.getTime();
-  const matureBefore = nowMs - MAGIC_LINK_DAYS * dayMs;
-  m.series = [...buckets.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .filter(([, v]) => v.startMs <= nowMs)   // the bucket has begun
-    .map(([key, v]) => ({
-      key, label: v.label, quotedPennies: v.quoted, acceptedPennies: v.accepted,
-      // Only a bucket that has STARTED can be immature, and only while its end is still inside the
-      // window. A closed month from last year is complete; this week is not.
-      incomplete: v.endMs > matureBefore,
-    }));
 
   // ── AVERAGE DAYS SEND → RESPONSE — formal quotes only, and said so on screen. ─────────────────
   const gaps: number[] = [];
