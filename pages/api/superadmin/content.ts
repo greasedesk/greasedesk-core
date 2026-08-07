@@ -18,7 +18,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireOperatorApi } from '@/lib/operator-auth';
-import { DRAFT, canEditType, isDocType, sanitiseSlug, nextVersionStamp, resolvePublished } from '@/lib/content';
+import { DRAFT, canEditType, isDocType, sanitiseSlug, nextVersionStamp, resolvePublished, refuseIdenticalPublish } from '@/lib/content';
 
 function audit(actorId: string, action: string, slug: string, country: string, detail: any) {
   return prisma.superAdminAudit.create({ data: {
@@ -90,6 +90,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!canEditType(actor.role, latest.type) || !inScope(actor as any, country)) return res.status(403).json({ message: 'You cannot edit this document.' });
       try {
         const doc = await prisma.document.create({ data: { slug, title: latest.title, type: latest.type, country_code: country, body: latest.body, version: DRAFT, status: 'draft', created_by: actor.userId } });
+        // A fork left no trace, so the trail showed publishes with nothing before them and the
+        // "draft never saved" failure was invisible until someone read the bodies.
+        await audit(actor.userId, 'document.new_version', slug, country, { type: latest.type, forkedFrom: latest.version });
         return res.status(200).json({ ok: true, id: doc.id, message: 'New draft created from the current version.' });
       } catch (e: any) {
         if (e?.code === 'P2002') return res.status(409).json({ message: 'A draft already exists — publish or discard it first.' });
@@ -110,6 +113,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else {
         effectiveFrom = b.effectiveFrom && /^\d{4}-\d{2}-\d{2}$/.test(String(b.effectiveFrom)) ? new Date(String(b.effectiveFrom) + 'T00:00:00.000Z') : new Date();
       }
+      // REFUSE A NO-OP PUBLISH. Checked against the version this would supersede, before the stamp
+      // is minted — a spent version number cannot be handed back.
+      const superseded = await resolvePublished(prisma, doc.slug, doc.country_code);
+      const identical = refuseIdenticalPublish(doc.body, superseded?.body ?? null, superseded?.version ?? null);
+      if (identical) return res.status(409).json({ code: identical.code, message: identical.message });
+
       const version = await nextVersionStamp(prisma, doc.slug, doc.country_code, effectiveFrom);
       await prisma.document.update({ where: { id: doc.id }, data: { version, status: 'published', published_at: new Date(), effective_from: effectiveFrom } });
       await audit(actor.userId, 'document.published', doc.slug, doc.country_code, { type: doc.type, version, effective_from: effectiveFrom.toISOString().slice(0, 10) });

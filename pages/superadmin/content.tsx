@@ -64,16 +64,30 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
   }
   const backToList = () => { setSel(null); setDraft(null); setPublished([]); loadList(); };
 
-  async function saveDraft() {
-    if (!draft) return; setBusy(true);
-    const { ok, d } = await api('PATCH', { id: draft.id, title, body }); setBusy(false);
-    flash(ok, d.message || (ok ? 'Saved.' : 'Failed.'));
+  /** Returns whether the save landed, so a caller can refuse to continue without it. */
+  async function saveDraft(quiet = false): Promise<boolean> {
+    if (!draft) return false;
+    setBusy(true);
+    const { ok, d } = await api('PATCH', { id: draft.id, title, body });
+    setBusy(false);
+    if (!quiet || !ok) flash(ok, d.message || (ok ? 'Saved.' : 'Failed.'));
+    return ok;
   }
   async function publish() {
     if (!draft) return;
     const isLegal = draft.type === 'legal';
     if (isLegal && !effective) { flash(false, 'A legal document needs an effective date.'); return; }
     if (isLegal && !confirm(`Publish this LEGAL version effective ${effective}?\n\nOnce published it becomes IMMUTABLE — it can never be edited or deleted. Corrections mean publishing a new version.`)) return;
+
+    // ── SAVE FIRST, ALWAYS ────────────────────────────────────────────────────────────────────
+    // `publish` writes the STORED draft; it never carried the editor's buffer. So pasting a new
+    // body and pressing Publish shipped whatever the fork was seeded with — twice on `terms`, and
+    // once on `privacy` before that — under a fresh date and an "IMMUTABLE" confirmation.
+    // Deliberately a PATCH rather than a `body` field on the publish payload: the PATCH is what
+    // writes the `document.draft_saved` audit row, and that row is how the failure was eventually
+    // diagnosed. If the save does not land, we do NOT publish — a spent version cannot be undone.
+    if (!(await saveDraft(true))) { flash(false, 'Could not save the draft, so nothing was published.'); return; }
+
     setBusy(true);
     const { ok, d } = await api('POST', { action: 'publish', id: draft.id, effectiveFrom: effective || undefined }); setBusy(false);
     if (!ok) { flash(false, d.message || 'Failed.'); return; }
@@ -169,7 +183,7 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
                   <div><label className="block text-xs text-slate-400 mb-1">Preview</label><div className="rounded-lg border border-slate-800 bg-slate-950 p-3 h-[26rem] overflow-auto"><Preview body={body} /></div></div>
                 </div>
                 <div className="flex flex-wrap items-end gap-3 border-t border-slate-800 pt-4">
-                  <button onClick={saveDraft} disabled={busy} className="rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 px-4 py-2 text-sm">Save draft</button>
+                  <button onClick={() => { void saveDraft(); }} disabled={busy} className="rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 px-4 py-2 text-sm">Save draft</button>
                   {draft.type === 'legal' && <div><label className="block text-xs text-slate-400 mb-1">Effective date (required)</label><input type="date" value={effective} onChange={(e) => setEffective(e.target.value)} className={input} /></div>}
                   <button onClick={publish} disabled={busy} className={btn}>{draft.type === 'legal' ? 'Publish immutable version' : 'Publish'}</button>
                   <button onClick={discard} disabled={busy} className="text-red-300 text-sm px-2 hover:text-red-200">Discard draft</button>

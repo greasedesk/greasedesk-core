@@ -58,3 +58,37 @@ export async function nextVersionStamp(db: Db, slug: string, country: string, ef
   }
   return stamp;
 }
+
+/**
+ * ── PUBLISHING SOMETHING IDENTICAL IS ALWAYS A MISTAKE ──────────────────────────────────────────
+ * A legal version is immutable and its stamp is spent forever, so a publish that changes not one
+ * byte burns a version number and re-dates the OLD text — which reads to a customer as a fresh
+ * commitment to wording you were trying to replace.
+ *
+ * This has fired at least three times in this system's short life: the two `terms` publishes on
+ * 2026-08-07 and the `privacy` publish on 2026-07-30, all byte-identical to what they superseded.
+ * The cause each time was the editor publishing a draft whose body had never been saved, so the
+ * fork's seeded text went out under a new date. The editor is fixed; this is the backstop, because
+ * the next cause will be something else.
+ *
+ * NULL = go ahead. Nothing published yet (a first version) has nothing to be identical TO.
+ */
+export type IdenticalPublishRefusal = { code: 'identical_to_published'; message: string };
+
+export function refuseIdenticalPublish(
+  draftBody: string | null | undefined,
+  publishedBody: string | null | undefined,
+  publishedVersion?: string | null,
+): IdenticalPublishRefusal | null {
+  if (publishedBody == null) return null;                 // nothing to supersede — a first publish
+  if ((draftBody ?? '') !== publishedBody) return null;   // it differs; that is the whole point
+  return {
+    code: 'identical_to_published',
+    message:
+      `This draft is byte-for-byte identical to the published version${publishedVersion ? ` (${publishedVersion})` : ''}, ` +
+      `so publishing would spend a new version number and re-date the same text. ` +
+      `If you edited the body, press "Save draft" first — an unsaved edit is not in the draft. ` +
+      `If you meant only to change the effective date, that still needs a real change to the wording.`,
+  };
+}
+
