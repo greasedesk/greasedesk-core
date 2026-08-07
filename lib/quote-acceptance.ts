@@ -138,3 +138,34 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
 
   return { versionId: live?.id ?? null, version: live?.version ?? null, alreadyAccepted: false };
 }
+
+/**
+ * ── CAN THIS CARD STILL ANSWER A QUOTE? ─────────────────────────────────────────────────────────
+ * The transition table is the authority for BOTH answers, so accept and decline can never disagree
+ * about whether a card is still open to one.
+ *
+ * Why this exists: a customer clicked an accept link on a card that had already been INVOICED.
+ * acceptQuote threw ILLEGAL_TRANSITION as designed, nothing caught it, and the customer got a 500
+ * reading "something went wrong". Meanwhile the DECLINE branch bypassed the check entirely and
+ * would happily have marked a version declined on work already billed — the same hole, failing
+ * silently instead of loudly, which is worse.
+ *
+ * `accepted` is answerable-for-accept ONLY: acceptQuote treats a second accept as idempotent (a
+ * customer double-tapping on a bad connection must not see an error), but a card that has been
+ * accepted cannot then be declined through a stale link.
+ *
+ * NULL = go ahead.
+ */
+export type QuoteAnswerRefusal = { code: 'already_actioned'; message: string };
+
+export function refuseQuoteAnswer(cardStatus: string, outcome: 'accepted' | 'declined'): QuoteAnswerRefusal | null {
+  if (outcome === 'accepted' && cardStatus === 'accepted') return null; // idempotent re-accept
+  if (findTransition(cardStatus as JobStatus, outcome)) return null;
+  return {
+    code: 'already_actioned',
+    // ONE sentence, customer-facing. It must not name the internal status: "invoiced" tells a
+    // customer they have been billed for something they were still being asked to approve.
+    message: 'This quote has already been actioned — please contact the garage.',
+  };
+}
+

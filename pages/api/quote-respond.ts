@@ -19,7 +19,7 @@ import { sendNotification } from '@/lib/notify';
 import { resolveOpsEmail, OPS_EMAIL_SELECT } from '@/lib/ops-email';
 import { formatMoney } from '@/lib/format-money';
 import { writeAudit } from '@/lib/audit';
-import { acceptQuote } from '@/lib/quote-acceptance';
+import { acceptQuote, refuseQuoteAnswer } from '@/lib/quote-acceptance';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -70,6 +70,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const now = new Date();
   const accepted = action === 'accept';
 
+  // ── IS THIS CARD STILL OPEN TO AN ANSWER? ────────────────────────────────────────────────────
+  // Asked for BOTH outcomes, from the one predicate, BEFORE anything is written. A quote link
+  // outlives the state it was minted for: this card had already been invoiced, and the customer
+  // was still holding a live link to approve the price.
+  const refusal = refuseQuoteAnswer(card.status, accepted ? 'accepted' : 'declined');
+  if (refusal) return res.status(409).json({ code: refusal.code, message: refusal.message });
+
+  try {
   await prisma.$transaction(async (tx: any) => {
     if (accepted) {
       // ONE acceptance rule for every door — version, card, accepted_at and audit, in this tx.
@@ -94,6 +102,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       diff: { version: version.version, grossPennies: version.gross_pennies, at: now.toISOString(), ip, userAgent: ua },
     });
   });
+  } catch (e: any) {
+    // A CUSTOMER MUST NEVER SEE A STACK TRACE FROM A STATE WE CREATED. acceptQuote throws
+    // ILLEGAL_TRANSITION as its own backstop; the check above should already have caught it, so
+    // reaching here means the card moved between the check and the write. Same sentence either way.
+    const msg = String(e?.message ?? '');
+    if (msg.startsWith('ILLEGAL_TRANSITION') || msg === 'CARD_NOT_FOUND') {
+      console.warn('[quote-respond] refused after check —', msg, 'card', card.id);
+      return res.status(409).json({ code: 'already_actioned', message: 'This quote has already been actioned — please contact the garage.' });
+    }
+    console.error('[quote-respond] failed', msg, 'card', card.id);
+    return res.status(500).json({ message: 'Something went wrong — please call the garage.' });
+  }
 
   // A DECLINE ends the link — the offer is over. An ACCEPT deliberately leaves it live so the
   // customer can re-open what they agreed to.
