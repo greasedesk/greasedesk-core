@@ -19,6 +19,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { canWrite } from '@/lib/billing';
 import { createMagicLink, MAGIC_LINK_DAYS, revokeMagicLinksForCard } from '@/lib/magic-link';
+import { refuseQuoteSend } from '@/lib/quote-acceptance';
 import { sendNotification } from '@/lib/notify';
 import { freezeQuoteVersion, attachMagicLink } from '@/lib/quote-version';
 import { formatMoney } from '@/lib/format-money';
@@ -63,6 +64,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(402).json({ message: 'Your subscription is inactive — sending a quote is paused.' });
   }
   if (!card._count.items) return res.status(400).json({ message: 'Add at least one line to the estimate before sending it.' });
+
+  // CAN THIS CARD ANSWER A QUOTE AT ALL? Before the freeze and before the mint — refusing after
+  // either would leave a superseded version and a revoked link behind for a send that never went.
+  // Same predicate the customer's answer is judged by, so a link is never minted that could only
+  // ever be refused. Staff wording; the customer-facing sentence is deliberately different.
+  const sendRefusal = refuseQuoteSend(card.status);
+  if (sendRefusal) return res.status(409).json({ code: sendRefusal.code, message: sendRefusal.message });
 
   // IS THIS A REVISION? Answered by the VERSIONS, not the card status: acceptance belongs to the
   // version (ruling 2026-08-05). A customer who has already agreed to a figure is being told the

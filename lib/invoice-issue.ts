@@ -21,6 +21,7 @@
 import { Prisma } from '@prisma/client';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
+import { revokeMagicLinksForCard } from '@/lib/magic-link';
 
 const CARD_SELECT = {
   site_id: true,
@@ -83,6 +84,17 @@ async function createInvoiceRow(
     },
     select: { id: true },
   });
+
+  // A LIVE CUSTOMER LINK MUST NOT OUTLIVE THE STATE IT WAS MINTED FOR.
+  // Once the work is invoiced the quote is no longer answerable, so a link still sitting in the
+  // customer's inbox can only lead somewhere useless. quote-respond refuses the answer, but a
+  // refusal is the wrong place to learn this — the link should already be dead. Here rather than in
+  // the four callers because THIS is the point every mint passes through (chargeable, warranty,
+  // historical, import); a fifth caller added later gets the revoke without knowing it exists.
+  // Same tx as the mint: a revoke that outlived a rolled-back invoice would kill a link to work
+  // that is still genuinely quotable.
+  await revokeMagicLinksForCard(jobCardId, tx);
+
   return invoice.id;
 }
 

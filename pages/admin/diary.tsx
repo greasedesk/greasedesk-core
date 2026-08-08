@@ -1013,6 +1013,7 @@ export default function DiaryPage(props: PageProps) {
                     canManage={pane.data.canEdit} canOperate={pane.data.canOperate} canEditPricing={pane.data.canEditPricing}
                     quoteFrozen={pane.data.quoteFrozen}
                     quoteSupersededNoLink={pane.data.quoteSupersededNoLink}
+                    quoteSendBlockedReason={pane.data.quoteSendBlockedReason}
                     quoteHasAcceptedVersion={pane.data.quoteHasAcceptedVersion}
                     priceUnconfirmed={pane.data.priceUnconfirmed}
                     canIssueInvoice={pane.data.canIssueInvoice}

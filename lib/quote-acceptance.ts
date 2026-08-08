@@ -169,3 +169,50 @@ export function refuseQuoteAnswer(cardStatus: string, outcome: 'accepted' | 'dec
   };
 }
 
+/**
+ * CAN THIS CARD BE SENT A QUOTE AT ALL? Asked BEFORE a version is frozen and a link minted.
+ *
+ * A quote is a question, and there is no point asking one the card cannot answer. Sending on an
+ * invoiced card mints a live customer link whose only possible outcome is the refusal above — the
+ * customer learns the quote is dead by clicking it, which is the worst place to find out. This is
+ * how the BJ65KWV incident happened: the invoice went out at 12:26 and the quote at 12:30.
+ *
+ * ── IT ASKS ABOUT THE POST-SEND STATUS, AND THAT IS THE WHOLE SUBTLETY ──────────────────────────
+ * `draft` has NO transition to `accepted` — the path is draft → quoted → accepted. Testing the
+ * CURRENT status would therefore refuse every FIRST send, which is 51 of the 63 quotes ever sent.
+ * The status that matters is the one the card will hold when the customer clicks, and quote-send
+ * itself performs the draft → quoted move. So we answer for the post-send card.
+ *
+ * Same predicate as the answer, deliberately: whether a card can be sent a quote and whether it can
+ * answer one are the same question asked at two moments, and if they ever disagreed we would either
+ * refuse sends that would have worked or mint links that could only fail.
+ *
+ * `accepted` passes — that is the REVISION path, and refuseQuoteAnswer already treats a re-accept as
+ * idempotent. `declined` passes, because declined → accepted is a legal reopen.
+ *
+ * ── THE PREDICATE IS SHARED; THE WORDING IS NOT ─────────────────────────────────────────────────
+ * The refusal above is read by a CUSTOMER and must not name the internal status. This one is read
+ * by the GARAGE, who is owed the actual reason and can act on it — so it says which state the card
+ * is in and what to do instead. One rule, two audiences.
+ */
+export type QuoteSendRefusal = { code: 'not_answerable'; status: string; message: string };
+
+const SEND_REFUSAL_REASON: Record<string, string> = {
+  invoiced: 'This job has already been invoiced, so a quote can no longer be accepted against it.',
+  paid: 'This job has already been invoiced and paid.',
+  done: 'This job is closed.',
+  in_progress: 'This job is already under way — a quote sent now could not be accepted. Add the extra work to the job and invoice it, or raise a new job card for it.',
+  cancelled: 'This job card has been cancelled. Reopen it before quoting.',
+};
+
+export function refuseQuoteSend(cardStatus: string): QuoteSendRefusal | null {
+  const answerable = cardStatus === 'draft' ? 'quoted' : cardStatus;
+  if (!refuseQuoteAnswer(answerable, 'accepted')) return null;
+  return {
+    code: 'not_answerable',
+    status: cardStatus,
+    message: SEND_REFUSAL_REASON[cardStatus]
+      ?? `A quote cannot be sent on a job card at “${cardStatus}” — the customer would not be able to accept it.`,
+  };
+}
+

@@ -37,9 +37,12 @@
  * they travel by email, where length is free and there is no reason to spend entropy.
  */
 import crypto from 'crypto';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { hashToken } from '@/lib/tokens';
 import { takeToken } from '@/lib/auth-rate-limit';
+
+type Db = PrismaClient | Prisma.TransactionClient;
 
 export const MAGIC_LINK_DAYS = 14;
 
@@ -156,9 +159,16 @@ export async function revokeMagicLink(id: string): Promise<void> {
   await prisma.customerMagicLink.updateMany({ where: { id, revoked_at: null }, data: { revoked_at: new Date() } });
 }
 
-/** Revoke every live link for a card — used when a card is cancelled or hard-deleted. */
-export async function revokeMagicLinksForCard(jobCardId: string): Promise<number> {
-  const r = await prisma.customerMagicLink.updateMany({
+/**
+ * Revoke every live link for a card — cancelled, hard-deleted, declined, or INVOICED.
+ *
+ * Takes an optional transaction client because the invoice mint calls it from inside the minting
+ * transaction. Revoking outside that tx would kill a customer's live link for an invoice that then
+ * rolled back: the work would still be quotable and the customer would hold a dead link to it.
+ * The revoke belongs to the mint, so it commits or fails with it.
+ */
+export async function revokeMagicLinksForCard(jobCardId: string, db: Db = prisma): Promise<number> {
+  const r = await db.customerMagicLink.updateMany({
     where: { job_card_id: jobCardId, revoked_at: null },
     data: { revoked_at: new Date() },
   });

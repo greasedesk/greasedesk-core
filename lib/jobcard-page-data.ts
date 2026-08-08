@@ -27,6 +27,7 @@ import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { isBookedCard } from '@/lib/jobcard-status';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
+import { refuseQuoteSend } from '@/lib/quote-acceptance';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -142,6 +143,10 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     status: invoiceRow.status,
     hasFrozenLines: (invoiceRow.lines?.length ?? 0) > 0,
   });
+  // WHY THE SEND CONTROL IS ABSENT, in the garage's words — computed from the SAME predicate the
+  // API refuses with, so the button cannot be offered where the send would 409. A button that
+  // always fails is a trap; a stated reason is an answer. Null when a quote can be sent.
+  const quoteSendBlockedReason = refuseQuoteSend(row.status)?.message ?? null;
   // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
   // a user who may not see money never RECEIVES money. Absent, not hidden.
   //   priceVisible = seeValues OR canEditPricing (edit implies see, for PRICES only)
@@ -257,6 +262,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     status: row.status,
     jobCardId: row.id,
     canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
+    quoteSendBlockedReason,
     quoteSupersededNoLink,
     quoteHasAcceptedVersion,
     priceUnconfirmed,

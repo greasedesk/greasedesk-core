@@ -43,6 +43,7 @@ type Props = {
   canEditPricing: boolean;
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
   quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
+  quoteSendBlockedReason: string | null; // server-computed: why no quote can be sent (null = it can)
   quoteHasAcceptedVersion: boolean; // a version was ACCEPTED → the next send is a revision, not a quote
   priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
@@ -650,6 +651,7 @@ export default function JobCardWorkspace(p: Props) {
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} currency={p.currency} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
+            quoteSendBlockedReason={p.quoteSendBlockedReason}
             quoteHasAcceptedVersion={p.quoteHasAcceptedVersion}
             quoteFrozen={p.quoteFrozen}
             priceUnconfirmed={p.priceUnconfirmed}
@@ -734,6 +736,7 @@ function QuoteActions(props: {
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
   quoteSupersededNoLink: boolean;
+  quoteSendBlockedReason: string | null;
   quoteHasAcceptedVersion: boolean;
   quoteFrozen: boolean;
   priceUnconfirmed: PriceUnconfirmed | null;
@@ -941,14 +944,24 @@ function QuoteActions(props: {
         </p>
       )}
 
-      {/* NOT gated on card status. A quote can be re-sent for as long as the estimate can change —
-          up to the invoice, which freezes the lines. A CANCELLED card is the other end: the job is
-          dead, so offering to send a price for it is worse than an accepted card refusing to.
-          (The whole panel is already hidden when cancelled; stated here so it does not depend on
-          an unrelated guard staying that way.) */}
-      {!props.quoteFrozen && !props.cancelled && (
+      {/* GATED ON WHETHER THE CARD COULD ANSWER (2026-08-08). It used to be gated only on the
+          freeze and on cancellation, deliberately — but that let the control stand on a card whose
+          quote could no longer be accepted, and offering to send a price nobody can say yes to is
+          the same trap in a quieter form. `quoteSendBlockedReason` is computed SERVER-SIDE from the
+          predicate the API refuses with, so the button is never offered where the send would 409.
+          It also covers cancelled and invoiced, but those guards stay: they answer a different
+          question (is this panel live at all?) and must not depend on this one. */}
+      {!props.quoteFrozen && !props.cancelled && !props.quoteSendBlockedReason && (
         <SendQuote jobCardId={jobCardId} disabled={busy !== null} beforeSend={commitEstimate}
           revision={props.quoteHasAcceptedVersion} currency={props.currency} locale={props.locale} />
+      )}
+
+      {/* The reason, where the button was. Absent controls need an explanation or they read as a
+          bug — and this one is a real decision the garage may want to act on. */}
+      {!props.quoteFrozen && !props.cancelled && props.quoteSendBlockedReason && (
+        <p className="mt-4 pt-4 border-t border-line text-sm text-muted" data-testid="quote-send-blocked">
+          {props.quoteSendBlockedReason}
+        </p>
       )}
 
       {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
