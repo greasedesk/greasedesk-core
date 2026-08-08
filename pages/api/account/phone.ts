@@ -16,7 +16,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { sendPhoneVerification, confirmPhoneVerification } from '@/lib/phone-verification';
-import { hasLiveCode, clearCodes } from '@/lib/delivered-code';
+import { hasLiveCode } from '@/lib/delivered-code';
 
 /** Last three digits only. Enough for "yes, that's my phone", useless to anyone who isn't them. */
 const mask = (e164: string | null): string | null => (e164 ? `•••• ••• ${e164.slice(-3)}` : null);
@@ -50,9 +50,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (b.action === 'send') {
       const raw = String(b.phone ?? '').trim();
       if (!raw) return res.status(400).json({ code: 'bad_number', message: 'Enter your mobile number.' });
-      // CHANGING THE NUMBER KILLS ANY LIVE CODE. Otherwise a code sent to the old handset could
-      // verify the new one — which would make "verified" mean nothing at all.
-      await clearCodes(subject, 'phone_verify');
+      // NOTE: the route does NOT clear codes. It used to, unconditionally, which silently defeated
+      // the resend cooldown — clearing the row removed the timestamp the cooldown is measured from.
+      // The rule now lives in sendPhoneVerification, which is the only place that knows whether the
+      // number actually changed.
       const country = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true } });
       const r = await sendPhoneVerification({
         subject, groupId, rawPhone: raw, ip: clientIp(req.headers as any),

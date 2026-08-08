@@ -55,6 +55,27 @@ export async function sendPhoneVerification(args: {
     return { code: 'bad_number', message: 'That doesn’t look like a mobile number. Check it and try again.' };
   }
 
+  // ── A GENUINELY NEW NUMBER RESETS EVERYTHING, AND MUST DO SO FIRST ───────────────────────────
+  // Order matters and this is the fix for a real defect the live gate caught: the ENDPOINT used to
+  // clear codes unconditionally on every send, which deleted the row cooldownRemaining reads from —
+  // so the cooldown could never fire at all, and a user hammering "resend" burned their whole hourly
+  // allowance in seconds, every press a real text. Two went out during the gate before it was seen.
+  //
+  // The rule belongs here, not at the caller, because THIS is the only place that knows both the old
+  // number and the new one. Clearing is conditional on the number actually changing: a mistyped
+  // number deserves a fresh code immediately, while asking again for the SAME number is exactly what
+  // the cooldown exists to slow down. Alternating between two numbers still bypasses the cooldown,
+  // and is bounded by the per-subject limit rather than by this.
+  const previous = await prisma.twoFactorSecret.findUnique({
+    where: { subject_type_subject_id: { subject_type: args.subject.type, subject_id: args.subject.id } },
+    select: { phone_e164: true },
+  });
+  const numberChanged = !!previous && previous.phone_e164 !== e164;
+  if (numberChanged) {
+    // A code sent to the OLD handset must never verify the new number.
+    await clearCodes(args.subject, 'phone_verify');
+  }
+
   // ── COOLDOWN BEFORE THE BUDGET, NOT AFTER ────────────────────────────────────────────────────
   // The limits used to be consumed first, so a resend refused by the cooldown still burned a token
   // on all four axes — an impatient user tapping "send again" could spend their whole hourly
