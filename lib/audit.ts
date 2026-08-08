@@ -55,6 +55,11 @@ export type AuditAction =
   | 'quote.accepted'     // THE acceptance action, every door: { via:'link'|'counter'|'booked',
                          // attested, versionId, version, grossPennies, frozenVersion, from, at }.
                          // `attested` false = garage-recorded; only via:'link' carries ip/user-agent.
+  | 'quote.agreed_version' // ADMIN recorded that a LATER version was agreed on a card already invoiced
+                           // against an earlier one: { versionId, version, grossPennies,
+                           // attested:false, cardStatusUnchanged:true, at }. NOT an acceptance of the
+                           // CARD — deliberately outside ACCEPTANCE_ACTIONS so quotes-metrics never
+                           // dates a second acceptance from it. Always garage-recorded.
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.

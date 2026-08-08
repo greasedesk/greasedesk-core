@@ -8,7 +8,18 @@
 import React from 'react';
 import { useTranslation } from 'next-i18next';
 
-export type AuditEvent = { id: string; action: string; actor: string | null; at: string };
+export type AuditEvent = {
+  id: string; action: string; actor: string | null; at: string;
+  /**
+   * PROVENANCE, IN WORDS. Server-computed (lib/jobcard-page-data) from the audit diff, because the
+   * distinction that matters here is not in the action name. Since acceptance was unified into one
+   * chokepoint, a customer's own click and a garage-recorded one both write `quote.accepted`, and
+   * this view used to carry no diff at all — so the only difference on screen was whether a staff
+   * name happened to appear. That is an absence, not a statement: a reader could not tell "the
+   * customer did this" from "we don't know who did". Null on every event that isn't an acceptance.
+   */
+  note?: string | null;
+};
 
 function relTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -36,7 +47,10 @@ export default function JobCardAudit({ events }: { events: AuditEvent[] }) {
         <ol className="space-y-2">
           {events.map((e) => (
             <li key={e.id} className="flex items-start justify-between gap-3 text-sm border-b border-line last:border-0 pb-2">
-              <span className="text-ink">{label(e.action)}</span>
+              <span className="text-ink">
+                {label(e.action)}
+                {e.note && <span className="block text-xs text-muted mt-0.5" data-testid="audit-note">{e.note}</span>}
+              </span>
               <span className="text-muted whitespace-nowrap text-xs">
                 {e.actor ? `${e.actor} · ` : ''}{relTime(e.at)}
               </span>

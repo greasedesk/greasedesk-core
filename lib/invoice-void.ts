@@ -115,3 +115,36 @@ export function refuseIfVoid(inv: { status: string } | null | undefined): { code
   if (inv?.status !== 'void') return null;
   return { code: 'voided', message: 'This invoice has been voided and cannot be changed, re-issued or re-sent. Raise a new invoice instead.' };
 }
+
+/**
+ * ── HAS THE CUSTOMER ALREADY GOT THIS DOCUMENT? ─────────────────────────────────────────────────
+ * Nothing used to ask. `unlock` deletes the frozen lines and `reissue` re-freezes them under the
+ * SAME number, so an invoice the customer is holding could be silently rebuilt with different lines
+ * and a different total — same reference, different document, no trace on their copy. That is the
+ * one correction a void exists to prevent, and the guard for it was simply missing.
+ *
+ * TWO SIGNALS, both needed, because they cover different halves:
+ *   • an `invoice.sent` AUDIT ROW — written on EVERY successful send (lib/invoice-email-send),
+ *     paid or not. This is the one that catches an unpaid, issued invoice already emailed out.
+ *   • `receipt_sent_at` — set only when a PAID invoice is emailed. Belt-and-braces here (paid is
+ *     refused anyway) but it is a fact ON the row, and a guard that reads the row should use it.
+ *
+ * Caller's note: `invoice.sent` is audited with the JOB CARD as its entity_id, not the invoice, so
+ * the existence query is AuditLog{entity_id: job_card_id, action: 'invoice.sent'}. Safe because
+ * Invoice.job_card_id is unique — one invoice per card, so the row cannot refer to a different one.
+ *
+ * This is a REFUSAL, not a downgrade to a warning: once it has left the building, the honest
+ * corrections are a credit note (not built) or void-and-reissue, which retires the old number and
+ * retains the old document — exactly the audit trail an in-place amendment destroys.
+ */
+export function refuseIfSent(
+  inv: { receipt_sent_at?: Date | null } | null | undefined,
+  sentAuditExists: boolean,
+): { code: string; message: string } | null {
+  if (!inv) return null;
+  if (!sentAuditExists && !inv.receipt_sent_at) return null;
+  return {
+    code: 'already_sent',
+    message: 'This invoice has already been sent to the customer, so its lines can no longer be changed — they are holding a copy of the document as it stands. Void it and raise a corrected invoice instead.',
+  };
+}

@@ -18,6 +18,7 @@
 import { prisma } from '@/lib/db';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { isBookedCard } from '@/lib/jobcard-status';
+import { acceptanceProvenance, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
 
 export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
 export type QuoteFilter = typeof QUOTE_FILTERS[number];
@@ -142,6 +143,10 @@ export type QuoteRow = {
    *  from a timed-out expiry (both file under `expired`). Clears the moment a fresh quote is sent, as
    *  the new `sent` version becomes the latest. */
   supersededNoLink: boolean;
+  /** WHO confirmed the acceptance — from the HIGHEST accepted version, or null when nothing is
+   *  accepted. Deliberately NOT called `verbal`: that field above means "no version was ever sent",
+   *  a different axis. See lib/acceptance-provenance. */
+  acceptanceProvenance: AcceptanceProvenance | null;
   cardStatus: string;
   siteId: string;
 };
@@ -164,6 +169,7 @@ export async function listQuotes(args: {
     orderBy: [{ job_card_id: 'asc' }, { version: 'desc' }],
     select: {
       id: true, job_card_id: true, version: true, status: true, sent_at: true, gross_pennies: true,
+      responded_by_user: true, responded_ip: true, // the provenance pair — see lib/acceptance-provenance
       job_card: {
         select: {
           status: true, site_id: true,
@@ -181,8 +187,15 @@ export async function listQuotes(args: {
   // Every version, grouped by card — the unconfirmed-price rule needs the WHOLE series, not just
   // the latest, so it is computed here from the rows already fetched rather than re-queried.
   const byCard = new Map<string, Array<{ version: number; status: string; gross_pennies: number }>>();
+  // The HIGHEST accepted version per card — the operative one everywhere (invoice-issue reads the
+  // same rule), so it is the one whose provenance the row states. `versions` is already ordered
+  // version DESC within a card, so the first accepted sighting is the highest.
+  const acceptedByCard = new Map<string, { responded_by_user: string | null; responded_ip: string | null }>();
   for (const v of versions) {
     byCard.set(v.job_card_id, [...(byCard.get(v.job_card_id) ?? []), { version: v.version, status: v.status, gross_pennies: v.gross_pennies }]);
+    if (v.status === 'accepted' && !acceptedByCard.has(v.job_card_id)) {
+      acceptedByCard.set(v.job_card_id, { responded_by_user: v.responded_by_user, responded_ip: v.responded_ip });
+    }
   }
 
   const seen = new Set<string>();
@@ -207,6 +220,10 @@ export async function listQuotes(args: {
       supersededNoLink: v.status === 'superseded',
       cardStatus: v.job_card?.status ?? '',
       siteId: v.job_card?.site_id ?? '',
+      // Null where nothing is accepted — an unanswered quote has no confirmation to attribute.
+      acceptanceProvenance: acceptedByCard.has(v.job_card_id)
+        ? acceptanceProvenance(acceptedByCard.get(v.job_card_id)!)
+        : null,
     });
   }
 
@@ -244,6 +261,10 @@ export async function listQuotes(args: {
       supersededNoLink: false, // never sent → no link to have lost
       cardStatus: c.status,
       siteId: c.site_id,
+      // These are `quoted` cards only — nothing has been accepted, so there is no confirmation to
+      // attribute. (Once accepted a versionless card would be garage-recorded by construction, but
+      // it also leaves this list: `quoted` is the whole scope of this query.)
+      acceptanceProvenance: null,
     });
   }
 

@@ -31,6 +31,7 @@
  * for rows that predate the column, and it stops mattering as the estate rolls forward.
  */
 import { prisma } from '@/lib/db';
+import { acceptanceProvenance } from '@/lib/acceptance-provenance';
 import { quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
 import { isBookedCard } from '@/lib/jobcard-status';
 
@@ -45,7 +46,12 @@ export type QuotesMetrics = {
   awaitingPennies: number; awaitingCount: number; awaitingVerbalCount: number;
   acceptedPennies: number; acceptedCount: number;
   acceptedBookedPennies: number; acceptedBookedCount: number;  // SUBSET of accepted, never an addend
+  /** Cards with NO quote version at all — never formally quoted. NOT a provenance figure; see below. */
   acceptedVerbalCount: number;
+  /** Acceptances NOT confirmed by the customer themselves — garage-recorded or unrecorded. A SENT
+   *  quote agreed by phone lands here but NOT in acceptedVerbalCount, which is why the two are
+   *  separate: one is "was there a formal quote?", the other "who said yes?". */
+  acceptedGarageRecordedCount: number;
   declinedPennies: number; declinedCount: number;
   expiredPennies: number; expiredCount: number;
   /** Cohort basis: of quotes SENT in the period, how many were accepted (ever). */
@@ -65,6 +71,19 @@ const dayMs = 86_400_000;
  *   3. the earliest acceptance AuditLog row — the only date left for older rows
  * Returns null when the card is accepted but NOTHING dates it, which is a real state (ZZ fixtures
  * written directly by script). Such cards are counted as undated rather than dropped or guessed.
+ *
+ * ── KNOWN IMPRECISION: ONE DATE CANNOT HOLD TWO ACCEPTANCES (ruling 2026-08-08) ──────────────────
+ * `recordAgreedVersion` lets an admin record that a LATER version was agreed on a card already
+ * invoiced against an earlier one, and deliberately does NOT write `accepted_at` — the original
+ * acceptance date stays. So on a card where `accepted_at` is null (every acceptance before
+ * 2026-08-05), step 2 above now resolves to the NEW version's responded_at, and the card's reported
+ * acceptance moves — date AND value — from the first agreement to the second. BJ65KWV: 29 July /
+ * £311.92 → the recording date / £701.41, across a month boundary.
+ *
+ * This is ACCEPTED, not a bug to route around. Both acceptances really happened; the model holds one
+ * date per card, and pinning the older one would mean reporting a figure the customer no longer owes.
+ * If a month's Accepted total looks like it has shifted, this is why. Fixing it properly means
+ * per-acceptance rows, which is a much larger change than the invoice it exists to correct.
  */
 function resolveAcceptedAt(
   card: { id: string; accepted_at: Date | null },
@@ -80,7 +99,7 @@ export async function computeQuotesMetrics(args: {
   const now = args.now ?? new Date();
   const empty: QuotesMetrics = {
     awaitingPennies: 0, awaitingCount: 0, awaitingVerbalCount: 0,
-    acceptedPennies: 0, acceptedCount: 0, acceptedBookedPennies: 0, acceptedBookedCount: 0, acceptedVerbalCount: 0,
+    acceptedPennies: 0, acceptedCount: 0, acceptedBookedPennies: 0, acceptedBookedCount: 0, acceptedVerbalCount: 0, acceptedGarageRecordedCount: 0,
     declinedPennies: 0, declinedCount: 0, expiredPennies: 0, expiredCount: 0,
     cohortSentCount: 0, cohortAcceptedCount: 0, conversionPct: null,
     avgDaysToResponse: null, avgDaysSample: 0, historicDatedCount: 0,
@@ -91,7 +110,8 @@ export async function computeQuotesMetrics(args: {
     prisma.quoteVersion.findMany({
       where: { group_id: args.groupId, job_card: { site_id: { in: args.siteIds } } },
       orderBy: [{ job_card_id: 'asc' }, { version: 'asc' }],
-      select: { id: true, job_card_id: true, version: true, status: true, sent_at: true, responded_at: true, gross_pennies: true },
+      select: { id: true, job_card_id: true, version: true, status: true, sent_at: true, responded_at: true, gross_pennies: true,
+        responded_by_user: true, responded_ip: true }, // the provenance pair — see lib/acceptance-provenance
     }),
     // Every card that reached acceptance, plus the estimate value for the ones with no version.
     prisma.jobCard.findMany({
@@ -137,6 +157,10 @@ export async function computeQuotesMetrics(args: {
         const value = acceptedV?.gross_pennies ?? liveGross(c.items);
         m.acceptedPennies += value; m.acceptedCount += 1;
         if (!acceptedV) m.acceptedVerbalCount += 1;
+        // Provenance of the operative acceptance. A versionless card is garage-recorded by
+        // construction (no link existed to click), so it counts here too — the two figures overlap
+        // deliberately and the tile labels each for what it measures.
+        if (acceptanceProvenance(acceptedV) !== 'customer') m.acceptedGarageRecordedCount += 1;
         if (c.accepted_at == null) m.historicDatedCount += 1; // dated by the fallback, not the column
         if (isBookedCard(c)) { m.acceptedBookedPennies += value; m.acceptedBookedCount += 1; }
       }

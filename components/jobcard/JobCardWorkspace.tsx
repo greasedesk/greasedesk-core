@@ -33,6 +33,17 @@ import { formatMoney } from '@/lib/format-money';
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
 
+/** The mismatch between what was BILLED and what was later agreed. Shaped by lib/jobcard-page-data;
+ *  present only where there is a real correction to offer, and only for an admin. */
+export type AgreedVersionFix = {
+  versionId: string;
+  sentVersion: number; sentPennies: number;
+  agreedVersion: number; agreedPennies: number;
+  differencePennies: number;
+  agreedProvenance: 'customer' | 'garage' | 'unknown';
+  invoiceNumber: string | null;
+};
+
 type Props = {
   jobCardId: string;
   status: JobStatus;
@@ -44,6 +55,13 @@ type Props = {
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
   quoteSupersededNoLink: boolean; // latest quote version is superseded → no live customer link
   quoteSendBlockedReason: string | null; // server-computed: why no quote can be sent (null = it can)
+  /** WHO confirmed the acceptance, in words. Null before anything is accepted. */
+  acceptanceNote: string | null;
+  acceptanceLabel: string | null;
+  /** Present only for an ADMIN on a card invoiced against an EARLIER accepted version than the
+   *  latest one still sent. Both totals are shaped server-side so the control states the money it
+   *  is about to change rather than computing it client-side. */
+  agreedVersionFix: AgreedVersionFix | null;
   quoteHasAcceptedVersion: boolean; // a version was ACCEPTED → the next send is a revision, not a quote
   priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
@@ -464,6 +482,14 @@ export default function JobCardWorkspace(p: Props) {
     const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
     );
+    // THE AGREED-VERSION CORRECTION, wherever the invoice link renders (normal + comeback). Absent
+    // unless the server shaped a real mismatch for an admin — no client-side eligibility logic.
+    const agreedVersionPanel = p.agreedVersionFix && !cancelled && (
+      <AgreedVersionFixPanel
+        jobCardId={p.jobCardId} fix={p.agreedVersionFix} disabled={busy !== null}
+        currency={p.currency} locale={p.locale} onDone={refreshCard}
+      />
+    );
     // Email-invoice action + paid-lifecycle state, shown wherever the invoice link renders
     // (normal + comeback). Pending = amber, reversible, silently unmarkable; never the PAID face.
     const invoiceActions = eff.invoice && (
@@ -583,6 +609,7 @@ export default function JobCardWorkspace(p: Props) {
               </Link>
             )}
             {invoiceActions}
+            {agreedVersionPanel}
             {startWorkBtn}
             {eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !cancelled && !mintOpen && (
               <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
@@ -601,6 +628,7 @@ export default function JobCardWorkspace(p: Props) {
               <span className="text-sm text-accent">{t('invoiceTab.view')} →</span>
             </Link>
             {invoiceActions}
+            {agreedVersionPanel}
             {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
               <button disabled={busy !== null} onClick={openPay} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
@@ -652,6 +680,8 @@ export default function JobCardWorkspace(p: Props) {
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
             quoteSendBlockedReason={p.quoteSendBlockedReason}
+            acceptanceNote={p.acceptanceNote}
+            acceptanceLabel={p.acceptanceLabel}
             quoteHasAcceptedVersion={p.quoteHasAcceptedVersion}
             quoteFrozen={p.quoteFrozen}
             priceUnconfirmed={p.priceUnconfirmed}
@@ -737,6 +767,8 @@ function QuoteActions(props: {
   t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
   quoteSupersededNoLink: boolean;
   quoteSendBlockedReason: string | null;
+  acceptanceNote: string | null;
+  acceptanceLabel: string | null;
   quoteHasAcceptedVersion: boolean;
   quoteFrozen: boolean;
   priceUnconfirmed: PriceUnconfirmed | null;
@@ -967,7 +999,92 @@ function QuoteActions(props: {
       {/* ACCEPTANCE TAKEN BY PHONE. Distinct from the customer clicking their own link: the record
           captures WHO on staff marked it and that it was verbal, and deliberately records NO ip or
           user-agent — those would describe the receptionist, not the customer. */}
+      {/* WHO CONFIRMED IT, in words (ruling 2026-08-08). A garage-recorded acceptance must SAY so —
+          it used to be distinguishable only by a missing IP on a row nobody renders, and by whether a
+          staff name happened to appear in the audit list. An absence is not a statement. */}
+      {props.acceptanceLabel && props.acceptanceNote && (
+        <div className="mt-4 pt-4 border-t border-line" data-testid="acceptance-provenance">
+          <p className="text-sm font-medium text-ink">{props.acceptanceLabel}</p>
+          <p className="text-xs text-muted mt-0.5">{props.acceptanceNote}</p>
+        </div>
+      )}
+
       {!isAcceptedOnwards && <AcceptVerbal jobCardId={jobCardId} disabled={busy !== null} />}
+    </div>
+  );
+}
+
+/**
+ * THE AGREED-VERSION CORRECTION. Admin-only, on the INVOICE step, because correcting an invoice is
+ * what it is for — putting it on Quote would file a money change under quoting.
+ *
+ * IT STATES THE MONEY BEFORE IT COMMITS (ruling): old total, new total, signed difference, and which
+ * version. Both figures come from the server; this component does no arithmetic it would then ask
+ * someone to authorise.
+ *
+ * TWO STEPS, NOT ONE. Recording the agreement does NOT unlock or re-issue. On success it says so —
+ * an invoice still showing the old figures is the honest intermediate state, not a failure.
+ */
+function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onDone }: {
+  jobCardId: string; fix: AgreedVersionFix; disabled: boolean; currency: string; locale: string; onDone: () => void;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+  const m = (p: number) => formatMoney(p, { currency, locale });
+  const up = fix.differencePennies >= 0;
+
+  async function record() {
+    if (!window.confirm(
+      `Record that the customer agreed version ${fix.sentVersion} (${m(fix.sentPennies)}) by phone?\n\n`
+      + `This is logged as a garage-recorded agreement, not a customer-signed one. `
+      + `It does NOT change invoice ${fix.invoiceNumber ?? ''} — you must unlock and re-issue it afterwards.`,
+    )) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await fetch('/api/quote-agreed-version', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId, versionId: fix.versionId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.message || 'Could not record the agreed version.'); return; }
+      setMsg(d.message);
+      onDone();
+    } catch { setErr('Could not record the agreed version.'); }
+    finally { setBusy(false); } // never strand the busy flag
+  }
+
+  return (
+    <div className="border border-warn rounded-xl p-4 bg-warn-soft" data-testid="agreed-version-fix">
+      <p className="text-sm font-semibold text-warn">The agreed quote doesn’t match this invoice</p>
+      <dl className="mt-2 text-sm text-ink space-y-1">
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted">Invoiced from v{fix.agreedVersion}</dt>
+          <dd className="tabular-nums font-medium" data-testid="fix-agreed">{m(fix.agreedPennies)}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted">Latest quote sent, v{fix.sentVersion}</dt>
+          <dd className="tabular-nums font-medium" data-testid="fix-sent">{m(fix.sentPennies)}</dd>
+        </div>
+        <div className="flex justify-between gap-3 pt-1 border-t border-warn">
+          <dt className="font-semibold">Difference</dt>
+          <dd className="tabular-nums font-semibold" data-testid="fix-difference">
+            {up ? '+' : '−'}{m(Math.abs(fix.differencePennies))}
+          </dd>
+        </div>
+      </dl>
+      {!msg && (
+        <button type="button" disabled={disabled || busy} onClick={record}
+          className="mt-3 w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">
+          {busy ? 'Recording…' : `Record that the customer agreed v${fix.sentVersion} by phone`}
+        </button>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        Logged as a garage-recorded agreement, not a customer-signed one. Recording it does not change
+        the invoice — unlock and re-issue it afterwards to bill the agreed figures.
+      </p>
+      {msg && <p className="mt-2 text-sm text-ok" data-testid="fix-done">{msg}</p>}
+      {err && <p className="mt-2 text-sm text-danger" data-testid="fix-error">{err}</p>}
     </div>
   );
 }

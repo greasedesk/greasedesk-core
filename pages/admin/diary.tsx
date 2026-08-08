@@ -1014,6 +1014,9 @@ export default function DiaryPage(props: PageProps) {
                     quoteFrozen={pane.data.quoteFrozen}
                     quoteSupersededNoLink={pane.data.quoteSupersededNoLink}
                     quoteSendBlockedReason={pane.data.quoteSendBlockedReason}
+        acceptanceNote={pane.data.acceptanceNote}
+        acceptanceLabel={pane.data.acceptanceLabel}
+        agreedVersionFix={pane.data.agreedVersionFix}
                     quoteHasAcceptedVersion={pane.data.quoteHasAcceptedVersion}
                     priceUnconfirmed={pane.data.priceUnconfirmed}
                     canIssueInvoice={pane.data.canIssueInvoice}

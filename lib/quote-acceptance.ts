@@ -140,6 +140,116 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
 }
 
 /**
+ * ── RECORDING THAT A LATER VERSION WAS AGREED, ON A CARD THAT HAS MOVED ON ───────────────────────
+ * VERSION-LEVEL ONLY. It marks a version accepted and touches the JobCard row NOT AT ALL.
+ *
+ * The case: BJ65KWV held an accepted v1 at £311.92 and a sent v3 at £701.41, invoiced against v1's
+ * lines. The customer agreed v3 by phone. There was no way to record that — acceptQuote refuses
+ * because `invoiced` has no legal transition to `accepted`, and it is RIGHT to refuse: the card is
+ * invoiced because the work is done, and dragging it back to `accepted` would falsify the spine and
+ * undo the invoice's own status. Someone had already unlocked and re-issued that invoice FOUR times
+ * trying to fix it by hand, getting v1's lines back every time — faithfully, because v1 was the only
+ * accepted version.
+ *
+ * ── WHY A SECOND FUNCTION AND NOT A FLAG ON acceptQuote ─────────────────────────────────────────
+ * acceptQuote does two things: marks the version, and moves the card. Here we want the first
+ * without the second. A `skipStatusMove` flag would put "do the half that bypasses the transition
+ * table" behind a boolean on the very function the CUSTOMER's magic link calls, one mistaken
+ * argument away from letting a stale link rewrite a billed card. Two functions cannot be confused
+ * by a flag; `actorUserId` here is NON-NULLABLE, so the shape that means "the customer did this"
+ * is unconstructible.
+ *
+ * ── WHAT IT DELIBERATELY DOES NOT DO ────────────────────────────────────────────────────────────
+ *  • No status move, no `accepted_at` (ruling 2026-08-08: the original acceptance date STAYS).
+ *  • It does not touch the earlier accepted version. The customer really did accept v1 on 29 July,
+ *    with their own IP on the row; deleting that would falsify the record to tidy a report.
+ *  • It does not unlock or re-issue. Fusing them would hide a £389 change to a customer's bill
+ *    inside a click labelled "accepted". The admin does the money as a separate audited act.
+ *  • It mints nothing. The existing accepted-version inheritance in lib/invoice-issue resolves the
+ *    HIGHEST accepted version, so re-issue picks up v3 with no new billing code at all.
+ *
+ * ── THE ACTION IS ITS OWN ───────────────────────────────────────────────────────────────────────
+ * `quote.agreed_version`, never `quote.accepted`. quotes-metrics unions the acceptance actions to
+ * date historic acceptances, and this event is NOT a card acceptance — folding it in would add a
+ * second acceptance to a card that only ever had one.
+ *
+ * KNOWN IMPRECISION, accepted by ruling rather than worked around: with `accepted_at` left alone,
+ * resolveAcceptedAt falls back to the highest accepted version's responded_at, so this card's
+ * reported acceptance moves to the recording date and its value from £311.92 to £701.41 — across
+ * month boundaries. One date per card cannot express two real acceptances. See lib/quotes-metrics.
+ */
+export type AgreedVersionRefusal =
+  | { code: 'version_not_on_card'; message: string }
+  | { code: 'version_not_open'; message: string };
+
+export type RecordAgreedVersionArgs = {
+  groupId: string;
+  jobCardId: string;
+  /** EXPLICIT. Never "the highest sent" — the garage is asserting that a SPECIFIC version was
+   *  agreed, and inferring which one is how the wrong figure gets billed. */
+  versionId: string;
+  /** NON-NULLABLE. A garage-recorded agreement always has a named member of staff behind it. */
+  actorUserId: string;
+  at: Date;
+};
+
+export async function recordAgreedVersion(
+  tx: Prisma.TransactionClient,
+  args: RecordAgreedVersionArgs,
+): Promise<{ version: number; grossPennies: number } | AgreedVersionRefusal> {
+  const v = (await tx.quoteVersion.findFirst({
+    where: { id: args.versionId, job_card_id: args.jobCardId, group_id: args.groupId },
+    select: { id: true, version: true, status: true, gross_pennies: true },
+  })) as { id: string; version: number; status: string; gross_pennies: number } | null;
+
+  // Scoped to the card AND the tenant in one query — a versionId from another card (or another
+  // garage) is not found, rather than found and then checked.
+  if (!v) return { code: 'version_not_on_card', message: 'That quote version is not on this job card.' };
+
+  // ONLY a `sent` version can be agreed. `superseded` was withdrawn when a newer quote went out, so
+  // nobody could have agreed to it as the live offer; `accepted`/`declined` already have an answer.
+  if (v.status !== 'sent') {
+    return {
+      code: 'version_not_open',
+      message: v.status === 'superseded'
+        ? `Version ${v.version} was replaced by a newer quote, so it is no longer the offer. Agree the version the customer was actually shown.`
+        : `Version ${v.version} has already been answered (${v.status}).`,
+    };
+  }
+
+  await tx.quoteVersion.update({
+    where: { id: v.id },
+    data: {
+      status: 'accepted',
+      responded_at: args.at,
+      responded_by_user: args.actorUserId, // SET + ip null = garage-recorded (lib/acceptance-provenance)
+      responded_ip: null,                  // never fabricated: no customer was on the end of a request
+      responded_user_agent: null,
+    },
+  });
+
+  await writeAudit(tx, {
+    groupId: args.groupId,
+    userId: args.actorUserId,
+    jobCardId: args.jobCardId,
+    action: 'quote.agreed_version',
+    diff: {
+      versionId: v.id,
+      version: v.version,
+      grossPennies: v.gross_pennies,
+      attested: false,      // garage-recorded, always — there is no attested route into this function
+      cardStatusUnchanged: true,
+      at: args.at.toISOString(),
+    },
+  });
+
+  return { version: v.version, grossPennies: v.gross_pennies };
+}
+
+export const isAgreedVersionRefusal = (r: unknown): r is AgreedVersionRefusal =>
+  !!r && typeof r === 'object' && 'code' in (r as any);
+
+/**
  * ── CAN THIS CARD STILL ANSWER A QUOTE? ─────────────────────────────────────────────────────────
  * The transition table is the authority for BOTH answers, so accept and decline can never disagree
  * about whether a card is still open to one.

@@ -22,6 +22,7 @@ import { canAccessSite } from '@/lib/admin-guard';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { listQuotes, quoteFilterCounts, QUOTE_FILTERS, isQuoteFilter, DEFAULT_QUOTE_FILTER, type QuoteFilter, type QuoteRow } from '@/lib/quotes-list';
 import { formatMoney } from '@/lib/format-money';
+import { PROVENANCE_LABEL } from '@/lib/acceptance-provenance';
 import { withI18n } from '@/lib/gssp-i18n';
 import PeriodPicker, { type PeriodSelection } from '@/components/PeriodPicker';
 import { namedMonthRangeQS } from '@/lib/dashboard-periods';
@@ -179,6 +180,15 @@ export default function QuotesPage(props: Props) {
                         it is a fact about a card that already belongs under Accepted or Accepted &
                         booked, and a tab would split the accepted work in two. Both figures, because
                         "awaiting approval" states nothing. */}
+                    {/* WHO confirmed it (ruling 2026-08-08). Only stated where it is NOT the
+                        customer's own click: "Confirmed by the customer" on every attested row would
+                        be noise, while the silent case is exactly the one a reader must not mistake
+                        for one. Rendered from the shared label so the words cannot drift. */}
+                    {r.acceptanceProvenance && r.acceptanceProvenance !== 'customer' && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line ml-1" data-testid="row-provenance">
+                        {PROVENANCE_LABEL[r.acceptanceProvenance]}
+                      </span>
+                    )}
                     {r.priceUnconfirmed && (
                       <span className="block mt-1 text-[11px] font-medium text-warn" data-testid="price-unconfirmed-row">
                         Agreed {formatMoney(r.priceUnconfirmed.agreedPennies, { currency: props.currency, locale: props.locale })} (v{r.priceUnconfirmed.agreedVersion}),
@@ -258,7 +268,12 @@ export default function QuotesPage(props: Props) {
                 <span className="text-xs font-semibold text-muted">Accepted</span>
                 <p className="text-2xl font-bold text-ok tabular-nums mt-1" data-testid="accepted-value">{m ? money(m.acceptedPennies) : '—'}</p>
                 <p className="text-xs text-muted mt-1">{m ? `${m.acceptedCount} quote${m.acceptedCount === 1 ? '' : 's'}` : ''}
-                  {m && m.acceptedVerbalCount > 0 ? `, ${m.acceptedVerbalCount} verbal` : ''}</p>
+                  {/* SAY WHAT IT COUNTS. This figure is cards with NO quote version — it was
+                      labelled "verbal", which reads as a claim about who confirmed the acceptance
+                      and is a different axis entirely (a SENT quote can also be agreed by phone).
+                      The provenance count sits beside it, named for what it is. */}
+                  {m && m.acceptedVerbalCount > 0 ? `, ${m.acceptedVerbalCount} never formally quoted` : ''}
+                  {m && m.acceptedGarageRecordedCount > 0 ? `, ${m.acceptedGarageRecordedCount} recorded by the garage` : ''}</p>
                 {/* SUBSET, worded so it can never be added to the figure above. */}
                 <p className="text-xs text-muted mt-1" data-testid="accepted-booked">
                   {m ? `of which ${m.acceptedBookedCount} ${m.acceptedBookedCount === 1 ? 'is' : 'are'} booked in (${money(m.acceptedBookedPennies)}) — part of the figure above, not extra` : ''}

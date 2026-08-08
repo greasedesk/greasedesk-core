@@ -28,6 +28,7 @@ import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { isBookedCard } from '@/lib/jobcard-status';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { refuseQuoteSend } from '@/lib/quote-acceptance';
+import { acceptanceProvenance, PROVENANCE_LABEL, PROVENANCE_SENTENCE } from '@/lib/acceptance-provenance';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -79,7 +80,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
       take: 100,
-      select: { id: true, action: true, created_at: true, user: { select: { name: true, email: true } } },
+      select: { id: true, action: true, created_at: true, diff_json: true, user: { select: { name: true, email: true } } },
     }) as Promise<any[]>,
     // The card's LATEST quote version status — a `superseded` latest means the estimate was
     // materially edited after sending and never re-sent, so there is no live link for the customer.
@@ -101,8 +102,10 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // read answers "has anything been accepted?".
   const allVersions = (await prisma.quoteVersion.findMany({
     where: { job_card_id: cardId },
-    select: { version: true, status: true, gross_pennies: true },
-  }).catch(() => [])) as Array<{ version: number; status: string; gross_pennies: number }>;
+    // id + the provenance pair ride along: the same read answers "who confirmed the agreed one?"
+    // and feeds the agreed-version control, rather than a second query for each.
+    select: { id: true, version: true, status: true, gross_pennies: true, responded_by_user: true, responded_ip: true },
+  }).catch(() => [])) as Array<{ id: string; version: number; status: string; gross_pennies: number; responded_by_user: string | null; responded_ip: string | null }>;
   const quoteHasAcceptedVersion = allVersions.some((v) => v.status === 'accepted');
   // ONE RULE, shared with the diary and the quotes list — never re-derived here.
   const priceUnconfirmed = quotePriceUnconfirmed(allVersions);
@@ -147,6 +150,37 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // API refuses with, so the button cannot be offered where the send would 409. A button that
   // always fails is a trap; a stated reason is an answer. Null when a quote can be sent.
   const quoteSendBlockedReason = refuseQuoteSend(row.status)?.message ?? null;
+
+  // ── WHO CONFIRMED THE ACCEPTANCE, in words, for the Quote panel ────────────────────────────────
+  // The HIGHEST accepted version is the operative one everywhere (invoice-issue, quotes-list), so it
+  // is the one whose provenance gets stated. Versionless → 'garage' by construction, and that is the
+  // 219-card majority, not an edge.
+  const acceptedVersionRow = [...allVersions].sort((a, b) => b.version - a.version).find((v) => v.status === 'accepted') ?? null;
+  const acceptanceProv = (row.status === 'draft' || row.status === 'quoted' || row.status === 'declined')
+    ? null // nothing has been accepted, so there is nothing to attribute
+    : acceptanceProvenance(acceptedVersionRow);
+  const acceptanceNote = acceptanceProv ? PROVENANCE_SENTENCE[acceptanceProv] : null;
+  const acceptanceLabel = acceptanceProv ? PROVENANCE_LABEL[acceptanceProv] : null;
+
+  // ── THE AGREED-VERSION CORRECTION (admin, invoiced cards) ──────────────────────────────────────
+  // Present ONLY when there is a real mismatch to fix: an invoice whose lines came from an earlier
+  // accepted version while a LATER version is still sitting `sent`. Shaped server-side with both
+  // totals so the control can state the money before it commits — the client never computes a
+  // difference it is about to ask someone to authorise. Absent (not hidden) for non-admins.
+  const latestSent = [...allVersions].sort((a, b) => b.version - a.version).find((v) => v.status === 'sent') ?? null;
+  const agreedVersionFix = (vis.isAdmin && invoiceRow && acceptedVersionRow && latestSent
+    && latestSent.version > acceptedVersionRow.version)
+    ? {
+        versionId: latestSent.id,
+        sentVersion: latestSent.version,
+        sentPennies: latestSent.gross_pennies,
+        agreedVersion: acceptedVersionRow.version,
+        agreedPennies: acceptedVersionRow.gross_pennies,
+        differencePennies: latestSent.gross_pennies - acceptedVersionRow.gross_pennies,
+        agreedProvenance: acceptanceProvenance(acceptedVersionRow),
+        invoiceNumber: invoiceRow.invoice_number,
+      }
+    : null;
   // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
   // a user who may not see money never RECEIVES money. Absent, not hidden.
   //   priceVisible = seeValues OR canEditPricing (edit implies see, for PRICES only)
@@ -225,8 +259,24 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   });
 
   // Audit trail — this card's events, newest first. Empty for cards created before this shipped.
+  // PROVENANCE IN WORDS, resolved server-side. `quote.accepted` is written by BOTH the customer's own
+  // click and a garage-recorded answer, so the action name cannot carry this and the client must not
+  // have to infer it from a missing name. `quote.agreed_version` is garage-recorded by construction.
+  const auditNote = (action: string, diff: any): string | null => {
+    if (action === 'quote.agreed_version') {
+      return `${PROVENANCE_LABEL.garage} — version ${diff?.version ?? '?'} agreed after this job was invoiced. The job's own status and acceptance date are unchanged.`;
+    }
+    if (action !== 'quote.accepted') return null;
+    // `attested` is written by the chokepoint on every row since 2026-08-05. Its ABSENCE on an older
+    // row is unknown, not false — the same honest-null rule the provenance module applies.
+    if (diff && typeof diff.attested === 'boolean') {
+      return diff.attested ? PROVENANCE_LABEL.customer : PROVENANCE_LABEL.garage;
+    }
+    return PROVENANCE_LABEL.unknown;
+  };
   const events: AuditEvent[] = auditRows.map((a) => ({
     id: a.id, action: a.action, actor: a.user?.name ?? a.user?.email ?? null, at: (a.created_at as Date).toISOString(),
+    note: auditNote(a.action, a.diff_json),
   }));
 
   // Duplicate provenance for the two notices. Ownership change compares customer IDs (source card
@@ -263,6 +313,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     jobCardId: row.id,
     canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
     quoteSendBlockedReason,
+    acceptanceNote, acceptanceLabel, agreedVersionFix,
     quoteSupersededNoLink,
     quoteHasAcceptedVersion,
     priceUnconfirmed,

@@ -20,7 +20,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { writeAudit } from '@/lib/audit';
 import { snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { tServer } from '@/lib/server-i18n';
-import { refuseIfVoid } from '@/lib/invoice-void';
+import { refuseIfVoid, refuseIfSent } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -40,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const invoice = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: user.group_id },
-    select: { id: true, status: true, series: true, invoice_number: true, job_card_id: true, vat_registered_at_issue: true, job_card: { select: { status: true } }, lines: { select: { id: true }, take: 1 }, site: { select: { locale: true } } },
+    select: { id: true, status: true, series: true, invoice_number: true, job_card_id: true, receipt_sent_at: true, vat_registered_at_issue: true, job_card: { select: { status: true } }, lines: { select: { id: true }, take: 1 }, site: { select: { locale: true } } },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
 
@@ -51,6 +51,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Guarding on the status, above both branches, is the version of this that cannot rot.
   const voided = refuseIfVoid(invoice);
   if (voided) return res.status(409).json(voided);
+
+  // ALREADY WITH THE CUSTOMER → refuse BOTH branches (ruling 2026-08-08). unlock deletes the frozen
+  // lines and reissue re-freezes them under the SAME number, so between them they could rebuild a
+  // document the customer is holding into a different one with the same reference and no trace on
+  // their copy. Guarded above both branches for the same reason the void guard is: a check that sits
+  // inside one branch protects only that branch.
+  const sentAudit = await prisma.auditLog.findFirst({
+    where: { entity_id: invoice.job_card_id, action: 'invoice.sent' },
+    select: { id: true },
+  });
+  const sent = refuseIfSent(invoice, !!sentAudit);
+  if (sent) return res.status(409).json(sent);
 
   if (act === 'reissue') {
     // Re-freeze the corrected card lines and re-lock. Only meaningful while unlocked (no lines).
