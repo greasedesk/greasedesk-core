@@ -90,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const group = await prisma.group.findUnique({
     where: { id: groupId },
-    select: { group_name: true, trading_name: true, billing_email: true, invoice_reply_to: true, invoice_sender_name: true, inbound_token: true },
+    select: { group_name: true, trading_name: true, billing_email: true, invoice_reply_to: true, invoice_sender_name: true, inbound_token: true, phone: true },
   });
   const garageName = (group?.trading_name || group?.group_name || 'Your garage') as string;
 
@@ -106,6 +106,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     data: {
       body,
       garageName,
+      // One-way sender: a customer replying to this SMS reaches nobody, so the number goes in the
+      // body. Group-level here — a thread is not site-scoped, so there is no site number to prefer.
+      garagePhone: group?.phone ?? null,
       greeting: `Hello ${reach.customerName}`,
       subject: `Message from ${garageName}${thread.vehicle?.registration ? ` — ${thread.vehicle.registration}` : ''}`,
     },

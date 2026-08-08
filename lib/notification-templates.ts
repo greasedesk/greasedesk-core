@@ -15,6 +15,19 @@ export type RenderedSms = { text: string };
 export type NotificationTemplate = {
   /** Human label for the Engine Room / support view. */
   label: string;
+  /**
+   * SECURITY MESSAGES IGNORE CONTACT PREFERENCES, and the flag lives on the TEMPLATE so no caller
+   * can forget it. Opt-out is a commercial-messaging right — it was never a request not to receive
+   * one's own login code, and honouring it here would lock a garage owner out of their own account.
+   *
+   * The concrete case: a garage owner who is also a customer of their own garage (very common — they
+   * service their own car) with sms_opt_out set. Suppression matches by recipient string within the
+   * tenant, so their code would be REFUSED, not sent.
+   *
+   * Deliberately NOT a caller argument. Fourteen call sites, and the ones that would forget are the
+   * ones that matter. Absent/false = an ordinary message that honours the preference.
+   */
+  security?: boolean;
   email?: (d: TemplateData) => RenderedEmail;
   sms?: (d: TemplateData) => RenderedSms;
 };
@@ -29,6 +42,21 @@ const shell = (bodyHtml: string): string => `
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
     <p style="font-size:12px;color:#64748b;margin:0">Sent by GreaseDesk on behalf of your garage.</p>
   </div>`;
+
+/**
+ * ── THE REPLY ROUTE, ON EVERY CUSTOMER-FACING SMS ───────────────────────────────────────────────
+ * We send from the alphanumeric sender `GreaseDesk`, which is ONE-WAY: a customer who replies gets
+ * nothing back, silently, and never learns why. So every message that reaches a customer carries the
+ * garage's own number and says plainly that the text cannot be answered.
+ *
+ * OMITTED, not faked, when no number is on file — an empty "call " is worse than nothing, and
+ * lib/company-info already treats a missing number as an honest gap rather than a default.
+ *
+ * Costs 26 septets plus the number. Measured against the one-segment budget in the template tests:
+ * a quote SMS with a 30-character garage name and a 41-character link still lands at 155 of 160.
+ */
+const replyRoute = (d: TemplateData): string =>
+  d.garagePhone ? ` No replies - call ${d.garagePhone}` : '';
 
 const button = (href: string, label: string): string =>
   `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#2563eb;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:600">${esc(label)}</a></p>`;
@@ -55,7 +83,7 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it, so please don't forward it.</p>`),
     }),
     sms: (d) => ({
-      text: `${d.garageName ?? 'Your garage'}: the price for ${d.registration ?? 'your vehicle'} has changed${d.total ? ` to ${d.total}` : ''}. Please approve: ${d.link}`,
+      text: `${d.garageName ?? 'Your garage'}: the price for ${d.registration ?? 'your vehicle'} has changed${d.total ? ` to ${d.total}` : ''}. Please approve: ${d.link}${replyRoute(d)}`,
     }),
   },
 
@@ -70,7 +98,7 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view the quote, so please don't forward it.</p>`),
     }),
     sms: (d) => ({
-      text: `${d.garageName ?? 'Your garage'}: your quote${d.registration ? ` for ${d.registration}` : ''} is ready${d.total ? ` (${d.total})` : ''}. View: ${d.link}`,
+      text: `${d.garageName ?? 'Your garage'}: your quote${d.registration ? ` for ${d.registration}` : ''} is ready${d.total ? ` (${d.total})` : ''}. View: ${d.link}${replyRoute(d)}`,
     }),
   },
 
@@ -84,7 +112,7 @@ export const NOTIFICATION_TEMPLATES = {
         ${button(String(d.link ?? ''), 'View progress')}
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it.</p>`),
     }),
-    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: track your vehicle${d.registration ? ` ${d.registration}` : ''} here: ${d.link}` }),
+    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: track your vehicle${d.registration ? ` ${d.registration}` : ''} here: ${d.link}${replyRoute(d)}` }),
   },
 
   // ── Garage-facing: the customer answered ────────────────────────────────────────────────────────
@@ -151,8 +179,31 @@ export const NOTIFICATION_TEMPLATES = {
 
   // Signup email verification. Previously the ONE send with its own inline Resend client, recorded
   // nowhere — the first email a tenant ever receives went down a path nothing else used.
+  /**
+   * THE PHONE VERIFICATION CODE. security:true — it bypasses contact-preference suppression, because
+   * opt-out is a commercial-messaging right and was never a request to be locked out of your own
+   * account. No link, no branding beyond the name: a code SMS that looks like marketing trains people
+   * to ignore it, and one that carries a URL trains them to tap links in texts.
+   *
+   * NO reply route here, deliberately. This one goes to the GARAGE's own phone during signup, not to
+   * a customer, and "no replies - call yourself" would be absurd.
+   */
+  phone_verify: {
+    label: 'Phone verification code',
+    security: true,
+    sms: (d) => ({ text: `${d.code} is your GreaseDesk verification code. It expires in ${d.expiryMinutes ?? 5} minutes. We will never ask you for it.` }),
+    email: (d) => ({
+      subject: `${d.code} is your GreaseDesk verification code`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">Your verification code</h2>
+        <p style="font-size:28px;font-weight:700;letter-spacing:4px;margin:16px 0">${esc(d.code)}</p>
+        <p>It expires in ${esc(d.expiryMinutes ?? 5)} minutes. We will never ask you for this code.</p>`),
+    }),
+  },
+
   signup_verify: {
     label: 'Verify your email (signup)',
+    security: true,
     email: (d) => ({
       subject: 'Welcome to GreaseDesk — verify your email',
       html: shell(`
@@ -181,7 +232,7 @@ export const NOTIFICATION_TEMPLATES = {
     // Declared so `channel` is a real field rather than decoration: an SMS free-text send renders
     // here and is then recorded as skipped by the unconfigured SMS adapter — refused for the right
     // reason (no provider), not silently unsupported.
-    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}` }),
+    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}${replyRoute(d)}` }),
   },
 
   // A COPY of an inbound customer reply, forwarded to the garage's own mailbox so that switching
@@ -200,6 +251,7 @@ export const NOTIFICATION_TEMPLATES = {
 
   password_reset: {
     label: 'Password reset',
+    security: true, // an account-recovery message: a contact preference must not strand somebody
     email: (d) => ({
       subject: 'Reset your GreaseDesk password',
       html: shell(`

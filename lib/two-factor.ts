@@ -105,6 +105,11 @@ export async function beginEnrolment(subject: Subject, account: string): Promise
 export async function confirmEnrolment(subject: Subject, code: string): Promise<{ recoveryCodes: string[] } | null> {
   const row = await prisma.twoFactorSecret.findUnique({ where: uniqueWhere(subject) });
   if (!row || row.enabled) return null; // nothing pending to confirm
+  // EXPLICIT, because the compiler will not do it for us: `secret` became nullable when the sms
+  // method was added, and lib/db exports `prisma` as `any` (globalForPrisma is any, which widens the
+  // whole ?? expression), so NO Prisma access in this codebase is type-checked. A null secret here
+  // would reach base32Decode and throw a 500 on a login screen.
+  if (!row.secret) return null; // an sms-method row has no secret to confirm a TOTP against
   if (!verifyTotp(row.secret, code)) return null; // the round-trip failed — DO NOT enable
   const recoveryCodes = Array.from({ length: RECOVERY_COUNT }, makeRecoveryCode);
   await prisma.$transaction([
@@ -127,7 +132,9 @@ export async function verifySecondFactor(subject: Subject, code: string): Promis
   // CHECKED BEFORE THE COMPARISON, so a locked-out attacker learns nothing from timing or outcome.
   if (await isLockedOut(subject)) return { ok: false, method: null, lockedOut: true };
 
-  if (verifyTotp(row.secret, code)) { await clearFailures(subject); return { ok: true, method: 'totp' }; }
+  // Guarded explicitly — see confirmEnrolment. A row with no secret is an sms-method enrolment; it
+  // simply has no TOTP to check, and falls through to the recovery-code branch below.
+  if (row.secret && verifyTotp(row.secret, code)) { await clearFailures(subject); return { ok: true, method: 'totp' }; }
   const hash = sha256(normaliseRecovery(code));
   if (normaliseRecovery(code).length >= 8) {
     const consumed = await prisma.twoFactorRecoveryCode.updateMany({

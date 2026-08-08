@@ -23,6 +23,7 @@ import { refuseQuoteSend } from '@/lib/quote-acceptance';
 import { sendNotification } from '@/lib/notify';
 import { freezeQuoteVersion, attachMagicLink } from '@/lib/quote-version';
 import { formatMoney } from '@/lib/format-money';
+import { resolveContactRoutes } from '@/lib/contact-routes';
 import { writeAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -48,11 +49,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       customer: { select: { email: true } },
       group: {
         select: {
-          group_name: true, trading_name: true, tax_label: true, vat_registered: true,
+          group_name: true, trading_name: true, tax_label: true, vat_registered: true, phone: true,
           billing: { select: { subscription_status: true, status: true } },
         },
       },
-      site: { select: { currency_code: true, locale: true } },
+      site: { select: { currency_code: true, locale: true, phone: true, whatsapp: true } },
       _count: { select: { items: true } },
     },
   });
@@ -129,6 +130,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       subject: { type: 'job_card', id: card.id },
       data: {
         garageName,
+        // THE REPLY ROUTE. The alphanumeric sender is one-way, so a customer who replies to this text
+        // reaches nobody. Site number first, group number as the fallback — the same precedence every
+        // other contact surface uses (lib/contact-routes), never a second resolution invented here.
+        garagePhone: resolveContactRoutes(card.site, card.group).phone,
         registration: card.vehicle?.registration ?? null,
         total: formatMoney(frozen.grossPennies, { currency: card.site?.currency_code ?? 'GBP', locale: card.site?.locale ?? 'en-GB' }),
         // EMAIL ONLY — the sms renderer ignores it. Any useful note breaks the one-segment budget,

@@ -38,7 +38,9 @@ export default function BillingPage({ priceLabel }: { priceLabel: string }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.onboarded) {
-        router.replace('/admin/dashboard');
+        // The optional phone step, which itself continues to the dashboard. Not gated: see
+        // pages/onboarding/phone — a user who skips it lands exactly where they used to.
+        router.replace('/onboarding/phone');
         return;
       }
       // Not live yet (rare, very-early return). Retry a few times, then offer a manual refresh.

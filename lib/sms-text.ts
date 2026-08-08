@@ -46,3 +46,38 @@ export function smsText(input: string): string {
   for (const [re, to] of MAP) out = out.replace(re, to);
   return out;
 }
+
+/**
+ * ── SEGMENT COUNTING (2026-08-08) ───────────────────────────────────────────────────────────────
+ * There was none. The magic-link token was sized by hand against a segment budget and the templates
+ * were written to "about 160 characters" by eye — which held only while nothing was added to them.
+ * Adding the garage's phone number to every customer-facing SMS is exactly the change that breaks a
+ * budget nobody measures, so the budget is now measurable.
+ *
+ * GSM-7 packs 160 septets into one segment, 153 when a message is split (the UDH header eats 7).
+ * Characters in the GSM 03.38 EXTENSION table (including the euro, and [ ] { } \ ~ ^ |) cost TWO
+ * septets each. Anything outside the alphabet forces the WHOLE message to UCS-2: 70 characters, 67
+ * when concatenated. Run smsText() first — that is what keeps typography from triggering the cliff.
+ */
+const GSM_BASE =
+  '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?'
+  + '¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà';
+const GSM_EXTENDED = '^{}\\[~]|€';
+
+export type SmsCost = { encoding: 'GSM-7' | 'UCS-2'; septets: number; segments: number };
+
+export function smsCost(text: string): SmsCost {
+  const chars = Array.from(text);
+  let septets = 0;
+  for (const c of chars) {
+    if (GSM_EXTENDED.includes(c)) { septets += 2; continue; }
+    if (GSM_BASE.includes(c)) { septets += 1; continue; }
+    // One character outside the alphabet drops the entire message to UCS-2 — there is no partial.
+    const units = chars.reduce((n, ch) => n + (ch.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+    return { encoding: 'UCS-2', septets: units, segments: units <= 70 ? 1 : Math.ceil(units / 67) };
+  }
+  return { encoding: 'GSM-7', septets, segments: septets <= 160 ? 1 : Math.ceil(septets / 153) };
+}
+
+/** One segment? The assertion a template test should make, rather than counting characters by eye. */
+export const isOneSegment = (text: string): boolean => smsCost(text).segments <= 1;

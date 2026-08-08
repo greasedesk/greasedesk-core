@@ -69,12 +69,55 @@ const ADAPTERS: Record<NotifyChannel, Adapter> = {
     configured: () => !!process.env.RESEND_API_KEY,
     send: (to, rendered, opts) => sendEmail(to, rendered.subject ?? '', rendered.body, opts ?? {}),
   },
-  // Declared, deliberately unconfigured. Adding SMS = fill this adapter + set the key; no new send path.
+  /**
+   * ── SMS (Twilio REST, no SDK) ─────────────────────────────────────────────────────────────────
+   * `fetch`, not the SDK: this is one POST with basic auth, and a dependency for a single call is
+   * weight we would carry forever.
+   *
+   * CONFIGURED REQUIRES A SENDER. Provider + key alone used to satisfy it, which would have let the
+   * adapter declare itself ready and then fail every send with a provider error — the worst shape,
+   * because sendNotification would record `failed` rather than the honest `skipped`.
+   *
+   * MESSAGING SERVICE FIRST, bare sender ID as the documented fallback. A Messaging Service can hold
+   * the alphanumeric `GreaseDesk` AND the real number together and fall back when a network rejects
+   * the alphanumeric one; with a bare sender a rejection is simply a failed message. It is also the
+   * only shape that survives leaving GB, where alphanumeric senders are not universally supported.
+   */
   sms: {
     provider: process.env.SMS_PROVIDER || 'none',
-    configured: () => !!process.env.SMS_API_KEY && !!process.env.SMS_PROVIDER,
-    send: async () => false,
+    configured: () => !!process.env.SMS_PROVIDER && !!process.env.SMS_API_KEY
+      && !!process.env.SMS_ACCOUNT_SID
+      && !!(process.env.SMS_MESSAGING_SERVICE_SID || process.env.SMS_SENDER_ID),
+    send: async (to, rendered) => {
+      const sid = process.env.SMS_ACCOUNT_SID as string;
+      const form = new URLSearchParams({ To: toE164Plus(to), Body: rendered.body });
+      if (process.env.SMS_MESSAGING_SERVICE_SID) form.set('MessagingServiceSid', process.env.SMS_MESSAGING_SERVICE_SID);
+      else form.set('From', process.env.SMS_SENDER_ID as string);
+      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Basic ' + Buffer.from(`${sid}:${process.env.SMS_API_KEY}`).toString('base64'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: form,
+      });
+      if (!r.ok) {
+        // Surface the provider's own words — "provider rejected the message" is undiagnosable, and
+        // Twilio's error codes are the only way to tell a bad number from a blocked sender.
+        const detail = await r.text().catch(() => '');
+        throw new Error(`sms ${r.status}: ${detail.slice(0, 300)}`);
+      }
+      // ACCEPTED, not delivered. Twilio returns `queued`; a delivery webhook would upgrade the
+      // NotificationLog row later. We must never render "delivered" off the back of this.
+      return true;
+    },
   },
+};
+
+/** Twilio wants a leading +; toE164Digits stores digits only, so the + is added at the boundary. */
+const toE164Plus = (raw: string): string => {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  return d ? `+${d}` : '';
 };
 
 /**
@@ -158,7 +201,7 @@ async function record(args: {
 export async function sendNotification(args: SendNotificationArgs): Promise<SendNotificationResult> {
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
-  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; email?: Function; sms?: Function } | undefined;
+  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; email?: Function; sms?: Function } | undefined;
   const common = { groupId: args.groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null };
 
@@ -174,7 +217,10 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   // CONTACT PREFERENCE — checked before rendering and before any provider call. The row is written
   // as `skipped` with an explicit reason: a suppressed message is NEVER recorded as sent, and never
   // silently vanishes either. ok:false + suppressed:true is the caller's signal to surface it.
-  if (await isSuppressed(args.groupId, channel, args.recipient)) {
+  // A SECURITY template bypasses it entirely — see NotificationTemplate.security. The
+  // NotificationLog row is still written by the normal path below, so a bypassed send is as
+  // recorded as any other; bypassing the preference must never mean bypassing the record.
+  if (!tpl.security && await isSuppressed(args.groupId, channel, args.recipient)) {
     const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
     return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true };
   }

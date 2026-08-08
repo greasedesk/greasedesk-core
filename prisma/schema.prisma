@@ -518,7 +518,19 @@ model TwoFactorSecret {
   id           String    @id @default(uuid())
   subject_type String // 'operator' | 'tenant' | 'rep'
   subject_id   String
-  secret       String // base32 TOTP secret
+  // WHICH second factor this row describes. 'totp' has a secret and no phone; 'sms' has a phone and
+  // no secret. One row per subject either way, so the lifecycle (enabled flips only after a live
+  // code round-trips) is identical for both and cannot fork.
+  method       String    @default("totp") // 'totp' | 'sms'
+  secret       String? // base32 TOTP secret — NULL on an sms-method row
+  // THE VERIFIED NUMBER, and deliberately NOT User.phone. That column is a free-text HR profile
+  // field an ADMIN can edit, so a factor delivered there would let an admin redirect a colleague's
+  // codes to their own handset. Only a verification round-trip writes this one.
+  // Stored E.164 digits-only via lib/contact-routes::toE164Digits — the same normaliser the customer
+  // spine uses. No raw copy: a customer's raw number is what the garage recognises on screen; this
+  // one is only ever dialled by a machine.
+  phone_e164        String?
+  phone_verified_at DateTime?
   enabled      Boolean   @default(false) // false during enrolment; true ONLY after a confirming code round-trips
   confirmed_at DateTime?
   created_at   DateTime  @default(now())
@@ -529,6 +541,33 @@ model TwoFactorSecret {
 
 // One-time recovery codes — the escape hatch when the authenticator device is lost. Raw shown ONCE at
 // enrolment; only the sha256 hash is stored (like invite/reset tokens). used_at makes each single-use.
+/**
+ * ONE-TIME CODES WE DELIVERED, for every purpose. Deliberately one table, not one per feature: a
+ * signup phone verification and an SMS login code are the same mechanism asked twice, and a second
+ * table would mean a second expiry rule, a second attempt cap and eventually a second bug.
+ *
+ * `purpose` is what keeps them apart — a code minted to verify a phone can never satisfy a login,
+ * because the lookup is scoped to it. Only the HASH is stored, so a database reader cannot sign in
+ * as anybody. `consumed_at` makes a code single-use; `attempts` kills THIS code after 5 wrong
+ * guesses, which is the delivered-code analogue of the rotating-TOTP lockout in lib/two-factor —
+ * both exist, because they answer different questions.
+ */
+model DeliveredCode {
+  id           String   @id @default(uuid())
+  subject_type String // 'tenant' | 'operator' | 'rep' — same Subject shape as TwoFactorSecret
+  subject_id   String
+  purpose      String // 'phone_verify' | 'login_2fa'
+  destination  String // E.164 digits, exactly as sent — the record of WHERE it went
+  code_hash    String // sha256(code). NEVER the code.
+  expires_at   DateTime
+  attempts     Int       @default(0)
+  consumed_at  DateTime?
+  created_at   DateTime  @default(now())
+
+  @@index([subject_type, subject_id, purpose])
+  @@index([expires_at])
+}
+
 model TwoFactorRecoveryCode {
   id           String    @id @default(uuid())
   subject_type String
