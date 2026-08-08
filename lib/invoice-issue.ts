@@ -93,7 +93,7 @@ async function createInvoiceRow(
   // historical, import); a fifth caller added later gets the revoke without knowing it exists.
   // Same tx as the mint: a revoke that outlived a rolled-back invoice would kill a link to work
   // that is still genuinely quotable.
-  await revokeMagicLinksForCard(jobCardId, tx);
+  await revokeMagicLinksForCard(jobCardId, 'invoiced', tx);
 
   return invoice.id;
 }

@@ -108,7 +108,9 @@ export function magicLinkUrl(rawToken: string, baseUrl?: string): string {
 
 export type MagicResolution =
   | { ok: true; link: { id: string; groupId: string; jobCardId: string; purpose: MagicPurpose; recipient: string; expiresAt: Date } }
-  | { ok: false; reason: 'not_found' | 'expired' | 'revoked' | 'wrong_purpose' | 'rate_limited' };
+  // `revokedReason` rides along on the revoked branch only — the caller needs WHY to pick the
+  // sentence, and undefined/null both mean "not recorded" and get the neutral one.
+  | { ok: false; reason: 'not_found' | 'expired' | 'revoked' | 'wrong_purpose' | 'rate_limited'; revokedReason?: RevokeReason };
 
 /**
  * Resolve a raw token. Distinguishes EXPIRED from NOT-FOUND deliberately: the customer holding a
@@ -127,10 +129,10 @@ export async function resolveMagicLink(
 
   const row = await prisma.customerMagicLink.findUnique({
     where: { token_hash: hashToken(rawToken) },
-    select: { id: true, group_id: true, job_card_id: true, purpose: true, recipient: true, expires_at: true, revoked_at: true },
+    select: { id: true, group_id: true, job_card_id: true, purpose: true, recipient: true, expires_at: true, revoked_at: true, revoked_reason: true },
   });
   if (!row) return { ok: false, reason: 'not_found' };
-  if (row.revoked_at) return { ok: false, reason: 'revoked' };
+  if (row.revoked_at) return { ok: false, reason: 'revoked', revokedReason: (row.revoked_reason ?? null) as RevokeReason };
   if (row.expires_at.getTime() <= Date.now()) return { ok: false, reason: 'expired' };
   if (opts.purpose && row.purpose !== opts.purpose) return { ok: false, reason: 'wrong_purpose' };
 
@@ -154,9 +156,23 @@ export async function resolveMagicLink(
   };
 }
 
-/** Kill a link (card cancelled, sent to the wrong address). Idempotent. */
-export async function revokeMagicLink(id: string): Promise<void> {
-  await prisma.customerMagicLink.updateMany({ where: { id, revoked_at: null }, data: { revoked_at: new Date() } });
+/**
+ * WHY a link was killed — the customer reads a different sentence for each, so this is not
+ * bookkeeping. Kept as a union rather than an enum column: the set will grow, and an additive
+ * string needs no migration to add a reason the renderer already has to default for anyway.
+ *
+ * NULL is a first-class member, not a gap. It means "revoked, cause not recorded" — every row
+ * written before 2026-08-08, plus `in_progress` (ruling): a started job has no true reason word,
+ * and "invoiced" would be a lie while "cancelled" would be a worse one.
+ */
+export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | null;
+
+/** Kill one link (sent to the wrong address). Idempotent. */
+export async function revokeMagicLink(id: string, reason: RevokeReason): Promise<void> {
+  await prisma.customerMagicLink.updateMany({
+    where: { id, revoked_at: null },
+    data: { revoked_at: new Date(), revoked_reason: reason },
+  });
 }
 
 /**
@@ -167,10 +183,10 @@ export async function revokeMagicLink(id: string): Promise<void> {
  * rolled back: the work would still be quotable and the customer would hold a dead link to it.
  * The revoke belongs to the mint, so it commits or fails with it.
  */
-export async function revokeMagicLinksForCard(jobCardId: string, db: Db = prisma): Promise<number> {
+export async function revokeMagicLinksForCard(jobCardId: string, reason: RevokeReason, db: Db = prisma): Promise<number> {
   const r = await db.customerMagicLink.updateMany({
     where: { job_card_id: jobCardId, revoked_at: null },
-    data: { revoked_at: new Date() },
+    data: { revoked_at: new Date(), revoked_reason: reason },
   });
   return r.count;
 }

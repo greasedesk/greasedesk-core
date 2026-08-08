@@ -117,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // A DECLINE ends the link — the offer is over. An ACCEPT deliberately leaves it live so the
   // customer can re-open what they agreed to.
-  if (!accepted) await revokeMagicLinksForCard(card.id).catch(() => {});
+  if (!accepted) await revokeMagicLinksForCard(card.id, 'declined').catch(() => {});
 
   const garageName = card.group.trading_name || card.group.group_name || 'your garage';
   const total = formatMoney(version.gross_pennies, { currency: card.site?.currency_code ?? 'GBP', locale: card.site?.locale ?? 'en-GB' });

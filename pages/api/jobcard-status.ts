@@ -17,6 +17,7 @@ import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
+import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
@@ -144,6 +145,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
         await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
       }
+      // CANCELLING KILLS THE CUSTOMER'S LINK. It never used to — the docstring on revoked_at has
+      // claimed "card cancelled" since it was written, but no caller ever passed one, which is why
+      // three cancelled cards were still serving live quotes. A dead job that can still be accepted
+      // is the worst of the four states: the customer says yes to work nobody is going to do.
+      // In THIS tx, so a failed cancellation cannot leave the link dead behind it.
+      if (to === 'cancelled') await revokeMagicLinksForCard(jobCardId, 'cancelled', tx);
       if (to === 'invoiced') {
         // COMEBACK NUMBERING GUARD (locked): a comeback mints a £0 invoice from the SEPARATE
         // warranty series — never the chargeable customer-facing sequence. Both counters stay

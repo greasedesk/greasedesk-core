@@ -82,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // A NEW send supersedes anything already out AND kills its link, before the new one exists — an
   // old set of figures must never be acceptable once a newer offer has been made.
-  await revokeMagicLinksForCard(card.id);
+  await revokeMagicLinksForCard(card.id, 'superseded');
 
   let frozen;
   try {

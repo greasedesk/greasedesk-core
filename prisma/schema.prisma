@@ -2295,6 +2295,12 @@ model CustomerMagicLink {
   token_hash String    @unique // sha256(raw) — the raw token exists only in the emailed URL
   expires_at DateTime
   revoked_at DateTime? // explicit kill switch (card cancelled, sent to the wrong address)
+  // WHY it was killed — it decides the sentence the customer reads. One `revoked` bucket used to
+  // tell everyone "this quote has been updated, ask for the current version", which is false for an
+  // invoiced job: nothing was updated and there is no current version to ask for.
+  // NULL is honest, not missing: every row written before 2026-08-08, plus states with no true
+  // reason word, get the neutral sentence rather than a guessed one.
+  revoked_reason String? // 'superseded' | 'invoiced' | 'declined' | 'cancelled' (see lib/magic-link)
 
   recipient   String // who it was sent to, for the audit answer "who could see this?"
   consumed_at DateTime? // FIRST use

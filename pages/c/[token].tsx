@@ -28,7 +28,7 @@ type Denied = 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purp
 
 type Props =
   | { state: 'ok'; doc: SerializedDoc; token: string }
-  | { state: 'denied'; reason: Denied; garagePhone: string | null };
+  | { state: 'denied'; reason: Denied; revokedReason?: string | null; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
 
@@ -38,10 +38,13 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
     body: `Quote links stay valid for ${MAGIC_LINK_DAYS} days. Your job and its details are safe — only the link has aged out. Please contact the garage and ask them to send a fresh one.`,
   },
   revoked: {
-    // Seen at the moment someone was about to accept — keep the conversation OPEN, don't imply the
-    // door has closed. (Expired copy is separate and deliberately unchanged.)
-    title: 'This quote has been updated',
-    body: 'This quote has been updated — please ask the garage for the current version.',
+    // THE FALLBACK, for a link revoked before we recorded why (every row before 2026-08-08) and for
+    // states with no true reason word — see REVOKED_COPY below, which overrides this when we know.
+    // It must claim NOTHING about the cause: the old single sentence said "this quote has been
+    // updated — ask for the current version", which was a flat lie on an invoiced job, sending the
+    // customer to the garage for a document that does not exist.
+    title: 'This quote is no longer available',
+    body: 'This link has been closed by the garage. Please contact them — they can tell you where things stand, and send a new quote if you need one.',
   },
   not_found: {
     title: "We couldn't find that quote",
@@ -61,12 +64,45 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
   },
 };
 
+/**
+ * WHY the link died, in the customer's language. Overrides DENIED_COPY.revoked when the cause was
+ * recorded; an unrecognised or absent reason falls back to the neutral sentence above.
+ *
+ * Each of these has to be true STANDING ALONE, name no next step that doesn't exist, and never
+ * blame the customer for a state the garage created.
+ */
+const REVOKED_COPY: Record<string, { title: string; body: string }> = {
+  superseded: {
+    title: 'This quote has been updated',
+    body: 'A newer version of this quote has been sent. Please open the most recent message from the garage, or ask them to resend it.',
+  },
+  invoiced: {
+    // Deliberately does NOT say an invoice was sent to them — we know one was raised, not that it
+    // arrived, and "check your email" would be a guess pointing at an empty inbox.
+    title: 'This work has now been invoiced',
+    body: 'The garage has invoiced this job, so this quote is no longer open for approval. If you haven’t received the invoice, or something on it doesn’t look right, please contact the garage.',
+  },
+  declined: {
+    // PASSIVE ON PURPOSE. Staff can decline on a customer's behalf over the phone, so "you declined
+    // this" would sometimes be a false accusation aimed at the one person who didn't do it.
+    title: 'This quote was declined',
+    body: 'This quote is no longer open. If that wasn’t what you meant, or you’d like to go ahead after all, please contact the garage — they can send you a fresh quote.',
+  },
+  cancelled: {
+    title: 'This job has been cancelled',
+    body: 'The garage has cancelled this job, so the quote is no longer open. If you think that’s a mistake, please give them a call.',
+  },
+};
+
 const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
 const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
 
 export default function CustomerQuotePage(props: Props) {
   if (props.state === 'denied') {
-    const copy = DENIED_COPY[props.reason];
+    // A recorded reason overrides the generic revoked copy; anything unrecognised falls back to it,
+    // so a reason word added later can never render a blank page before its copy is written.
+    const copy = (props.reason === 'revoked' && props.revokedReason && REVOKED_COPY[props.revokedReason])
+      || DENIED_COPY[props.reason];
     return (
       <>
         <Head><title>{copy.title} — GreaseDesk</title><meta name="robots" content="noindex" /></Head>
@@ -272,7 +308,9 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   if (!res.ok) {
     // Even a refusal should offer the phone where we can identify the garage cheaply — but a
     // not-found token identifies nothing, so the number is simply absent there.
-    return { props: { state: 'denied', reason: res.reason, garagePhone: null } };
+    // `revokedReason` decides WHICH revoked sentence renders. Serialised as null, never undefined —
+    // Next refuses to serialise undefined through getServerSideProps.
+    return { props: { state: 'denied', reason: res.reason, revokedReason: res.revokedReason ?? null, garagePhone: null } };
   }
 
   // The version this link was minted for; if it has been superseded the link is already revoked,
