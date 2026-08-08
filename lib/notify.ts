@@ -59,8 +59,13 @@ export type SendNotificationResult = {
 type Adapter = {
   provider: string;
   configured: () => boolean;
-  /** Resolves true when the provider ACCEPTED the message. */
-  send: (to: string, rendered: { subject?: string; body: string }, opts?: SendEmailOpts) => Promise<boolean>;
+  /**
+   * Resolves true when the provider ACCEPTED the message. An adapter may instead return the
+   * provider's own answer — its message id and whatever it told us — which is recorded so a row can
+   * be reconciled against the provider's console later. A bare boolean stays valid: email does that.
+   */
+  send: (to: string, rendered: { subject?: string; body: string }, opts?: SendEmailOpts)
+    => Promise<boolean | { accepted: boolean; providerMessageId?: string; meta?: Record<string, unknown> }>;
 };
 
 const ADAPTERS: Record<NotifyChannel, Adapter> = {
@@ -109,7 +114,17 @@ const ADAPTERS: Record<NotifyChannel, Adapter> = {
       }
       // ACCEPTED, not delivered. Twilio returns `queued`; a delivery webhook would upgrade the
       // NotificationLog row later. We must never render "delivered" off the back of this.
-      return true;
+      //
+      // `from` IS THE POINT of recording this. A Messaging Service can fall back from the
+      // alphanumeric sender to a bare number without telling anyone, and the only evidence is what
+      // the provider echoes back. num_segments is the provider's own count — a second opinion on
+      // lib/sms-text's smsCost, and the one that gets billed.
+      const j: any = await r.json().catch(() => ({}));
+      return {
+        accepted: true,
+        providerMessageId: j?.sid ?? undefined,
+        meta: { sid: j?.sid ?? null, status: j?.status ?? null, from: j?.from ?? null, numSegments: j?.num_segments ?? null },
+      };
     },
   },
 };
@@ -163,6 +178,7 @@ async function record(args: {
   status: 'queued' | 'sent' | 'failed' | 'skipped'; recipient: string; subject?: string | null;
   error?: string | null; subjectRef?: { type: string; id: string } | null; sentAt?: Date | null;
   body?: string | null; sentByUserId?: string | null; threadId?: string | null;
+  providerMessageId?: string | null; providerMeta?: Record<string, unknown> | null;
 }): Promise<string | null> {
   try {
     const row = await prisma.notificationLog.create({
@@ -181,6 +197,8 @@ async function record(args: {
         body: args.body ?? null,
         sent_by_user: args.sentByUserId ?? null,
         thread_id: args.threadId ?? null,
+        provider_message_id: args.providerMessageId ?? null,
+        provider_meta: (args.providerMeta ?? undefined) as any,
       },
       select: { id: true },
     });
@@ -259,8 +277,12 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   let accepted = false;
   let error: string | null = null;
+  let providerMessageId: string | null = null;
+  let providerMeta: Record<string, unknown> | null = null;
   try {
-    accepted = await adapter.send(args.recipient, { subject, body }, args.emailOpts);
+    const out = await adapter.send(args.recipient, { subject, body }, args.emailOpts);
+    if (typeof out === 'boolean') accepted = out;
+    else { accepted = out.accepted; providerMessageId = out.providerMessageId ?? null; providerMeta = out.meta ?? null; }
   } catch (e: any) {
     error = e?.message ?? String(e);
   }
@@ -271,6 +293,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     subject,
     error: accepted ? null : (error ?? 'provider rejected the message'),
     sentAt: accepted ? new Date() : null,
+    providerMessageId, providerMeta,
   });
   return accepted
     ? { ok: true, notificationId: id, status: 'sent' }

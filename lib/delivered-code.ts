@@ -53,6 +53,22 @@ export function newCode(): string {
 export type IssueRefusal = { code: 'cooldown'; retryAfterSeconds: number };
 
 /**
+ * Seconds left on the cooldown, or 0. Exposed so a caller can check it BEFORE spending anything
+ * else — issueCode enforces it too (it is the code's own rule and must not depend on a caller
+ * remembering), but a caller that draws on a money budget needs to ask first.
+ */
+export async function cooldownRemaining(subject: CodeSubject, purpose: CodePurpose): Promise<number> {
+  const recent = await prisma.deliveredCode.findFirst({
+    where: { subject_type: subject.type, subject_id: subject.id, purpose },
+    orderBy: { created_at: 'desc' },
+    select: { created_at: true },
+  });
+  if (!recent) return 0;
+  const elapsed = (Date.now() - recent.created_at.getTime()) / 1000;
+  return elapsed >= CODE_RESEND_COOLDOWN_SECONDS ? 0 : Math.max(1, Math.ceil(CODE_RESEND_COOLDOWN_SECONDS - elapsed));
+}
+
+/**
  * Mint a code for this subject+purpose. Supersedes any live one — a user who asks again is telling
  * us the first did not arrive, and leaving both valid would widen the guessing surface for no gain.
  *

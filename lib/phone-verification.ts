@@ -22,7 +22,7 @@
  */
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
-import { issueCode, verifyCode, clearCodes, CODE_TTL_MINUTES, type CodeSubject } from '@/lib/delivered-code';
+import { issueCode, verifyCode, clearCodes, cooldownRemaining, CODE_TTL_MINUTES, type CodeSubject } from '@/lib/delivered-code';
 import { sendNotification } from '@/lib/notify';
 import {
   takeTokenStrict, SMS_LIMITS, smsSubjectKey, smsDestinationKey, smsIpKey, smsTenantKey,
@@ -53,6 +53,16 @@ export async function sendPhoneVerification(args: {
   const e164 = toE164Digits(args.rawPhone, args.countryDialCode);
   if (!e164) {
     return { code: 'bad_number', message: 'That doesn’t look like a mobile number. Check it and try again.' };
+  }
+
+  // ── COOLDOWN BEFORE THE BUDGET, NOT AFTER ────────────────────────────────────────────────────
+  // The limits used to be consumed first, so a resend refused by the cooldown still burned a token
+  // on all four axes — an impatient user tapping "send again" could spend their whole hourly
+  // allowance without a single text being sent, and then be told they were rate-limited. The limits
+  // exist to protect MONEY; a request that spends none must not draw on them.
+  const cooling = await cooldownRemaining(args.subject, 'phone_verify');
+  if (cooling > 0) {
+    return { code: 'cooldown', retryAfterSeconds: cooling, message: `Please wait ${cooling} seconds before asking for another code.` };
   }
 
   // ALL FOUR AXES, every time. Checked before minting so a refusal leaves the previous code intact.

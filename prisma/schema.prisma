@@ -2209,6 +2209,12 @@ model NotificationLog {
   recipient           String // email address or E.164 phone — see PRIVACY note above
   subject             String? // email only
   provider_message_id String? // provider's id, for delivery-webhook reconciliation
+  // WHAT THE PROVIDER SAID BACK. The SMS adapter used to discard the response entirely, so a row
+  // recorded that we sent something and nothing could ever be reconciled with the provider's own
+  // console — no sid, no status, and crucially no record of WHICH SENDER went out. A Messaging
+  // Service can silently fall back from the alphanumeric `GreaseDesk` to the bare number, and
+  // without this there is no way to know that happened. { sid, status, from, numSegments }.
+  provider_meta       Json?
   error               String? // provider/transport error, when status = failed
 
   // STAFF-COMPOSED BODY. Null for templated sends — there the template key + data ARE the record and
