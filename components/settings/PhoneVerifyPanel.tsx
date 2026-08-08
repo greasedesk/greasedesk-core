@@ -33,6 +33,9 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   const [code, setCode] = React.useState('');
   const [stage, setStage] = React.useState<'enter' | 'confirm'>('enter');
   const [sentTo, setSentTo] = React.useState<string | null>(null);
+  // Told to us by the send response — never a literal here. The server owns the code's life, so the
+  // screen must not carry its own copy of the number.
+  const [expiresInMinutes, setExpiresInMinutes] = React.useState<number | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
   const [ok, setOk] = React.useState<string | null>(null);
@@ -68,7 +71,7 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
 
   const send = async () => {
     const d = await post({ action: 'send', phone });
-    if (d) { setSentTo(d.phone); setStage('confirm'); setCode(''); setCooldown(60); }
+    if (d) { setSentTo(d.phone); setExpiresInMinutes(d.expiresInMinutes ?? null); setStage('confirm'); setCode(''); setCooldown(60); }
   };
   const confirm = async () => {
     const d = await post({ action: 'confirm', code });
@@ -127,7 +130,8 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
         <>
           <p className="text-sm text-ink mb-1">Enter the 6-digit code</p>
           <p className="text-sm text-muted mb-3">
-            We’ve sent a code to <span className="font-mono text-ink">{sentTo}</span>. It expires in 5 minutes.
+            We’ve sent a code to <span className="font-mono text-ink">{sentTo}</span>.
+            {expiresInMinutes ? ` It expires in ${expiresInMinutes} minutes.` : ''}
           </p>
           <div className="flex flex-wrap gap-2 items-center">
             <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="6-digit code"

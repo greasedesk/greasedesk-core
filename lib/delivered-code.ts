@@ -21,7 +21,7 @@
  *    questions: "has this code been attacked?" versus "has this account been attacked?".
  *
  * ── SIX DIGITS IS FINE HERE, AND WOULDN'T BE WITHOUT THE CAP ────────────────────────────────────
- * 1,000,000 codes with 5 attempts and a 5-minute life is a 1-in-200,000 chance per code. The same
+ * 1,000,000 codes with 5 attempts is a 1-in-200,000 chance per code, whatever the window. The same
  * six digits with unlimited guesses is not a credential at all — which is exactly the hole the TOTP
  * slice closed for operators. The cap is not a nicety; it is what makes the length acceptable.
  */
@@ -32,7 +32,18 @@ export type CodeSubjectType = 'tenant' | 'operator' | 'rep';
 export type CodeSubject = { type: CodeSubjectType; id: string };
 export type CodePurpose = 'phone_verify' | 'login_2fa';
 
-export const CODE_TTL_MINUTES = 5;
+/**
+ * THE code's life, and the ONLY place it is stated as a number. Everything that tells a user how
+ * long they have — the SMS body, the email, the on-screen line — is handed this value; nothing
+ * repeats it. A message that says "5 minutes" against a 15-minute code is a small lie that teaches
+ * people to distrust the whole flow, and the way that happens is a second copy of the figure.
+ *
+ * 15 rather than 5 (ruling 2026-08-08): a code has to survive a person walking to where they left
+ * their phone. Five minutes is comfortable for someone holding the handset and hostile to everyone
+ * else, and the cost of the longer window is bounded by the things that actually protect the code —
+ * single use, five attempts, and superseding on resend — not by its lifetime.
+ */
+export const CODE_TTL_MINUTES = 15;
 export const CODE_MAX_ATTEMPTS = 5;
 /** How long before a fresh code may be requested for the same subject+purpose. */
 export const CODE_RESEND_COOLDOWN_SECONDS = 60;

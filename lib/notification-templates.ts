@@ -191,13 +191,17 @@ export const NOTIFICATION_TEMPLATES = {
   phone_verify: {
     label: 'Phone verification code',
     security: true,
-    sms: (d) => ({ text: `${d.code} is your GreaseDesk verification code. It expires in ${d.expiryMinutes ?? 5} minutes. We will never ask you for it.` }),
+    // NO NUMERIC FALLBACK, here or in the email below. The expiry has one source
+    // (lib/delivered-code.CODE_TTL_MINUTES) and the caller passes it; a default here would be a
+    // second copy of the figure, which is exactly how a message ends up stating the wrong one. If it
+    // is ever absent the sentence is OMITTED rather than guessed.
+    sms: (d) => ({ text: `${d.code} is your GreaseDesk verification code.${d.expiryMinutes ? ` It expires in ${d.expiryMinutes} minutes.` : ''} We will never ask you for it.` }),
     email: (d) => ({
       subject: `${d.code} is your GreaseDesk verification code`,
       html: shell(`
         <h2 style="margin:0 0 8px">Your verification code</h2>
         <p style="font-size:28px;font-weight:700;letter-spacing:4px;margin:16px 0">${esc(d.code)}</p>
-        <p>It expires in ${esc(d.expiryMinutes ?? 5)} minutes. We will never ask you for this code.</p>`),
+        <p>${d.expiryMinutes ? `It expires in ${esc(d.expiryMinutes)} minutes. ` : ''}We will never ask you for this code.</p>`),
     }),
   },
 
