@@ -41,6 +41,9 @@ export type AgreedVersionFix = {
   agreedVersion: number; agreedPennies: number;
   differencePennies: number;
   agreedProvenance: 'customer' | 'garage' | 'unknown';
+  /** FALSE = no invoice yet. There is then no second step: the invoice is simply raised at the
+   *  agreed figure, and the control must not send anyone looking for an unlock button. */
+  invoiced: boolean;
   invoiceNumber: string | null;
 };
 
@@ -484,7 +487,7 @@ export default function JobCardWorkspace(p: Props) {
     );
     // THE AGREED-VERSION CORRECTION, wherever the invoice link renders (normal + comeback). Absent
     // unless the server shaped a real mismatch for an admin — no client-side eligibility logic.
-    const agreedVersionPanel = p.agreedVersionFix && !cancelled && (
+    const agreedVersionPanel = p.agreedVersionFix && p.agreedVersionFix.invoiced && !cancelled && (
       <AgreedVersionFixPanel
         jobCardId={p.jobCardId} fix={p.agreedVersionFix} disabled={busy !== null}
         currency={p.currency} locale={p.locale} onDone={refreshCard}
@@ -682,6 +685,7 @@ export default function JobCardWorkspace(p: Props) {
             quoteSendBlockedReason={p.quoteSendBlockedReason}
             acceptanceNote={p.acceptanceNote}
             acceptanceLabel={p.acceptanceLabel}
+            agreedVersionFix={p.agreedVersionFix}
             quoteHasAcceptedVersion={p.quoteHasAcceptedVersion}
             quoteFrozen={p.quoteFrozen}
             priceUnconfirmed={p.priceUnconfirmed}
@@ -769,6 +773,7 @@ function QuoteActions(props: {
   quoteSendBlockedReason: string | null;
   acceptanceNote: string | null;
   acceptanceLabel: string | null;
+  agreedVersionFix: AgreedVersionFix | null;
   quoteHasAcceptedVersion: boolean;
   quoteFrozen: boolean;
   priceUnconfirmed: PriceUnconfirmed | null;
@@ -968,6 +973,20 @@ function QuoteActions(props: {
         </div>
       )}
 
+      {/* THE REMEDY, directly beneath the warning that states the problem — on an UNINVOICED card
+          this is where a garage settles it. The warning has existed for a while with nothing to
+          click: KR60LCX sat in_progress with seven lines of work in the bay, an accepted v2 £156.00
+          lower, and an invoice that would have billed the smaller figure. Stating an exposure and
+          offering no way to close it is how that happens. */}
+      {props.agreedVersionFix && !props.agreedVersionFix.invoiced && !props.cancelled && (
+        <div className="mt-3">
+          <AgreedVersionFixPanel
+            jobCardId={jobCardId} fix={props.agreedVersionFix} disabled={busy !== null}
+            currency={props.currency} locale={props.locale} onDone={props.onDone}
+          />
+        </div>
+      )}
+
       {!props.quoteFrozen && !props.cancelled && props.quoteSupersededNoLink && (
         <p className="mt-4 text-sm text-warn">
           {props.quoteHasAcceptedVersion
@@ -1037,8 +1056,10 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
   async function record() {
     if (!window.confirm(
       `Record that the customer agreed version ${fix.sentVersion} (${m(fix.sentPennies)}) by phone?\n\n`
-      + `This is logged as a garage-recorded agreement, not a customer-signed one. `
-      + `It does NOT change invoice ${fix.invoiceNumber ?? ''} — you must unlock and re-issue it afterwards.`,
+      + `This is logged as a garage-recorded agreement, not a customer-signed one.\n\n`
+      + (fix.invoiced
+        ? `It does NOT change invoice ${fix.invoiceNumber ?? ''} — you must unlock and re-issue it afterwards.`
+        : `The invoice for this job will then be raised at ${m(fix.sentPennies)} instead of ${m(fix.agreedPennies)}.`),
     )) return;
     setBusy(true); setErr(null); setMsg(null);
     try {
@@ -1056,10 +1077,12 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
 
   return (
     <div className="border border-warn rounded-xl p-4 bg-warn-soft" data-testid="agreed-version-fix">
-      <p className="text-sm font-semibold text-warn">The agreed quote doesn’t match this invoice</p>
+      <p className="text-sm font-semibold text-warn">
+        {fix.invoiced ? 'The agreed quote doesn’t match this invoice' : 'The invoice will be raised at the OLD agreed price'}
+      </p>
       <dl className="mt-2 text-sm text-ink space-y-1">
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">Invoiced from v{fix.agreedVersion}</dt>
+          <dt className="text-muted">{fix.invoiced ? `Invoiced from v${fix.agreedVersion}` : `Agreed, v${fix.agreedVersion}`}</dt>
           <dd className="tabular-nums font-medium" data-testid="fix-agreed">{m(fix.agreedPennies)}</dd>
         </div>
         <div className="flex justify-between gap-3">
@@ -1080,8 +1103,11 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
         </button>
       )}
       <p className="mt-2 text-xs text-muted">
-        Logged as a garage-recorded agreement, not a customer-signed one. Recording it does not change
-        the invoice — unlock and re-issue it afterwards to bill the agreed figures.
+        {fix.invoiced
+          ? 'Logged as a garage-recorded agreement, not a customer-signed one. Recording it does not change the invoice — unlock and re-issue it afterwards to bill the agreed figures.'
+          /* THE FACT THAT COSTS MONEY, said plainly. Editing the estimate does not fix this: the
+             invoice is a column-copy of the agreed version and never reads the estimate. */
+          : 'This job has an agreed quote, so the invoice will be built from that version — adding lines to the estimate will not change it. Record the agreed version to bill the newer figure. Logged as a garage-recorded agreement, not a customer-signed one.'}
       </p>
       {msg && <p className="mt-2 text-sm text-ok" data-testid="fix-done">{msg}</p>}
       {err && <p className="mt-2 text-sm text-danger" data-testid="fix-error">{err}</p>}

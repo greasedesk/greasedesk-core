@@ -69,16 +69,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // either would leave a superseded version and a revoked link behind for a send that never went.
   // Same predicate the customer's answer is judged by, so a link is never minted that could only
   // ever be refused. Staff wording; the customer-facing sentence is deliberately different.
-  const sendRefusal = refuseQuoteSend(card.status);
-  if (sendRefusal) return res.status(409).json({ code: sendRefusal.code, message: sendRefusal.message });
-
   // IS THIS A REVISION? Answered by the VERSIONS, not the card status: acceptance belongs to the
   // version (ruling 2026-08-05). A customer who has already agreed to a figure is being told the
   // price CHANGED, which is a different message from a first quote — so this is read BEFORE the
   // freeze, while the accepted version is still the newest thing on record.
+  //
+  // The SAME fact also decides what a refusal SAYS: with an accepted version present, "add the work
+  // to the estimate and invoice it" is false, because the invoice copies that version and never
+  // reads the estimate. One read, both uses — they can never disagree about it.
   const isRevision = (await prisma.quoteVersion.count({
     where: { job_card_id: card.id, status: 'accepted' },
   })) > 0;
+
+  const sendRefusal = refuseQuoteSend(card.status, isRevision);
+  if (sendRefusal) return res.status(409).json({ code: sendRefusal.code, message: sendRefusal.message });
 
   // A NEW send supersedes anything already out AND kills its link, before the new one exists — an
   // old set of figures must never be acceptable once a newer offer has been made.

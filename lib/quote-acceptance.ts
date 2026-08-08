@@ -315,14 +315,29 @@ const SEND_REFUSAL_REASON: Record<string, string> = {
   cancelled: 'This job card has been cancelled. Reopen it before quoting.',
 };
 
-export function refuseQuoteSend(cardStatus: string): QuoteSendRefusal | null {
+/**
+ * ── THE ADVICE HAS TO KNOW ABOUT THE ACCEPTED VERSION, OR IT IS WRONG ───────────────────────────
+ * "Add the extra work to the job and invoice it" is true ONLY where nothing has been accepted: the
+ * invoice then falls through to the live JobCardItem, so editing the estimate really does change
+ * what is billed.
+ *
+ * With an ACCEPTED VERSION present it is false, and expensively so. lib/invoice-issue column-copies
+ * the highest accepted version and never reads the estimate at all, so adding lines changes nothing
+ * about the bill. KR60LCX proved it: seven lines and £2,171.01 on the estimate, accepted v2 at
+ * £2,015.01, and an invoice that would have quietly billed the smaller figure. The old sentence sent
+ * the garage to do the one thing that could not work.
+ */
+export function refuseQuoteSend(cardStatus: string, hasAcceptedVersion = false): QuoteSendRefusal | null {
   const answerable = cardStatus === 'draft' ? 'quoted' : cardStatus;
   if (!refuseQuoteAnswer(answerable, 'accepted')) return null;
-  return {
-    code: 'not_answerable',
-    status: cardStatus,
-    message: SEND_REFUSAL_REASON[cardStatus]
-      ?? `A quote cannot be sent on a job card at “${cardStatus}” — the customer would not be able to accept it.`,
-  };
+  const base = SEND_REFUSAL_REASON[cardStatus]
+    ?? `A quote cannot be sent on a job card at “${cardStatus}” — the customer would not be able to accept it.`;
+  if (!hasAcceptedVersion) return { code: 'not_answerable', status: cardStatus, message: base };
+  // Pre-invoice, there is a remedy and it is the agreed-version control sitting right below this.
+  // Once invoiced, the estimate is frozen anyway and the correction runs through unlock/re-issue.
+  const withAccepted = cardStatus === 'in_progress' || cardStatus === 'accepted'
+    ? 'This job is already under way — a quote sent now could not be accepted. Adding the work to the estimate will NOT change the bill: this job has an agreed quote, and the invoice is built from that version, not from the estimate. Record the agreed version below, or raise a new job card for the extra work.'
+    : `${base} This job has an agreed quote, and the invoice is built from that version rather than from the estimate.`;
+  return { code: 'not_answerable', status: cardStatus, message: withAccepted };
 }
 

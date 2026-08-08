@@ -149,7 +149,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // WHY THE SEND CONTROL IS ABSENT, in the garage's words — computed from the SAME predicate the
   // API refuses with, so the button cannot be offered where the send would 409. A button that
   // always fails is a trap; a stated reason is an answer. Null when a quote can be sent.
-  const quoteSendBlockedReason = refuseQuoteSend(row.status)?.message ?? null;
+  const quoteSendBlockedReason = refuseQuoteSend(row.status, quoteHasAcceptedVersion)?.message ?? null;
 
   // ── WHO CONFIRMED THE ACCEPTANCE, in words, for the Quote panel ────────────────────────────────
   // The HIGHEST accepted version is the operative one everywhere (invoice-issue, quotes-list), so it
@@ -168,7 +168,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // totals so the control can state the money before it commits — the client never computes a
   // difference it is about to ask someone to authorise. Absent (not hidden) for non-admins.
   const latestSent = [...allVersions].sort((a, b) => b.version - a.version).find((v) => v.status === 'sent') ?? null;
-  const agreedVersionFix = (vis.isAdmin && invoiceRow && acceptedVersionRow && latestSent
+  // AUTHORITY FOLLOWS THE ARTEFACT (ruling 2026-08-08), matching the endpoint exactly: with an
+  // invoice this changes a document, so admin; without one it is ordinary quoting and carries the
+  // same authority as the existing verbal control. Shaping it wider than the endpoint would render
+  // a button that 403s — a trap; shaping it narrower would hide the remedy from the people who need
+  // it most, which is how KR60LCX sat at £156.00 short with a warning and no control.
+  const mayFixAgreedVersion = invoiceRow ? vis.isAdmin : canAccessSite(vis, row.site_id);
+  const agreedVersionFix = (mayFixAgreedVersion && acceptedVersionRow && latestSent
     && latestSent.version > acceptedVersionRow.version)
     ? {
         versionId: latestSent.id,
@@ -178,7 +184,10 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         agreedPennies: acceptedVersionRow.gross_pennies,
         differencePennies: latestSent.gross_pennies - acceptedVersionRow.gross_pennies,
         agreedProvenance: acceptanceProvenance(acceptedVersionRow),
-        invoiceNumber: invoiceRow.invoice_number,
+        // NULL = no invoice yet: the control drops the unlock/re-issue second step and says the
+        // invoice will simply be raised at the agreed figure.
+        invoiceNumber: invoiceRow?.invoice_number ?? null,
+        invoiced: !!invoiceRow,
       }
     : null;
   // FINANCE SHAPING (ruling 2026-07-12): props are shaped to financeVisibility SERVER-SIDE —
