@@ -18,6 +18,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { makeInviteToken } from '@/lib/tokens';
 import { sendNotification } from '@/lib/notify';
 import { writeUserAudit } from '@/lib/audit';
+import { isEnabled, resetTwoFactor } from '@/lib/two-factor';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -116,8 +117,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { id, name, siteIds, role, primarySiteId, canInvoice, isActive } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null; canInvoice?: boolean; isActive?: boolean };
+    const { id, name, siteIds, role, primarySiteId, canInvoice, isActive, action } = (req.body || {}) as { id?: string; name?: string; siteIds?: string[]; role?: string; primarySiteId?: string | null; canInvoice?: boolean; isActive?: boolean; action?: string };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
+    // ── RESET 2FA — ADMIN ONLY, AND IT ONLY EVER DISABLES ────────────────────────────────────────
+    // The single power an admin has over someone else's second factor, and it is deliberately
+    // one-directional. Enabling would mean enrolling on their behalf, which is impossible by
+    // construction — `enabled` flips only after a live code from the handset — and an admin who
+    // COULD point a colleague's second factor anywhere would hold a route into that account.
+    // So: lost device + lost recovery codes → drop them back to one factor and make them re-enrol.
+    if (action === 'reset_2fa') {
+      if (isManagerOnly) return res.status(403).json({ message: 'Only an admin can reset two-factor authentication.' });
+      const t = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, email: true } });
+      if (!t) return res.status(404).json({ message: 'User not found.' });
+      if (!(await isEnabled({ type: 'tenant', id: t.id }))) {
+        return res.status(200).json({ ok: true, message: 'Two-factor authentication is already off for this account.' });
+      }
+      await resetTwoFactor({ type: 'tenant', id: t.id });
+      await writeUserAudit(prisma, {
+        groupId, actorUserId: sessionUserId, targetUserId: t.id,
+        action: 'user.2fa_reset', diff: { email: t.email },
+      }).catch(() => {});
+      return res.status(200).json({ ok: true, message: `Two-factor authentication reset for ${t.email}. They sign in with their password alone until they re-enrol.` });
+    }
     // can_invoice is an ADMIN-only grant (a ledger power) — a site manager may manage their mechanics
     // but may not hand out invoice-raising authority.
     if (canInvoice !== undefined && isManagerOnly) {

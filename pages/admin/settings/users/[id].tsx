@@ -9,6 +9,7 @@
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
+import TwoFactorPanel from '@/components/settings/TwoFactorPanel';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
@@ -267,6 +268,10 @@ export default function UserDetail({ selfId, isSelf, canSeeEmergency, isAdmin, i
 
       {isSelf && <ChangePassword email={profile.email} />}
       {isSelf && <ChangeEmail currentEmail={profile.email} />}
+      {/* SELF ONLY. There is nothing here an admin could legitimately do to a colleague — enrolment
+          requires the handset, so it cannot be done on someone's behalf. The admin power is Reset,
+          on the roster, and it only ever disables. */}
+      {isSelf && <TwoFactorPanel />}
       {/* ADMIN only — mirrors requireAdminApi on the endpoint, so the button can never 403. Covers
           an admin acting on a group member AND on themselves (your own phone can be the stolen one).
           A STANDARD/manager user viewing their own record does not get this. */}

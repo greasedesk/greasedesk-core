@@ -8,7 +8,7 @@ import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from '../../../lib/db';
 import * as bcrypt from 'bcryptjs';
 import { UserRole } from '@prisma/client'; // Import the Role enum
-import { isEnabled, verifySecondFactor } from '@/lib/two-factor'; // Engine Room operator 2FA (server-side gate)
+import { isEnabled, verifySecondFactor } from '@/lib/two-factor'; // 2FA gate — operator AND tenant, one chokepoint
 
 export const authOptions: NextAuthOptions = {
   // Use the Prisma Adapter
@@ -53,6 +53,21 @@ export const authOptions: NextAuthOptions = {
         // Verify the supplied password against the stored bcrypt hash.
         const ok = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!ok) throw FAIL;
+
+        // ── SECOND FACTOR (tenant 2FA, opt-in) — enforced HERE, server-side, before any session is
+        // minted, exactly as the operator provider does. Same chokepoint, same tables, different
+        // subject_type: lib/two-factor was written actor-agnostic for this.
+        //
+        // NOT part of the generic FAIL above. Once the password has verified, "wrong password" is a
+        // lie that would send someone resetting a password that is perfectly correct — and the
+        // enumeration argument does not apply, because reaching this line already required the
+        // right password. The distinct error is what lets the form ask for the code.
+        const tfSubject = { type: 'tenant' as const, id: user.id };
+        if (await isEnabled(tfSubject)) {
+          const code = String((credentials as any).totp ?? '').trim();
+          const v = code ? await verifySecondFactor(tfSubject, code) : { ok: false as const, method: null, lockedOut: false };
+          if (!v.ok) throw new Error(v.lockedOut ? 'TWO_FACTOR_LOCKED' : 'TWO_FACTOR_REQUIRED');
+        }
 
         // Returned object is put into the JWT / session.
         return {

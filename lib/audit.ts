@@ -120,7 +120,12 @@ export type UserAuditAction =
   | 'user.sessions_revoked'  // ADMIN signed this user out of every device (stolen-phone case)
   | 'user.deactivated'       // ADMIN suspended the account: login blocked + sessions killed
   | 'user.reactivated'       // ADMIN restored a suspended account
-  | 'user.email_changed';    // user changed their own LOGIN email (from/to in diff) — a credential change
+  | 'user.email_changed'     // user changed their own LOGIN email (from/to in diff) — a credential change
+  // ── TENANT 2FA. Only the transitions that CHANGE the protection are audited: beginning an
+  // enrolment flips nothing (enabled stays false and the row is overwritable), so it writes no row.
+  | 'user.2fa_enrolled'      // the user confirmed a live code — 2FA is now ON for their account
+  | 'user.2fa_disabled'      // the user turned it off themselves (password + a live code)
+  | 'user.2fa_reset';        // an ADMIN reset it — DISABLES, never enables. Lost-device recovery only.
 
 /**
  * Same table, same discipline, subject = a USER. Sibling of writeAudit rather than a second audit

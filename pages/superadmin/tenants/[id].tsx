@@ -24,12 +24,14 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
+import React from 'react';
+import { useRouter } from 'next/router';
 import { requireOperatorPage, operatorTenantScope, type OperatorRoleName } from '@/lib/operator-auth';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type SiteRow = { name: string; address: string | null; phone: string | null; currency: string; hours: string | null; labourRate: number | null };
-type UserRow = { name: string | null; email: string; role: string; active: boolean };
+type UserRow = { id: string; name: string | null; email: string; role: string; active: boolean; twoFactorEnabled: boolean };
 // Company number is a THREE-state value, never collapsed: a real number, legitimately 'na' (sole
 // traders have none, flag set), or 'missing' (neither supplied).
 type CompanyNumber = { kind: 'value'; value: string } | { kind: 'na' } | { kind: 'missing' };
@@ -76,6 +78,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
   const b = d.business, a = d.account;
+  const router = useRouter();
+  const [busy2fa, setBusy2fa] = React.useState<string | null>(null);
+
+  // DISABLE-ONLY, and the confirm says so in the operator's own terms: this is a support action on
+  // someone else's business, so it names the person and states the consequence before it happens.
+  async function reset2fa(userId: string, email: string) {
+    if (!confirm(`Reset two-factor authentication for ${email}?\n\nThey will sign in with their password alone until they set it up again. Use this ONLY when the account holder has lost both their phone and their recovery codes.\n\nThis is recorded against your operator account and in the garage's own audit trail.`)) return;
+    setBusy2fa(userId);
+    try {
+      const r = await fetch('/api/superadmin/tenant-2fa-reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      alert(j?.message || (r.ok ? 'Done.' : 'Could not reset two-factor authentication.'));
+      if (r.ok) router.replace(router.asPath);
+    } finally { setBusy2fa(null); } // never strand the busy flag
+  }
+
   const companyNumber =
     d.business.companyNumber.kind === 'value' ? <V v={d.business.companyNumber.value} />
     : d.business.companyNumber.kind === 'na' ? <span style={{ color: '#7C8AA3' }}>not applicable</span>
@@ -137,7 +157,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             {d.users.length === 0 ? <Muted>{NS}</Muted> : (
               <table className="w-full text-sm">
                 <thead style={{ color: '#7C8AA3' }}><tr className="text-left text-xs">
-                  <th className="py-1 font-medium">Name</th><th className="py-1 font-medium">Email</th><th className="py-1 font-medium">Role</th><th className="py-1 font-medium">Status</th>
+                  <th className="py-1 font-medium">Name</th><th className="py-1 font-medium">Email</th><th className="py-1 font-medium">Role</th><th className="py-1 font-medium">Status</th><th className="py-1 font-medium">2FA</th>
                 </tr></thead>
                 <tbody>
                   {d.users.map((u, i) => (
@@ -146,6 +166,18 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
                       <td className="py-1.5">{u.email}</td>
                       <td className="py-1.5">{u.role}</td>
                       <td className="py-1.5">{u.active ? 'Active' : <span style={{ color: '#FCA5A5' }}>Deactivated</span>}</td>
+                      {/* SUPPORT ACTION, DISABLE-ONLY. The sole owner of a single-admin garage has
+                          nobody above them; without this their only remedy is a hand-written DELETE
+                          against production. There is deliberately no way to turn 2FA ON from here. */}
+                      <td className="py-1.5">
+                        {u.twoFactorEnabled ? (
+                          <button type="button" disabled={busy2fa === u.id} data-testid={`er-reset-2fa-${u.email}`}
+                            onClick={() => reset2fa(u.id, u.email)}
+                            style={{ color: '#FCD34D' }} className="text-xs hover:underline disabled:opacity-40">
+                            {busy2fa === u.id ? 'Resetting…' : '🔒 on — Reset'}
+                          </button>
+                        ) : <Muted>off</Muted>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -227,8 +259,15 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const users = (await prisma.user.findMany({
     where: { group_id: g.id, customerId: null },
     orderBy: { email: 'asc' },
-    select: { name: true, email: true, role: true, is_active: true },
-  })) as Array<{ name: string | null; email: string; role: string; is_active: boolean }>;
+    select: { id: true, name: true, email: true, role: true, is_active: true },
+  })) as Array<{ id: string; name: string | null; email: string; role: string; is_active: boolean }>;
+  // Which of them hold a second factor — one query, from the subject-keyed table.
+  const tenant2fa = new Set(
+    (await prisma.twoFactorSecret.findMany({
+      where: { subject_type: 'tenant', enabled: true, subject_id: { in: users.map((u) => u.id) } },
+      select: { subject_id: true },
+    })).map((r: { subject_id: string }) => r.subject_id),
+  );
 
   const modules = (await prisma.groupFeature.findMany({
     where: { group_id: g.id, enabled: true }, select: { feature_key: true },
@@ -275,7 +314,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
           currency: s.currency_code, hours: fmtHours(s.open_hour, s.close_hour),
           labourRate: labourBySite.has(s.id) ? labourBySite.get(s.id)! : null,
         })),
-        users: users.map((u) => ({ name: u.name, email: u.email, role: u.role, active: u.is_active })),
+        users: users.map((u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, active: u.is_active, twoFactorEnabled: tenant2fa.has(u.id) })),
         account: {
           created: (g.created_at as Date).toISOString(),
           subscriptionStatus: g.billing?.subscription_status ?? null,

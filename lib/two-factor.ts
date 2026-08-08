@@ -22,8 +22,42 @@ export type Subject = { type: SubjectType; id: string };
 const where = (s: Subject) => ({ subject_type: s.type, subject_id: s.id });
 const uniqueWhere = (s: Subject) => ({ subject_type_subject_id: { subject_type: s.type, subject_id: s.id } });
 
-export const TOTP_ISSUER = 'GreaseDesk Engine Room';
+/**
+ * ── THE ISSUER IS PERMANENT, SO IT MUST NOT BE VARIABLE ─────────────────────────────────────────
+ * This string is baked into the authenticator app when the QR is scanned and stays there for the
+ * life of the enrolment — renaming it later changes NOTHING on the handset. So it must be something
+ * that cannot go stale.
+ *
+ * Operators keep 'GreaseDesk Engine Room' — an operator holds exactly one platform-staff identity.
+ *
+ * Tenants get plain 'GreaseDesk', deliberately NOT "GreaseDesk — Dave's Motors". A garage can rename
+ * itself (trading_name and group_name are both editable), and a renamed garage would leave the OLD
+ * name sitting in the owner's authenticator forever with no way to correct it. The account field
+ * already carries the email, which disambiguates two accounts far better than a name that can drift.
+ */
+const ISSUERS: Record<SubjectType, string> = {
+  operator: 'GreaseDesk Engine Room',
+  tenant: 'GreaseDesk',
+  rep: 'GreaseDesk Reps',
+};
+export const issuerFor = (t: SubjectType): string => ISSUERS[t];
+/** @deprecated Read `issuerFor(subject.type)`. Kept so existing operator callers keep compiling. */
+export const TOTP_ISSUER = ISSUERS.operator;
 const RECOVERY_COUNT = 10;
+
+/**
+ * ── ATTEMPT LIMIT (ruling 2026-08-08) ───────────────────────────────────────────────────────────
+ * There was none. Six digits is 1,000,000 codes and verifyTotp accepts a ±1-step window, so an
+ * unlimited online guesser gets in. This affected OPERATORS in production, not just the new tenant
+ * path, which is why it is fixed in the chokepoint rather than at one caller.
+ *
+ * FAILURES are counted, not attempts — a legitimate user who types five correct codes is not
+ * throttled. A success clears the counter, so the only way to reach the limit is to keep being wrong.
+ * Recovery codes count too: they are the higher-value target (they don't rotate every 30 seconds).
+ */
+export const TWO_FACTOR_MAX_FAILURES = 5;
+export const TWO_FACTOR_LOCKOUT_MINUTES = 15;
+const failKey = (s: Subject) => `2fa:${s.type}:${s.id}`;
 
 const sha256 = (raw: string) => crypto.createHash('sha256').update(raw).digest('hex');
 /** Normalise a typed recovery code: strip separators/space, uppercase — so 'abcde-fghij' == 'ABCDEFGHIJ'. */
@@ -61,7 +95,7 @@ export async function beginEnrolment(subject: Subject, account: string): Promise
     create: { ...where(subject), secret, enabled: false },
     update: { secret, enabled: false, confirmed_at: null },
   });
-  return { secret, otpauthUri: otpauthURI({ secret, issuer: TOTP_ISSUER, account }) };
+  return { secret, otpauthUri: otpauthURI({ secret, issuer: issuerFor(subject.type), account }) };
 }
 
 /**
@@ -86,22 +120,65 @@ export async function confirmEnrolment(subject: Subject, code: string): Promise<
  * the method used, or ok:false. Recovery consumption is an atomic conditional update, so a code can
  * never be spent twice even under a race.
  */
-export async function verifySecondFactor(subject: Subject, code: string): Promise<{ ok: boolean; method: 'totp' | 'recovery' | null }> {
+export async function verifySecondFactor(subject: Subject, code: string): Promise<{ ok: boolean; method: 'totp' | 'recovery' | null; lockedOut?: boolean }> {
   const row = await prisma.twoFactorSecret.findUnique({ where: uniqueWhere(subject), select: { enabled: true, secret: true } });
   if (!row?.enabled) return { ok: false, method: null };
-  if (verifyTotp(row.secret, code)) return { ok: true, method: 'totp' };
+
+  // CHECKED BEFORE THE COMPARISON, so a locked-out attacker learns nothing from timing or outcome.
+  if (await isLockedOut(subject)) return { ok: false, method: null, lockedOut: true };
+
+  if (verifyTotp(row.secret, code)) { await clearFailures(subject); return { ok: true, method: 'totp' }; }
   const hash = sha256(normaliseRecovery(code));
   if (normaliseRecovery(code).length >= 8) {
     const consumed = await prisma.twoFactorRecoveryCode.updateMany({
       where: { ...where(subject), code_hash: hash, used_at: null }, data: { used_at: new Date() },
     });
-    if (consumed.count === 1) return { ok: true, method: 'recovery' };
+    if (consumed.count === 1) { await clearFailures(subject); return { ok: true, method: 'recovery' }; }
   }
-  return { ok: false, method: null };
+  const lockedOut = await recordFailure(subject);
+  return { ok: false, method: null, lockedOut };
+}
+
+/**
+ * The counter, on the SAME AuthRateLimit table the rest of auth uses — no new infra for one feature.
+ *
+ * AVAILABILITY STANCE, stated because it differs per direction: a counting error ALLOWS the attempt
+ * (matching lib/auth-rate-limit — a limiter outage must not lock every user out of their own
+ * account), while a successfully-counted overflow REFUSES. Errors here are rare and an attacker
+ * cannot induce them, so 5-in-15-minutes still ends an online brute force long before 500,000 tries.
+ */
+async function isLockedOut(subject: Subject): Promise<boolean> {
+  const since = new Date(Date.now() - TWO_FACTOR_LOCKOUT_MINUTES * 60 * 1000);
+  try {
+    return (await prisma.authRateLimit.count({ where: { key: failKey(subject), created_at: { gte: since } } })) >= TWO_FACTOR_MAX_FAILURES;
+  } catch { return false; }
+}
+
+/** Record one failure; returns TRUE when that failure was the one that tripped the lockout. */
+async function recordFailure(subject: Subject): Promise<boolean> {
+  try {
+    await prisma.authRateLimit.create({ data: { key: failKey(subject) } });
+    return await isLockedOut(subject);
+  } catch { return false; }
+}
+
+/** A correct code wipes the slate — five fat-fingered attempts across a week must not accumulate. */
+async function clearFailures(subject: Subject): Promise<void> {
+  await prisma.authRateLimit.deleteMany({ where: { key: failKey(subject) } }).catch(() => {});
+}
+
+/** Remaining failures before lockout, for a status panel. Never used as a gate — isLockedOut is. */
+export async function failuresRemaining(subject: Subject): Promise<number> {
+  const since = new Date(Date.now() - TWO_FACTOR_LOCKOUT_MINUTES * 60 * 1000);
+  try {
+    const used = await prisma.authRateLimit.count({ where: { key: failKey(subject), created_at: { gte: since } } });
+    return Math.max(0, TWO_FACTOR_MAX_FAILURES - used);
+  } catch { return TWO_FACTOR_MAX_FAILURES; }
 }
 
 /** Turn 2FA off and wipe the secret + recovery codes — the disable and the owner-reset both land here. */
 export async function disable(subject: Subject): Promise<void> {
+  await clearFailures(subject); // a reset must not hand back an account that is still locked out
   await prisma.$transaction([
     prisma.twoFactorRecoveryCode.deleteMany({ where: where(subject) }),
     prisma.twoFactorSecret.deleteMany({ where: where(subject) }),

@@ -34,23 +34,55 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false); // oily-thumb reveal — typos are the norm in a workshop
   const [loading, setLoading] = useState(false);
+  // ── SECOND FACTOR. `needCode` is answered by a PREFLIGHT rather than by failing a sign-in: the
+  // NextAuth credentials flow is one-shot, so without it the only way to discover a code is wanted
+  // is a rejection that looks exactly like a wrong password. Telling someone their correct password
+  // was refused is the worst version of this screen.
+  const [needCode, setNeedCode] = useState(false);
+  const [totp, setTotp] = useState('');
+  const [codeError, setCodeError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setCodeError(null);
 
-    // Call NextAuth signin provider
+    // Ask FIRST, before spending a sign-in attempt, unless we are already on the code step.
+    if (!needCode) {
+      try {
+        const pf = await fetch('/api/account/2fa-preflight', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: loginEmail, password }),
+        });
+        const d = await pf.json().catch(() => ({}));
+        if (d?.twoFactorRequired) { setNeedCode(true); setLoading(false); return; }
+      } catch { /* preflight is an optimisation — a failure just means the sign-in below asks */ }
+    }
+
     const result = await signIn('credentials', {
       redirect: false,
       email: loginEmail,
       password: password,
+      totp: totp.trim(),
       callbackUrl: callbackUrl, // Use the destination we passed
     });
 
     setLoading(false);
 
     if (result && result.error) {
+      // A 2FA refusal is NOT a credentials failure and must not be reported as one — bouncing to
+      // "invalid email or password" would send someone resetting a password that is correct.
+      if (result.error.includes('TWO_FACTOR_LOCKED')) {
+        setNeedCode(true); setTotp('');
+        setCodeError('Too many incorrect codes. Wait 15 minutes and try again.');
+        return;
+      }
+      if (result.error.includes('TWO_FACTOR_REQUIRED')) {
+        setNeedCode(true); setTotp('');
+        setCodeError(totp.trim() ? 'That code didn’t match. Try the current one from your app.' : null);
+        return;
+      }
       // Keep the callbackUrl through the retry — a failed first try at /m must still return to /m.
       router.push(`/admin/login?error=InvalidCredentials&callbackUrl=${encodeURIComponent(callbackUrl)}`);
     } else if (result && result.url) {
@@ -148,13 +180,40 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
               </div>
             </div>
 
+            {/* THE CODE STEP. Appears only once the password has verified and the account has 2FA
+                on, so it is never a puzzle for the 99% who don't. The recovery-code route is named
+                here rather than hidden behind a link — someone who has lost their phone is already
+                having a bad morning. */}
+            {needCode && (
+              <div data-testid="totp-step">
+                <label htmlFor="login-totp" className="block text-sm font-medium text-muted">Enter your authenticator code</label>
+                <p className="text-xs text-muted mt-1 mb-2">
+                  Open your authenticator app and enter the 6-digit code for GreaseDesk.
+                  Lost your phone? Enter one of your recovery codes instead.
+                </p>
+                <input
+                  id="login-totp"
+                  name="totp"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  value={totp}
+                  onChange={(e) => setTotp(e.target.value)}
+                  className="w-full min-h-[48px] bg-surface border border-line rounded-xl px-4 py-3 text-ink focus:ring-2 focus:ring-accent focus:outline-none"
+                  placeholder="6-digit code"
+                />
+                {codeError && <p className="mt-2 text-sm text-danger" data-testid="totp-error">{codeError}</p>}
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (needCode && !totp.trim())}
               className="w-full min-h-[48px] bg-accent text-white font-medium rounded-xl px-4 py-3 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading && <LoadingSpinner />}
-              {loading ? 'Signing in…' : 'Sign in'}
+              {loading ? 'Signing in…' : needCode ? 'Verify and sign in' : 'Sign in'}
             </button>
           </form>
 
