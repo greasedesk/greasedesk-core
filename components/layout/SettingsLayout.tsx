@@ -95,7 +95,13 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
   const { data: session } = useSession();
   const selfId = selfUserId ?? ((session?.user as any)?.id as string | undefined);
   const router = useRouter();
-  const path = router.pathname; // e.g. /admin/settings/users/[id]
+  // ── RESOLVED URL, NOT THE ROUTE PATTERN ──────────────────────────────────────────────────────
+  // This was router.pathname, which yields '/admin/settings/users/[id]' — a literal that can never
+  // equal '/admin/settings/users/<uuid>'. Everything comparing against a per-user href therefore
+  // failed silently: on a manager's own account page the Account tab did not register as active, so
+  // `active` was undefined and the ENTIRE sub-tab row disappeared. asPath is what the browser is
+  // actually showing, and the static match[] prefixes hold under it unchanged.
+  const path = (router.asPath || router.pathname).split('?')[0].split('#')[0];
   const canSee = (g: Gate) => (g.adminOnly ? isAdmin : g.managerOk ? isAdmin || isManager : true);
 
   // 'My account' is dropped when we do not know who "self" is, rather than rendering a tab that
