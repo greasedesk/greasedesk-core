@@ -2,7 +2,11 @@
  * File: pages/pricing.tsx
  * Public pricing. Single-tier, flat per location. The price string comes from the billing-pricing
  * chokepoint (lib/billing-pricing) — NEVER hardcoded — so it stays in lockstep with what Checkout
- * uses and carries "+ VAT" automatically only once GreaseDesk Ltd is VAT-registered.
+ * uses and carries " inc. VAT" automatically only once GreaseDesk Ltd is VAT-registered.
+ *
+ * THE META DESCRIPTION USED TO HARDCODE "£75", which defeated the point of the chokepoint on the
+ * one surface search engines quote. It now interpolates, so a price change cannot leave a stale
+ * figure in the search result while the page itself is correct.
  */
 import Link from 'next/link';
 import Seo from '@/components/marketing/Seo';
@@ -29,7 +33,7 @@ export default function PricingPage() {
     <>
       <Seo
         title="Pricing — GreaseDesk garage management software"
-        description="Simple, flat pricing: £75 per site, per month. No tiers, no setup fees, cancel any time. Start a 60-day free trial."
+        description={`Simple, flat pricing: ${perLocationLabel()} per site, per month. No tiers, no setup fees, cancel any time. Start a 60-day free trial.`}
         path="/pricing"
         softwareApp
       />

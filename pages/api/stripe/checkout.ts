@@ -23,6 +23,13 @@ import { createHash } from 'node:crypto';
 import type Stripe from 'stripe';
 import { writeAudit } from '@/lib/audit';
 import { garageVatRegistered } from '@/lib/billing-pricing';
+
+/**
+ * What the Price must say about tax. A CONSTANT rather than a config value on purpose: this is not
+ * a preference, it is what Terms v2 commits us to, and it should take a code change and a review to
+ * alter — not an env var somebody can flip at 6pm.
+ */
+const EXPECTED_TAX_BEHAVIOR = 'inclusive' as const;
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -42,8 +49,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ]);
   if (!group) return res.status(404).json({ message: 'Group not found.' });
 
-  // ONE MULTI-CURRENCY PRICE (model changed 2026-07-28): a single Price carries GBP as base plus
-  // currency_options; the session's `currency` parameter tells Stripe which option to charge.
+  // GBP-ONLY, TAX-INCLUSIVE PRICE (model changed 2026-08-09, superseding the multi-currency one).
+  // The session still passes the profile's currency; there is simply one option to resolve to.
   const profile = resolveTenantProfile(group);
   const priceId = stripePriceId();
   if (!priceId) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
@@ -63,6 +70,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (optionAmount !== wantAmount) {
       console.error(`[stripe] PRICE MISMATCH: ${priceId} ${wantCurrency} option is ${optionAmount}, profile says ${wantAmount} — refusing checkout`);
+      return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
+    }
+    // ── AND THE TAX BEHAVIOUR, WHICH THE AMOUNT CANNOT REVEAL ──────────────────────────────────
+    // The old exclusive price and the new inclusive one are BOTH £75 in GBP. They differ in one
+    // field, and it decides whether the customer pays £75 or £90 — so an amount-only guard would
+    // have passed a swapped price silently and for ever. Terms v2 (effective 2026-08-09) states the
+    // price INCLUDES VAT, so anything else is not merely a misconfiguration, it is a term we are
+    // no longer entitled to charge on.
+    //
+    // Checked on the resolved option, not just the base: currency_options carry their own
+    // tax_behavior and could in principle disagree with the top-level one.
+    const optionTaxBehavior = price.currency === wantCurrency
+      ? price.tax_behavior
+      : (price.currency_options?.[wantCurrency]?.tax_behavior ?? null);
+    if (optionTaxBehavior !== EXPECTED_TAX_BEHAVIOR) {
+      console.error(`[stripe] TAX BEHAVIOUR MISMATCH: ${priceId} ${wantCurrency} is '${optionTaxBehavior}', expected '${EXPECTED_TAX_BEHAVIOR}' — refusing checkout`);
       return res.status(503).json({ message: 'Billing configuration is being updated — please try again shortly.' });
     }
   } catch (e: any) {

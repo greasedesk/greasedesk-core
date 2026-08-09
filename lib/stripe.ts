@@ -8,16 +8,22 @@
  * Env (Vercel, sensitive OFF per standing rule):
  *   STRIPE_SECRET_KEY        — sk_test_… (sandbox)
  *   STRIPE_WEBHOOK_SECRET    — whsec_… (from the webhook endpoint config)
- *   STRIPE_PRICE_ID          — THE one recurring Price (licensed, per-site quantity): GBP £75 base
- *                              with currency_options (USD $100, EUR €90, + AUD/CAD/NZD/ZAR/FKP/GIP/JMD),
- *                              all tax-exclusive. Checkout passes the tenant's profile currency on
- *                              the session and Stripe resolves the right option — ONE price id,
- *                              never per-currency ids (model changed 2026-07-28).
+ *   STRIPE_PRICE_ID          — THE one recurring Price (licensed, per-site quantity). Since
+ *                              2026-08-09: GBP-ONLY, £75.00, TAX-INCLUSIVE, on product
+ *                              prod_V2WiIjJUsLBzkC. Supersedes the multi-currency tax-EXCLUSIVE
+ *                              price (GBP base + USD/EUR options) on prod_V1ZiRMQ7jAs6bc, now
+ *                              renamed GreaseDesk_OLD.
+ *   STRIPE_PRICE_CORE        — the SAME id. lib/modules maps a paid line item to the `core`
+ *                              entitlement via `STRIPE_PRICE_CORE ?? STRIPE_PRICE_ID`, so a stale
+ *                              CORE value silently WINS over a freshly-set PRICE_ID. The two must
+ *                              always be changed together; that fallback is a trap, not a feature.
  *   NEXT_PUBLIC_APP_URL      — base URL for Checkout success/cancel + Portal return (defaults greasedesk.com)
  *
- * Price amounts are the COUNTRY PROFILE's monthlyPrice, exclusive of tax — checkout retrieves the
- * Price (expand: currency_options) and asserts the tenant-currency option's amount against the
- * profile before creating a session.
+ * Price amounts are the COUNTRY PROFILE's monthlyPrice — checkout retrieves the Price (expand:
+ * currency_options) and asserts BOTH the tenant-currency option's amount AND its tax_behavior
+ * against what we display before creating a session. The amount alone is not enough: the old
+ * exclusive price and the new inclusive one are both £75 in GBP and differ only in that field,
+ * which is the difference between charging £75 and charging £90.
  */
 import Stripe from 'stripe';
 

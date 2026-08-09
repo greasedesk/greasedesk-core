@@ -50,8 +50,12 @@ const softwareAppLd = () => ({
     '@type': 'Offer',
     price: String(MONTHLY_PRICE_POUNDS),
     priceCurrency: 'GBP',
-    // Price shown is per location, per month. VAT excluded while GreaseDesk Ltd is not registered.
-    ...(garageVatRegistered() ? {} : { valueAddedTaxIncluded: false }),
+    // Price shown is per location, per month. The claim is made in BOTH directions rather than
+    // omitted in one: registered → the £75 INCLUDES VAT (the Stripe price is tax-inclusive and
+    // Terms v2 says so); not registered → no VAT is charged at all. Leaving the field out when
+    // registered, as this did, let a search result imply nothing where we now have something
+    // definite to say.
+    valueAddedTaxIncluded: garageVatRegistered(),
   },
   publisher: { '@type': 'Organization', name: COMPANY.legalName },
 });

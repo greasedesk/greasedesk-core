@@ -8,14 +8,21 @@
  * banner, licences, onboarding billing step) use the *For(profile) helpers; the PUBLIC marketing
  * site is GB-targeted and keeps the no-arg wrappers (GB profile).
  *
- * ⚠️ STRIPE ALIGNMENT: these are DISPLAYED prices. The actual charge is the ONE multi-currency
- * Stripe Price (STRIPE_PRICE_ID, GBP base + currency_options) — checkout passes the profile's
- * currency on the session and VERIFIES the option's amount against the profile first, so display
- * and charge cannot disagree (both halves or neither; the £35 drift can never recur silently).
+ * ⚠️ STRIPE ALIGNMENT: these are DISPLAYED prices. The actual charge is the Stripe Price named by
+ * STRIPE_PRICE_ID — since 2026-08-09 a GBP-ONLY, TAX-INCLUSIVE price on product prod_V2WiIjJUsLBzkC.
+ * Checkout verifies the amount AND the tax behaviour against what we display before creating a
+ * session, so display and charge cannot disagree (both halves or neither; the £35 drift can never
+ * recur silently, and a swapped exclusive price can no longer pass unnoticed — the two differed
+ * only in tax_behavior, both £75).
+ *
+ * The multi-currency model (GBP base + usd/eur currency_options) belonged to the OLD price and is
+ * gone. Admission is GB-only (lib/enabled-countries), so a non-GB tenant now finds no currency
+ * option and Checkout refuses rather than charging in a currency nobody priced.
  *
  * WHEN VAT REGISTRATION COMPLETES: set NEXT_PUBLIC_GARAGE_VAT_REGISTERED=true in Vercel. VAT-model
- * countries (GB/IE) gain " + VAT" labels AND Stripe Tax at Checkout. US labels never carry a VAT
- * suffix.
+ * countries (GB/IE) gain " inc. VAT" labels AND Stripe Tax at Checkout — the price does not change,
+ * because it is inclusive; what changes is that part of it becomes VAT we account for. US labels
+ * never carry a VAT suffix.
  *
  * ── WHY AN ENV VAR, AND WHY NEXT_PUBLIC ─────────────────────────────────────────────────────────
  * Registration completes on a date HMRC picks, not on a date we ship. As a hardcoded constant the
@@ -29,7 +36,8 @@
  * two would disagree the moment the flag flipped. It is not a secret: whether our prices include
  * VAT is already published in the marketing schema.
  */
-import { CountryProfile, getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
+import { getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
+import type { CountryProfile } from '@/lib/locale-profiles';
 
 /**
  * GreaseDesk Ltd's VAT status. DEFAULTS FALSE — only the exact string 'true' turns it on, so a
@@ -43,8 +51,23 @@ export const garageVatRegistered = (): boolean => process.env.NEXT_PUBLIC_GARAGE
 /** Legacy GB constant — marketing schema/Seo only. Tenant surfaces use the profile helpers. */
 export const MONTHLY_PRICE_POUNDS = getProfile(DEFAULT_COUNTRY).monthlyPrice;
 
+/**
+ * ── THE PRICE INCLUDES VAT; IT IS NOT PLUS VAT (ruling 2026-08-09) ──────────────────────────────
+ * This appended " + VAT", which was right while the Stripe Price was tax-EXCLUSIVE: £75 was the net
+ * and VAT went on top. The live price is now `tax_behavior: inclusive`
+ * (price_1U2RfYDu8OXvJikwUsR3NmHZ) and Terms v2 states "£75 including VAT where applicable", so
+ * " + VAT" now overstates the charge on every surface that renders it — the marketing site, the
+ * dashboard banner, Settings → Licence and the onboarding billing step.
+ *
+ * £75 inclusive at 20% is £62.50 net plus £12.50 VAT. The customer pays £75 either way; the words
+ * are what changed, and a label promising £75 + VAT promises £90.
+ *
+ * NOT REGISTERED still means no suffix at all, and that is not the same sentence: an unregistered
+ * seller charges no VAT, so £75 is simply £75 and "inc. VAT" would claim a component that does not
+ * exist. US (sales-tax model) never carries a VAT suffix in either state.
+ */
 const taxSuffix = (profile: CountryProfile): string =>
-  garageVatRegistered() && profile.taxModel === 'vat' ? ' + VAT' : '';
+  garageVatRegistered() && profile.taxModel === 'vat' ? ' inc. VAT' : '';
 
 /** "£75" / "$100" / "€90" — one site, with " + VAT" only for registered VAT-model countries. */
 export function perLocationLabelFor(profile: CountryProfile): string {
