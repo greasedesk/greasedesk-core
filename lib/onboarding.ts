@@ -45,8 +45,18 @@ import type { OnboardingStep } from '@/lib/onboarding-order';
  * A DATE rather than a per-tenant flag: it needs no backfill, no marker to go stale, and it answers
  * "was this tenant asked at signup?" exactly, for ever. Tenants before it are never asked; tenants
  * after it always are.
+ *
+ * ── MOVED TO TODAY, 2026-08-09 (ruling) ─────────────────────────────────────────────────────────
+ * It shipped at 2026-08-10 so that nothing live could be caught while the step was still being
+ * proved. It is now today's date, so a signup today meets the step — which is the point. That is a
+ * REAL boundary, not a test one: it caught one existing tenant (BigDog, created 14:18 today), whose
+ * admin now stands behind the step until they confirm a number or an operator exempts them.
+ *
+ * MOVING THIS DATE BACKWARDS IS A LOCKOUT. Every admin of every GB tenant created after it who has
+ * no recorded number is held at the step the moment they next load a page — no warning, no email,
+ * nothing they did. Measure before touching it: scripts/phone-gate-blast-radius.mjs names them.
  */
-export const PHONE_STEP_REQUIRED_FROM = new Date('2026-08-10T00:00:00.000Z');
+export const PHONE_STEP_REQUIRED_FROM = new Date('2026-08-09T00:00:00.000Z');
 
 /** The ONE country the phone step runs for. See the warning at the check — widening this is a
  *  deliberate act, and it is the thing a second country's rollout must not forget. */

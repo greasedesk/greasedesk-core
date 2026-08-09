@@ -15,7 +15,7 @@ const prisma = new PrismaClient();
 
 // Mirrors lib/onboarding — deliberately re-stated rather than imported, so a change to the rule
 // shows up as a DISAGREEMENT here instead of both sides moving together silently.
-const CUTOFF = new Date('2026-08-10T00:00:00.000Z');
+const CUTOFF = new Date('2026-08-09T00:00:00.000Z');
 
 const groups = await prisma.group.findMany({
   select: {
