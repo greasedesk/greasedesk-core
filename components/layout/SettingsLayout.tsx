@@ -72,13 +72,14 @@ const TABS: TopTab[] = [
    */
   {
     name: 'Account', key: 'account', href: '/admin/settings/users',
-    match: ['/admin/settings/licences'],
+    match: ['/admin/settings/licences', '/admin/settings/rep'],
     subtabs: [
       // href resolved per-user in hrefFor — the placeholder is never navigated to.
       { name: 'My Account', href: '/admin/settings/users' },
       { name: 'Licence & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
-      // My Rep lands here once its content is agreed. Deliberately absent rather than stubbed: a
-      // sub-tab pointing at a page that does not exist is a 404 with a friendly label on it.
+      // NO GATE (ruling 2026-08-09): knowing who to call is not privileged, and the person who
+      // answers the phone in a workshop is rarely the account holder.
+      { name: 'My Rep', href: '/admin/settings/rep' },
     ],
   },
 ];
