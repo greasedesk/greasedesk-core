@@ -10,6 +10,7 @@
  */
 import React from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/router';
 
 // Gating: adminOnly → ADMIN/owner; managerOk → ADMIN or SITE_MANAGER; neither → everyone.
@@ -21,25 +22,6 @@ type Pointer = { text: string; linkText: string; href: string };
 type TopTab = Gate & { name: string; key: string; href: string; match: string[]; subtabs?: SubTab[]; pointer?: Pointer };
 
 const TABS: TopTab[] = [
-  /**
-   * ── MY ACCOUNT — EVERY ROLE, ALWAYS FIRST ─────────────────────────────────────────────────────
-   * Your own password, login email, sessions and mobile number. The href is resolved per-user in
-   * hrefFor; the placeholder below is never navigated to.
-   *
-   * It exists because the page it points at was reachable only by accident. An ADMIN found their
-   * own record by spotting themselves in a roster meant for managing OTHER people; a STANDARD user
-   * got there because the Users tab was quietly rewritten for them; and a SITE_MANAGER could not
-   * get there AT ALL — the roster is scoped to STANDARD users so they are absent from it, and the
-   * rewrite deliberately excluded managers because they "get the roster". Between those two rules
-   * a manager had no route to their own account page, which is where they change their password.
-   *
-   * Naming it also fixes a smaller thing: "my details" and "managing my staff" are different jobs,
-   * and one tab called Users was doing both.
-   */
-  {
-    name: 'My account', key: 'account', href: '/admin/settings/users',
-    match: [], // never matches by path — see accountActive below; the Users tab owns /users/*
-  },
   {
     name: 'Locations & Resources', key: 'locations', href: '/admin/settings/locations', managerOk: true,
     match: ['/admin/settings/locations'],
@@ -73,31 +55,64 @@ const TABS: TopTab[] = [
     name: 'Invoicing', key: 'invoicing', href: '/admin/settings/invoicing', adminOnly: true,
     match: ['/admin/settings/invoicing'],
   },
+  /**
+   * ── ACCOUNT — WHO YOU ARE, WHAT YOU PAY, WHO LOOKS AFTER YOU ──────────────────────────────────
+   * Was "Licence & Subscriptions", which described one of the three things now under it.
+   *
+   * MY ACCOUNT IS HERE, AND VISIBLE TO EVERY ROLE. The page it points at existed already but was
+   * reachable only by accident: an ADMIN found their own record by spotting themselves in a roster
+   * built for managing OTHER people, a STANDARD user got there because the Users tab was quietly
+   * rewritten for them, and a SITE_MANAGER could not get there AT ALL — the roster is scoped to
+   * STANDARD users so managers are absent from it, and the rewrite excluded managers on the grounds
+   * that they "get the roster". Between those two rules a manager had no route to the page where
+   * they change their own password.
+   *
+   * The top tab is therefore NOT adminOnly; the sub-tabs carry their own gates, so a manager or
+   * mechanic sees Account with one entry in it and admins see all three.
+   */
   {
-    name: 'Licence & Subscriptions', key: 'licence', href: '/admin/settings/licences', adminOnly: true,
+    name: 'Account', key: 'account', href: '/admin/settings/users',
     match: ['/admin/settings/licences'],
+    subtabs: [
+      // href resolved per-user in hrefFor — the placeholder is never navigated to.
+      { name: 'My Account', href: '/admin/settings/users' },
+      { name: 'Licence & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
+      // My Rep lands here once its content is agreed. Deliberately absent rather than stubbed: a
+      // sub-tab pointing at a page that does not exist is a 404 with a friendly label on it.
+    ],
   },
 ];
 
+/** selfUserId is an OVERRIDE; the session supplies it everywhere else. */
 type Props = { isAdmin?: boolean; isManager?: boolean; selfUserId?: string; children: React.ReactNode };
 
 export default function SettingsLayout({ isAdmin = false, isManager = false, selfUserId, children }: Props) {
+  // ── WHO IS "SELF", ON EVERY SETTINGS PAGE ────────────────────────────────────────────────────
+  // Only users/[id] ever passed selfUserId, so anywhere else the Account tab would have vanished —
+  // a manager on Locations would lose the only route to their own password. Read from the session
+  // instead of threading a prop through ten getServerSideProps: the layout is the thing that needs
+  // it, and the session already carries it on every authenticated page.
+  const { data: session } = useSession();
+  const selfId = selfUserId ?? ((session?.user as any)?.id as string | undefined);
   const router = useRouter();
   const path = router.pathname; // e.g. /admin/settings/users/[id]
   const canSee = (g: Gate) => (g.adminOnly ? isAdmin : g.managerOk ? isAdmin || isManager : true);
 
   // 'My account' is dropped when we do not know who "self" is, rather than rendering a tab that
   // cannot resolve a destination.
-  const top = TABS.filter(canSee).filter((t) => t.key !== 'account' || !!selfUserId);
+  const top = TABS.filter(canSee).filter((t) => t.key !== 'account' || !!selfId);
   // MY ACCOUNT WINS ON THE SELF RECORD. /admin/settings/users/<self> is matched by the Users tab's
   // prefix too, so without this the manager who just clicked "My account" would see "Users"
   // highlighted and the roster's sub-tabs — told they are somewhere they are not.
-  const accountActive = !!selfUserId && path === `/admin/settings/users/${selfUserId}`;
+  const accountActive = !!selfId && path === `/admin/settings/users/${selfId}`;
   const active = accountActive
     ? TABS.find((t) => t.key === 'account')
     : TABS.find((t) => t.match.some((m) => path === m || path.startsWith(m + '/')));
-  const hrefFor = (t: TopTab) =>
-    t.key === 'account' && selfUserId ? `/admin/settings/users/${selfUserId}` : t.href;
+  // Both the top tab and its My Account sub-tab resolve to the caller's OWN record.
+  const hrefFor = (t: TopTab | SubTab) =>
+    ('key' in t ? t.key === 'account' : t.name === 'My Account') && selfId
+      ? `/admin/settings/users/${selfId}`
+      : t.href;
   const subtabs = (active?.subtabs ?? []).filter(canSee);
 
   const tabCls = (on: boolean) =>
@@ -123,8 +138,11 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
       {subtabs.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
           {subtabs.map((s) => {
-            const on = path === s.href || path.startsWith(s.href + '/');
-            return <Link key={s.href} href={s.href} className={subCls(on)}>{s.name}</Link>;
+            // RESOLVED href, not the placeholder — My Account points at the caller's own record and
+            // its active test has to compare against the same string it navigates to.
+            const href = hrefFor(s);
+            const on = path === href || path.startsWith(href + '/');
+            return <Link key={s.name} href={href} className={subCls(on)}>{s.name}</Link>;
           })}
         </div>
       )}
