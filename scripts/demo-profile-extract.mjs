@@ -91,6 +91,28 @@ export const FUEL_MIX = [
   { fuel: 'Hybrid', share:  8 },
   { fuel: 'Electric', share: 4 },
 ] as const;
+
+/**
+ * ── FUEL HAS TO SUIT THE CAR, OR A MECHANIC SPOTS IT IN A SECOND ────────────────────────────────
+ * Drawing fuel independently of the model produced a diesel Toyota Aygo and a 2015 electric
+ * Peugeot 2008 in the first generated tenant. Neither has ever existed, and the audience for this
+ * demo is people who would know that immediately — one implausible row costs more credibility than
+ * the other nine hundred earn.
+ *
+ * PETROL_ONLY: city cars and small petrol models never sold as diesels in the UK.
+ * EV_FROM / HYBRID_FROM: the earliest model year at which an electrified version is plausible at
+ * all. A car older than that falls back to petrol or diesel.
+ */
+export const PETROL_ONLY = [
+  'Aygo', 'Picanto', 'i10', 'Up', 'Micra', 'Jazz', 'Yaris', 'Ibiza', 'Fabia', 'Panda',
+] as const;
+export const EV_FROM = 2016;
+export const HYBRID_FROM = 2012;
+/** Models that are electric-capable at all — everything else stays combustion whatever the year. */
+export const EV_CAPABLE = [
+  'Corsa', 'Mokka', 'Astra', '208', '2008', 'Zoe', 'Niro', 'Kona', 'Leaf', 'Golf', 'Up',
+  'i3', 'X1', 'A-Class', 'Puma', 'Fiesta', 'Captur', 'Clio', 'Yaris', 'Corolla',
+] as const;
 `;
 
 /** AUTHORED name pools. Common GB given names and surnames, and invented street names in an
