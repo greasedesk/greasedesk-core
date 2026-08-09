@@ -2237,7 +2237,15 @@ enum NotificationStatus {
 
 model NotificationLog {
   id       String              @id @default(uuid())
-  group_id String? // null = platform-level send (operator invite, reseller enquiry) — not tenant work
+  // ── group_id NULL IS A RECORD, NOT AN ORPHAN ────────────────────────────────────────────────
+  // Two legitimate causes, and BOTH are rows to keep:
+  //   • a platform-level send (operator invite, reseller enquiry) — never belonged to a tenant;
+  //   • an INBOUND email we could not resolve to a tenant — "unresolved is recorded, never
+  //     dropped" is the inbound spine's rule, and this row IS that record.
+  // ANY cleanup predicate over this table must exclude NULL explicitly. Treating it as "orphaned"
+  // deletes exactly the evidence somebody will need when an email goes missing (learned the hard
+  // way, 2026-08-09 — one such row was swept by a teardown that assumed NULL meant stale).
+  group_id String?
   channel  NotificationChannel
   template String // template key (lib/notification-templates) — never free-text body
   provider String // 'resend' | 'none' | future sms provider — configuration, not code

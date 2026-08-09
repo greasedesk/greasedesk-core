@@ -54,6 +54,13 @@ export type SendNotificationResult = {
    *  was deliverable and we chose not to deliver it. Callers must handle it as a refusal, never as
    *  a quiet success. */
   suppressed?: boolean;
+  /**
+   * WHY it was skipped, as a code rather than prose. `reason` is a sentence for a log; this is for
+   * a caller that must say something different to a user. It exists because collapsing them cost a
+   * real lie: a demo tenant's blocked code surfaced as "text messaging isn't switched on for
+   * GreaseDesk yet", which is false — it is switched on, they are in a demo.
+   */
+  skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -233,11 +240,11 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   if (!args.recipient?.trim()) {
     const id = await record({ ...common, status: 'skipped', error: 'no recipient' });
-    return { ok: false, notificationId: id, status: 'skipped', reason: 'no recipient' };
+    return { ok: false, notificationId: id, status: 'skipped', reason: 'no recipient', skipCode: 'no_recipient' };
   }
   if (!tpl) {
     const id = await record({ ...common, status: 'failed', error: `unknown template '${args.template}'` });
-    return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template' };
+    return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template', skipCode: 'unknown_template' };
   }
 
   // ── DEMO TENANTS REFUSE EVERYTHING, BEFORE THE SECURITY BYPASS BELOW ────────────────────────
@@ -251,7 +258,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   const demo = await demoSendDecision(args.groupId, args.recipient);
   if (demo.block) {
     const id = await record({ ...common, status: 'skipped', error: demo.reason });
-    return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason };
+    return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason, skipCode: 'demo_tenant' };
   }
 
   // CONTACT PREFERENCE — checked before rendering and before any provider call. The row is written
@@ -262,7 +269,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   // recorded as any other; bypassing the preference must never mean bypassing the record.
   if (!tpl.security && await isSuppressed(args.groupId, channel, args.recipient)) {
     const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
-    return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true };
+    return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true, skipCode: 'opted_out' };
   }
 
   // Render for the channel. A template with no renderer for this channel is a skip, never a guess.
@@ -272,14 +279,14 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     if (channel === 'email') {
       if (!tpl.email) {
         const id = await record({ ...common, status: 'skipped', error: 'template has no email renderer' });
-        return { ok: false, notificationId: id, status: 'skipped', reason: 'no email renderer' };
+        return { ok: false, notificationId: id, status: 'skipped', reason: 'no email renderer', skipCode: 'no_renderer' };
       }
       const r = tpl.email(args.data ?? {}) as { subject: string; html: string };
       subject = r.subject; body = r.html;
     } else {
       if (!tpl.sms) {
         const id = await record({ ...common, status: 'skipped', error: 'template has no sms renderer' });
-        return { ok: false, notificationId: id, status: 'skipped', reason: 'no sms renderer' };
+        return { ok: false, notificationId: id, status: 'skipped', reason: 'no sms renderer', skipCode: 'no_renderer' };
       }
       // ONE transliteration, at the ONE place an SMS body is produced. Typographic characters
       // force UCS-2 and can triple the segment count for a message that reads identically — see
@@ -294,7 +301,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   if (!adapter.configured()) {
     const id = await record({ ...common, status: 'skipped', subject, error: `${channel} provider not configured` });
-    return { ok: false, notificationId: id, status: 'skipped', reason: `${channel} provider not configured` };
+    return { ok: false, notificationId: id, status: 'skipped', reason: `${channel} provider not configured`, skipCode: 'not_configured' };
   }
 
   let accepted = false;

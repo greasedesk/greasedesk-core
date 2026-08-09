@@ -89,6 +89,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // 503, not 400: an unconfigured provider is OUR state, not bad input from the user, and the
         // status code is the first thing anyone debugging this will read.
         const status = r.code === 'rate_limited' || r.code === 'cooldown' ? 429
+          // 403, not 503 and NOT 200. Not 503 because nothing is unavailable — the product's
+          // messaging works, this tenant is a demo. Not 200 because the panel advances to "enter
+          // the code" on a success, and it would sit there waiting for a code that will never
+          // arrive. A refusal by policy, which the panel already renders by showing the message
+          // and staying put.
+          : r.code === 'demo_tenant' ? 403
           : r.code === 'sms_unavailable' ? 503
           : r.code === 'not_sent' ? 502
           : 400;

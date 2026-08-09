@@ -35,7 +35,11 @@ export type SendRefusal =
   | { code: 'not_sent'; message: string }
   /** The adapter has no provider/key/sender — the feature is OFF, not broken. Visibly distinct from
    *  not_sent so nobody is told to retry against something that was never switched on. */
-  | { code: 'sms_unavailable'; message: string };
+  | { code: 'sms_unavailable'; message: string }
+  /** A DEMO tenant never sends. Its own code because the sms_unavailable sentence is FALSE here:
+   *  texting is switched on, the tenant is a demo. Telling a demo user the product's messaging is
+   *  broken is a lie about the product, told at the moment they are evaluating it. */
+  | { code: 'demo_tenant'; message: string };
 
 export type SendOk = { ok: true; destination: string; expiresInMinutes: number; channel: 'sms' | 'email' };
 
@@ -151,6 +155,16 @@ export async function sendPhoneVerification(args: {
     // "we couldn't send it, try again" while the truth is that texting is not switched on at all —
     // they would retry forever against a feature that does not exist yet. Different status, different
     // sentence, and the caller can tell them apart by `code`.
+    // A DEMO SKIP IS NOT AN OUTAGE. Read from the CODE, not the sentence — the reason string is
+    // for a log and would be a fragile thing to branch on.
+    if (sent.skipCode === 'demo_tenant') {
+      return {
+        code: 'demo_tenant',
+        message: channel === 'email'
+          ? 'This is a demo, so we don’t send real emails — nothing has left the building. Your number is saved against the account.'
+          : 'This is a demo, so we don’t send real texts — nothing has left the building. Your number is saved against the account.',
+      };
+    }
     if (sent.status === 'skipped') {
       // THE SENTENCE HAS TO NAME THE RIGHT CHANNEL. The caller now falls back to email on its own,
       // so a skip here can mean either adapter is off — and telling somebody "texting isn't switched

@@ -109,6 +109,19 @@ export async function getOnboardingState(
 ): Promise<OnboardingState> {
   if (!groupId) return { onboarded: false, firstIncompleteStep: 'country' };
 
+  // ── A DEMO IS ONBOARDED BY CONSTRUCTION ──────────────────────────────────────────────────────
+  // The generator gives it a country, a site, rates, tax and a diary before anyone signs in, and it
+  // has no subscription and never will — so the checkout step below would hold it at a payment
+  // screen for a product it is not buying. Answered here, at the top, rather than by writing a
+  // fake GroupBilling row: that table mirrors Stripe's truth, the webhook and lib/billing both
+  // read it, and a lie there is a lie in the one place the money is decided.
+  //
+  // Returning early also skips five queries per request for a tenant whose answer cannot change.
+  const demoGroup = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { is_demo: true },
+  })) as { is_demo: boolean } | null;
+  if (demoGroup?.is_demo) return { onboarded: true, firstIncompleteStep: null };
+
   // (A) COUNTRY FIRST — a SUPPORTED country must be chosen. An unsupported one leaves country_code
   // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.
   const grpCountry = (await prisma.group.findUnique({
