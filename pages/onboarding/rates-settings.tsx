@@ -12,7 +12,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import Head from 'next/head';
 import { useSession, signIn } from 'next-auth/react';
 import { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
@@ -22,6 +21,7 @@ import { getUsState } from '@/lib/us-states';
 import { zoneChoicesFor, initialZone } from '@/lib/timezone-choices';
 import TimezoneField from '@/components/TimezoneField';
 import { currencySymbol } from '@/lib/format-money';
+import OnboardingLayout, { fieldClass, labelClass as sharedLabel, primaryButtonClass, helpClass } from '@/components/layout/OnboardingLayout';
 
 type PageProps = {
   countryName: string;
@@ -45,8 +45,8 @@ type FormData = {
 // named labels (usZoneLabel) computed server-side into the options.
 const tzLabel = (z: string) => (z.split('/').pop() ?? z).replace(/_/g, ' ');
 
-const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500 transition';
-const labelClass = 'block text-sm font-medium text-slate-300 mb-1 mt-3';
+const inputClass = fieldClass;
+const labelClass = sharedLabel;
 
 export default function RatesSettingsPage({ countryName, currencyCode, timezones, initialTimezone, timezoneFixed, timezoneNote }: PageProps) {
   const router = useRouter();
@@ -97,78 +97,64 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
   };
 
   // Security Check
-  if (status === 'loading') return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">Loading...</div>;
+  if (status === 'loading') return <div className="min-h-screen bg-content flex items-center justify-center text-muted">Loading…</div>;
   if (status === 'unauthenticated') {
     signIn('credentials', { callbackUrl: '/onboarding/rates-settings' });
     return null;
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4 sm:p-8">
-      <Head>
-        <title>Setup Rates & Localisation - GreaseDesk</title>
-      </Head>
+    <OnboardingLayout
+      step="rates"
+      title="Rates & region"
+      heading="Rates & region"
+      intro="Set your timezone and default labour rate. Currency comes from your country. Tax is the next step."
+    >
+      {error && <div className="bg-danger-soft text-danger p-3 rounded-lg mb-4 text-sm" data-testid="rates-error">{error}</div>}
 
-      <div className="max-w-lg mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl shadow-2xl border border-blue-600/50">
-        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 4: Rates &amp; Region</h1>
-        <p className="text-slate-400 mb-6">
-          Set your timezone and default labour rate. Currency comes from your country. Tax is the next step.
-        </p>
+      <form onSubmit={handleSubmit}>
+        <h2 className="text-sm font-semibold text-ink mt-2 mb-2 pb-2 border-b border-line">Regional settings</h2>
 
-        {error && (
-          <div className="bg-red-800 text-red-100 p-3 rounded-lg mb-4 text-sm">{error}</div>
-        )}
+        <label htmlFor="currencyCode" className={labelClass}>Currency</label>
+        <input
+          id="currencyCode"
+          value={`${currencyCode} (${rateSym})`}
+          className={`${inputClass} bg-surface-muted text-muted cursor-not-allowed`}
+          disabled
+          readOnly
+        />
+        <p className={helpClass}>Set by your country — {countryName}.</p>
 
-        <form onSubmit={handleSubmit}>
+        <label htmlFor="timezone" className={labelClass}>Timezone</label>
+        <TimezoneField
+          value={data.timezone}
+          options={timezones}
+          fixed={timezoneFixed}
+          note={timezoneNote}
+          onChange={(z) => setData((prev) => ({ ...prev, timezone: z }))}
+          inputClass={inputClass}
+          noteClass={helpClass}
+        />
 
-          <h2 className="text-xl font-semibold mt-4 mb-2">Regional Settings</h2>
-          <hr className="border-slate-700 mb-4" />
-          <label htmlFor="currencyCode" className={labelClass}>Currency</label>
-          <input
-            id="currencyCode"
-            value={`${currencyCode} (${rateSym})`}
-            className={`${inputClass} opacity-70 cursor-not-allowed`}
-            disabled
-            readOnly
-          />
-          <p className="text-xs text-slate-500 mt-1">Set by your country — {countryName}.</p>
+        <h2 className="text-sm font-semibold text-ink mt-8 mb-2 pb-2 border-b border-line">Default labour rate</h2>
 
-          <label htmlFor="timezone" className={labelClass}>Timezone</label>
-          <TimezoneField
-            value={data.timezone}
-            options={timezones}
-            fixed={timezoneFixed}
-            note={timezoneNote}
-            onChange={(z) => setData((prev) => ({ ...prev, timezone: z }))}
-            inputClass={inputClass}
-            noteClass="text-xs text-slate-500 mt-1"
-          />
+        <label htmlFor="defaultLabourRate" className={labelClass}>Default labour rate ({rateSym}/hr, ex. tax)</label>
+        <input
+          type="number"
+          step="0.01"
+          id="defaultLabourRate"
+          name="defaultLabourRate"
+          value={data.defaultLabourRate}
+          onChange={handleChange}
+          className={inputClass}
+          required
+        />
 
-          <h2 className="text-xl font-semibold mt-8 mb-2">Default Labour Rate</h2>
-          <hr className="border-slate-700 mb-4" />
-
-          <label htmlFor="defaultLabourRate" className={labelClass}>Default Labour Rate ({rateSym}/hr, Ex. Tax)</label>
-          <input
-            type="number"
-            step="0.01"
-            id="defaultLabourRate"
-            name="defaultLabourRate"
-            value={data.defaultLabourRate}
-            onChange={handleChange}
-            className={inputClass}
-            required
-          />
-
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition disabled:opacity-50 mt-8"
-          >
-            {isSaving ? 'Saving & Continuing...' : 'Save & Continue to Tax'}
-          </button>
-        </form>
-      </div>
-    </div>
+        <button type="submit" disabled={isSaving} className={`${primaryButtonClass} mt-8`}>
+          {isSaving ? 'Saving…' : 'Save & continue to tax'}
+        </button>
+      </form>
+    </OnboardingLayout>
   );
 }
 

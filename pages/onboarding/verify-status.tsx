@@ -1,86 +1,96 @@
 /**
  * File: pages/onboarding/verify-status.tsx
- * Last edited: 2025-11-13 at 17:28 Europe/London
+ * Where a FAILED email-verification link lands (from /api/auth/verify).
  *
- * Client-side page to display user-friendly error messages
- * after a failed email verification attempt (via /api/auth/verify).
+ * ── SiteChrome, NOT OnboardingLayout ────────────────────────────────────────────────────────────
+ * Everything else in /onboarding is post-sign-in and wears the wizard shell. This page is not: the
+ * visitor arrived by clicking a link in an email and has no session, so a "Sign out" button would
+ * be nonsense and a step counter would be a lie. It takes the public chrome, exactly as its sibling
+ * check-email does — the pre-auth pages are one family and this was the last of them still dark.
+ *
+ * ── THE FOUR OUTCOMES ARE NOT ALL FAILURES, AND THEY NO LONGER LOOK ALIKE ───────────────────────
+ * The old page painted three of them in reds and yellows of its own mixing. Deliberately mapped:
+ *
+ *   used      → OK. Nothing is wrong. The account is verified and the link was simply clicked
+ *               twice — a very common thing to do with an email. Telling somebody in alarm colours
+ *               that they succeeded earlier is the page being rude about its own success.
+ *   expired   → WARN. Recoverable, and the remedy is one click, but they cannot proceed today.
+ *   invalid   → DANGER. Genuinely broken: a mangled or forged link, and we cannot say which.
+ *   (default) → neutral. We are still reading the query string; claiming anything would be a guess.
  */
-
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Link from 'next/link';
+import SiteChrome from '@/components/marketing/SiteChrome';
 
-// Component to handle the various status messages
-const StatusMessage: React.FC<{ status: string | undefined }> = ({ status }) => {
-  const commonStyles = "text-center p-8 rounded-xl max-w-lg mx-auto shadow-2xl";
+type Tone = 'ok' | 'warn' | 'danger' | 'neutral';
 
-  switch (status) {
-    case 'used':
-      return (
-        <div className={`${commonStyles} bg-yellow-800/80 border-yellow-600`}>
-          <h1 className="text-3xl font-bold mb-3 text-yellow-200">Link Already Used</h1>
-          <p className="text-lg text-yellow-100 mb-6">
-            It looks like this verification link has already been used to activate your account.
-            Please proceed to the sign-in page to log in.
-          </p>
-          <Link href="/admin/login" className="text-yellow-200 underline font-semibold hover:text-yellow-100 transition">
-            Go to Sign In
-          </Link>
-        </div>
-      );
-    case 'expired':
-      return (
-        <div className={`${commonStyles} bg-red-800/80 border-red-600`}>
-          <h1 className="text-3xl font-bold mb-3 text-red-200">Link Expired</h1>
-          <p className="text-lg text-red-100 mb-6">
-            This verification link is over 24 hours old and has expired.
-            Please register again to receive a fresh verification email.
-          </p>
-          <Link href="/register" className="text-red-200 underline font-semibold hover:text-red-100 transition">
-            Register Again
-          </Link>
-        </div>
-      );
-    case 'invalid':
-    case 'server':
-      return (
-        <div className={`${commonStyles} bg-red-900/80 border-red-700`}>
-          <h1 className="text-3xl font-bold mb-3 text-red-300">Verification Failed</h1>
-          <p className="text-lg text-red-100 mb-6">
-            We encountered an issue with your verification link. It may be incomplete or invalid.
-            If the problem persists, please register again.
-          </p>
-          <Link href="/register" className="text-red-300 underline font-semibold hover:text-red-100 transition">
-            Register Again
-          </Link>
-        </div>
-      );
-    default:
-      return (
-        <div className={`${commonStyles} bg-slate-700/80 border-slate-600`}>
-          <h1 className="text-3xl font-bold mb-3 text-white">Verification Status</h1>
-          <p className="text-lg text-slate-300">
-            Checking status...
-          </p>
-        </div>
-      );
-  }
+const TONE: Record<Tone, string> = {
+  ok: 'bg-ok-soft border-ok/30',
+  warn: 'bg-warn-soft border-warn/30',
+  danger: 'bg-danger-soft border-danger/30',
+  neutral: 'bg-surface-muted border-line',
+};
+const HEADING: Record<Tone, string> = {
+  ok: 'text-ok', warn: 'text-warn', danger: 'text-danger', neutral: 'text-ink',
 };
 
+function Outcome({ status }: { status: string | undefined }) {
+  const cases: Record<string, { tone: Tone; title: string; body: string; href: string; cta: string } | undefined> = {
+    used: {
+      tone: 'ok',
+      title: 'Already verified',
+      body: 'This link has already been used, which means your account is active. Sign in and carry on.',
+      href: '/admin/login', cta: 'Go to sign in',
+    },
+    expired: {
+      tone: 'warn',
+      title: 'Link expired',
+      body: 'Verification links last 24 hours and this one is older than that. Register again and we’ll send a fresh one.',
+      href: '/register', cta: 'Register again',
+    },
+    invalid: {
+      tone: 'danger',
+      title: 'Verification failed',
+      body: 'We couldn’t make sense of that verification link — it may have been cut short by your email client. If it happens again, register once more.',
+      href: '/register', cta: 'Register again',
+    },
+  };
+  // 'server' shares the invalid copy: from the visitor's side the situation and the remedy are the
+  // same, and the distinction only matters in our logs.
+  const c = cases[status === 'server' ? 'invalid' : (status ?? '')];
+
+  if (!c) {
+    return (
+      <div className={`border rounded-2xl p-8 text-center ${TONE.neutral}`} data-testid="verify-status">
+        <h1 className={`text-xl font-semibold mb-2 ${HEADING.neutral}`}>Verification status</h1>
+        <p className="text-sm text-muted">Checking…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`border rounded-2xl p-8 text-center ${TONE[c.tone]}`} data-testid="verify-status">
+      <h1 className={`text-xl font-semibold mb-2 ${HEADING[c.tone]}`}>{c.title}</h1>
+      <p className="text-sm text-ink mb-6">{c.body}</p>
+      <Link href={c.href} className="text-sm text-accent font-semibold underline underline-offset-2">
+        {c.cta}
+      </Link>
+    </div>
+  );
+}
 
 export default function VerifyStatusPage() {
   const router = useRouter();
   const { error } = router.query;
-  const status = typeof error === 'string' ? error : undefined;
-
   return (
     <>
-      <Head>
-        <title>Verification Status - GreaseDesk</title>
-      </Head>
-      <main className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-6">
-        <StatusMessage status={status} />
-      </main>
+      <Head><title>Verification status - GreaseDesk</title></Head>
+      <SiteChrome>
+        <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+          <Outcome status={typeof error === 'string' ? error : undefined} />
+        </div>
+      </SiteChrome>
     </>
   );
 }

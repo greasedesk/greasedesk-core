@@ -33,7 +33,9 @@ const secondary = 'bg-surface-muted border border-line text-ink font-semibold ro
 
 export default function PhoneVerifyPanel({ onDone, heading }: {
   onDone?: () => void;
-  heading?: string;
+  /** NULL suppresses the panel's own title — for the wizard, where the layout already renders one
+   *  and two stacked headings is just noise. */
+  heading?: string | null;
 }) {
   const [state, setState] = React.useState<State | null>(null);
   const [phone, setPhone] = React.useState('');
@@ -119,7 +121,7 @@ export default function PhoneVerifyPanel({ onDone, heading }: {
     const byEmail = !state.verified;
     return (
       <div data-testid="phone-panel">
-        <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Mobile number'}</h2>
+        {heading !== null && <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Mobile number'}</h2>}
         {byEmail ? (
           <p className="text-sm text-ink" data-testid="phone-recorded">
             <span className="font-mono">{state.phone}</span> <span className="text-warn">Recorded</span>
@@ -150,7 +152,7 @@ export default function PhoneVerifyPanel({ onDone, heading }: {
 
   return (
     <div data-testid="phone-panel">
-      <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Add your mobile number'}</h2>
+      {heading !== null && <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Add your mobile number'}</h2>}
 
       {/* ── SAID BEFORE ANYONE TYPES ────────────────────────────────────────────────────────────
           Discovering the only channel is down AFTER filling in a number and pressing send wastes

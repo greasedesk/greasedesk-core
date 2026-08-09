@@ -1,16 +1,15 @@
 /**
  * File: pages/onboarding/country.tsx
- * Onboarding Step 2 — the first question ABOUT THE GARAGE, before currency, timezone or tax (the
- * phone step now leads; see lib/onboarding):
+ * Onboarding Step 1 — the first question, before currency, timezone, tax or even a phone number:
  * every visitor sees their country listed. A SUPPORTED choice configures the rest of the flow
  * (currency, timezones, which tax step renders) and continues. An UNSUPPORTED choice ends on a
  * friendly coming-soon gate that captures an email into the waitlist, with the country.
  */
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
+import OnboardingLayout, { fieldClass, primaryButtonClass } from '@/components/layout/OnboardingLayout';
 import { PICKER_COUNTRIES } from '@/lib/locale-profiles';
 import { enabledCountryOptions } from '@/lib/enabled-countries';
 
@@ -21,8 +20,6 @@ import { enabledCountryOptions } from '@/lib/enabled-countries';
 // without full support.
 const OPTIONS = enabledCountryOptions();
 
-const inputClass = 'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white focus:ring-blue-500 focus:border-blue-500';
-const cardClass = 'max-w-lg w-full bg-slate-800 border border-slate-700 rounded-2xl p-8';
 
 export default function CountryStepPage() {
   const router = useRouter();
@@ -43,7 +40,7 @@ export default function CountryStepPage() {
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.message || 'Could not save your country.');
-      if (data.supported) router.push('/onboarding/setup');
+      if (data.supported) router.push('/onboarding/phone');
       else setComingSoon(country);
     } catch (e: any) { setError(e?.message || 'Something went wrong.'); }
     finally { setSaving(false); }
@@ -65,53 +62,65 @@ export default function CountryStepPage() {
 
   const countryName = PICKER_COUNTRIES.find((c) => c.code === comingSoon)?.name ?? 'your country';
 
-  return (
-    <>
-      <Head><title>Where are you? — GreaseDesk</title></Head>
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        {comingSoon ? (
-          <div className={cardClass}>
-            <h1 className="text-2xl font-bold text-white mb-2">We&rsquo;re not live in {countryName} yet</h1>
-            {joined ? (
-              <p className="text-slate-300">Thanks — you&rsquo;re on the list. We&rsquo;ll email you the moment GreaseDesk launches in {countryName}.</p>
-            ) : (
-              <>
-                <p className="text-slate-300 mb-5">
-                  GreaseDesk is built for {countryName}&rsquo;s way of working, and we&rsquo;re not there quite yet.
-                  Leave your email and we&rsquo;ll let you know the moment we launch.
-                </p>
-                <label className="block text-sm text-slate-400 mb-1">Email</label>
-                <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@garage.com" />
-                {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
-                <button onClick={joinWaitlist} disabled={saving || !email.trim()}
-                  className="mt-4 w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg px-4 py-3 disabled:opacity-50">
-                  {saving ? 'Adding…' : 'Tell me when you launch'}
-                </button>
-              </>
-            )}
-            <button onClick={() => { setComingSoon(null); setJoined(false); }} className="mt-4 text-sm text-slate-400 hover:text-white">
-              ← Choose a different country
-            </button>
-          </div>
+  // ── THE COMING-SOON BRANCH IS A REFUSAL, NOT A FAULT ──────────────────────────────────────────
+  // Deliberately NOT danger-soft. "We aren't open in Ireland yet" is disappointing news about our
+  // coverage, not something the visitor did wrong and not something they can fix by trying again —
+  // red would read as an error they had caused. warn-soft says "stop, this isn't going to work
+  // today" while leaving the tone right for a page whose whole job is to keep them interested.
+  if (comingSoon) {
+    return (
+      <OnboardingLayout
+        title="Not live here yet"
+        heading={`We’re not live in ${countryName} yet`}
+      >
+        {joined ? (
+          // The ONE genuinely good outcome on this screen, so it gets the positive token.
+          <p className="text-sm text-ok bg-ok-soft border border-ok/30 rounded-lg p-3" data-testid="waitlist-joined">
+            Thanks — you’re on the list. We’ll email you the moment GreaseDesk launches in {countryName}.
+          </p>
         ) : (
-          <div className={cardClass}>
-            <h1 className="text-2xl font-bold text-white mb-1">Where&rsquo;s your garage?</h1>
-            <p className="text-slate-400 mb-6">This sets your currency, timezone and tax — so the rest of setup is right for you.</p>
-            <label className="block text-sm text-slate-400 mb-1">Country</label>
-            <select className={inputClass} value={country} onChange={(e) => setCountry(e.target.value)}>
-              {OPTIONS.map((c) => (
-                <option key={c.code} value={c.code}>{c.name}</option>
-              ))}
-            </select>
-            {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
-            <button onClick={submit} disabled={saving}
-              className="mt-6 w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg px-4 py-3 disabled:opacity-50">
-              {saving ? 'Saving…' : 'Continue'}
+          <>
+            <p className="text-sm text-warn bg-warn-soft border border-warn/30 rounded-lg p-3 mb-5" data-testid="coming-soon">
+              GreaseDesk is built for {countryName}’s way of working, and we’re not there quite yet.
+              Leave your email and we’ll let you know the moment we launch.
+            </p>
+            <label className="block text-sm font-medium text-ink mb-1" htmlFor="waitlist-email">Email</label>
+            <input id="waitlist-email" type="email" className={fieldClass} value={email}
+              onChange={(e) => setEmail(e.target.value)} placeholder="you@garage.com" />
+            {/* A FAILED WAITLIST SIGN-UP *is* an error, and reads as one. Two different reds would
+                be a muddle; this is the only danger state on the page. */}
+            {error && <p className="text-sm text-danger mt-2" data-testid="country-error">{error}</p>}
+            <button type="button" onClick={joinWaitlist} disabled={saving || !email.trim()}
+              className={`${primaryButtonClass} mt-4`}>
+              {saving ? 'Adding…' : 'Tell me when you launch'}
             </button>
-          </div>
+          </>
         )}
-      </div>
-    </>
+        <button type="button" onClick={() => { setComingSoon(null); setJoined(false); setError(null); }}
+          className="mt-4 text-sm text-muted hover:text-ink underline underline-offset-2">
+          ← Choose a different country
+        </button>
+      </OnboardingLayout>
+    );
+  }
+
+  return (
+    <OnboardingLayout
+      step="country"
+      heading="Where’s your garage?"
+      intro="This sets your currency, timezone and tax — so the rest of setup is right for you."
+    >
+      <label className="block text-sm font-medium text-ink mb-1" htmlFor="country">Country</label>
+      <select id="country" className={fieldClass} value={country} onChange={(e) => setCountry(e.target.value)}>
+        {OPTIONS.map((c) => (
+          <option key={c.code} value={c.code}>{c.name}</option>
+        ))}
+      </select>
+      {error && <p className="text-sm text-danger mt-2" data-testid="country-error">{error}</p>}
+      <button type="button" onClick={submit} disabled={saving} className={`${primaryButtonClass} mt-6`}>
+        {saving ? 'Saving…' : 'Continue'}
+      </button>
+    </OnboardingLayout>
   );
 }
 

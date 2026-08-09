@@ -6,12 +6,12 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/router';
-import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { US_STATES } from '@/lib/us-states';
+import OnboardingLayout, { fieldClass, primaryButtonClass, helpClass } from '@/components/layout/OnboardingLayout';
 
 type PageProps = {
   // Country-profile-driven (ruling 2026-07-28): render a structured state select for countries
@@ -53,7 +53,6 @@ interface SetupData {
 }
 
 // Logo Configuration (Assuming it's placed in /public)
-const LOGO_SRC = '/greasedesk-logo-source.png';
 
 export default function OnboardingSetupPage({ stateField, states, postcodeLabel, postcodePlaceholder }: PageProps) {
   const router = useRouter();
@@ -117,47 +116,29 @@ export default function OnboardingSetupPage({ stateField, states, postcodeLabel,
   };
 
   // Tailwind CSS classes for consistent styling
-  const inputClass =
-    'w-full p-3 bg-slate-700 border border-slate-600 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-slate-200 placeholder-slate-400';
-  const labelClass = 'block text-sm font-medium text-slate-300 mb-1';
-  const panelClass = 'bg-slate-700/50 p-4 rounded-xl border border-slate-700';
+  const inputClass = fieldClass;
+  const labelClass = 'block text-sm font-medium text-ink mb-1';
+  // A grouping panel INSIDE the card, so it must not be the same surface as the card itself.
+  const panelClass = 'bg-surface-muted p-4 rounded-xl border border-line';
 
   return (
-    <>
-      <Head>
-        <title>Garage Setup - GreaseDesk</title>
-      </Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-xl w-full bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl p-8">
-          {/* Logo */}
-          <div className="text-center mb-6">
-            <img
-              src={LOGO_SRC}
-              alt="GreaseDesk Logo"
-              className="mx-auto"
-              style={{ width: '200px', height: 'auto' }}
-            />
-          </div>
+    // The logo used to be repeated in the card body; the layout's header carries it now, once.
+    <OnboardingLayout
+      step="site"
+      title="Garage setup"
+      heading="Your garage"
+      intro="Tell us about your company and your primary garage location to get started."
+    >
+      {error && (
+        <div className="bg-danger-soft text-danger p-3 rounded-lg mb-4 text-sm" data-testid="setup-error">
+          {error}
+        </div>
+      )}
 
-          <h1 className="text-3xl font-bold text-blue-400 mb-2">
-            Step 3: Garage Setup
-          </h1>
-          <p className="text-slate-400 mb-8">
-            Tell us about your company and your primary garage location to get started.
-          </p>
-
-          {error && (
-            <div className="bg-red-800 text-red-200 p-3 rounded-lg mb-4 text-sm">
-              Error: {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6">
             {/* Group (Company) Details */}
             <div className={panelClass}>
-              <h2 className="text-xl font-semibold text-white mb-4">
-                Company Details (The Group)
-              </h2>
+              <h2 className="text-sm font-semibold text-ink mb-3">Company details</h2>
               <div>
                 <label htmlFor="groupName" className={labelClass}>
                   Company / Group Name
@@ -178,9 +159,7 @@ export default function OnboardingSetupPage({ stateField, states, postcodeLabel,
 
             {/* Site (Garage) Details */}
             <div className={panelClass}>
-              <h2 className="text-xl font-semibold text-white mb-4">
-                Primary Garage Location (The Site)
-              </h2>
+              <h2 className="text-sm font-semibold text-ink mb-3">Primary garage location</h2>
               <div className="space-y-4">
                 <div>
                   <label htmlFor="siteName" className={labelClass}>
@@ -263,24 +242,16 @@ export default function OnboardingSetupPage({ stateField, states, postcodeLabel,
                       <option value="" disabled>Select your state…</option>
                       {states.map((s) => <option key={s.code} value={s.code}>{s.name}</option>)}
                     </select>
-                    <p className="text-xs text-slate-500 mt-1">Sets your timezone; you can adjust it on the next step if your area differs.</p>
+                    <p className={helpClass}>Sets your timezone; you can adjust it on the next step if your area differs.</p>
                   </div>
                 )}
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition disabled:opacity-50"
-            >
-              {loading
-                ? 'Setting up garage...'
-                : 'Save & Continue to Financial Setup'}
-            </button>
-          </form>
-        </div>
-      </main>
-    </>
+        <button type="submit" disabled={loading} className={primaryButtonClass}>
+          {loading ? 'Setting up your garage…' : 'Save & continue to rates'}
+        </button>
+      </form>
+    </OnboardingLayout>
   );
 }

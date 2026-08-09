@@ -12,9 +12,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
+import OnboardingLayout, { primaryButtonClass } from '@/components/layout/OnboardingLayout';
 import { perLocationLabelFor } from '@/lib/billing-pricing';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
@@ -83,46 +83,70 @@ export default function BillingPage({ priceLabel }: { priceLabel: string }) {
   }
 
   return (
-    <>
-      <Head><title>Start your subscription — GreaseDesk</title></Head>
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-slate-800/80 border border-slate-700 rounded-2xl shadow-xl p-8">
-          <h1 className="text-xl font-semibold text-white mb-4 text-center">Start your 60-day free trial</h1>
-
-          {mode === 'finalising' ? (
-            <div className="text-center py-6">
-              <div className="animate-spin h-8 w-8 border-2 border-slate-500 border-t-blue-400 rounded-full mx-auto mb-4" />
-              <p className="text-slate-300">Finalising your subscription…</p>
-              <p className="text-xs text-slate-500 mt-2">Confirming with Stripe — this only takes a moment.</p>
-            </div>
-          ) : mode === 'stuck' ? (
-            <div className="text-center py-4">
-              <p className="text-amber-300 mb-4">Your payment went through — we’re still confirming it with Stripe.</p>
-              <button onClick={() => { polls.current = 0; const sid = router.query.session_id as string; if (sid) { setMode('finalising'); confirm(sid); } }}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl px-4 py-2.5">Check again</button>
-            </div>
-          ) : mode === 'unconfigured' ? (
-            <p className="text-sm text-amber-300 py-4 text-center">Card billing isn’t switched on for this environment yet. Please contact support to finish setting up your account.</p>
-          ) : (
-            <>
-              <div className="bg-slate-700/40 p-4 rounded-lg mb-6 text-sm text-slate-300 space-y-2">
-                <p><span className="text-white font-semibold">{priceLabel}</span> per location, per month.</p>
-                <p>Your card is verified today but <span className="text-white font-semibold">not charged</span>. The trial runs 60 days.</p>
-                <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
-              </div>
-
-              {cancelled && <div className="bg-slate-700/40 border border-slate-600 text-slate-200 p-3 rounded-lg text-sm mb-4">Checkout cancelled — you can start again whenever you’re ready.</div>}
-              {error && <div className="bg-red-800/80 border border-red-600 text-red-100 p-3 rounded-lg text-sm mb-4">{error}</div>}
-
-              <button onClick={startCheckout} disabled={mode === 'launching'} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl px-4 py-2.5 disabled:opacity-50">
-                {mode === 'launching' ? 'Opening secure checkout…' : 'Continue to secure checkout'}
-              </button>
-              <p className="text-xs text-slate-500 text-center mt-3">Payments are handled by Stripe. We never see or store your card details.</p>
-            </>
-          )}
+    <OnboardingLayout step="checkout" title="Start your subscription" heading="Start your 60-day free trial">
+      {mode === 'finalising' ? (
+        <div className="text-center py-6">
+          <div className="animate-spin h-8 w-8 border-2 border-line border-t-accent rounded-full mx-auto mb-4" />
+          <p className="text-ink">Finalising your subscription…</p>
+          <p className="text-xs text-muted mt-2">Confirming with Stripe — this only takes a moment.</p>
         </div>
-      </main>
-    </>
+      ) : mode === 'stuck' ? (
+        // ── WARN, NOT DANGER, AND THE SENTENCE IS WHY ──────────────────────────────────────────
+        // The money has ALREADY left: Stripe took the card, we simply have not read it back yet.
+        // Red here would tell somebody who has just paid us that their payment failed — the single
+        // most alarming thing this page could say, and false. warn-soft is "hold on", which is
+        // exactly the true state, and the reassurance leads before the retry.
+        <div className="py-2">
+          <p className="text-sm text-warn bg-warn-soft border border-warn/30 rounded-lg p-3 mb-4" data-testid="billing-stuck">
+            Your payment went through — we’re still confirming it with Stripe. Nothing has gone wrong
+            and you won’t be charged twice.
+          </p>
+          <button
+            type="button"
+            onClick={() => { polls.current = 0; const sid = router.query.session_id as string; if (sid) { setMode('finalising'); confirm(sid); } }}
+            className={primaryButtonClass}
+          >
+            Check again
+          </button>
+        </div>
+      ) : mode === 'unconfigured' ? (
+        // OUR fault, not theirs, and unfixable by retrying — so it neither turns red nor offers a
+        // button that would do nothing. It is a dead end by nature; the honest thing is to say so
+        // and name the way out.
+        <p className="text-sm text-warn bg-warn-soft border border-warn/30 rounded-lg p-3" data-testid="billing-unconfigured">
+          Card billing isn’t switched on for this environment yet. Please contact support to finish
+          setting up your account.
+        </p>
+      ) : (
+        <>
+          <div className="bg-surface-muted border border-line p-4 rounded-lg mb-6 text-sm text-muted space-y-2">
+            <p><span className="text-ink font-semibold">{priceLabel}</span> per location, per month.</p>
+            <p>Your card is verified today but <span className="text-ink font-semibold">not charged</span>. The trial runs 60 days.</p>
+            <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
+          </div>
+
+          {/* CANCELLED IS NEITHER A WARNING NOR AN ERROR — they chose to back out, and the screen
+              should not scold them for it. Plain surface, plain sentence. */}
+          {cancelled && (
+            <div className="bg-surface-muted border border-line text-ink p-3 rounded-lg text-sm mb-4" data-testid="billing-cancelled">
+              Checkout cancelled — you can start again whenever you’re ready.
+            </div>
+          )}
+          {/* THE ONE REAL ERROR on this page: checkout would not start. Retrying is the remedy, so
+              danger is right — something failed and the next press might work. */}
+          {error && (
+            <div className="bg-danger-soft border border-danger/30 text-danger p-3 rounded-lg text-sm mb-4" data-testid="billing-error">
+              {error}
+            </div>
+          )}
+
+          <button type="button" onClick={startCheckout} disabled={mode === 'launching'} className={primaryButtonClass}>
+            {mode === 'launching' ? 'Opening secure checkout…' : 'Continue to secure checkout'}
+          </button>
+          <p className="text-xs text-muted text-center mt-3">Payments are handled by Stripe. We never see or store your card details.</p>
+        </>
+      )}
+    </OnboardingLayout>
   );
 }
 
