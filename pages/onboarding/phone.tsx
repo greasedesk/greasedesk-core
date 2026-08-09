@@ -1,18 +1,22 @@
 /**
  * File: pages/onboarding/phone.tsx
- * Onboarding Step 5 — the mobile number. IN the gate now (ONBOARDING_ORDER, before checkout), where
- * it started life outside it as an optional afterthought with "I'll do this later" on the button row.
+ * Onboarding Step 1 — the mobile number, and the FIRST thing asked after sign-in. It started life
+ * outside the gate as an optional afterthought with "I'll do this later" on the button row, spent a
+ * few hours sitting last-before-checkout, and now leads.
  *
  * ── WHY IT MOVED INSIDE ─────────────────────────────────────────────────────────────────────────
  * Optional meant nobody did it: five of five live tenants, zero numbers. A recovery channel nobody
  * has is not a recovery channel, and the moment it is actually needed — a locked-out owner, a failed
  * payment, a card gone wrong on a Saturday — is the moment it is too late to ask.
  *
- * ── WHY IT SITS BEFORE CHECKOUT AND NOT AFTER ───────────────────────────────────────────────────
- * After checkout the tenant has paid and the gate has nothing left to hold; the step would be
- * skippable in practice by closing the tab. Before checkout it is the last thing between setting up
- * and paying, which is the strongest position it can occupy without standing between a customer and
- * giving us money for longer than one screen.
+ * ── WHY IT LEADS (ruling 2026-08-09) ────────────────────────────────────────────────────────────
+ * It is the only step that is about the PERSON rather than the garage, and the only one whose whole
+ * value is being able to reach them when something else has gone wrong. Asked first, we hold a way
+ * to contact whoever is setting this up before they have entered a single fact we could ring them
+ * about. Asked last, the one signup that abandons halfway is the one we can never follow up.
+ *
+ * The cost is stated in lib/onboarding: it runs before COUNTRY, so a non-GB visitor confirms a
+ * number before learning we are GB-only. Harmless while the country step refuses everything else.
  *
  * ── WHAT THE GUARD DOES ─────────────────────────────────────────────────────────────────────────
  * requireOnboardingStep sends anyone here who is not on this step somewhere else: a grandfathered
@@ -28,15 +32,15 @@ import PhoneVerifyPanel from '@/components/settings/PhoneVerifyPanel';
 
 export default function OnboardingPhone() {
   const router = useRouter();
-  // Onward to CHECKOUT, not the dashboard: this step is inside the wizard now, and the dashboard is
-  // still gated behind billing. Sending them to a page that would bounce them back is a flicker.
-  const go = () => router.replace('/onboarding/billing');
+  // Onward to COUNTRY, the next step. Not the dashboard — five gated steps still stand between
+  // here and there, and sending them to a page that would bounce them back is a flicker.
+  const go = () => router.replace('/onboarding/country');
   return (
     <>
       <Head><title>Your mobile number - GreaseDesk</title></Head>
       <div className="min-h-screen bg-surface-muted py-10 px-4">
         <div className="max-w-xl mx-auto bg-surface border border-line rounded-2xl p-6">
-          <p className="text-xs text-muted mb-3">Step 5 of 6 — then payment.</p>
+          <p className="text-xs text-muted mb-3">Step 1 of 6 — before anything about the garage.</p>
           <PhoneVerifyPanel onDone={go} heading="Confirm your mobile number" />
         </div>
       </div>

@@ -1,6 +1,6 @@
 /**
  * File: pages/onboarding/tax.tsx
- * Onboarding Step 3 — tax profile. Renders its questions from the locale-keyed config
+ * Onboarding Step 5 — tax profile. Renders its questions from the locale-keyed config
  * (lib/onboarding-steps), so a new geography is a config row, not a new page (item-13). Writes via
  * /api/onboarding/tax; tax_default_rate_bp going non-NULL advances the wizard to Checkout.
  */
@@ -64,7 +64,7 @@ export default function TaxStepPage({ questions, initial }: PageProps) {
     <div className="min-h-screen bg-slate-900 text-white p-4 sm:p-8">
       <Head><title>Tax Setup - GreaseDesk</title></Head>
       <div className="max-w-lg mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl shadow-2xl border border-blue-600/50">
-        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 3: Tax</h1>
+        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 5: Tax</h1>
         <p className="text-slate-400 mb-6">Tell us how your garage is set up for tax. This drives VAT on your quotes and invoices.</p>
 
         {error && <div className="bg-red-800 text-red-100 p-3 rounded-lg mb-4 text-sm">{error}</div>}

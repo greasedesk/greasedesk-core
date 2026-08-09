@@ -7,10 +7,12 @@
  *
  * Completion (ordered; the gate SHORT-CIRCUITS at the first miss — an incomplete-at-site tenant
  * costs ONE indexed query):
- *   (A) site          — the tenant has at least one Site
- *   (B) rates         — that Site has default_labour_rate (nullable, no default → genuine signal)
- *   (C) tax           — Group.tax_default_rate_bp is set (Int?, NULL until the tax step writes it)
- *   (D) subscription  — GroupBilling.subscription_status ∈ {trialing, active, past_due}
+ *   (0) phone         — the signed-in ADMIN has confirmed a mobile (per-USER, see OnboardingActor)
+ *   (A) country       — a supported country is chosen
+ *   (B) site          — the tenant has at least one Site
+ *   (C) rates         — that Site has default_labour_rate (nullable, no default → genuine signal)
+ *   (D) tax           — Group.tax_default_rate_bp is set (Int?, NULL until the tax step writes it)
+ *   (E) subscription  — GroupBilling.subscription_status ∈ {trialing, active, past_due}
  *                       (webhook/confirm-written mirror of Stripe's truth; a real trial/sub exists)
  *                       past_due COUNTS AS DONE (2026-08-06): the step asks "has this tenant ever
  *                       set billing up", not "is the money currently arriving". A tenant whose card
@@ -28,8 +30,14 @@ import { isSupportedCountry } from '@/lib/locale-profiles';
 
 export type OnboardingStep = 'country' | 'site' | 'rates' | 'tax' | 'phone' | 'checkout';
 
-/** The wizard order — also the order the gate evaluates completion in. */
-export const ONBOARDING_ORDER: OnboardingStep[] = ['country', 'site', 'rates', 'tax', 'phone', 'checkout'];
+/**
+ * The wizard order — also the order the gate evaluates completion in.
+ *
+ * DOCUMENTATION, NOT BEHAVIOUR. Nothing iterates this array; the order that actually decides where a
+ * tenant is sent is the sequence of checks inside getOnboardingState. Reordering this alone changes
+ * nothing, and the two must be kept in step by hand.
+ */
+export const ONBOARDING_ORDER: OnboardingStep[] = ['phone', 'country', 'site', 'rates', 'tax', 'checkout'];
 
 /**
  * ── GROUPS CREATED BEFORE THIS ARE NOT ASKED ────────────────────────────────────────────────────
@@ -94,46 +102,30 @@ export type OnboardingState = {
 
 /**
  * Derive completion for a group, short-circuiting at the first incomplete step.
- * Each check is a single indexed lookup; (A)+(B) share one Site read.
+ * Each check is a single indexed lookup.
  */
 export async function getOnboardingState(
   groupId: string | null | undefined,
   actor?: OnboardingActor,
 ): Promise<OnboardingState> {
+  // NO GROUP is a degenerate case — the page and API guards redirect to login before this can be
+  // reached — and the phone step needs a group to read the cutoff from, so 'country' stays the
+  // answer here even though it is no longer the first step.
   if (!groupId) return { onboarded: false, firstIncompleteStep: 'country' };
 
-  // (0) COUNTRY FIRST — a SUPPORTED country must be chosen. An unsupported one leaves country_code
-  // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.
-  const grpCountry = (await prisma.group.findUnique({
-    where: { id: groupId }, select: { country_code: true },
-  })) as { country_code: string | null } | null;
-  if (!isSupportedCountry(grpCountry?.country_code)) return { onboarded: false, firstIncompleteStep: 'country' };
-
-  // (A) — the tenant has a site.
-  const site = (await prisma.site.findFirst({
-    where: { group_id: groupId },
-    select: { id: true },
-  })) as { id: string } | null;
-  if (!site) return { onboarded: false, firstIncompleteStep: 'site' };
-
-  // (B) — the rates step wrote the LABOUR_HR service with a labour rate. That row (not a Site column)
-  // is where the labour rate lives; its existence with a non-null rate is the "rates done" signal.
-  const labour = (await prisma.serviceCatalogue.findFirst({
-    where: { group_id: groupId, service_code: 'LABOUR_HR', default_labour_rate: { not: null } },
-    select: { id: true },
-  })) as { id: string } | null;
-  if (!labour) return { onboarded: false, firstIncompleteStep: 'rates' };
-
-  // (C) — tax profile answered.
-  const group = (await prisma.group.findUnique({
-    where: { id: groupId },
-    select: { tax_default_rate_bp: true },
-  })) as { tax_default_rate_bp: number | null } | null;
-  if (group?.tax_default_rate_bp == null) return { onboarded: false, firstIncompleteStep: 'tax' };
-
-  // (C2) — THE PHONE, and the only per-USER step. Ordered before checkout deliberately: it is the
-  // last thing asked before money, and a tenant who cannot complete it should discover that before
-  // paying rather than after.
+  // (0) THE PHONE — FIRST, ahead of every garage fact, and the only per-USER step. It was briefly
+  // last-before-checkout; it now runs the moment somebody signs in, before they have told us
+  // anything about their business (ruling 2026-08-09).
+  //
+  // ── PHONE BEFORE COUNTRY HAS A CONSEQUENCE WORTH WRITING DOWN ────────────────────────────────
+  // The country step is where we tell a visitor we are not open where they are. Asking for a phone
+  // number before it means a non-GB visitor confirms a number and only then learns GreaseDesk is
+  // GB-only — and their number is parsed against the GB dial code, because Group.country_code is
+  // still NULL and toE164Digits falls back to '44'. Harmless today: the country step refuses
+  // everything but GB (lib/enabled-countries), so a non-GB signup cannot complete either way.
+  // THE DAY A SECOND COUNTRY OPENS this becomes a real defect — the number is misparsed and the
+  // rejection arrives one step too late. At that point the dial code must come from somewhere that
+  // exists before the country step, or the phone step moves back behind country.
   //
   // Three ways to be complete, and only the first proves a handset:
   //   • phone_recorded_at — a code was confirmed, by SMS or by the email fallback
@@ -158,7 +150,36 @@ export async function getOnboardingState(
     }
   }
 
-  // (D) — a real Stripe trial/subscription exists (webhook- or confirm-written mirror).
+  // (A) COUNTRY — a SUPPORTED country must be chosen. An unsupported one leaves country_code
+  // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.
+  const grpCountry = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { country_code: true },
+  })) as { country_code: string | null } | null;
+  if (!isSupportedCountry(grpCountry?.country_code)) return { onboarded: false, firstIncompleteStep: 'country' };
+
+  // (B) — the tenant has a site.
+  const site = (await prisma.site.findFirst({
+    where: { group_id: groupId },
+    select: { id: true },
+  })) as { id: string } | null;
+  if (!site) return { onboarded: false, firstIncompleteStep: 'site' };
+
+  // (C) — the rates step wrote the LABOUR_HR service with a labour rate. That row (not a Site column)
+  // is where the labour rate lives; its existence with a non-null rate is the "rates done" signal.
+  const labour = (await prisma.serviceCatalogue.findFirst({
+    where: { group_id: groupId, service_code: 'LABOUR_HR', default_labour_rate: { not: null } },
+    select: { id: true },
+  })) as { id: string } | null;
+  if (!labour) return { onboarded: false, firstIncompleteStep: 'rates' };
+
+  // (D) — tax profile answered.
+  const group = (await prisma.group.findUnique({
+    where: { id: groupId },
+    select: { tax_default_rate_bp: true },
+  })) as { tax_default_rate_bp: number | null } | null;
+  if (group?.tax_default_rate_bp == null) return { onboarded: false, firstIncompleteStep: 'tax' };
+
+  // (E) — a real Stripe trial/subscription exists (webhook- or confirm-written mirror).
   const billing = (await prisma.groupBilling.findUnique({
     where: { group_id: groupId },
     select: { subscription_status: true },

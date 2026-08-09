@@ -140,7 +140,7 @@ export default function OnboardingSetupPage({ stateField, states, postcodeLabel,
           </div>
 
           <h1 className="text-3xl font-bold text-blue-400 mb-2">
-            Step 1: Garage Setup
+            Step 3: Garage Setup
           </h1>
           <p className="text-slate-400 mb-8">
             Tell us about your company and your primary garage location to get started.

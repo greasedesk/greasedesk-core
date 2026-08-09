@@ -1,6 +1,7 @@
 /**
  * File: pages/onboarding/country.tsx
- * Onboarding Step 0 — COUNTRY FIRST. The very first question, before currency, timezone or tax:
+ * Onboarding Step 2 — the first question ABOUT THE GARAGE, before currency, timezone or tax (the
+ * phone step now leads; see lib/onboarding):
  * every visitor sees their country listed. A SUPPORTED choice configures the rest of the flow
  * (currency, timezones, which tax step renders) and continues. An UNSUPPORTED choice ends on a
  * friendly coming-soon gate that captures an email into the waitlist, with the country.

@@ -1,6 +1,6 @@
 /**
  * File: pages/onboarding/rates-settings.tsx
- * Description: Onboarding Step 2 - Collects initial financial and regional settings.
+ * Description: Onboarding Step 4 - Collects initial financial and regional settings.
  *
  * COUNTRY-DERIVED (ruling 2026-07-28): everything regional on this step comes from the tenant's
  * country profile (lib/locale-profiles), read server-side. Currency is DISPLAY, not input — one
@@ -110,7 +110,7 @@ export default function RatesSettingsPage({ countryName, currencyCode, timezones
       </Head>
 
       <div className="max-w-lg mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl shadow-2xl border border-blue-600/50">
-        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 2: Rates &amp; Region</h1>
+        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 4: Rates &amp; Region</h1>
         <p className="text-slate-400 mb-6">
           Set your timezone and default labour rate. Currency comes from your country. Tax is the next step.
         </p>

@@ -1,6 +1,6 @@
 /**
  * File: pages/onboarding/billing.tsx
- * Onboarding Step 4 — start the subscription (the FINAL, non-skippable step; item-13). A hosted
+ * Onboarding Step 6 — start the subscription (the FINAL, non-skippable step; item-13). A hosted
  * Stripe Checkout launcher: 60-day free trial, card verified today, first charge a flat monthly
  * price per site at trial end unless cancelled. Real terms only (ruling 2026-07-13 — no fake card
  * fields, no untrue money strings on a live domain).
@@ -38,9 +38,11 @@ export default function BillingPage({ priceLabel }: { priceLabel: string }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.onboarded) {
-        // The optional phone step, which itself continues to the dashboard. Not gated: see
-        // pages/onboarding/phone — a user who skips it lands exactly where they used to.
-        router.replace('/onboarding/phone');
+        // STRAIGHT TO THE DASHBOARD. This used to hand off to the phone step, from the days when
+        // that step was optional and ran AFTER payment. The phone step is now the first thing in the
+        // wizard, so by the time anyone reaches checkout it is long behind them — sending them there
+        // meant a paid tenant bouncing through a completed step's guard to get where they belong.
+        router.replace('/admin/dashboard');
         return;
       }
       // Not live yet (rare, very-early return). Retry a few times, then offer a manual refresh.

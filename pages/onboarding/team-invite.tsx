@@ -1,6 +1,7 @@
 /**
  * File: pages/onboarding/team-invite.tsx
- * Description: Onboarding Step 3 - Allows Admin to invite initial team members.
+ * Description: Allows Admin to invite initial team members. NOT a gated wizard step — it is not
+ * in ONBOARDING_ORDER, and numbering it invented a position it has never held.
  */
 
 import { useState } from 'react';
@@ -94,7 +95,7 @@ export default function TeamInvitePage() {
       </Head>
 
       <div className="max-w-xl mx-auto bg-slate-800 p-6 sm:p-8 rounded-xl shadow-2xl border border-blue-600/50">
-        <h1 className="text-3xl font-bold mb-2 text-blue-400">Step 3: Team Setup</h1>
+        <h1 className="text-3xl font-bold mb-2 text-blue-400">Invite your team</h1>
         <p className="text-slate-400 mb-6">
           Invite the mechanics and managers for your new site. They will receive a link to set their password.
         </p>
