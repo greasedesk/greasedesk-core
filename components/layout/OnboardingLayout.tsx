@@ -57,10 +57,12 @@ export default function OnboardingLayout({
             {/* href="" → no link. The default target is the dashboard, which the gate would bounce
                 straight back to this page: a logo that appears to do nothing is worse than one that
                 plainly isn't a link.
-                slim: the full plate exists so the dark-navy logo reads against the DARK rail. On a
-                white header it is invisible padding that stands taller than the header itself, and
-                it hung out of the top-left corner. */}
-            <BrandLogo href="" width={104} slim />
+                plate={false}: the plate exists so the dark-navy logo reads against the DARK rail.
+                On a white header it is invisible padding that stood taller than the header itself
+                and hung out of the top-left corner — first at full size, then still at slim. Bounded
+                by HEIGHT here, because the header is a fixed 3.5rem and the asset's aspect ratio is
+                what defeated two attempts to control it by width. */}
+            <BrandLogo href="" plate={false} maxHeight={32} />
             {/* SIGN OUT IS THE ONLY WAY OUT, and it is offered plainly rather than hidden. Somebody
                 who has to stop halfway should not have to close the tab to do it. */}
             <button
