@@ -95,23 +95,40 @@ export const FUEL_MIX = [
 /**
  * ── FUEL HAS TO SUIT THE CAR, OR A MECHANIC SPOTS IT IN A SECOND ────────────────────────────────
  * Drawing fuel independently of the model produced a diesel Toyota Aygo and a 2015 electric
- * Peugeot 2008 in the first generated tenant. Neither has ever existed, and the audience for this
- * demo is people who would know that immediately — one implausible row costs more credibility than
- * the other nine hundred earn.
+ * Peugeot 2008 in the first generated tenant — 36 of 612 vehicles were impossible. Neither of those
+ * cars has ever existed, and the audience for this demo is people who would know that immediately:
+ * one implausible row costs more credibility than the other nine hundred earn.
  *
- * PETROL_ONLY: city cars and small petrol models never sold as diesels in the UK.
- * EV_FROM / HYBRID_FROM: the earliest model year at which an electrified version is plausible at
- * all. A car older than that falls back to petrol or diesel.
+ * THREE INDEPENDENT CONSTRAINTS, because the first attempt collapsed them into one and got it
+ * wrong. "Never sold as a diesel" is not the same as "always petrol": a Yaris Hybrid and a Jazz
+ * Hybrid are two of the commonest hybrids on a UK forecourt, and a rule that forced those models to
+ * petrol would have removed them from the demo entirely.
+ *
+ *   NEVER_DIESEL     — city cars and small petrol models never sold as diesels here.
+ *   EV_CAPABLE       — models with a battery-electric version at all; + EV_FROM for the year.
+ *   HYBRID_CAPABLE   — models with a hybrid version at all; + HYBRID_FROM for the year.
+ *
+ * Anything a model cannot be falls back to petrol.
  */
-export const PETROL_ONLY = [
+export const NEVER_DIESEL = [
   'Aygo', 'Picanto', 'i10', 'Up', 'Micra', 'Jazz', 'Yaris', 'Ibiza', 'Fabia', 'Panda',
 ] as const;
+
 export const EV_FROM = 2016;
-export const HYBRID_FROM = 2012;
-/** Models that are electric-capable at all — everything else stays combustion whatever the year. */
 export const EV_CAPABLE = [
-  'Corsa', 'Mokka', 'Astra', '208', '2008', 'Zoe', 'Niro', 'Kona', 'Leaf', 'Golf', 'Up',
-  'i3', 'X1', 'A-Class', 'Puma', 'Fiesta', 'Captur', 'Clio', 'Yaris', 'Corolla',
+  'Corsa', 'Mokka', 'Astra', '208', '2008', 'Niro', 'Golf', 'Up',
+  'X1', 'A-Class', 'Puma', 'Fiesta', 'Captur', 'Clio', 'Yaris', 'Corolla',
+] as const;
+
+/**
+ * 2012 was too loose on its own — it allowed a 2012 hybrid Insignia, which never existed. The year
+ * floor only makes sense paired with a model list, and the earliest of these (the Yaris Hybrid,
+ * 2012) is what sets it.
+ */
+export const HYBRID_FROM = 2012;
+export const HYBRID_CAPABLE = [
+  'Yaris', 'Corolla', 'RAV4', 'Jazz', 'CR-V', 'Civic', 'Niro', 'Sportage', 'Tucson',
+  'Puma', 'Kuga', 'Clio', 'Captur', 'Golf', 'Passat', 'A-Class', 'C-Class', 'X1', 'Q3',
 ] as const;
 `;
 

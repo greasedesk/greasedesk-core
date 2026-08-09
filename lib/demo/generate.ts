@@ -34,7 +34,7 @@ import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
   RETURN_INTERVAL_MONTHS, COMEBACK_RATE_PCT, NEGATIVE_LINE_RATE_PCT,
-  PETROL_ONLY, EV_CAPABLE, EV_FROM, HYBRID_FROM,
+  NEVER_DIESEL, EV_CAPABLE, EV_FROM, HYBRID_CAPABLE, HYBRID_FROM,
 } from '@/lib/demo/profile';
 
 // ── the shape of a demo ──────────────────────────────────────────────────────────────────────────
@@ -259,14 +259,19 @@ const JOB_MIX = {
 
 /**
  * A fuel the car could actually have had. Drawing from FUEL_MIX alone produced a diesel Aygo and a
- * 2015 electric 2008 — neither has ever existed, and this demo is shown to people who would know
- * that instantly. One implausible row costs more than nine hundred plausible ones earn.
+ * 2015 electric 2008 — 36 of 612 vehicles were impossible, and this demo is shown to people who
+ * would spot one on the first screen.
+ *
+ * Each constraint is checked against its OWN list. An earlier version treated "never a diesel" as
+ * "always petrol", which also silenced the Yaris and Jazz hybrids — two of the commonest hybrids
+ * on the road, removed from the demo by a rule meant to exclude a diesel Aygo.
  */
 export function fuelFor(r: Rand, model: string, year: number): string {
   const draw = weighted(r, FUEL_MIX.map((f) => [f.fuel, f.share] as [string, number]));
-  if ((PETROL_ONLY as readonly string[]).includes(model)) return 'Petrol';
-  if (draw === 'Electric' && (year < EV_FROM || !(EV_CAPABLE as readonly string[]).includes(model))) return 'Petrol';
-  if (draw === 'Hybrid' && year < HYBRID_FROM) return 'Petrol';
+  const has = (xs: readonly string[]) => xs.includes(model);
+  if (draw === 'Diesel' && has(NEVER_DIESEL)) return 'Petrol';
+  if (draw === 'Electric' && (year < EV_FROM || !has(EV_CAPABLE))) return 'Petrol';
+  if (draw === 'Hybrid' && (year < HYBRID_FROM || !has(HYBRID_CAPABLE))) return 'Petrol';
   return draw;
 }
 
