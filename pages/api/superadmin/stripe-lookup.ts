@@ -48,7 +48,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       resolvedCoreEntitlementPrice: coreEnv ?? priceIdEnv,
       agree: !!priceIdEnv && coreEnv === priceIdEnv,
       stripeConfigured: true,
-      livemode: (process.env.STRIPE_SECRET_KEY ?? '').startsWith('sk_live_'),
+      // NO livemode FIELD. It was inferred from an sk_live_ prefix and got it WRONG on this
+      // account — a restricted live key (rk_live_…) fails that test, so it reported "test" about a
+      // live account while the objects themselves returned livemode:true. A check that can lie
+      // about whether real money is involved is worse than no check: the objects are authoritative
+      // and every lookup already carries their own `livemode`. Ask the object, not the key.
     });
   }
 
