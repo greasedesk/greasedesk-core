@@ -88,6 +88,44 @@ export const smsDestinationKey = (e164: string) => `sms:dst:${hashToken(e164)}`;
 export const smsIpKey = (ip: string) => `sms:ip:${ip}`;
 export const smsTenantKey = (groupId: string) => `sms:grp:${groupId}`;
 
+/**
+ * ── RETENTION, AND WHY THE OPPORTUNISTIC PRUNE IS NOT ENOUGH ────────────────────────────────────
+ * takeToken prunes expired rows FOR THE KEY IT IS TAKING. That only ever reaches keys that come
+ * back: a key used once and never again is never pruned by anything. Two shapes guarantee that —
+ *   • a deleted tenant's `sms:grp:<id>`, which cannot recur by definition;
+ *   • a one-off IP, which usually doesn't.
+ * The table was found holding rows three weeks old, five of them naming a raw IP address, four
+ * naming a tenant that had been purged. So retention is now TIME-based and unconditional.
+ *
+ * Derived from the windows rather than typed as a number: a row older than the longest window can
+ * no longer affect any limit decision, and doubling it leaves generous headroom for clock skew and
+ * a late cron. Add a longer window above and the retention follows it automatically.
+ *
+ * NOTE on the header's privacy claim: the email and destination axes are hashed, but ipKey and
+ * smsIpKey store the address in clear — there is no way to rate-limit by IP without holding it.
+ * This reaper is what bounds how long we hold it.
+ */
+export const RATE_LIMIT_RETENTION_MINUTES =
+  2 * Math.max(
+    ...Object.values(LIMITS).map((l) => l.windowMinutes),
+    ...Object.values(SMS_LIMITS).map((l) => l.windowMinutes),
+  );
+
+/**
+ * Delete every rate-limit row older than the retention window, whatever its key. Returns the count.
+ * Unconditional by design: it must not depend on a key recurring, because that is the flaw it fixes.
+ */
+export async function reapRateLimits(now: Date = new Date()): Promise<{ deleted: number; cutoff: Date }> {
+  const cutoff = new Date(now.getTime() - RATE_LIMIT_RETENTION_MINUTES * 60 * 1000);
+  const r = await prisma.authRateLimit.deleteMany({ where: { created_at: { lt: cutoff } } });
+  return { deleted: r.count, cutoff };
+}
+
+/** Rate-limit keys belonging to one tenant and its users — what a purge must take with it. */
+export function tenantRateLimitKeys(groupId: string, userIds: string[]): string[] {
+  return [smsTenantKey(groupId), ...userIds.map((id) => smsSubjectKey('tenant', id))];
+}
+
 /** Best-effort client IP for the per-IP axis. */
 export function clientIp(headers: Record<string, string | string[] | undefined>): string {
   const xff = headers['x-forwarded-for'];

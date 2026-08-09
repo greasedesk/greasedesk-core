@@ -12,9 +12,40 @@
  *        → explicit User delete (group_id is SetNull → cascade would ORPHAN PII; GDPR-critical;
  *          →Account/Session/UserSite cascade off User)
  *        → explicit UploadTelemetry + VinReadShadow (no FK — cascade misses them)
+ *        → explicit SUBJECT-KEYED sweep (no FK either — see below)
  *        → group.delete() (cascades the entire remainder: Sites+children, catalogue, promos,
  *          cost, leave, invoices-seq, roles, billing, …).
  *   4. Write a SuperAdminAudit row (its own table — survives the purge).
+ *
+ * ── THE SUBJECT-KEYED TABLES, AND WHY A CASCADE CANNOT REACH THEM ───────────────────────────────
+ * Six tables hold tenant or personal data with NO foreign key to Group, so `group.delete()` sails
+ * straight past them. They were found the hard way: a tenant purged on 2026-08-09 left behind a
+ * TwoFactorSecret holding a real, VERIFIED mobile number, keyed to a user that no longer existed.
+ * A hard purge is our erasure mechanism; leaving a phone number behind is the one thing it must not
+ * do.
+ *
+ *   TwoFactorSecret / DeliveredCode / TwoFactorRecoveryCode
+ *        keyed by (subject_type, subject_id) — a bare string, no FK. Hold the phone number, the
+ *        code destinations and the recovery-code hashes.
+ *   VerificationToken
+ *        `identifier` IS the email address (NextAuth's shape), so the row is PII in its own key.
+ *   CountryWaitlist
+ *        relates to Group as SetNull — the row SURVIVES with its email and a nulled group_id. The
+ *        exact trap the User delete below already guards against, one table over.
+ *   AuthRateLimit
+ *        keys embed the user id, the group id and (unavoidably) raw IP addresses.
+ *
+ * THE SUBJECT LIST IS CAPTURED BEFORE THE TRANSACTION, and that ordering is load-bearing twice
+ * over: the sweep needs the user ids AFTER the users are deleted (nothing left to enumerate), and
+ * so does the after-count — recomputing it from the group would find no users, count zero
+ * subject-rows, and cheerfully report a clean purge over the top of whatever remained.
+ *
+ * ── WHAT IS DELIBERATELY LEFT ───────────────────────────────────────────────────────────────────
+ * CommissionEntry and TenantAttribution also carry group_id with no cascade, and they STAY. They
+ * are our own accounts payable — what we owe a rep for the introduction — and they hold no personal
+ * data about the tenant's people, only the id of a group that no longer exists, exactly as
+ * SuperAdminAudit.target_group_id does. Erasing a customer must not erase our books. They are named
+ * here so nobody later reads the sweep, notices the gap, and "fixes" it.
  *
  * ── WHY AN UNCONFIRMED CANCEL MUST ABORT ────────────────────────────────────────────────────────
  * `Group.billing.stripe_subscription_id` is the ONLY route from the product to the subscription.
@@ -32,6 +63,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { deleteByPrefix } from '@/lib/r2';
+import { tenantRateLimitKeys } from '@/lib/auth-rate-limit';
 
 /**
  * Thrown INSTEAD of purging when the subscription cannot be confirmed stopped. Carries the
@@ -61,9 +93,24 @@ export type PurgeResult = {
   auditId: string;
 };
 
+/** The identifiers the subject-keyed tables are addressed by. Captured ONCE, before anything is
+ *  deleted, then handed to both counts and to the sweep — see the header. */
+export type PurgeSubjects = { userIds: string[]; emails: string[] };
+
+export async function collectPurgeSubjects(groupId: string): Promise<PurgeSubjects> {
+  const users = (await prisma.user.findMany({
+    where: { group_id: groupId }, select: { id: true, email: true },
+  })) as Array<{ id: string; email: string }>;
+  return { userIds: users.map((u) => u.id), emails: users.map((u) => u.email) };
+}
+
 /** Comprehensive tenant row-count across every table holding this tenant's data (direct group_id,
- *  site-scoped, and child tables reached via relation). Used before + after to PROVE zero remain. */
-export async function countTenantRows(groupId: string): Promise<Record<string, number>> {
+ *  site-scoped, and child tables reached via relation). Used before + after to PROVE zero remain.
+ *
+ *  `subjects` is REQUIRED for an honest after-count: the subject-keyed tables cannot be found from
+ *  the group once its users are gone, so passing them is what stops the count from reporting zero
+ *  because it looked in the wrong place. */
+export async function countTenantRows(groupId: string, subjects?: PurgeSubjects): Promise<Record<string, number>> {
   const [
     users, sites, siteFeatures, profitCentres, resources, userSites, roles, groupFeatures, groupBilling,
     customers, vehicles, vehicleIdentities, vehicleOwnerships, serviceCatalogue, partCatalogue, taxRates,
@@ -115,6 +162,19 @@ export async function countTenantRows(groupId: string): Promise<Record<string, n
     prisma.uploadTelemetry.count({ where: { group_id: groupId } }),
   ]);
   const groups = await prisma.group.count({ where: { id: groupId } });
+
+  // The six with no path back to Group. Counted by the captured identifiers, never re-derived.
+  const ids = subjects?.userIds ?? [];
+  const emails = subjects?.emails ?? [];
+  const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits] = await Promise.all([
+    ids.length ? prisma.twoFactorSecret.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
+    ids.length ? prisma.deliveredCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
+    ids.length ? prisma.twoFactorRecoveryCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
+    emails.length ? prisma.verificationToken.count({ where: { identifier: { in: emails } } }) : 0,
+    prisma.countryWaitlist.count({ where: { group_id: groupId } }),
+    prisma.authRateLimit.count({ where: { key: { in: tenantRateLimitKeys(groupId, ids) } } }),
+  ]);
+
   return {
     Group: groups, User: users, Site: sites, SiteFeature: siteFeatures, ProfitCentre: profitCentres, Resource: resources,
     UserSite: userSites, Role: roles, GroupFeature: groupFeatures, GroupBilling: groupBilling,
@@ -127,6 +187,8 @@ export async function countTenantRows(groupId: string): Promise<Record<string, n
     CostPerson: costPeople, Overhead: overheads, CostAllocation: costAllocations,
     LeaveRecord: leaveRecords, PublicHoliday: publicHolidays, EmploymentEvent: employmentEvents,
     VinReadShadow: vinReadShadow, UploadTelemetry: uploadTelemetry,
+    TwoFactorSecret: twoFactorSecrets, DeliveredCode: deliveredCodes, TwoFactorRecoveryCode: recoveryCodes,
+    VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
   };
 }
 
@@ -145,7 +207,10 @@ export async function unarchiveTenant(operatorUserId: string, groupId: string): 
 export async function purgeTenant(operatorUserId: string, groupId: string): Promise<PurgeResult> {
   const g = await prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, ref: true, billing: { select: { stripe_subscription_id: true } } } });
   if (!g) throw new Error('Tenant not found.');
-  const before = await countTenantRows(groupId);
+  // BEFORE ANYTHING. Once the users are deleted these identifiers are unrecoverable, and both the
+  // sweep and the after-count are addressed by them — see the header.
+  const subjects = await collectPurgeSubjects(groupId);
+  const before = await countTenantRows(groupId, subjects);
 
   // 1. Stripe FIRST — cancel AND CONFIRM. Nothing below this point runs unless the subscription is
   // provably stopped, because after step 3 there is no way back to it (see the header).
@@ -182,10 +247,32 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     await tx.user.deleteMany({ where: { group_id: groupId } });         // EXPLICIT (SetNull would orphan PII) → Account/Session/UserSite cascade
     await tx.uploadTelemetry.deleteMany({ where: { group_id: groupId } }); // no FK — cascade misses
     await tx.vinReadShadow.deleteMany({ where: { group_id: groupId } });   // no FK — cascade misses
+
+    // ── SUBJECT-KEYED SWEEP. No FK to Group, so the cascade below never sees these. ────────────
+    // In the SAME transaction as the rest: a purge that half-erased somebody would be worse than
+    // one that failed, because only the failure is visible.
+    if (subjects.userIds.length) {
+      await tx.twoFactorSecret.deleteMany({ where: { subject_type: 'tenant', subject_id: { in: subjects.userIds } } });
+      await tx.deliveredCode.deleteMany({ where: { subject_type: 'tenant', subject_id: { in: subjects.userIds } } });
+      await tx.twoFactorRecoveryCode.deleteMany({ where: { subject_type: 'tenant', subject_id: { in: subjects.userIds } } });
+    }
+    // The identifier IS the email address, so these rows are PII whether or not they have expired.
+    if (subjects.emails.length) {
+      await tx.verificationToken.deleteMany({ where: { identifier: { in: subjects.emails } } });
+    }
+    // SetNull would leave the email behind with a nulled group — the same trap the User delete above
+    // avoids. Deleted explicitly, before the cascade gets the chance to merely disown it.
+    await tx.countryWaitlist.deleteMany({ where: { group_id: groupId } });
+    await tx.authRateLimit.deleteMany({ where: { key: { in: tenantRateLimitKeys(groupId, subjects.userIds) } } });
+    // NOT swept: the per-IP and per-destination keys. The destination is hashed and the IP is not
+    // this tenant's to claim — one address serves many people, and deleting it on their behalf
+    // would blank a live limiter for whoever else is behind it. Bounded by the reaper instead
+    // (lib/auth-rate-limit.reapRateLimits).
+
     await tx.group.delete({ where: { id: groupId } });                 // cascades the entire remainder
   });
 
-  const after = await countTenantRows(groupId);
+  const after = await countTenantRows(groupId, subjects); // SAME identifiers — see the header
 
   // 4. Audit — its own table, survives the purge.
   const audit = await prisma.superAdminAudit.create({
