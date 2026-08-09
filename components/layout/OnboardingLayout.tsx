@@ -62,7 +62,7 @@ export default function OnboardingLayout({
                 and hung out of the top-left corner — first at full size, then still at slim. Bounded
                 by HEIGHT here, because the header is a fixed 3.5rem and the asset's aspect ratio is
                 what defeated two attempts to control it by width. */}
-            <BrandLogo href="" plate={false} maxHeight={32} />
+            <BrandLogo href="" plate={false} maxHeight={40} />
             {/* SIGN OUT IS THE ONLY WAY OUT, and it is offered plainly rather than hidden. Somebody
                 who has to stop halfway should not have to close the tab to do it. */}
             <button
