@@ -344,7 +344,7 @@ export const getServerSideProps: GetServerSideProps<Props> = withI18n(['period']
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
-  const onboard = await onboardingGateRedirect(user.group_id);
+  const onboard = await onboardingGateRedirect(user.group_id, { userId: user.id as string });
   if (onboard) return { redirect: { destination: onboard, permanent: false } };
 
   const vis = await getVisibility(user.id as string);

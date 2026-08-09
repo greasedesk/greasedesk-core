@@ -1080,7 +1080,7 @@ export const getServerSideProps = withI18n(['dashboard', 'period'])(async (ctx) 
   }
   // Root onboarding gate — a half-set-up admin can never reach the dashboard; resume at first step.
   if (vis.isAdmin) {
-    const onboard = await onboardingGateRedirect(vis.groupId);
+    const onboard = await onboardingGateRedirect(vis.groupId, { userId: vis.userId, isAdmin: vis.isAdmin });
     if (onboard) return { redirect: { destination: onboard, permanent: false } };
   }
   const group = (await prisma.group.findUnique({

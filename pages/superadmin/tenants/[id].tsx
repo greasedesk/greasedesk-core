@@ -28,6 +28,7 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { requireOperatorPage, operatorTenantScope, type OperatorRoleName } from '@/lib/operator-auth';
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
+import { PHONE_STEP_REQUIRED_FROM } from '@/lib/onboarding';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type SiteRow = { name: string; address: string | null; phone: string | null; currency: string; hours: string | null; labourRate: number | null };
@@ -49,6 +50,8 @@ type Detail = {
   account: {
     created: string; subscriptionStatus: string | null; tenantStatus: string; trialEnds: string | null;
     modules: string[]; signupSource: string; lastActivity: string | null;
+    phoneExempt: { at: string; reason: string | null } | null;
+    phoneStepApplies: boolean;
     counts: { sites: number; users: number; jobCards: number; invoices: number };
   };
 };
@@ -80,6 +83,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
   const b = d.business, a = d.account;
   const router = useRouter();
   const [busy2fa, setBusy2fa] = React.useState<string | null>(null);
+  const [busyExempt, setBusyExempt] = React.useState(false);
 
   // DISABLE-ONLY, and the confirm says so in the operator's own terms: this is a support action on
   // someone else's business, so it names the person and states the consequence before it happens.
@@ -94,6 +98,37 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
       alert(j?.message || (r.ok ? 'Done.' : 'Could not reset two-factor authentication.'));
       if (r.ok) router.replace(router.asPath);
     } finally { setBusy2fa(null); } // never strand the busy flag
+  }
+
+  // ── BREAK-GLASS ON A MANDATORY STEP ──────────────────────────────────────────────────────────
+  // The phone step blocks signup, and the panel tells a stuck garage to phone us — so whoever picks
+  // up has to be able to finish the call. An API with no button is not a break-glass; it is a
+  // promise that somebody else will run a script.
+  //
+  // It exempts. It never verifies: see the endpoint header. The confirm says so in as many words,
+  // because the operator's instinct will be that they have just "sorted their phone out".
+  async function setPhoneExempt(revoke: boolean) {
+    let reason = '';
+    if (!revoke) {
+      reason = window.prompt(
+        `Exempt ${d.business.tradingName || d.business.legalName} from the phone step?\n\n`
+        + 'They will reach checkout with NO phone number recorded — this does not confirm a number and never will.\n\n'
+        + 'Why can they not complete it? (recorded against your operator account and theirs)',
+      ) ?? '';
+      if (!reason.trim()) return;
+    } else if (!confirm('Remove the exemption? The phone step will apply to their admins again.')) {
+      return;
+    }
+    setBusyExempt(true);
+    try {
+      const r = await fetch('/api/superadmin/tenant-phone-exempt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: d.id, reason, revoke }),
+      });
+      const j = await r.json().catch(() => ({}));
+      alert(j?.message || (r.ok ? 'Done.' : 'Could not change the exemption.'));
+      if (r.ok) router.replace(router.asPath);
+    } finally { setBusyExempt(false); } // never strand the busy flag
   }
 
   const companyNumber =
@@ -192,6 +227,32 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             <Field label="Trial ends">{a.trialEnds ? new Date(a.trialEnds).toLocaleDateString('en-GB') : <Muted>{NS}</Muted>}</Field>
             <Field label="Modules entitled">{a.modules.length ? a.modules.join(', ') : <Muted>{NS}</Muted>}</Field>
             <Field label="Signup source">{a.signupSource}</Field>
+            <Field label="Phone step">
+              {a.phoneExempt ? (
+                <>
+                  <span style={{ color: '#FCD34D' }}>Exempt</span>
+                  <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>
+                    since {new Date(a.phoneExempt.at).toLocaleDateString('en-GB')} · {a.phoneExempt.reason || 'no reason recorded'}
+                  </span>
+                  <button type="button" disabled={busyExempt} onClick={() => setPhoneExempt(true)}
+                    data-testid="er-phone-exempt-revoke"
+                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#8AB4F8' }}>
+                    {busyExempt ? 'Working…' : 'Remove exemption'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {a.phoneStepApplies
+                    ? 'Required at signup'
+                    : <span style={{ color: '#7C8AA3' }}>Not required — signed up before the step existed</span>}
+                  <button type="button" disabled={busyExempt} onClick={() => setPhoneExempt(false)}
+                    data-testid="er-phone-exempt"
+                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#FCD34D' }}>
+                    {busyExempt ? 'Working…' : 'Exempt'}
+                  </button>
+                </>
+              )}
+            </Field>
             <Field label="Last activity">
               {a.lastActivity ? new Date(a.lastActivity).toLocaleString('en-GB') : <Muted>none recorded</Muted>}
               <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>· basis: most recent recorded action in the tenant's audit log</span>
@@ -223,6 +284,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       company_number_not_applicable: true, vat_number: true, vat_registered: true, country_code: true,
       tax_model: true, tax_default_rate_bp: true, default_vat_rate: true, address: true, phone: true,
       billing_email: true, created_at: true, status: true, trial_ends_at: true, signup_ref: true,
+      phone_step_exempt_at: true, phone_step_exempt_reason: true,
       is_internal: true,
       billing: { select: { subscription_status: true } },
       sites: {
@@ -321,6 +383,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
           tenantStatus: g.status,
           trialEnds: g.trial_ends_at ? (g.trial_ends_at as Date).toISOString() : null,
           modules, signupSource,
+          // The exemption is shown WITH its reason, because an exemption nobody can explain is
+          // indistinguishable from a mistake when it is found months later.
+          phoneExempt: g.phone_step_exempt_at
+            ? { at: (g.phone_step_exempt_at as Date).toISOString(), reason: g.phone_step_exempt_reason ?? null }
+            : null,
+          phoneStepApplies: (g.created_at as Date) >= PHONE_STEP_REQUIRED_FROM,
           lastActivity: lastAct._max.created_at ? (lastAct._max.created_at as Date).toISOString() : null,
           counts: { sites: g.sites.length, users: staffUserCount, jobCards: jobCardCount, invoices: invoiceCount },
         },

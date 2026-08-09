@@ -269,7 +269,7 @@ export const getServerSideProps = withI18n(['jobcard'])(async (ctx) => {
   const user = session?.user as any;
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
   // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
-  const onboard = await onboardingGateRedirect(user.group_id);
+  const onboard = await onboardingGateRedirect(user.group_id, { userId: user.id as string });
   if (onboard) return { redirect: { destination: onboard, permanent: false } };
   // Valid session, no location yet (siteless — e.g. between signup and first-site): a graceful
   // ONE builder shared with /api/jobcard-pane (the diary's inline card) — lib/jobcard-page-data.ts.

@@ -15,7 +15,7 @@ import { getVisibility, type Visibility } from '@/lib/site-visibility';
 import { prisma } from '@/lib/db';
 import { canWrite } from '@/lib/billing';
 import { canIssueInvoice } from '@/lib/permissions';
-import { getOnboardingState, stepPath, type OnboardingStep } from '@/lib/onboarding';
+import { getOnboardingState, stepPath, type OnboardingStep, type OnboardingActor } from '@/lib/onboarding';
 
 type RedirectResult = { ok: false; redirect: { destination: string; permanent: boolean } };
 
@@ -26,8 +26,11 @@ type RedirectResult = { ok: false; redirect: { destination: string; permanent: b
  * getOnboardingState — microseconds on the request path. This single call REPLACES the five
  * scattered `!site_id → setup-location` leaf patches: one gate, not five defensive checks.
  */
-export async function onboardingGateRedirect(groupId: string | null | undefined): Promise<string | null> {
-  const state = await getOnboardingState(groupId);
+export async function onboardingGateRedirect(
+  groupId: string | null | undefined,
+  actor?: OnboardingActor,
+): Promise<string | null> {
+  const state = await getOnboardingState(groupId, actor);
   return state.onboarded ? null : stepPath(state.firstIncompleteStep ?? 'site');
 }
 
@@ -58,7 +61,7 @@ export async function requireAdminPage(
   if (!vis.isAdmin) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
   // Root onboarding gate: an admin whose tenant isn't fully set up is sent to its first incomplete
   // step. Every admin page built on this guard inherits it — no per-page onboarding checks.
-  const onboard = await onboardingGateRedirect(vis.groupId);
+  const onboard = await onboardingGateRedirect(vis.groupId, { userId: vis.userId, isAdmin: vis.isAdmin });
   if (onboard) return { ok: false, redirect: { destination: onboard, permanent: false } };
   return { ok: true, vis };
 }
@@ -88,7 +91,10 @@ export async function requireOnboardingStep(
   const vis = await getVisibility(u.id as string);
   if (!vis.groupId) return { ok: false, redirect: { destination: '/admin/login', permanent: false } };
   if (!vis.isAdmin) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
-  const state = await getOnboardingState(vis.groupId);
+  // THE ACTOR IS REQUIRED, not optional here: the phone step is per-user, so without it
+  // getOnboardingState can never answer 'phone' and this guard would bounce anyone who reached the
+  // phone page straight back to checkout. isAdmin is already known and passed to save the query.
+  const state = await getOnboardingState(vis.groupId, { userId: vis.userId, isAdmin: vis.isAdmin });
   if (state.onboarded) return { ok: false, redirect: { destination: '/admin/dashboard', permanent: false } };
   if (state.firstIncompleteStep !== step) {
     return { ok: false, redirect: { destination: stepPath(state.firstIncompleteStep ?? 'site'), permanent: false } };
@@ -172,7 +178,7 @@ export async function requireImportPage(
   if (!vis.groupId || !importableSiteIds(vis).length) {
     return { ok: false, redirect: { destination: '/admin/invoices', permanent: false } };
   }
-  const onboard = await onboardingGateRedirect(vis.groupId);
+  const onboard = await onboardingGateRedirect(vis.groupId, { userId: vis.userId, isAdmin: vis.isAdmin });
   if (onboard) return { ok: false, redirect: { destination: onboard, permanent: false } };
   return { ok: true, vis };
 }

@@ -307,5 +307,12 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     : { ok: false, notificationId: id, status: 'failed', reason: error ?? 'provider rejected' };
 }
 
+/**
+ * IS A CHANNEL ACTUALLY USABLE? Read by surfaces that must say so BEFORE asking for input rather
+ * than after a failed submit — a mandatory step that only reveals SMS is off once you have typed a
+ * number and pressed send has wasted the one moment the user was willing to spend on it.
+ */
+export const channelConfigured = (channel: NotifyChannel): boolean => ADAPTERS[channel].configured();
+
 /** Log a send that a legacy transport performed directly (migration bridge — see docs). */
 export const recordNotification = record;

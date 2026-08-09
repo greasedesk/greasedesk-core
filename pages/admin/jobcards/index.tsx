@@ -265,7 +265,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
   // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
-  const onboard = await onboardingGateRedirect(user.group_id);
+  const onboard = await onboardingGateRedirect(user.group_id, { userId: user.id as string });
   if (onboard) return { redirect: { destination: onboard, permanent: false } };
 
   const vis = await getVisibility(user.id as string); // role/assignment site visibility

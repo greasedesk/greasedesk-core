@@ -4,28 +4,34 @@
  * /onboarding/phone and Settings → your account. Both drive /api/account/phone, so the rules, the
  * cooldown and the wording cannot drift between "at signup" and "later".
  *
- * ── NOTHING HERE BLOCKS ANYTHING ────────────────────────────────────────────────────────────────
- * Every state offers a way out, and "I'll do this later" is a plain link at the same visual weight
- * as the button — not greyed, not buried. Continuing without a number is a legitimate choice, and a
- * flow that only looks skippable is worse than one that is honestly optional. `onSkip` is what makes
- * the signup step non-blocking; the settings copy simply omits it.
+ * ── IT IS NOW MANDATORY AT SIGNUP, SO EVERY DEAD END IS A LOCKOUT ───────────────────────────────
+ * There is no "I'll do this later" any more (ruling 2026-08-09). That raises the stakes on every
+ * failure path: a step somebody cannot finish is a customer who cannot reach the product they are
+ * about to pay for. So each state offers a real action — resend, change the number, switch to email,
+ * and a phone number that reaches a person who can exempt the account.
+ *
+ * ── TWO CHANNELS, TWO DIFFERENT CLAIMS ──────────────────────────────────────────────────────────
+ * An SMS code proves a HANDSET. An emailed code proves the account inbox and merely records the
+ * number. Both satisfy the signup gate; only the first sets phone_verified_at, which is what SMS
+ * 2FA is later built on. The wording says which happened rather than flattening them.
  *
  * The cooldown COUNTS DOWN ON SCREEN rather than letting the resend button fail silently — "nothing
  * happened when I pressed it" is how people conclude the product is broken.
  */
 import React from 'react';
 
-type State = { phone: string | null; verified: boolean; codeOutstanding: boolean; pendingPhone: string | null; pendingDiffers: boolean };
+type State = {
+  phone: string | null; verified: boolean; recorded: boolean; confirmedVia: string | null;
+  codeOutstanding: boolean; pendingPhone: string | null; pendingDiffers: boolean;
+  smsAvailable: boolean; emailAvailable: boolean; supportPhone: string;
+};
 
 const input = 'w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-accent focus:outline-none';
 const primary = 'bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50';
 const linkish = 'text-sm text-muted hover:text-ink underline underline-offset-2';
 const secondary = 'bg-surface-muted border border-line text-ink font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50';
 
-export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
-  /** Present ONLY at signup. Its absence is what makes the settings copy read as ongoing rather than
-   *  a step to get past. */
-  onSkip?: () => void;
+export default function PhoneVerifyPanel({ onDone, heading }: {
   onDone?: () => void;
   heading?: string;
 }) {
@@ -37,6 +43,8 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   // Told to us by the send response — never a literal here. The server owns the code's life, so the
   // screen must not carry its own copy of the number.
   const [expiresInMinutes, setExpiresInMinutes] = React.useState<number | null>(null);
+  const [sentVia, setSentVia] = React.useState<'sms' | 'email'>('sms');
+  const [sentToEmail, setSentToEmail] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
   const [ok, setOk] = React.useState<string | null>(null);
@@ -73,35 +81,63 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
     finally { setBusy(false); } // never strand the busy flag
   }
 
-  const send = async () => {
-    const d = await post({ action: 'send', phone });
-    if (d) { setSentTo(d.phone); setExpiresInMinutes(d.expiresInMinutes ?? null); setStage('confirm'); setCode(''); setCooldown(60); }
+  const send = async (channel?: 'sms' | 'email') => {
+    const d = await post({ action: 'send', phone, ...(channel ? { channel } : {}) });
+    if (d) {
+      setSentTo(d.phone); setExpiresInMinutes(d.expiresInMinutes ?? null);
+      setSentVia(d.channel ?? 'sms'); setSentToEmail(d.sentToEmail ?? null);
+      setStage('confirm'); setCode(''); setCooldown(60);
+    }
   };
   const confirm = async () => {
-    const d = await post({ action: 'confirm', code });
+    const d = await post({ action: 'confirm', code }); // channel is the SERVER's to know
     if (d) { setOk(d.message); setStage('enter'); setChanging(false); setCode(''); await refresh(); onDone?.(); }
   };
 
   if (!state) return null;
 
-  const skip = onSkip && (
-    <button type="button" onClick={onSkip} className={linkish} data-testid="phone-later">I’ll do this later</button>
+  /** EVERY DEAD END GETS A ROUTE OUT. The step is mandatory, so "it isn't working" must never be
+   *  the end of the conversation — a real number reaches a person who can exempt the account. */
+  const help = (
+    <p className="mt-3 text-xs text-muted" data-testid="phone-help">
+      Having trouble? Call us on{' '}
+      <a className="text-accent font-semibold" href={`tel:${(state?.supportPhone ?? '').replace(/\s/g, '')}`}>{state?.supportPhone}</a>
+      {' '}and we’ll sort it out with you.
+    </p>
   );
 
-  // ── ALREADY CONFIRMED ────────────────────────────────────────────────────────────────────────
+  // ── SETTLED: EITHER CHANNEL SATISFIED THE GATE ───────────────────────────────────────────────
   // `changing` is local state, NOT a fake unverified server state. The previous version flipped
   // `state.verified` to false to reveal the entry field, which meant the screen claimed the account
   // was unverified while the server still (correctly) had it confirmed — and left no way back.
-  if (state.verified && stage === 'enter' && !changing) {
+  //
+  // RECORDED-BUT-NOT-VERIFIED IS ITS OWN BRANCH, not a variant of "unconfirmed". An emailed code
+  // clears the gate, so leaving this case in the entry state would leave someone who has finished
+  // the step staring at a form with no Continue button — mandatory step, no way forward, which is
+  // exactly the lockout the whole design is trying not to build.
+  if ((state.verified || state.recorded) && stage === 'enter' && !changing) {
+    const byEmail = !state.verified;
     return (
       <div data-testid="phone-panel">
         <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Mobile number'}</h2>
-        <p className="text-sm text-ink" data-testid="phone-verified">
-          <span className="font-mono">{state.phone}</span> <span className="text-ok">✓ Confirmed</span>
-        </p>
+        {byEmail ? (
+          <p className="text-sm text-ink" data-testid="phone-recorded">
+            <span className="font-mono">{state.phone}</span> <span className="text-warn">Recorded</span>
+            {/* SAYS WHAT WE ACTUALLY KNOW. We proved the account's inbox, not the handset — and the
+                difference matters the day this number is asked to carry a login code. */}
+            <span className="block text-muted mt-0.5">
+              You confirmed this by email, so it’s saved against your account but we haven’t yet
+              proved the handset. Send yourself a text whenever you like to finish that off.
+            </span>
+          </p>
+        ) : (
+          <p className="text-sm text-ink" data-testid="phone-verified">
+            <span className="font-mono">{state.phone}</span> <span className="text-ok">✓ Confirmed</span>
+          </p>
+        )}
         <div className="flex flex-wrap gap-2 items-center mt-3">
           <button type="button" className={secondary} onClick={() => { setChanging(true); setPhone(''); setSentTo(null); setOk(null); setErr(null); }}>
-            Change number
+            {byEmail ? 'Confirm by text' : 'Change number'}
           </button>
           {/* THE WAY FORWARD. Without it this branch was a dead end — fine as a settings panel,
               impossible as a step, and the step is where it now matters. */}
@@ -115,6 +151,18 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   return (
     <div data-testid="phone-panel">
       <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Add your mobile number'}</h2>
+
+      {/* ── SAID BEFORE ANYONE TYPES ────────────────────────────────────────────────────────────
+          Discovering the only channel is down AFTER filling in a number and pressing send wastes
+          the one moment somebody was willing to spend on this. If texts are off we say so, and we
+          say what happens instead — the code comes by email and the step still completes. */}
+      {!state.smsAvailable && stage === 'enter' && (
+        <p className="text-sm text-warn bg-warn-soft border border-warn rounded-lg p-3 mb-3" data-testid="phone-sms-down">
+          {state.emailAvailable
+            ? 'Text messages are unavailable at the moment, so we’ll email your code instead. Enter your mobile number as normal — we still record it against your account.'
+            : `We can’t send a code right now. Call us on ${state.supportPhone} and we’ll get you set up.`}
+        </p>
+      )}
 
       {stage === 'enter' ? (
         <>
@@ -138,17 +186,19 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
           <div className="flex flex-wrap gap-2 items-center">
             <input type="tel" inputMode="tel" autoComplete="tel" placeholder="07700 900123" value={phone}
               onChange={(e) => setPhone(e.target.value)} className={`${input} max-w-[14rem]`} data-testid="phone-input" />
-            <button type="button" disabled={busy || !phone.trim()} onClick={send} className={primary} data-testid="phone-send">
+            <button type="button" disabled={busy || !phone.trim() || (!state.smsAvailable && !state.emailAvailable)} onClick={() => send()} className={primary} data-testid="phone-send">
               {busy ? 'Sending…' : 'Send me a code'}
             </button>
-            {skip}
           </div>
+          {help}
         </>
       ) : (
         <>
           <p className="text-sm text-ink mb-1">Enter the 6-digit code</p>
           <p className="text-sm text-muted mb-3">
-            We’ve sent a code to <span className="font-mono text-ink">{sentTo}</span>.
+            {sentVia === 'email'
+              ? <>We’ve emailed your code to <span className="font-mono text-ink">{sentToEmail}</span> — texts aren’t getting through, so we’ve used your account email.</>
+              : <>We’ve sent a code to <span className="font-mono text-ink">{sentTo}</span>.</>}
             {expiresInMinutes ? ` It expires in ${expiresInMinutes} minutes.` : ''}
           </p>
           <div className="flex flex-wrap gap-2 items-center">
@@ -160,7 +210,7 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
           </div>
           <p className="mt-3 text-sm text-muted">
             Didn’t arrive?{' '}
-            <button type="button" disabled={busy || cooldown > 0} onClick={send}
+            <button type="button" disabled={busy || cooldown > 0} onClick={() => send()}
               className={`${linkish} disabled:opacity-50 disabled:no-underline`} data-testid="phone-resend">
               Send another code
             </button>
@@ -169,8 +219,15 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
             <button type="button" onClick={() => { setStage('enter'); setCode(''); setErr(null); }} className={linkish} data-testid="phone-change">
               Change the number
             </button>
-            {skip && <> · {skip}</>}
+            {/* THE FALLBACK, offered rather than hidden. A text that has not arrived twice is not
+                going to arrive; the email route completes the step and records the number. */}
+            {sentVia === 'sms' && state.emailAvailable && (
+              <> · <button type="button" disabled={busy} onClick={() => send('email')} className={linkish} data-testid="phone-email-instead">
+                Email me the code instead
+              </button></>
+            )}
           </p>
+          {help}
         </>
       )}
 

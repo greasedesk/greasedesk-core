@@ -260,6 +260,14 @@ model Group {
   // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).
   // Managers/admins always; this extends it to STANDARD.
   perm_standard_view_invoices Boolean @default(false)
+  // ── PHONE-STEP BREAK-GLASS. Set by an OPERATOR when a tenant genuinely cannot complete the step:
+  // no mobile at all, a number no carrier will deliver to, or both channels failing. It EXEMPTS the
+  // tenant from the gate and writes nothing about a phone — faking phone_verified_at would put a
+  // lie in the column SMS 2FA later trusts. Reason mandatory: an exemption with no explanation is
+  // indistinguishable from a mistake six months later.
+  phone_step_exempt_at     DateTime?
+  phone_step_exempt_reason String?
+  phone_step_exempt_by     String? // Operator.id — never a tenant user; only we can grant this
 
   // ── UTILISATION TRAFFIC LIGHT (dashboard capacity panel) ──────────────────────────────────────
   // Percentages, tenant-configurable. red BELOW util_red_below, amber up to util_amber_below, green
@@ -530,7 +538,16 @@ model TwoFactorSecret {
   // spine uses. No raw copy: a customer's raw number is what the garage recognises on screen; this
   // one is only ever dialled by a machine.
   phone_e164        String?
+  // TWO TIMESTAMPS, TWO DIFFERENT CLAIMS, and conflating them would quietly weaken a second factor.
+  //   phone_verified_at — an SMS code was confirmed. A HANDSET was proven. This is the only value
+  //                       SMS 2FA may ever build on, so it must never be written by any other route.
+  //   phone_recorded_at — a code was confirmed by SOME channel (sms or email). Enough to say "we
+  //                       hold a number this person can be reached at", which is what the signup
+  //                       gate actually needs, and all an email fallback can honestly assert.
+  // SMS sets both; email sets only the second.
   phone_verified_at DateTime?
+  phone_recorded_at DateTime?
+  phone_confirmed_via String? // 'sms' | 'email' — legibility; derivable, but not at a glance
   enabled      Boolean   @default(false) // false during enrolment; true ONLY after a confirming code round-trips
   confirmed_at DateTime?
   created_at   DateTime  @default(now())
@@ -558,6 +575,11 @@ model DeliveredCode {
   subject_id   String
   purpose      String // 'phone_verify' | 'login_2fa'
   destination  String // E.164 digits, exactly as sent — the record of WHERE it went
+  // HOW it went: 'sms' | 'email'. Written at issue, read at verify, NEVER taken from the client —
+  // it decides whether confirming the code may set phone_verified_at (a handset answered) or only
+  // phone_recorded_at. NULL on rows minted before the email fallback existed, and every one of
+  // those was an SMS, so a NULL reads as 'sms'.
+  channel      String?
   code_hash    String // sha256(code). NEVER the code.
   expires_at   DateTime
   attempts     Int       @default(0)

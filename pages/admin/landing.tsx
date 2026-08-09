@@ -23,7 +23,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   // incomplete step BEFORE any landing decision. (Only the owner/ADMIN onboards; STANDARD users
   // only exist post-onboarding, so they never hit this.)
   if (vis.isAdmin) {
-    const onboard = await onboardingGateRedirect(vis.groupId);
+    const onboard = await onboardingGateRedirect(vis.groupId, { userId: vis.userId, isAdmin: vis.isAdmin });
     if (onboard) return { redirect: { destination: onboard, permanent: false } };
     return { redirect: { destination: '/admin/dashboard', permanent: false } };
   }

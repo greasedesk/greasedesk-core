@@ -37,7 +37,7 @@ export type SendRefusal =
    *  not_sent so nobody is told to retry against something that was never switched on. */
   | { code: 'sms_unavailable'; message: string };
 
-export type SendOk = { ok: true; destination: string; expiresInMinutes: number };
+export type SendOk = { ok: true; destination: string; expiresInMinutes: number; channel: 'sms' | 'email' };
 
 /**
  * Mint and send a phone-verification code. `groupId` and `ip` are the two blast-radius axes and are
@@ -49,7 +49,16 @@ export async function sendPhoneVerification(args: {
   rawPhone: string;
   ip: string;
   countryDialCode?: string;
+  /**
+   * WHERE the code goes. 'sms' proves a handset; 'email' proves only that somebody reachable at the
+   * account address holds this number. The gate accepts either; phone_verified_at accepts only the
+   * first. Email needs an address — the caller supplies the account's, because this module has no
+   * business deciding which address is "theirs".
+   */
+  channel?: 'sms' | 'email';
+  emailTo?: string | null;
 }): Promise<SendOk | SendRefusal> {
+  const channel = args.channel ?? 'sms';
   const e164 = toE164Digits(args.rawPhone, args.countryDialCode);
   if (!e164) {
     return { code: 'bad_number', message: 'That doesn’t look like a mobile number. Check it and try again.' };
@@ -108,7 +117,7 @@ export async function sendPhoneVerification(args: {
   // phone_verified_at stays NULL — an unverified number is a note, never a credential.
   await storeUnverified(args.subject, e164);
 
-  const issued = await issueCode(args.subject, 'phone_verify', e164);
+  const issued = await issueCode(args.subject, 'phone_verify', e164, channel);
   if ('code' in issued && issued.code === 'cooldown') {
     return {
       code: 'cooldown',
@@ -117,16 +126,20 @@ export async function sendPhoneVerification(args: {
     };
   }
 
+  if (channel === 'email' && !args.emailTo) {
+    return { code: 'not_sent', message: 'We don’t have an email address for your account to send the code to.' };
+  }
   const sent = await sendNotification({
-    recipient: e164,
+    recipient: channel === 'email' ? (args.emailTo as string) : e164,
     template: 'phone_verify',
-    channel: 'sms',
+    channel,
     groupId: args.groupId,
     // 'user' never resolves a thread key (lib/message-threads), so a code can never land on a
     // customer conversation. Verified, not assumed — see threadKeyForSubject.
     subject: { type: 'user', id: args.subject.id },
     data: { code: (issued as { code: string }).code, expiryMinutes: CODE_TTL_MINUTES },
   });
+
 
   if (!sent.ok) {
     // The code is now live but undeliverable. Drop it: leaving it would let the user sit on an
@@ -139,9 +152,15 @@ export async function sendPhoneVerification(args: {
     // they would retry forever against a feature that does not exist yet. Different status, different
     // sentence, and the caller can tell them apart by `code`.
     if (sent.status === 'skipped') {
+      // THE SENTENCE HAS TO NAME THE RIGHT CHANNEL. The caller now falls back to email on its own,
+      // so a skip here can mean either adapter is off — and telling somebody "texting isn't switched
+      // on" when the thing that failed was the email they explicitly asked for sends them back to
+      // retry the channel that was never the problem.
       return {
         code: 'sms_unavailable',
-        message: 'Text messaging isn’t switched on for GreaseDesk yet, so we can’t send a code right now. Your number is saved as unconfirmed — you can confirm it from your account settings once it’s available.',
+        message: channel === 'email'
+          ? 'We can’t email a code right now. Your number is saved as unconfirmed — please call us and we’ll finish this with you.'
+          : 'Text messaging isn’t switched on for GreaseDesk yet, so we can’t send a code right now. Your number is saved as unconfirmed — you can confirm it from your account settings once it’s available.',
       };
     }
     return {
@@ -149,11 +168,13 @@ export async function sendPhoneVerification(args: {
       message: 'We couldn’t send the code just now. You can try again, or continue and confirm your number later.',
     };
   }
-  return { ok: true, destination: e164, expiresInMinutes: CODE_TTL_MINUTES };
+  return { ok: true, destination: e164, expiresInMinutes: CODE_TTL_MINUTES, channel };
 }
 
 export type ConfirmResult =
-  | { ok: true; e164: string }
+  /** `via` is the channel the code ACTUALLY travelled on, read off the row — so a caller can say
+   *  what happened without being able to influence it. */
+  | { ok: true; e164: string; via: 'sms' | 'email' }
   | { ok: false; message: string };
 
 /**
@@ -164,7 +185,10 @@ export type ConfirmResult =
  * a phone must never quietly change which second factor an account uses. Only `enabled` (which this
  * never touches) decides that.
  */
-export async function confirmPhoneVerification(subject: CodeSubject, typed: string): Promise<ConfirmResult> {
+export async function confirmPhoneVerification(
+  subject: CodeSubject,
+  typed: string,
+): Promise<ConfirmResult> {
   const r = await verifyCode(subject, 'phone_verify', typed);
   if (!r.ok) {
     // 'wrong' and 'exhausted' collapse into one sentence deliberately — telling an attacker which
@@ -181,11 +205,22 @@ export async function confirmPhoneVerification(subject: CodeSubject, typed: stri
     where: { subject_type_subject_id: { subject_type: subject.type, subject_id: subject.id } },
     select: { id: true },
   });
+  // ── WHAT EACH CHANNEL IS ENTITLED TO CLAIM ───────────────────────────────────────────────────
+  // phone_verified_at means a handset answered. An emailed code proves the account's inbox, not the
+  // phone — so it records the number and stops there. The gate reads phone_recorded_at and passes
+  // on either; SMS 2FA reads phone_verified_at and is never satisfied by an email confirmation.
+  // Writing verified_at from the email path would be the one lie that quietly weakens a factor.
+  // THE CHANNEL COMES FROM THE CODE ROW, not from the caller. It was briefly a parameter, which
+  // meant the browser decided whether its own confirmation counted as a handset — a user who asked
+  // for the email fallback could post channel:'sms' and mint a phone_verified_at against a phone
+  // nobody had proved. Same fact, unforgeable source.
+  const via = r.channel;
+  const now = new Date();
+  const stamp = via === 'sms'
+    ? { phone_e164: r.destination, phone_recorded_at: now, phone_verified_at: now, phone_confirmed_via: 'sms' }
+    : { phone_e164: r.destination, phone_recorded_at: now, phone_confirmed_via: 'email' };
   if (existing) {
-    await prisma.twoFactorSecret.update({
-      where: { id: existing.id },
-      data: { phone_e164: r.destination, phone_verified_at: new Date() },
-    });
+    await prisma.twoFactorSecret.update({ where: { id: existing.id }, data: stamp });
   } else {
     // A row with no secret and enabled:false — a verified phone, and NOT a second factor. SMS 2FA
     // would later set method/enabled through the two-factor lifecycle, never here.
@@ -193,11 +228,11 @@ export async function confirmPhoneVerification(subject: CodeSubject, typed: stri
       data: {
         subject_type: subject.type, subject_id: subject.id,
         method: 'totp', secret: null, enabled: false,
-        phone_e164: r.destination, phone_verified_at: new Date(),
+        ...stamp,
       },
     });
   }
-  return { ok: true, e164: r.destination };
+  return { ok: true, e164: r.destination, via };
 }
 
 /**
@@ -256,12 +291,12 @@ async function storeUnverified(subject: CodeSubject, e164: string): Promise<void
 export async function clearVerifiedPhone(subject: CodeSubject): Promise<boolean> {
   const row = await prisma.twoFactorSecret.findUnique({
     where: { subject_type_subject_id: { subject_type: subject.type, subject_id: subject.id } },
-    select: { id: true, phone_e164: true, phone_verified_at: true },
+    select: { id: true, phone_e164: true, phone_verified_at: true, phone_recorded_at: true },
   });
-  if (!row || (!row.phone_e164 && !row.phone_verified_at)) return false;
+  if (!row || (!row.phone_e164 && !row.phone_verified_at && !row.phone_recorded_at)) return false;
   await prisma.twoFactorSecret.update({
     where: { id: row.id },
-    data: { phone_e164: null, phone_verified_at: null },
+    data: { phone_e164: null, phone_verified_at: null, phone_recorded_at: null, phone_confirmed_via: null },
   });
   // Any outstanding code was minted for the number just removed; leaving it live would let it
   // verify against a row that no longer names that destination.

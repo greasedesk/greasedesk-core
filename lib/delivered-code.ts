@@ -31,6 +31,8 @@ import { prisma } from '@/lib/db';
 export type CodeSubjectType = 'tenant' | 'operator' | 'rep';
 export type CodeSubject = { type: CodeSubjectType; id: string };
 export type CodePurpose = 'phone_verify' | 'login_2fa';
+/** The delivery channel a code actually travelled on. Recorded at issue; see model DeliveredCode. */
+export type CodeChannel = 'sms' | 'email';
 
 /**
  * THE code's life, and the ONLY place it is stated as a number. Everything that tells a user how
@@ -90,6 +92,8 @@ export async function issueCode(
   subject: CodeSubject,
   purpose: CodePurpose,
   destination: string,
+  /** How it is about to be delivered. Stored so verify can trust it later — see the model comment. */
+  channel: CodeChannel = 'sms',
 ): Promise<{ code: string; expiresAt: Date } | IssueRefusal> {
   const recent = await prisma.deliveredCode.findFirst({
     where: { subject_type: subject.type, subject_id: subject.id, purpose },
@@ -112,7 +116,7 @@ export async function issueCode(
     prisma.deliveredCode.create({
       data: {
         subject_type: subject.type, subject_id: subject.id, purpose,
-        destination, code_hash: sha256(code), expires_at: expiresAt,
+        destination, channel, code_hash: sha256(code), expires_at: expiresAt,
       },
     }),
   ]);
@@ -120,7 +124,7 @@ export async function issueCode(
 }
 
 export type VerifyResult =
-  | { ok: true; destination: string }
+  | { ok: true; destination: string; channel: CodeChannel }
   | { ok: false; reason: 'no_code' | 'expired' | 'wrong' | 'exhausted'; attemptsLeft: number };
 
 /**
@@ -154,7 +158,10 @@ export async function verifyCode(subject: CodeSubject, purpose: CodePurpose, typ
     where: { id: row.id, consumed_at: null }, data: { consumed_at: new Date() },
   });
   if (consumed.count !== 1) return { ok: false, reason: 'no_code', attemptsLeft: 0 };
-  return { ok: true, destination: row.destination };
+  // The channel comes off the ROW, which is the only account of how the code actually travelled.
+  // A caller-supplied channel would let a user who received an emailed code assert 'sms' and mint a
+  // phone_verified_at with no handset in the story — the exact claim SMS 2FA is later built on.
+  return { ok: true, destination: row.destination, channel: (row.channel === 'email' ? 'email' : 'sms') };
 }
 
 /**

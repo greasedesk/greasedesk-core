@@ -324,7 +324,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const user = session?.user as any;
   if (!user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
   // Root onboarding gate (item-13) — replaces the old !site_id → setup-location leaf patch.
-  const onboard = await onboardingGateRedirect(user.group_id);
+  const onboard = await onboardingGateRedirect(user.group_id, { userId: user.id as string });
   if (onboard) return { redirect: { destination: onboard, permanent: false } };
   const grp = await prisma.group.findUnique({ where: { id: (session!.user as any).group_id as string }, select: { country_code: true, ref: true } });
   const prof = resolveTenantProfile(grp);
