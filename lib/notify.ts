@@ -19,6 +19,7 @@ import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
 import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
+import { demoSendDecision } from '@/lib/demo-tenant';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -237,6 +238,20 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (!tpl) {
     const id = await record({ ...common, status: 'failed', error: `unknown template '${args.template}'` });
     return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template' };
+  }
+
+  // ── DEMO TENANTS REFUSE EVERYTHING, BEFORE THE SECURITY BYPASS BELOW ────────────────────────
+  // Placed HERE and not inside isSuppressed on purpose: the next check exempts security templates
+  // from contact preferences, so a demo check living down there would let phone codes and password
+  // resets out of a tenant full of invented customers. Measured before this existed — a demo's
+  // phone_verify reached Twilio and came back 21211.
+  //
+  // The row is still WRITTEN. A demo where sending appears to do nothing is a broken demo; one that
+  // says "not sent — demo tenant" is an honest one, and the Messages thread still shows it.
+  const demo = await demoSendDecision(args.groupId, args.recipient);
+  if (demo.block) {
+    const id = await record({ ...common, status: 'skipped', error: demo.reason });
+    return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason };
   }
 
   // CONTACT PREFERENCE — checked before rendering and before any provider call. The row is written

@@ -266,6 +266,21 @@ model Group {
   // lie in the column SMS 2FA later trusts. Reason mandatory: an exemption with no explanation is
   // indistinguishable from a mistake six months later.
   phone_step_exempt_at     DateTime?
+
+  // ── DEMO TENANTS ──────────────────────────────────────────────────────────────────────────
+  // is_demo is the SAFETY flag: it makes sendNotification refuse (lib/demo-tenant), keeps the
+  // tenant out of counts and commission, and lets the onboarding gate pass a tenant that has no
+  // subscription and never will. It is deliberately NOT derived from demo_expires_at — the sales
+  // demo is a demo with no expiry, and conflating the two would either make it immortal-and-live
+  // or expiring-and-doomed.
+  is_demo         Boolean   @default(false)
+  // WHEN IT DIES. NULL = never (the long-lived sales demo). The purge cron only ever takes rows
+  // where this is non-null AND in the past, so a missing expiry can never cause a surprise
+  // deletion — it causes an immortal demo instead, which is visible in the Engine Room.
+  demo_expires_at DateTime?
+  // The generator's seed. Kept so a demo can be regenerated identically (the sales demo ages and
+  // is rebuilt nightly) and so a bug in generated data is reproducible.
+  demo_seed       String?
   phone_step_exempt_reason String?
   phone_step_exempt_by     String? // Operator.id — never a tenant user; only we can grant this
 
