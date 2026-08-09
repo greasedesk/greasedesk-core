@@ -1,6 +1,9 @@
 /**
  * File: pages/api/superadmin/stripe-lookup.ts
- * READ-ONLY Stripe inspection for operators. GET ?price=price_… | ?subscription=sub_…
+ * READ-ONLY Stripe inspection for operators.
+ *   GET ?price=price_…        → amount, currency_options, tax_behavior, product
+ *   GET ?subscription=sub_…   → status, trial_end, item ids, prices, quantities
+ *   GET ?config=1             → which price ids the RUNNING deployment resolves to
  *
  * ── WHY IT EXISTS ───────────────────────────────────────────────────────────────────────────────
  * A price switch is a money change that must be verified BEFORE anything is touched, and the facts
@@ -26,6 +29,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: 'Stripe is not configured.' });
+
+  // ── WHICH IDS IS THIS DEPLOYMENT ACTUALLY USING? ────────────────────────────────────────────
+  // A price switch is two env vars and a build, and today proved that a "Ready" deployment is not
+  // the same thing as "the new code and config are live". Price ids are not secrets — they appear
+  // in Checkout sessions and the customer's own Stripe receipts — so reporting them costs nothing
+  // and turns a precondition that was being TRUSTED into one that is CHECKED.
+  //
+  // The `??` is reproduced deliberately, because it is the trap: lib/modules maps entitlement via
+  // `STRIPE_PRICE_CORE ?? STRIPE_PRICE_ID`, so a stale CORE silently WINS. Reporting the resolved
+  // value beside both raws is what makes that visible rather than inferable.
+  if (String(req.query.config ?? '') === '1') {
+    const priceIdEnv = process.env.STRIPE_PRICE_ID ?? null;
+    const coreEnv = process.env.STRIPE_PRICE_CORE ?? null;
+    return res.status(200).json({
+      STRIPE_PRICE_ID: priceIdEnv,
+      STRIPE_PRICE_CORE: coreEnv,
+      resolvedCoreEntitlementPrice: coreEnv ?? priceIdEnv,
+      agree: !!priceIdEnv && coreEnv === priceIdEnv,
+      stripeConfigured: true,
+      livemode: (process.env.STRIPE_SECRET_KEY ?? '').startsWith('sk_live_'),
+    });
+  }
 
   const priceId = String(req.query.price ?? '').trim();
   const subId = String(req.query.subscription ?? '').trim();
@@ -76,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    return res.status(400).json({ message: 'Give ?price=price_… or ?subscription=sub_…' });
+    return res.status(400).json({ message: 'Give ?price=price_…, ?subscription=sub_… or ?config=1' });
   } catch (e: any) {
     return res.status(502).json({ message: 'Stripe lookup failed', detail: String(e?.message ?? e).slice(0, 300) });
   }
