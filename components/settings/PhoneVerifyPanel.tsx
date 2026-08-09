@@ -15,11 +15,12 @@
  */
 import React from 'react';
 
-type State = { phone: string | null; verified: boolean; codeOutstanding: boolean };
+type State = { phone: string | null; verified: boolean; codeOutstanding: boolean; pendingPhone: string | null; pendingDiffers: boolean };
 
 const input = 'w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-accent focus:outline-none';
 const primary = 'bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50';
 const linkish = 'text-sm text-muted hover:text-ink underline underline-offset-2';
+const secondary = 'bg-surface-muted border border-line text-ink font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50';
 
 export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   /** Present ONLY at signup. Its absence is what makes the settings copy read as ongoing rather than
@@ -40,6 +41,9 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   const [err, setErr] = React.useState<string | null>(null);
   const [ok, setOk] = React.useState<string | null>(null);
   const [cooldown, setCooldown] = React.useState(0);
+  // Revealing the entry field on a verified account is a LOCAL intent, never a claim about the
+  // server's state — the confirmed number stays confirmed until a new one is proven.
+  const [changing, setChanging] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     const r = await fetch('/api/account/phone');
@@ -75,7 +79,7 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   };
   const confirm = async () => {
     const d = await post({ action: 'confirm', code });
-    if (d) { setOk(d.message); setStage('enter'); setCode(''); await refresh(); onDone?.(); }
+    if (d) { setOk(d.message); setStage('enter'); setChanging(false); setCode(''); await refresh(); onDone?.(); }
   };
 
   if (!state) return null;
@@ -85,16 +89,24 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
   );
 
   // ── ALREADY CONFIRMED ────────────────────────────────────────────────────────────────────────
-  if (state.verified && stage === 'enter') {
+  // `changing` is local state, NOT a fake unverified server state. The previous version flipped
+  // `state.verified` to false to reveal the entry field, which meant the screen claimed the account
+  // was unverified while the server still (correctly) had it confirmed — and left no way back.
+  if (state.verified && stage === 'enter' && !changing) {
     return (
       <div data-testid="phone-panel">
         <h2 className="text-lg font-semibold text-ink mb-1">{heading ?? 'Mobile number'}</h2>
         <p className="text-sm text-ink" data-testid="phone-verified">
           <span className="font-mono">{state.phone}</span> <span className="text-ok">✓ Confirmed</span>
         </p>
-        <button type="button" className={`${primary} mt-3`} onClick={() => { setStage('enter'); setPhone(''); setSentTo(null); setState({ ...state, verified: false }); }}>
-          Change number
-        </button>
+        <div className="flex flex-wrap gap-2 items-center mt-3">
+          <button type="button" className={secondary} onClick={() => { setChanging(true); setPhone(''); setSentTo(null); setOk(null); setErr(null); }}>
+            Change number
+          </button>
+          {/* THE WAY FORWARD. Without it this branch was a dead end — fine as a settings panel,
+              impossible as a step, and the step is where it now matters. */}
+          {onDone && <button type="button" className={primary} onClick={onDone} data-testid="phone-continue">Continue</button>}
+        </div>
         {ok && <p className="mt-2 text-sm text-ok" data-testid="phone-ok">{ok}</p>}
       </div>
     );
@@ -106,7 +118,13 @@ export default function PhoneVerifyPanel({ onSkip, onDone, heading }: {
 
       {stage === 'enter' ? (
         <>
-          {state.phone && !state.verified ? (
+          {state.verified && changing ? (
+            <p className="text-sm text-muted mb-3" data-testid="phone-changing">
+              Your confirmed number is <span className="font-mono text-ink">{state.phone}</span>. It stays
+              confirmed until a new one is confirmed — nothing changes if you stop here.
+              {' '}<button type="button" onClick={() => setChanging(false)} className={linkish}>Keep it</button>
+            </p>
+          ) : state.phone && !state.verified ? (
             <p className="text-sm text-ink mb-2" data-testid="phone-unverified">
               <span className="font-mono">{state.phone}</span> — <span className="text-warn font-medium">not confirmed</span>
               <span className="block text-muted mt-0.5">Confirm it so we can reach you if you’re ever locked out.</span>

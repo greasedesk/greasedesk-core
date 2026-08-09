@@ -125,7 +125,12 @@ export type UserAuditAction =
   // enrolment flips nothing (enabled stays false and the row is overwritable), so it writes no row.
   | 'user.2fa_enrolled'      // the user confirmed a live code — 2FA is now ON for their account
   | 'user.2fa_disabled'      // the user turned it off themselves (password + a live code)
-  | 'user.2fa_reset';        // an ADMIN reset it — DISABLES, never enables. Lost-device recovery only.
+  | 'user.2fa_reset'         // an ADMIN reset it — DISABLES, never enables. Lost-device recovery only.
+  // ── PHONE. CLEARED, never set and never re-pointed. An admin who could aim a colleague's
+  // verification at a handset they control would hold that account — which is exactly why the
+  // number lives on the enrolment row and not on the editable profile. The commonest real reason
+  // is a change of ownership: the previous owner's handset must stop being the recovery contact.
+  | 'user.phone_cleared';
 
 /**
  * Same table, same discipline, subject = a USER. Sibling of writeAudit rather than a second audit

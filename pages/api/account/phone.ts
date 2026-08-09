@@ -16,7 +16,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { sendPhoneVerification, confirmPhoneVerification } from '@/lib/phone-verification';
-import { hasLiveCode } from '@/lib/delivered-code';
+import { liveCodeDestination } from '@/lib/delivered-code';
 
 /** Last three digits only. Enough for "yes, that's my phone", useless to anyone who isn't them. */
 const mask = (e164: string | null): string | null => (e164 ? `•••• ••• ${e164.slice(-3)}` : null);
@@ -37,10 +37,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   if (req.method === 'GET') {
+    // `pending` is the number a live code was sent to. It can differ from `phone` now that a new
+    // number no longer displaces a confirmed one — the surface must be able to say "confirmed this,
+    // awaiting confirmation on that" instead of showing one number and meaning two things.
+    const pending = await liveCodeDestination(subject, 'phone_verify');
     return res.status(200).json({
       phone: mask(row?.phone_e164 ?? null),
       verified: !!row?.phone_verified_at,
-      codeOutstanding: await hasLiveCode(subject, 'phone_verify'),
+      codeOutstanding: !!pending,
+      pendingPhone: mask(pending),
+      pendingDiffers: !!pending && !!row?.phone_e164 && pending !== row.phone_e164,
     });
   }
 

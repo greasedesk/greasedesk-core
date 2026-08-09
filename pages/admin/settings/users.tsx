@@ -16,7 +16,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 
 type Role = 'ADMIN' | 'SITE_MANAGER' | 'STANDARD';
 type SiteOpt = { id: string; name: string };
-type UserRow = { id: string; name: string | null; email: string; isActive: boolean; deactivatedAt: string | null; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null; canInvoice: boolean; twoFactorEnabled: boolean };
+type UserRow = { id: string; name: string | null; email: string; isActive: boolean; deactivatedAt: string | null; siteIds: string[]; role: Role; isOwner: boolean; primarySiteId: string | null; canInvoice: boolean; twoFactorEnabled: boolean; phoneVerified: boolean };
 type PageProps = { users: UserRow[]; sites: SiteOpt[]; selfId: string | null; isAdmin: boolean; isManager: boolean };
 
 const ROLE_LABEL: Record<Role, string> = { ADMIN: 'ADMIN', SITE_MANAGER: 'SITE MANAGER', STANDARD: 'STANDARD' };
@@ -135,6 +135,16 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
   // ADMIN-ONLY, AND IT ONLY DISABLES. There is deliberately no "enable for them" — enrolment needs
   // the handset, so nobody can turn 2FA ON for someone else, and an admin who could point a
   // colleague's second factor anywhere would hold a route into that account.
+  // CLEARS ONLY. There is deliberately no admin control that SETS a number: verification needs the
+  // handset, so nobody can establish one for somebody else. The real reason this exists is a change
+  // of ownership — the previous owner's phone must stop being the account's recovery contact.
+  async function clearPhone() {
+    const who = user.name || user.email;
+    if (!confirm(`Clear the confirmed mobile number for ${who}?\n\nThey'll be able to confirm a new one themselves from their own account. You cannot set a number on their behalf — confirming one needs the handset.\n\nUse this when the number no longer belongs to the person holding the account.`)) return;
+    const error = await mutate('/api/users', 'PATCH', { id: user.id, action: 'clear_phone' });
+    if (error) return setErr(error);
+    onChanged();
+  }
   async function reset2fa() {
     const who = user.name || user.email;
     if (!confirm(`Reset two-factor authentication for ${who}?\n\nThey'll sign in with their password alone and must set it up again. Use this only if they've lost both their phone and their recovery codes — it lowers their account to a single factor until they re-enrol.`)) return;
@@ -171,6 +181,7 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
             {user.isOwner && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-ok-soft text-ok border border-line">owner</span>}
             {isSelf && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-accent-soft text-accent border border-line">you</span>}
             {user.twoFactorEnabled && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-ok-soft text-ok border border-line" title="Two-factor authentication is on" data-testid="row-2fa">🔒 2FA</span>}
+            {user.phoneVerified && <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line" title="A confirmed mobile number is on file" data-testid="row-phone">📱 mobile</span>}
             {/* is_active=false means two different things; deactivated_at is what tells them apart. */}
             {!user.isActive && (user.deactivatedAt
               ? <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-danger-soft text-danger border border-line">deactivated</span>
@@ -194,6 +205,9 @@ function UserCard({ user, sites, selfId, isAdmin, isManager, onChanged }: { user
             ) : user.deactivatedAt ? (
               <button onClick={() => setActive(true)} title="Allow this user to sign in again" className="text-xs text-ok hover:underline">Reactivate</button>
             ) : null)}
+            {isAdmin && user.phoneVerified && (
+              <button onClick={clearPhone} title="Clear the confirmed mobile (e.g. the number is no longer theirs)" className="text-xs text-warn hover:underline" data-testid="row-clear-phone">Clear&nbsp;mobile</button>
+            )}
             {isAdmin && user.twoFactorEnabled && (
               <button onClick={reset2fa} title="Reset 2FA (lost phone + lost recovery codes)" className="text-xs text-warn hover:underline" data-testid="row-reset-2fa">Reset&nbsp;2FA</button>
             )}
@@ -302,6 +316,12 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     (await prisma.twoFactorSecret.findMany({ where: { subject_type: 'tenant', enabled: true }, select: { subject_id: true } }))
       .map((r: { subject_id: string }) => r.subject_id),
   );
+  // Who holds a CONFIRMED number. Separate query from 2FA because they are separate facts: a phone
+  // can be confirmed with no second factor, and a second factor can exist with no phone.
+  const phoneOk = new Set(
+    (await prisma.twoFactorSecret.findMany({ where: { subject_type: 'tenant', phone_verified_at: { not: null } }, select: { subject_id: true } }))
+      .map((r: { subject_id: string }) => r.subject_id),
+  );
   const [userRows, siteRows] = await Promise.all([
     prisma.user.findMany({
       where: userWhere,
@@ -319,6 +339,7 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
     primarySiteId: u.primary_site_id ?? null,
     canInvoice: !!u.can_invoice,
     twoFactorEnabled: twoFA.has(u.id),
+    phoneVerified: phoneOk.has(u.id),
   }));
   const sites: SiteOpt[] = (siteRows as Array<{ id: string; site_name: string }>).map((s) => ({ id: s.id, name: s.site_name }));
 

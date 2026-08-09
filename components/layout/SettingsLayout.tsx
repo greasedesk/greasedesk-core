@@ -21,15 +21,34 @@ type Pointer = { text: string; linkText: string; href: string };
 type TopTab = Gate & { name: string; key: string; href: string; match: string[]; subtabs?: SubTab[]; pointer?: Pointer };
 
 const TABS: TopTab[] = [
+  /**
+   * ── MY ACCOUNT — EVERY ROLE, ALWAYS FIRST ─────────────────────────────────────────────────────
+   * Your own password, login email, sessions and mobile number. The href is resolved per-user in
+   * hrefFor; the placeholder below is never navigated to.
+   *
+   * It exists because the page it points at was reachable only by accident. An ADMIN found their
+   * own record by spotting themselves in a roster meant for managing OTHER people; a STANDARD user
+   * got there because the Users tab was quietly rewritten for them; and a SITE_MANAGER could not
+   * get there AT ALL — the roster is scoped to STANDARD users so they are absent from it, and the
+   * rewrite deliberately excluded managers because they "get the roster". Between those two rules
+   * a manager had no route to their own account page, which is where they change their password.
+   *
+   * Naming it also fixes a smaller thing: "my details" and "managing my staff" are different jobs,
+   * and one tab called Users was doing both.
+   */
+  {
+    name: 'My account', key: 'account', href: '/admin/settings/users',
+    match: [], // never matches by path — see accountActive below; the Users tab owns /users/*
+  },
   {
     name: 'Locations & Resources', key: 'locations', href: '/admin/settings/locations', managerOk: true,
     match: ['/admin/settings/locations'],
   },
   {
-    // Visible to everyone; href is resolved per-role in hrefFor (roster vs own detail). Both the
-    // roster (/users) and Permissions (/permissions) live under this tab, so BOTH must match here —
-    // otherwise the Permissions page finds no active top tab and the sub-tab bar disappears.
-    name: 'Users', key: 'users', href: '/admin/settings/users',
+    // Managing OTHER people. Both the roster (/users) and Permissions (/permissions) live under this
+    // tab, so BOTH must match here — otherwise the Permissions page finds no active top tab and the
+    // sub-tab bar disappears. A STANDARD user has nobody to manage, so it is hidden from them.
+    name: 'Users', key: 'users', href: '/admin/settings/users', managerOk: true,
     match: ['/admin/settings/users', '/admin/settings/permissions'],
     subtabs: [
       { name: 'Users', href: '/admin/settings/users', managerOk: true },
@@ -67,11 +86,18 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
   const path = router.pathname; // e.g. /admin/settings/users/[id]
   const canSee = (g: Gate) => (g.adminOnly ? isAdmin : g.managerOk ? isAdmin || isManager : true);
 
-  const top = TABS.filter(canSee);
-  const active = TABS.find((t) => t.match.some((m) => path === m || path.startsWith(m + '/')));
-  // Users top-tab: managers/admins → roster; a STANDARD user → their own detail.
+  // 'My account' is dropped when we do not know who "self" is, rather than rendering a tab that
+  // cannot resolve a destination.
+  const top = TABS.filter(canSee).filter((t) => t.key !== 'account' || !!selfUserId);
+  // MY ACCOUNT WINS ON THE SELF RECORD. /admin/settings/users/<self> is matched by the Users tab's
+  // prefix too, so without this the manager who just clicked "My account" would see "Users"
+  // highlighted and the roster's sub-tabs — told they are somewhere they are not.
+  const accountActive = !!selfUserId && path === `/admin/settings/users/${selfUserId}`;
+  const active = accountActive
+    ? TABS.find((t) => t.key === 'account')
+    : TABS.find((t) => t.match.some((m) => path === m || path.startsWith(m + '/')));
   const hrefFor = (t: TopTab) =>
-    t.key === 'users' && !(isAdmin || isManager) && selfUserId ? `/admin/settings/users/${selfUserId}` : t.href;
+    t.key === 'account' && selfUserId ? `/admin/settings/users/${selfUserId}` : t.href;
   const subtabs = (active?.subtabs ?? []).filter(canSee);
 
   const tabCls = (on: boolean) =>

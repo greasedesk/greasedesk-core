@@ -19,6 +19,7 @@ import { makeInviteToken } from '@/lib/tokens';
 import { sendNotification } from '@/lib/notify';
 import { writeUserAudit } from '@/lib/audit';
 import { isEnabled, resetTwoFactor } from '@/lib/two-factor';
+import { clearVerifiedPhone } from '@/lib/phone-verification';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -125,6 +126,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // construction — `enabled` flips only after a live code from the handset — and an admin who
     // COULD point a colleague's second factor anywhere would hold a route into that account.
     // So: lost device + lost recovery codes → drop them back to one factor and make them re-enrol.
+    // ── CLEAR A VERIFIED MOBILE. ADMIN ONLY, AND IT ONLY EVER CLEARS ────────────────────────────
+    // There is no admin path that SETS a number, by design: verification requires possession of the
+    // handset, so nobody can establish one on somebody else's behalf. This exists for the case that
+    // has no other remedy — the person has left, or the garage changed hands, and their handset must
+    // stop being the account's recovery contact.
+    //
+    // It does NOT touch a TOTP enrolment. Clearing a number and removing a second factor are
+    // different acts with different consequences; conflating them would silently drop somebody to
+    // one factor as a side effect of tidying a phone number.
+    if (action === 'clear_phone') {
+      if (isManagerOnly) return res.status(403).json({ message: 'Only an admin can clear a confirmed mobile number.' });
+      const t = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, email: true } });
+      if (!t) return res.status(404).json({ message: 'User not found.' });
+      const cleared = await clearVerifiedPhone({ type: 'tenant', id: t.id });
+      if (!cleared) return res.status(200).json({ ok: true, message: 'That account has no confirmed mobile number.' });
+      await writeUserAudit(prisma, {
+        groupId, actorUserId: sessionUserId, targetUserId: t.id,
+        action: 'user.phone_cleared', diff: { email: t.email },
+      }).catch(() => {});
+      return res.status(200).json({ ok: true, message: `Mobile number cleared for ${t.email}. They can confirm a new one from their own account.` });
+    }
+
     if (action === 'reset_2fa') {
       if (isManagerOnly) return res.status(403).json({ message: 'Only an admin can reset two-factor authentication.' });
       const t = await prisma.user.findFirst({ where: { id, group_id: groupId }, select: { id: true, email: true } });

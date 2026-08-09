@@ -24,6 +24,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOperatorApi, tenantInScope } from '@/lib/operator-auth';
 import { isEnabled, resetTwoFactor } from '@/lib/two-factor';
+import { clearVerifiedPhone } from '@/lib/phone-verification';
 import { writeUserAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -14,7 +14,11 @@
  * that is how you lock someone out of their own account.
  */
 import crypto from 'crypto';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+
+/** A transaction client or the base client — see disable(). */
+type Db = PrismaClient | Prisma.TransactionClient;
 import { generateSecret, verifyTotp, otpauthURI, base32Encode } from '@/lib/totp';
 
 export type SubjectType = 'operator' | 'tenant' | 'rep';
@@ -183,9 +187,24 @@ export async function failuresRemaining(subject: Subject): Promise<number> {
   } catch { return TWO_FACTOR_MAX_FAILURES; }
 }
 
-/** Turn 2FA off and wipe the secret + recovery codes — the disable and the owner-reset both land here. */
-export async function disable(subject: Subject): Promise<void> {
+/**
+ * Turn 2FA off and wipe the secret + recovery codes — the disable and the owner-reset both land here.
+ *
+ * NOTE it deletes the WHOLE row, which also removes any verified phone stored on it. That is right
+ * for a change of identity (nothing bound to the old one should survive) and WRONG for merely
+ * clearing a number — use clearVerifiedPhone in lib/phone-verification for that, which nulls the
+ * phone fields and leaves a TOTP enrolment intact.
+ */
+export async function disable(subject: Subject, db?: Db): Promise<void> {
   await clearFailures(subject); // a reset must not hand back an account that is still locked out
+  // TRANSACTION-AWARE. A caller already inside a transaction — changing a login email, where the
+  // identity change and the credentials it unbinds must land together or not at all — passes its
+  // client in; nesting $transaction would throw. Without a client we own the atomicity ourselves.
+  if (db) {
+    await db.twoFactorRecoveryCode.deleteMany({ where: where(subject) });
+    await db.twoFactorSecret.deleteMany({ where: where(subject) });
+    return;
+  }
   await prisma.$transaction([
     prisma.twoFactorRecoveryCode.deleteMany({ where: where(subject) }),
     prisma.twoFactorSecret.deleteMany({ where: where(subject) }),

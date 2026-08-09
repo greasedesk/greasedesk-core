@@ -157,6 +157,23 @@ export async function verifyCode(subject: CodeSubject, purpose: CodePurpose, typ
   return { ok: true, destination: row.destination };
 }
 
+/**
+ * The destination a live code was sent to, or null. Since a pending number NO LONGER displaces a
+ * verified one (see lib/phone-verification.storeUnverified), the code row is the only place the
+ * number being confirmed exists — so this is how a surface shows "confirmed •••999, code sent to
+ * •••332" rather than silently conflating the two.
+ */
+export async function liveCodeDestination(subject: CodeSubject, purpose: CodePurpose): Promise<string | null> {
+  const row = await prisma.deliveredCode.findFirst({
+    where: {
+      subject_type: subject.type, subject_id: subject.id, purpose,
+      consumed_at: null, expires_at: { gt: new Date() }, attempts: { lt: CODE_MAX_ATTEMPTS },
+    },
+    select: { destination: true },
+  });
+  return row?.destination ?? null;
+}
+
 /** Is a live, unexpired, unexhausted code outstanding? Drives "we've sent you a code" UI state. */
 export async function hasLiveCode(subject: CodeSubject, purpose: CodePurpose): Promise<boolean> {
   const row = await prisma.deliveredCode.findFirst({

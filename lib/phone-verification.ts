@@ -200,20 +200,36 @@ export async function confirmPhoneVerification(subject: CodeSubject, typed: stri
   return { ok: true, e164: r.destination };
 }
 
-/** Record a number WITHOUT verifying it. Never touches phone_verified_at, and never `enabled`. */
+/**
+ * Record a number WITHOUT verifying it. Never touches `enabled`.
+ *
+ * ── AN UNPROVEN NUMBER NEVER DISPLACES A PROVEN ONE (ruling 2026-08-09) ─────────────────────────
+ * This used to null phone_verified_at the moment a DIFFERENT number was entered, on the reasoning
+ * that the old handset is not evidence for the new one. True — but it made the account unverified
+ * before anything replaced it, so a user who mistyped a digit and walked away was left worse off
+ * than before they touched it. Under a blocking gate that is a lockout caused by a typo.
+ *
+ * The old verification stands until the new number is CONFIRMED. It has to stand for something:
+ * what it asserts is that we can reach a handset this person controls, and that stays true until a
+ * different one is proven. The pending number needs no column — it is already on the
+ * DeliveredCode row as `destination`, and confirmPhoneVerification promotes it from there.
+ *
+ * So: no verified number yet → store it unverified, which is what makes the "not confirmed" state
+ * in settings representable. Already verified → leave the row completely alone.
+ */
 async function storeUnverified(subject: CodeSubject, e164: string): Promise<void> {
   const existing = await prisma.twoFactorSecret.findUnique({
     where: { subject_type_subject_id: { subject_type: subject.type, subject_id: subject.id } },
-    select: { id: true, phone_e164: true },
+    select: { id: true, phone_e164: true, phone_verified_at: true },
   });
   if (existing) {
-    // A DIFFERENT number clears the old verification — the previously confirmed handset is not
-    // evidence for this one, and leaving the tick in place would attach it to the wrong phone.
-    const changed = existing.phone_e164 !== e164;
-    await prisma.twoFactorSecret.update({
-      where: { id: existing.id },
-      data: changed ? { phone_e164: e164, phone_verified_at: null } : { phone_e164: e164 },
-    });
+    // ALREADY VERIFIED → untouched. The pending number lives on the code row until it is proven.
+    if (existing.phone_verified_at) return;
+    // Not verified: overwrite freely. There is nothing to protect and the settings panel needs a
+    // number to show beside "not confirmed".
+    if (existing.phone_e164 !== e164) {
+      await prisma.twoFactorSecret.update({ where: { id: existing.id }, data: { phone_e164: e164 } });
+    }
     return;
   }
   await prisma.twoFactorSecret.create({
@@ -223,6 +239,34 @@ async function storeUnverified(subject: CodeSubject, e164: string): Promise<void
       phone_e164: e164, phone_verified_at: null,
     },
   });
+}
+
+/**
+ * ── THE CLEARING PATH (ruling 2026-08-09) ───────────────────────────────────────────────────────
+ * Removes a verified number and nothing else. It CLEARS; it never sets and never re-points — an
+ * admin who could aim a colleague's verification at a handset they control would hold that account,
+ * which is the whole reason the number lives on the enrolment row rather than the editable profile.
+ *
+ * Deliberately NOT lib/two-factor.disable, which deletes the entire row: someone with a TOTP
+ * enrolment must keep it when their phone is cleared. Two different erasures, two functions.
+ *
+ * Returns false when there was nothing to clear, so a caller can say "already clear" rather than
+ * reporting a change that did not happen.
+ */
+export async function clearVerifiedPhone(subject: CodeSubject): Promise<boolean> {
+  const row = await prisma.twoFactorSecret.findUnique({
+    where: { subject_type_subject_id: { subject_type: subject.type, subject_id: subject.id } },
+    select: { id: true, phone_e164: true, phone_verified_at: true },
+  });
+  if (!row || (!row.phone_e164 && !row.phone_verified_at)) return false;
+  await prisma.twoFactorSecret.update({
+    where: { id: row.id },
+    data: { phone_e164: null, phone_verified_at: null },
+  });
+  // Any outstanding code was minted for the number just removed; leaving it live would let it
+  // verify against a row that no longer names that destination.
+  await clearCodes(subject, 'phone_verify');
+  return true;
 }
 
 /** The verified number for a subject, or null. One reader, so no surface invents its own lookup. */

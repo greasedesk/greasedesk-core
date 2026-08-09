@@ -23,6 +23,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import * as bcrypt from 'bcryptjs';
 import { writeUserAudit } from '@/lib/audit';
+import { disable as disableTwoFactor } from '@/lib/two-factor';
 import { sendEmail } from '@/lib/email-service';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -47,10 +48,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.user.update({ where: { id: sUser.id }, data: { email } });
+      // ── A CHANGE OF LOGIN EMAIL IS A CHANGE OF IDENTITY ──────────────────────────────────────
+      // Everything bound to the old identity is unbound HERE, in the same transaction, or the
+      // account keeps credentials belonging to whoever held it before.
+      //
+      // The case that makes this urgent is a garage being SOLD. The buyer takes the existing login
+      // and changes the email; TwoFactorSecret is keyed on user.id, which does not change — so
+      // without this the previous owner's handset stays the verified recovery number AND keeps a
+      // working second factor for a business they no longer own. Nothing about that is visible to
+      // the new owner: the row simply persists.
+      //
+      // disable() removes the whole row, which is what we want here — the phone and the TOTP secret
+      // were both proofs about the PREVIOUS person. The new holder re-establishes both.
+      await disableTwoFactor({ type: 'tenant', id: sUser.id as string }, tx);
       // Audit the credential change — the gap this slice closes. from/to recorded on the user entity.
       await writeUserAudit(tx, {
         groupId: me.group_id, actorUserId: sUser.id, targetUserId: sUser.id,
-        action: 'user.email_changed', diff: { from: oldEmail, to: email },
+        action: 'user.email_changed',
+        diff: { from: oldEmail, to: email, credentialsCleared: ['phone', 'two_factor'] },
       });
     });
   } catch (e: any) {
@@ -61,7 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Notify the OLD address (best-effort) — a change to the login identity must never be silent.
   sendEmail(oldEmail, 'Your GreaseDesk login email was changed',
     `<p>The login email on your GreaseDesk account was changed to <strong>${email}</strong>.</p>` +
-    `<p>If this was you, no action is needed — sign in with the new address from now on. If it wasn't, contact your administrator immediately.</p>`,
+    `<p>If this was you, no action is needed — sign in with the new address from now on. Two-factor authentication and any confirmed mobile number have been cleared and will need setting up again.</p>` +
+    `<p>If it wasn't you, contact your administrator immediately.</p>`,
   ).catch(() => {});
 
   // Session stays valid (backstop). Tell the client it may silently re-mint onto the new identity.
