@@ -98,6 +98,13 @@ const ADAPTERS: Record<NotifyChannel, Adapter> = {
       const form = new URLSearchParams({ To: toE164Plus(to), Body: rendered.body });
       if (process.env.SMS_MESSAGING_SERVICE_SID) form.set('MessagingServiceSid', process.env.SMS_MESSAGING_SERVICE_SID);
       else form.set('From', process.env.SMS_SENDER_ID as string);
+      // ASK FOR THE TRUTH TO BE SENT BACK. Twilio only calls a status webhook if a message names
+      // one, so without this the callback route is dead code and every row stays at the create
+      // response forever. Optional on purpose: unset means no callbacks, which is exactly the
+      // behaviour we had before, rather than a send that fails because a webhook is not configured.
+      // The value MUST be byte-identical to SMS_STATUS_CALLBACK_URL — the same string is what the
+      // signature is computed over at the other end.
+      if (process.env.SMS_STATUS_CALLBACK_URL) form.set('StatusCallback', process.env.SMS_STATUS_CALLBACK_URL);
       const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, {
         method: 'POST',
         headers: {

@@ -8,14 +8,19 @@
  * as refused, and an interface that shows a message the log doesn't have is lying about the record.
  * Still no mark-as-read and no reply — the product cannot receive a message yet.
  *
- * ── WHAT "SENT" MEANS HERE, AND WHAT IT DOES NOT ────────────────────────────────────────────────
- * `sent` means THE PROVIDER ACCEPTED IT. It does not mean delivered, and this component must never
- * say delivered. Nothing in the product writes a delivery status: there is no provider webhook, and
- * NotificationLog.provider_message_id is null on every row, so there is nothing to reconcile a
- * delivery against. The label says "accepted by provider" for exactly that reason.
+ * ── WHAT EACH STATUS MEANS, AND WHAT IT DOES NOT ────────────────────────────────────────────────
+ * `sent` means THE PROVIDER ACCEPTED IT — nothing more. It is not proof of arrival and this
+ * component must never render it as one.
  *
- * DIRECTION is always outbound — there is no inbound path anywhere in the product. It is rendered
- * so the column exists honestly for the day inbound lands, not because there is variety today.
+ * `delivered` is new (2026-08-09) and is the ONLY value entitled to that word. It is written solely
+ * by the Twilio status callback (pages/api/webhooks/twilio-status), never by a send. SMS only: there
+ * is no equivalent for email, so an email row can still only reach `sent` and must keep saying
+ * "accepted by provider".
+ *
+ * BOTH OF THE OLD CAVEATS HERE WERE STALE and are corrected rather than deleted, because the
+ * reasoning still matters: this once said provider_message_id was null on every row (SMS rows now
+ * carry Twilio's SID, which is what makes reconciliation possible at all), and that there was no
+ * inbound path anywhere in the product (the inbound-email slice added one — hence `received`).
  */
 import React, { useState } from 'react';
 
@@ -60,12 +65,23 @@ const TEMPLATE_LABEL: Record<string, string> = {
  */
 function statusChip(status: string): { text: string; cls: string; title: string } {
   switch (status) {
+    case 'delivered':
+      // THE ONE STATUS THAT MAY SAY IT. Written only by the provider's status callback, and only
+      // after the carrier confirmed the handset took it.
+      return { text: 'Delivered', cls: 'bg-ok-soft text-ok border-ok', title: 'The network confirmed this message reached the handset.' };
     case 'sent':
-      return { text: 'Accepted by provider', cls: 'bg-ok-soft text-ok border-ok', title: 'The email provider accepted this message. That is not proof it arrived — the product records no delivery status.' };
+      // Deliberately NOT "sent" on the chip. The word invites the reader to assume arrival, which is
+      // the assumption this label exists to prevent.
+      return { text: 'Accepted by provider', cls: 'bg-accent-soft text-accent border-accent', title: 'The provider accepted this message. That is not proof it arrived — for a text, a delivery confirmation follows separately; for an email there is none.' };
+    case 'bounced':
+      return { text: 'Bounced', cls: 'bg-danger-soft text-danger border-danger', title: 'The provider reported a hard bounce — the address or number does not accept messages.' };
     case 'skipped':
       return { text: 'Not sent', cls: 'bg-warn-soft text-warn border-warn', title: 'The system deliberately did not send this. The reason is shown beside it.' };
     case 'failed':
-      return { text: 'Failed', cls: 'bg-danger-soft text-danger border-danger', title: 'The provider rejected the message, or the send threw.' };
+      // Two different events share this: rejected at the API, or reported undelivered afterwards by
+      // the network. The row's `error` carries the provider's own code and is rendered beside this,
+      // which is what separates "wrong number" from "carrier refused it".
+      return { text: 'Not delivered', cls: 'bg-danger-soft text-danger border-danger', title: 'The provider rejected this message, or the network reported it as undelivered. The reason is shown beside it.' };
     case 'queued':
       return { text: 'Queued', cls: 'bg-surface-muted text-muted border-line', title: 'Recorded but not yet handed to a provider.' };
     case 'received':
