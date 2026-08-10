@@ -22,13 +22,14 @@ import { Prisma } from '@prisma/client';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
+import { dueDateFor } from '@/lib/account-terms';
 
 const CARD_SELECT = {
   site_id: true,
   odometer_in: true,
   group: { select: { group_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
-  customer: { select: { name: true, address: true } },
+  customer: { select: { name: true, address: true, account_terms_days: true } },
   vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
 } as const;
 
@@ -71,6 +72,11 @@ async function createInvoiceRow(
       invoice_number: number,
       issued_at: issuedAt,
       date_issued: issuedAt, // the DOCUMENT date starts as the mint date; manager-editable thereafter
+      // FROZEN HERE, once, from the terms as they stand at this moment (lib/account-terms).
+      // CHARGEABLE ONLY: a warranty invoice is settled at £0 and collects nothing, and a historical
+      // import records work already paid for elsewhere — neither can fall due, so neither gets a
+      // date that would put it on a chase list.
+      due_date: series === 'chargeable' ? dueDateFor(card.customer, issuedAt) : null,
       company_name_snapshot: identity.name,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,

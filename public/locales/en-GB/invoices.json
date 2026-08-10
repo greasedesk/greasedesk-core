@@ -8,6 +8,7 @@
   "filter": {
     "all": "All",
     "unpaid": "Unpaid",
+    "overdue": "Overdue",
     "pending": "Pending",
     "paid": "Paid",
     "warranty": "Warranty",

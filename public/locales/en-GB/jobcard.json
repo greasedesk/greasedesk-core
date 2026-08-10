@@ -214,7 +214,11 @@
     "optOutNoRecord": "Not recorded",
     "optOutHint": "Tick to record that the customer has asked not to be contacted this way. Left clear means nothing has been recorded — not that they have agreed.",
     "phoneDialable": "Dialable",
-    "phoneNotDialable": "Couldn't read this as a dialable number — it's stored as typed."
+    "phoneNotDialable": "Couldn't read this as a dialable number — it's stored as typed.",
+    "accountTerms": "Payment terms (days)",
+    "accountTermsPh": "Blank = on collection",
+    "accountTermsHint": "Leave blank for a normal customer who pays when they collect the car.",
+    "accountName": "Account name (if different)"
   },
   "detailsEdit": {
     "dvsaButton": "Look up vehicle details (DVSA)",

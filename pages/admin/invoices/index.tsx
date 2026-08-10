@@ -31,7 +31,9 @@ type Row = {
   jobCardId: string; recipientEmail: string | null;
   voidedAt?: string | null; voidReason?: string | null;
 };
-const FILTERS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'historical', 'void'] as const;
+// 'overdue' sits immediately after 'unpaid' because it is a strict subset of it: unpaid is what is
+// out there (mostly cars still on the ramp), overdue is who is actually late.
+const FILTERS = ['all', 'unpaid', 'overdue', 'pending', 'paid', 'warranty', 'historical', 'void'] as const;
 // 'issued' is an ARRIVAL-ONLY filter (dashboard "Issued vs paid" tile): chargeable issued-in-period,
 // any status. It has no tab — the period banner names it; picking any tab replaces it.
 type Filter = typeof FILTERS[number] | 'issued';

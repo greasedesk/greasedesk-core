@@ -16,6 +16,7 @@ import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/veh
 // rendered as "opted in".
 type Owner = {
   name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null;
+  accountTermsDays?: number | null; accountName?: string | null;
   smsOptOut?: boolean | null; emailOptOut?: boolean | null;
 };
 type Vehicle = {
@@ -49,6 +50,10 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   const [phone, setPhone] = useState(owner.phone ?? '');
   const [email, setEmail] = useState(owner.email ?? '');
   const [address, setAddress] = useState(owner.address ?? '');
+  // Blank = retail, paid on collection. See lib/account-terms: the absence of terms is the normal
+  // case, not missing data, so this field starts empty and stays empty for almost every customer.
+  const [termsDays, setTermsDays] = useState(owner.accountTermsDays != null ? String(owner.accountTermsDays) : '');
+  const [accountName, setAccountName] = useState(owner.accountName ?? '');
   // Contact preferences. `?? null` preserves the unknown state — a customer nobody has asked must
   // not be turned into an explicit "opted in" just by opening the form and saving.
   const [smsOptOut, setSmsOptOut] = useState<boolean | null>(owner.smsOptOut ?? null);
@@ -121,7 +126,12 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
       // the operator's spacing on the CLIENT — "07747 732864" reached the server as "07747732864" and
       // the form the garage recognises was gone before anything could keep it. The server now stores
       // the raw string AND derives the dialable form beside it (lib/contact-routes).
-      owner: { name, phone, email, address, sms_opt_out: smsOptOut, email_opt_out: emailOptOut },
+      owner: {
+        name, phone, email, address, sms_opt_out: smsOptOut, email_opt_out: emailOptOut,
+        // Sent as typed; the server normalises through the one rule. '' becomes NULL — clearing the
+        // box takes a customer OFF account, which is the only way back to paying on collection.
+        account_terms_days: termsDays, account_name: accountName,
+      },
       vehicle: {
         registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc,
         ...(mot ? { motExpiry: mot.motExpiry ?? undefined, lastMotMileage: mot.lastMotMileage ?? undefined, lastMotDate: mot.lastMotDate ?? undefined } : {}),
@@ -223,6 +233,20 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
         </div>
         <div><label className={labelCls}>{t('field.email')}</label><input className={inputCls} type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
         <div className="sm:col-span-2"><label className={labelCls}>{t('field.address')}</label><textarea className={`${inputCls} resize-y`} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} /></div>
+        {/* ── ON ACCOUNT ─────────────────────────────────────────────────────────────────────────
+            Blank is the answer for almost everyone: a garage does not release a car until the bill
+            is paid, so retail work has no terms and cannot be overdue. Filling this in is the whole
+            act of putting a customer on account — there is no separate switch to disagree with. */}
+        <div>
+          <label className={labelCls}>{t('field.accountTerms')}</label>
+          <input className={inputCls} type="number" inputMode="numeric" min="1" max="180" placeholder={t('field.accountTermsPh')}
+            value={termsDays} onChange={(e) => setTermsDays(e.target.value)} data-testid="cust-terms" />
+          <p className="text-[11px] text-muted mt-1">{t('field.accountTermsHint')}</p>
+        </div>
+        <div>
+          <label className={labelCls}>{t('field.accountName')}</label>
+          <input className={inputCls} value={accountName} onChange={(e) => setAccountName(e.target.value)} data-testid="cust-account-name" />
+        </div>
         {/* CONTACT PREFERENCES — the garage is controller of this consent, so it is edited here on
             the customer's own record. Ticking a box records a REFUSAL (true); leaving it clear
             records nothing at all, so an untouched customer stays "no record" rather than being

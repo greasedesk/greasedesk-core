@@ -115,9 +115,9 @@ enum OverheadPeriod {
 // the door bars a garage from its own statutory records. lapsed = READ-ONLY-FOREVER-FREE, never
 // locked out. Read only via lib/billing.ts::canWrite — never inline.
 enum BillingStatus {
-  ok      // trialing or active — full write access
-  grace   // past_due: Stripe is retrying; writes still allowed, warned
-  lapsed  // canceled / unpaid: reads stay open forever, writes blocked, nothing deleted
+  ok // trialing or active — full write access
+  grace // past_due: Stripe is retrying; writes still allowed, warned
+  lapsed // canceled / unpaid: reads stay open forever, writes blocked, nothing deleted
 }
 
 enum ItemType {
@@ -149,11 +149,11 @@ enum ResourceType {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model Group {
-  id               String  @id @default(uuid())
-  group_name       String
-  trading_name     String?
-  company_number   String?
-  vat_number       String?
+  id                            String  @id @default(uuid())
+  group_name                    String
+  trading_name                  String?
+  company_number                String?
+  vat_number                    String?
   // Setup-checklist APPLICABILITY declarations (item-13) — NOT "done" flags (completion is always
   // derived from real rows). A sole trader legitimately has no company number and no employees, so
   // these let the owner mark those two signals "not applicable" instead of forever "to do". Scoped
@@ -164,16 +164,16 @@ model Group {
   // Master switch: VAT applies anywhere (quotes/invoices/overheads) only when true. Default true
   // preserves existing tenants' VAT-as-now behaviour; sub-threshold garages turn it off. Resolved
   // via lib/tax.ts (getTaxProfile → is_registered) and gated in computeTax — never scattered.
-  vat_registered   Boolean @default(true)
+  vat_registered                Boolean @default(true)
   // Company-wide default VAT rate (only meaningful when registered). LEGACY Decimal-percent column,
   // kept in lockstep with tax_default_rate_bp (the canonical integer-basis-point source since the
   // TaxProfile refactor). getTaxProfile reads bp, falling back to ×100 of this while backfill lands.
-  default_vat_rate Decimal @default(20) @db.Decimal(5, 2)
-  address          String?
+  default_vat_rate              Decimal @default(20) @db.Decimal(5, 2)
+  address                       String?
   // Marketing attribution captured at signup from a public `?ref=` parameter (DORMANT — no rep
   // system yet; we just never lose the attribution, which is expensive to retrofit). Sanitised +
   // capped at write; null when the signup carried no ref.
-  signup_ref       String?
+  signup_ref                    String?
 
   // ── TaxProfile (item-13 onboarding groundwork). The Group is the LEGAL entity that files one
   // tax return, so tax identity lives here; currency + locale are TRADING identity and stay on Site
@@ -183,11 +183,11 @@ model Group {
   // COUNTRY OF RECORD (country-first onboarding). NULL until the country step runs → the step's
   // completion signal. Drives currency, timezone options, tax_model and tax_label from the profile
   // (lib/locale-profiles). tax_country_code is kept in lockstep, derived from this.
-  country_code        String?                   // ISO 3166-1 alpha-2; NULL until chosen
-  tax_country_code    String  @default("GB")   // ISO 3166-1 alpha-2 (derived from country_code)
-  tax_model           String  @default("vat")  // 'vat' (only live branch) | 'sales_tax' | 'gst_split' (throw NotImplemented)
-  tax_default_rate_bp Int?                      // integer BASIS POINTS (2000 = 20%); NULL until backfilled → derive ×100 of default_vat_rate
-  prices_include_tax  Boolean @default(false)   // false for UK B2B (line prices are ex-tax)
+  country_code        String? // ISO 3166-1 alpha-2; NULL until chosen
+  tax_country_code    String  @default("GB") // ISO 3166-1 alpha-2 (derived from country_code)
+  tax_model           String  @default("vat") // 'vat' (only live branch) | 'sales_tax' | 'gst_split' (throw NotImplemented)
+  tax_default_rate_bp Int? // integer BASIS POINTS (2000 = 20%); NULL until backfilled → derive ×100 of default_vat_rate
+  prices_include_tax  Boolean @default(false) // false for UK B2B (line prices are ex-tax)
 
   // Invoice number DISPLAY format (per-tenant). Rendered via lib/invoice-number.ts::formatInvoiceNumber.
   // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").
@@ -248,24 +248,24 @@ model Group {
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
-  perm_standard_edit_pricing  Boolean @default(false)
-  perm_standard_diary_entries Boolean @default(false)
+  perm_standard_edit_pricing  Boolean   @default(false)
+  perm_standard_diary_entries Boolean   @default(false)
   // Diary financial visibility, per role (ADMIN/owner always sees both). see-values = per-block value +
   // "booked" total; see-margin = the margin total (exposes cost structure → tighter defaults).
-  perm_manager_see_values     Boolean @default(true)
-  perm_manager_see_margin     Boolean @default(false) // margin is a DELIBERATE grant, never inherited (ruling 2026-07-12)
+  perm_manager_see_values     Boolean   @default(true)
+  perm_manager_see_margin     Boolean   @default(false) // margin is a DELIBERATE grant, never inherited (ruling 2026-07-12)
   vin_hint_text               String? // tenant-worded "where to find the VIN" for the phone card; empty = no hint (never a marque default)
-  perm_standard_see_values    Boolean @default(false)
-  perm_standard_see_margin    Boolean @default(false)
+  perm_standard_see_values    Boolean   @default(false)
+  perm_standard_see_margin    Boolean   @default(false)
   // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).
   // Managers/admins always; this extends it to STANDARD.
-  perm_standard_view_invoices Boolean @default(false)
+  perm_standard_view_invoices Boolean   @default(false)
   // ── PHONE-STEP BREAK-GLASS. Set by an OPERATOR when a tenant genuinely cannot complete the step:
   // no mobile at all, a number no carrier will deliver to, or both channels failing. It EXEMPTS the
   // tenant from the gate and writes nothing about a phone — faking phone_verified_at would put a
   // lie in the column SMS 2FA later trusts. Reason mandatory: an exemption with no explanation is
   // indistinguishable from a mistake six months later.
-  phone_step_exempt_at     DateTime?
+  phone_step_exempt_at        DateTime?
 
   // ── DEMO TENANTS ──────────────────────────────────────────────────────────────────────────
   // is_demo is the SAFETY flag: it makes sendNotification refuse (lib/demo-tenant), keeps the
@@ -273,14 +273,14 @@ model Group {
   // subscription and never will. It is deliberately NOT derived from demo_expires_at — the sales
   // demo is a demo with no expiry, and conflating the two would either make it immortal-and-live
   // or expiring-and-doomed.
-  is_demo         Boolean   @default(false)
+  is_demo                  Boolean   @default(false)
   // WHEN IT DIES. NULL = never (the long-lived sales demo). The purge cron only ever takes rows
   // where this is non-null AND in the past, so a missing expiry can never cause a surprise
   // deletion — it causes an immortal demo instead, which is visible in the Engine Room.
-  demo_expires_at DateTime?
+  demo_expires_at          DateTime?
   // The generator's seed. Kept so a demo can be regenerated identically (the sales demo ages and
   // is rebuilt nightly) and so a bug in generated data is reproducible.
-  demo_seed       String?
+  demo_seed                String?
   phone_step_exempt_reason String?
   phone_step_exempt_by     String? // Operator.id — never a tenant user; only we can grant this
 
@@ -289,8 +289,8 @@ model Group {
   // at or above it. NULLABLE with defaults applied in lib/utilisation-light so a half-configured row
   // cannot produce a half-broken light. The writer refuses red >= amber — an inverted pair leaves no
   // amber band and looks like a working light that isn't.
-  util_red_below               Int? @default(50)
-  util_amber_below             Int? @default(75)
+  util_red_below   Int? @default(50)
+  util_amber_below Int? @default(75)
 
   billing            GroupBilling?
   features           GroupFeature[]
@@ -320,24 +320,24 @@ model Group {
   invoice_sequence InvoiceSequence?
 
   // Product catalogue (tenant-level; one shared catalogue across all sites)
-  catalogue_items  CatalogueItem[]
-  service_tiers    ServiceTier[]
-  leaveRecords     LeaveRecord[]
-  publicHolidays   PublicHoliday[]
-  employmentEvents EmploymentEvent[]
-  siteConfigEvents SiteConfigEvent[]
-  importBatches    ImportBatch[]
-  catalogueAliases CatalogueAlias[]
+  catalogue_items    CatalogueItem[]
+  service_tiers      ServiceTier[]
+  leaveRecords       LeaveRecord[]
+  publicHolidays     PublicHoliday[]
+  employmentEvents   EmploymentEvent[]
+  siteConfigEvents   SiteConfigEvent[]
+  importBatches      ImportBatch[]
+  catalogueAliases   CatalogueAlias[]
   lineSplitTemplates LineSplitTemplate[]
-  notifications    NotificationLog[]
-  message_threads  MessageThread[]
+  notifications      NotificationLog[]
+  message_threads    MessageThread[]
   // Per-tenant inbound mailbox token. RANDOM AND ROTATABLE — deliberately NOT derived from `ref`
   // (sequentially allocated, so an attacker could enumerate every garage) nor from `id` (unguessable
   // but unrotatable: a leaked address would be unfixable without changing the primary key).
-  inbound_token    String?           @unique
-  magicLinks       CustomerMagicLink[]
-  countryWaitlist  CountryWaitlist[]
-  quoteVersions    QuoteVersion[]
+  inbound_token      String?             @unique
+  magicLinks         CustomerMagicLink[]
+  countryWaitlist    CountryWaitlist[]
+  quoteVersions      QuoteVersion[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -376,32 +376,32 @@ model PlatformOperator {
 // axis from tenant authority. Each has its own credentials and its own NextAuth provider; the JWT
 // carries actorClass to keep the three boundaries separate. See lib/operator-auth / lib/rep-auth.
 enum OperatorRole {
-  owner           // all ops; manages operators; ONLY role that purges or transfers ownership
+  owner // all ops; manages operators; ONLY role that purges or transfers ownership
   country_manager // region-scoped; all support + lifecycle except operator-management and purge
-  support         // region-scoped, read-only tenant visibility + password reset / change email / extend trial
+  support // region-scoped, read-only tenant visibility + password reset / change email / extend trial
 }
 
 model Operator {
-  id           String       @id @default(uuid())
-  email        String       @unique
-  passwordHash String
-  name         String
-  role         OperatorRole @default(support)
+  id                   String       @id @default(uuid())
+  email                String       @unique
+  passwordHash         String
+  name                 String
+  role                 OperatorRole @default(support)
   // ISO-3166-1 alpha-2 country codes this operator may act in. IGNORED for `owner` (all regions).
   // The ONLY source of region scope — operatorTenantScope() derives the query filter from here,
   // never from a request param. Empty for a non-owner = can see nothing (fails closed).
-  regions      String[]     @default([])
-  status       String       @default("active") // 'active' | 'suspended' (authorize() blocks non-active)
-  suspended_at DateTime?
-  note         String?
+  regions              String[]     @default([])
+  status               String       @default("active") // 'active' | 'suspended' (authorize() blocks non-active)
+  suspended_at         DateTime?
+  note                 String?
   // Set-password invite (mirrors the tenant User flow): raw token emailed, only its hash stored,
   // single-use, 5-day expiry. A new operator is created INVITE_PENDING and cannot log in until set.
   invite_token_hash    String?
   invite_token_expires DateTime?
   invite_token_used_at DateTime?
   last_login_at        DateTime? // stamped by the operator authorize() on successful sign-in
-  created_at   DateTime     @default(now())
-  updated_at   DateTime     @updatedAt
+  created_at           DateTime     @default(now())
+  updated_at           DateTime     @updatedAt
 }
 
 model Rep {
@@ -538,21 +538,21 @@ model SuperAdminAudit {
 // a DB leak yields the secret but not the password (bcrypt), so 2FA still holds unless BOTH leak;
 // encryption-at-rest of the secret is a noted hardening follow-up.
 model TwoFactorSecret {
-  id           String    @id @default(uuid())
-  subject_type String // 'operator' | 'tenant' | 'rep'
-  subject_id   String
+  id                  String    @id @default(uuid())
+  subject_type        String // 'operator' | 'tenant' | 'rep'
+  subject_id          String
   // WHICH second factor this row describes. 'totp' has a secret and no phone; 'sms' has a phone and
   // no secret. One row per subject either way, so the lifecycle (enabled flips only after a live
   // code round-trips) is identical for both and cannot fork.
-  method       String    @default("totp") // 'totp' | 'sms'
-  secret       String? // base32 TOTP secret — NULL on an sms-method row
+  method              String    @default("totp") // 'totp' | 'sms'
+  secret              String? // base32 TOTP secret — NULL on an sms-method row
   // THE VERIFIED NUMBER, and deliberately NOT User.phone. That column is a free-text HR profile
   // field an ADMIN can edit, so a factor delivered there would let an admin redirect a colleague's
   // codes to their own handset. Only a verification round-trip writes this one.
   // Stored E.164 digits-only via lib/contact-routes::toE164Digits — the same normaliser the customer
   // spine uses. No raw copy: a customer's raw number is what the garage recognises on screen; this
   // one is only ever dialled by a machine.
-  phone_e164        String?
+  phone_e164          String?
   // TWO TIMESTAMPS, TWO DIFFERENT CLAIMS, and conflating them would quietly weaken a second factor.
   //   phone_verified_at — an SMS code was confirmed. A HANDSET was proven. This is the only value
   //                       SMS 2FA may ever build on, so it must never be written by any other route.
@@ -560,13 +560,13 @@ model TwoFactorSecret {
   //                       hold a number this person can be reached at", which is what the signup
   //                       gate actually needs, and all an email fallback can honestly assert.
   // SMS sets both; email sets only the second.
-  phone_verified_at DateTime?
-  phone_recorded_at DateTime?
+  phone_verified_at   DateTime?
+  phone_recorded_at   DateTime?
   phone_confirmed_via String? // 'sms' | 'email' — legibility; derivable, but not at a glance
-  enabled      Boolean   @default(false) // false during enrolment; true ONLY after a confirming code round-trips
-  confirmed_at DateTime?
-  created_at   DateTime  @default(now())
-  updated_at   DateTime  @updatedAt
+  enabled             Boolean   @default(false) // false during enrolment; true ONLY after a confirming code round-trips
+  confirmed_at        DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
 
   @@unique([subject_type, subject_id])
 }
@@ -577,7 +577,6 @@ model TwoFactorSecret {
  * ONE-TIME CODES WE DELIVERED, for every purpose. Deliberately one table, not one per feature: a
  * signup phone verification and an SMS login code are the same mechanism asked twice, and a second
  * table would mean a second expiry rule, a second attempt cap and eventually a second bug.
- *
  * `purpose` is what keeps them apart — a code minted to verify a phone can never satisfy a login,
  * because the lookup is scoped to it. Only the HASH is stored, so a database reader cannot sign in
  * as anybody. `consumed_at` makes a code single-use; `attempts` kills THIS code after 5 wrong
@@ -585,7 +584,7 @@ model TwoFactorSecret {
  * both exist, because they answer different questions.
  */
 model DeliveredCode {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   subject_type String // 'tenant' | 'operator' | 'rep' — same Subject shape as TwoFactorSecret
   subject_id   String
   purpose      String // 'phone_verify' | 'login_2fa'
@@ -720,8 +719,8 @@ model GroupBilling {
   // by verified webhook handlers (lib/stripe-webhook). subscription_status is the raw Stripe status
   // (trialing/active/past_due/canceled/…) that lib/billing derives the gate + the display status
   // from. NULL until the tenant completes Checkout. Never write these from a redirect. ──
-  stripe_customer_id     String?  @unique
-  stripe_subscription_id String?  @unique
+  stripe_customer_id     String?   @unique
+  stripe_subscription_id String?   @unique
   subscription_status    String? // raw Stripe subscription.status
   current_period_end     DateTime? // Stripe's period end (renewal/charge date), webhook-maintained
 
@@ -736,8 +735,8 @@ model GroupBilling {
   // The reason is carried because the two populations need different words for the same rule: a
   // trial that ended never intended to pay; a past_due subscription is a customer whose card
   // stopped working. Telling a two-year customer their trial ended would be insulting.
-  grace_started_at       DateTime?
-  grace_reason           String?   // 'trial_ended' | 'payment_failed'
+  grace_started_at DateTime?
+  grace_reason     String? // 'trial_ended' | 'payment_failed'
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
@@ -829,10 +828,10 @@ model Site {
   invoices         Invoice[]
   leaveRecords     LeaveRecord[]
   publicHolidays   PublicHoliday[]
+  config_events    SiteConfigEvent[]
+  import_batches   ImportBatch[]
 
   @@index([group_id])
-  config_events SiteConfigEvent[]
-  import_batches ImportBatch[]
 }
 
 model SiteFeature {
@@ -995,16 +994,16 @@ model User {
 }
 
 model Customer {
-  id         String   @id @default(uuid())
-  group_id   String
+  id                 String    @id @default(uuid())
+  group_id           String
   // ORIGIN site, not ownership. A customer belongs to the GARAGE (group_id above), not to a bay —
   // so this is NULLABLE + SetNull, mirroring User.site_id. Previously it was required + Cascade,
   // which meant deleting a Location would have destroyed its customers AND their VehicleOwnership
   // edges (which cascade from Customer) — the spine of the car-first model. Only the application-
   // level delete guard stood in the way; invoices had DB-level protection and customers did not.
   // Null = the origin site is gone; the customer survives as a group-level record.
-  site_id    String?
-  name       String
+  site_id            String?
+  name               String
   // TWO COLUMNS, ONE NUMBER. `phone` stays the OPERATOR'S RAW INPUT, exactly as typed — it is what
   // the garage recognises on the screen and every display reads it unchanged. `phone_e164` is the
   // machine-dialable form, derived on write by lib/contact-routes::toE164Digits using the TENANT'S
@@ -1012,11 +1011,22 @@ model Customer {
   // HONEST-NULL: an unparseable number leaves phone_e164 NULL while phone keeps the raw string —
   // unknown, not absent. Normalising in place would be unrecoverable for a mistyped number, so the
   // raw is never overwritten. Digits-only, no leading '+', matching what toE164Digits returns.
-  phone      String?
-  phone_e164 String?
-  email      String?
-  address    String? // billing address — source for Invoice.customer_address_snapshot
-  notes      String?
+  phone              String?
+  phone_e164         String?
+  email              String?
+  address            String? // billing address — source for Invoice.customer_address_snapshot
+  notes              String?
+  // ── ON ACCOUNT, AND THE TERMS, AS ONE FACT ──────────────────────────────────────────────────────
+  // NULL = a retail customer who pays on collection, which is every customer that existed before
+  // this column and the overwhelming majority after it. Non-null = an account customer, and the
+  // value IS the terms in days (30 for the usual "30 days net").
+  //
+  // Deliberately NOT a boolean beside a number. An `is_trade` flag and a `terms_days` column can
+  // disagree — a trade customer with no terms, terms sitting on a retail customer — and then
+  // something has to decide which of them is lying. One nullable column cannot contradict itself.
+  account_terms_days Int?
+  // The trading name to bill, when the account is not simply the customer's own name.
+  account_name       String?
   // ── CONTACT PREFERENCES (per channel — a customer may refuse SMS and still accept email) ────────
   // The GARAGE is controller of this consent, so it is tenant-scoped customer data, not a platform
   // record. THREE STATES, deliberately nullable: NULL = no record (unknown), true = opted OUT,
@@ -1025,7 +1035,7 @@ model Customer {
   sms_opt_out        Boolean?
   email_opt_out      Boolean?
   opt_out_updated_at DateTime? // when the preference was last set (who = AuditLog)
-  created_at DateTime @default(now())
+  created_at         DateTime  @default(now())
 
   // +++ CUSTOMER PORTAL LINK ---
   userId String? @unique
@@ -1210,8 +1220,8 @@ model Booking {
 model JobCard {
   // PROVENANCE: created by the Invoice Import wizard rather than lived through the workshop.
   // Imported cards are excluded from the unpaid-invoice chaser and marked on dashboard periods.
-  is_imported     Boolean @default(false)
-  import_batch_id String?
+  is_imported            Boolean       @default(false)
+  import_batch_id        String?
   id                     String        @id @default(uuid())
   group_id               String
   site_id                String
@@ -1288,20 +1298,20 @@ model JobCard {
   // shows a check-your-supplier-costs advisory.
   costs_inherited    Boolean @default(false)
 
-  group             Group          @relation(fields: [group_id], references: [id], onDelete: NoAction)
-  site              Site           @relation(fields: [site_id], references: [id], onDelete: NoAction)
-  profit_centre     ProfitCentre?  @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
-  customer          Customer?      @relation(fields: [customer_id], references: [id], onDelete: SetNull)
-  vehicle           Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
-  mechanic_assigned User?          @relation("JobCardMechanic", fields: [mechanic_assigned_id], references: [id], onDelete: SetNull)
-  resource          Resource?      @relation(fields: [resource_id], references: [id], onDelete: SetNull)
+  group             Group               @relation(fields: [group_id], references: [id], onDelete: NoAction)
+  site              Site                @relation(fields: [site_id], references: [id], onDelete: NoAction)
+  profit_centre     ProfitCentre?       @relation(fields: [profit_centre_id], references: [id], onDelete: NoAction)
+  customer          Customer?           @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+  vehicle           Vehicle             @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
+  mechanic_assigned User?               @relation("JobCardMechanic", fields: [mechanic_assigned_id], references: [id], onDelete: SetNull)
+  resource          Resource?           @relation(fields: [resource_id], references: [id], onDelete: SetNull)
   photos            JobCardPhoto[]
   items             JobCardItem[]
   invoice           Invoice?
   magicLinks        CustomerMagicLink[]
   quoteVersions     QuoteVersion[]
-  duplicated_from   JobCard?       @relation("CardDuplicate", fields: [duplicated_from_id], references: [id], onDelete: SetNull)
-  duplicates        JobCard[]      @relation("CardDuplicate")
+  duplicated_from   JobCard?            @relation("CardDuplicate", fields: [duplicated_from_id], references: [id], onDelete: SetNull)
+  duplicates        JobCard[]           @relation("CardDuplicate")
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
@@ -1321,9 +1331,9 @@ model JobCardPhoto {
   duration_seconds Int? // video length (client-probed metadata; display only)
   r2_key           String? // private R2 object key; display via presigned GET (URL never stored)
   poster_r2_key    String? // VIDEO ONLY: a small JPEG poster frame (captured client-side ~1-2s into
-                           // the clip), its own R2 object. NULL = pre-poster video → placeholder tile.
-  rotation         Int     @default(0) // 0/90/180/270 — a display INTERPRETATION applied as a CSS
-                           // transform (grid + lightbox). NEVER re-encodes or rewrites the R2 bytes.
+  // the clip), its own R2 object. NULL = pre-poster video → placeholder tile.
+  rotation         Int      @default(0) // 0/90/180/270 — a display INTERPRETATION applied as a CSS
+  // transform (grid + lightbox). NEVER re-encodes or rewrites the R2 bytes.
   photo_type       String?
   file_url         String? // legacy (pre-R2); nullable now
   uploaded_by      String?
@@ -1337,7 +1347,7 @@ model JobCardPhoto {
 }
 
 model JobCardItem {
-  cost_basis String? // 'actual' | 'estimated' — provenance of unit_cost on an imported line
+  cost_basis        String? // 'actual' | 'estimated' — provenance of unit_cost on an imported line
   id                String   @id @default(uuid())
   job_card_id       String
   item_type         ItemType
@@ -1457,9 +1467,9 @@ model Invoice {
   // PROVENANCE. external_ref carries the ORIGINAL system's number (Xero) — the GreaseDesk series
   // is still minted normally and stays gapless; on imported invoices the UI shows external_ref as
   // the primary number with the GreaseDesk number secondary.
-  is_imported  Boolean @default(false)
-  external_ref String?
-  cost_basis   String? // 'actual' | 'estimated' | 'mixed' — how the parts costs behind this were obtained
+  is_imported             Boolean       @default(false)
+  external_ref            String?
+  cost_basis              String? // 'actual' | 'estimated' | 'mixed' — how the parts costs behind this were obtained
   id                      String        @id @default(uuid())
   group_id                String // tenantId
   job_card_id             String        @unique // one invoice per card; sticky number on re-issue
@@ -1470,6 +1480,13 @@ model Invoice {
   invoice_number          String? // rendered string; set at issue, sticky thereafter
   issued_at               DateTime      @default(now())
   date_issued             DateTime? // the DOCUMENT issue/billing date (defaults from mint; manager-editable, audited) — issued_at stays the mint attestation
+  /**
+   * When payment is due. NULL = due on collection — a garage does not release a car until the bill
+   * is paid, so retail work has no due date and is not capable of being overdue.
+   * FROZEN AT ISSUE, like the lines: derived once from date_issued + the customer's terms AT THAT
+   * MOMENT. Re-deriving it later would let a change of terms silently re-age last year's invoices.
+   */
+  due_date                DateTime?
   paid_at                 DateTime?
   date_paid               DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
   payment_method_id       String? // how it was paid (grain for method reporting — banked tile)
@@ -1479,9 +1496,9 @@ model Invoice {
   // --- VOID grain. The explanation VATREC5010 asks for lives ON the document it explains, not in
   // a side table a reader has to know to join. Set together, in one transaction, or not at all.
   voided_at               DateTime?
-  voided_by               String?   // User.id of the admin who retired it — never a system actor
-  void_category           String?   // one of lib/invoice-void VOID_CATEGORIES
-  void_reason             String?   // free text, MANDATORY (see lib/invoice-void for why this one is)
+  voided_by               String? // User.id of the admin who retired it — never a system actor
+  void_category           String? // one of lib/invoice-void VOID_CATEGORIES
+  void_reason             String? // free text, MANDATORY (see lib/invoice-void for why this one is)
   // APPEND-ONLY correction log for `void_reason`, the SAME shape as EmploymentEvent.correction_json:
   // [{ at, by, from, to }]. The reason is the record an inspector reads, so a thin one must be
   // improvable — but never by quietly overwriting it. `void_reason` holds the CURRENT text and the
@@ -1508,39 +1525,37 @@ model Invoice {
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
 
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
-  @@index([group_id])
-  @@index([site_id])
-
   // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
   // checks at runtime, but two concurrent commits could both pass that check and both write;
   // only a constraint makes it impossible. NULL external_ref is exempt (Postgres), so ordinary
   // GreaseDesk invoices are unaffected.
   @@unique([group_id, external_ref])
-
+  @@index([group_id])
+  @@index([site_id])
 }
 
 model InvoiceLine {
   cost_basis        String? // 'actual' | 'estimated' — provenance of unit_cost on an imported line
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   invoice_id        String
   description       String
-  qty               Decimal  @default(1) @db.Decimal(12, 2)
-  unit_price        Decimal  @default(0) @db.Decimal(12, 2)
-  vat_rate          Decimal  @default(0) @db.Decimal(5, 2)
-  line_vat          Decimal  @default(0) @db.Decimal(12, 2)
-  line_total        Decimal  @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
+  qty               Decimal   @default(1) @db.Decimal(12, 2)
+  unit_price        Decimal   @default(0) @db.Decimal(12, 2)
+  vat_rate          Decimal   @default(0) @db.Decimal(5, 2)
+  line_vat          Decimal   @default(0) @db.Decimal(12, 2)
+  line_total        Decimal   @default(0) @db.Decimal(12, 2) // EX-VAT (qty×unit_price); gross = line_total + line_vat
   // INTERNAL — margin only; NEVER rendered to the customer. NULLABLE (2026-07-17): null = cost
   // UNKNOWN (frozen from an un-catalogued ad-hoc part); a number (incl. 0 = free) = known. The P&L
   // EXCLUDES null from parts-cost and surfaces the exposure — never counts unknown as zero.
-  unit_cost         Decimal? @db.Decimal(12, 2)
-  labour_hours      Decimal? @db.Decimal(6, 2) // frozen labour-content grain (fixed-service lines)
+  unit_cost         Decimal?  @db.Decimal(12, 2)
+  labour_hours      Decimal?  @db.Decimal(6, 2) // frozen labour-content grain (fixed-service lines)
   // Frozen classification (freeze-at-issue model): the ledger reads THESE, never the mutable card.
   // Nullable only for pre-backfill legacy rows; every new snapshot writes both.
   item_type         ItemType?
-  labour_outsourced Boolean  @default(false)
+  labour_outsourced Boolean   @default(false)
   catalogue_item_id String? // forward hook; NO FK yet (no catalogue table) — added when catalogue lands
-  position          Int      @default(0)
-  created_at        DateTime @default(now())
+  position          Int       @default(0)
+  created_at        DateTime  @default(now())
 
   invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
@@ -1583,13 +1598,13 @@ model PaymentMethod {
 }
 
 model InvoiceSequence {
-  group_id            String   @id // one row per tenant
-  last_value          Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
-  warranty_last_value Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
+  group_id              String   @id // one row per tenant
+  last_value            Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
+  warranty_last_value   Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
   // HISTORICAL counter — the third independent series. Recording an invoice raised elsewhere must
   // never advance the chargeable counter; that is the whole reason this column exists.
-  historical_last_value Int    @default(0)
-  updated_at          DateTime @default(now())
+  historical_last_value Int      @default(0)
+  updated_at            DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
@@ -1636,10 +1651,10 @@ model CatalogueItem {
   components    CatalogueComponent[]
   tier_prices   CatalogueItemTierPrice[]
   promo_targets PromoTarget[]
+  aliases       CatalogueAlias[]
 
   @@unique([group_id, code])
   @@index([group_id])
-  aliases CatalogueAlias[]
 }
 
 // Tenant-DEFINED, OPTIONAL vehicle/price tiers (0 tiers = single-price world; no tier UI shown).
@@ -1756,20 +1771,20 @@ model CostPerson {
   // contracted_hours_per_day: NULL on a chargeable person = incomplete config (amber flag).
   // working_days: rostered weekdays (0=Sun..6=Sat); EMPTY = inherit the site's open_days
   // (TMBS default Mon–Sat) — an explicit value overrides.
-  is_chargeable               Boolean   @default(false)
-  contracted_hours_per_day    Decimal?  @db.Decimal(4, 2)
-  working_days                Int[]     @default([])
+  is_chargeable                  Boolean   @default(false)
+  contracted_hours_per_day       Decimal?  @db.Decimal(4, 2)
+  working_days                   Int[]     @default([])
   // Annual leave allowance in DAYS (per person, admin-editable). Leave-year = CALENDAR year in
   // v1: "taken" = this calendar year's leave rows, balance = allowance − taken. SEAM (banked):
   // configurable leave-year start + carry-over + part-time/six-day pro-rata would land here.
   // Allowance/balance are PER-PERSON figures — never apportioned or summed across sites.
-  annual_leave_allowance_days Decimal?  @default(28.0) @db.Decimal(4, 1)
+  annual_leave_allowance_days    Decimal?  @default(28.0) @db.Decimal(4, 1)
   // Utilisation factor (%): the REALISTIC share of this person's available hours that can
   // be billed — sets the workshop's derived target; NEVER an individual performance score.
   // NOT NULL (default 70 — a competent full-time mechanic) so the target can't break.
   // Effective-dated via EmploymentEvent kind `factor`; the TARGET resolves value-at-window-end
   // from the series (the first value-true-at-time read — historic months keep their factor).
-  utilisation_factor          Int       @default(70)
+  utilisation_factor             Int       @default(70)
   // --- EMPLOYMENT DATES: TWO AT EACH END, because work and pay do not have to stop together ---
   // Payment in lieu of notice is the case a single leaving date cannot express: the last day
   // someone turns spanners and the last day they are paid can be a month apart, and each drives a
@@ -1792,7 +1807,7 @@ model CostPerson {
   // for the minutes between `migrate deploy` and the new deployment being promoted — the old code
   // still selects it. Nothing reads it; it is all-null across every tenant and drops in a
   // follow-up migration once no running build references it.
-  end_date                    DateTime?
+  end_date                       DateTime?
   // --- PERSONAL DETAILS. All OPTIONAL, none defaulted, none effective-dated ---------------------
   // NOT EventS: EmploymentEvent exists because a PAST month's figure must not restate when a value
   // changes (pay, hours, pattern, factor). Nothing here feeds capacity, cost or VAT, and an address
@@ -1804,10 +1819,10 @@ model CostPerson {
   // equivalent User columns are unreachable from HR. personal_email is a SEPARATE column from
   // User.email deliberately: that one is a @unique credential, this one is contact data that two
   // people may legitimately share.
-  date_of_birth               DateTime? @db.Date
-  home_address                String?
-  personal_email              String?
-  personal_phone              String?
+  date_of_birth                  DateTime? @db.Date
+  home_address                   String?
+  personal_email                 String?
+  personal_phone                 String?
   emergency_contact_name         String?
   emergency_contact_relationship String?
   emergency_contact_phone        String?
@@ -1815,12 +1830,12 @@ model CostPerson {
   // rendered as a guess. Neither is Article 9 data on its own — the Art 9(1) list does not include
   // gender identity — but together they can REVEAL gender reassignment and therefore health, so
   // they are handled as if they were: optional, explained at the point of entry, never inferred.
-  gender                      String?
-  pronouns                    String?
-  start_date                  DateTime? // first WORKING day (see above)
-  pay_start_date              DateTime? // NULL = same as start_date
-  work_end_date               DateTime? // last WORKING day — capacity stops here
-  pay_end_date                DateTime? // last PAID day — cost stops here. NULL = same as work_end_date
+  gender                         String?
+  pronouns                       String?
+  start_date                     DateTime? // first WORKING day (see above)
+  pay_start_date                 DateTime? // NULL = same as start_date
+  work_end_date                  DateTime? // last WORKING day — capacity stops here
+  pay_end_date                   DateTime? // last PAID day — cost stops here. NULL = same as work_end_date
 
   group            Group             @relation(fields: [group_id], references: [id], onDelete: Cascade)
   user             User?             @relation(fields: [user_id], references: [id], onDelete: SetNull)
@@ -1969,7 +1984,6 @@ model SiteConfigEvent {
   @@index([group_id, created_at])
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // INVOICE IMPORT — staging. STAGING IS NEVER THE LEDGER.
 // Uploaded PDFs parse into these tables and are edited here; only an explicit commit drives the
@@ -1978,17 +1992,17 @@ model SiteConfigEvent {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 enum ImportBatchStatus {
-  open       // accepting uploads / in progress
+  open // accepting uploads / in progress
   committing // whole-month commit under way
-  committed  // every invoice resolved
+  committed // every invoice resolved
   abandoned
 }
 
 enum StagedInvoiceStatus {
-  pending     // parsed, untouched
+  pending // parsed, untouched
   in_progress // being worked in the wizard (resumable across sessions)
-  committed   // written to the ledger; job_card_id + invoice_id set
-  skipped     // deliberately not imported; skip_reason required
+  committed // written to the ledger; job_card_id + invoice_id set
+  skipped // deliberately not imported; skip_reason required
 }
 
 model ImportBatch {
@@ -2014,15 +2028,15 @@ model StagedInvoice {
   batch_id String
   group_id String
 
-  external_number String // the Xero number, e.g. 100002292 — carried to Invoice.external_ref
-  issue_date      DateTime // the PRINTED date; immutable, never shifted
-  registration    String?
+  external_number  String // the Xero number, e.g. 100002292 — carried to Invoice.external_ref
+  issue_date       DateTime // the PRINTED date; immutable, never shifted
+  registration     String?
   // Customer name as PARSED from the invoice's address block, then EDITABLE by the operator.
   // 24 of TMBS's 42 May invoices carry only a first name ("Angi - BG63APU"), which is too thin an
   // identity to create a customer from — so where the vehicle is new the operator types the full
   // name before commit. Where the registration matches an existing vehicle the customer comes from
   // the ownership edge and this is a CROSS-CHECK only. (No phone: 0/42 PDFs contain one.)
-  customer_name   String?
+  customer_name    String?
   // RECONCILIATION IS A HARD COMMIT GATE: parsed line amounts must equal the printed Subtotal.
   subtotal_printed Decimal  @db.Decimal(12, 2)
   subtotal_parsed  Decimal  @db.Decimal(12, 2)
@@ -2038,8 +2052,8 @@ model StagedInvoice {
   // The diary date is EDITABLE per card and defaults to issue_date; the invoice keeps its printed
   // date immutably. Weekend-dated invoices are placed on a working day of the operator's choosing —
   // nothing is shifted automatically.
-  planned_start_at DateTime?
-  planned_resource_id String?
+  planned_start_at        DateTime?
+  planned_resource_id     String?
   // WORKING minutes for the diary placement. Was hardcoded to 60 at commit, so every imported card
   // occupied exactly one hour whatever the job — silently wrong occupancy on every commit, and a
   // contradiction of the duration-is-source-of-truth rule. Null falls back to the seeded suggestion.
@@ -2064,7 +2078,7 @@ model StagedInvoice {
 }
 
 model StagedLine {
-  id                String  @id @default(uuid())
+  id                String @id @default(uuid())
   staged_invoice_id String
   position          Int
 
@@ -2132,8 +2146,8 @@ model CatalogueAlias {
   source            String   @default("import") // 'import' | 'manual'
   created_at        DateTime @default(now())
 
-  group    Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  item     CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+  group Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  item  CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
 
   @@unique([group_id, description, unit_price])
   @@index([catalogue_item_id])
@@ -2203,7 +2217,7 @@ model CostAllocation {
 // plaintext list of who asked for a reset. ip:<addr> keys are the second axis.
 model AuthRateLimit {
   id         String   @id @default(uuid())
-  key        String   // 'email:<sha256>' | 'ip:<addr>'
+  key        String // 'email:<sha256>' | 'ip:<addr>'
   created_at DateTime @default(now())
 
   @@index([key, created_at])
@@ -2225,14 +2239,14 @@ enum NotificationChannel {
 }
 
 enum NotificationStatus {
-  queued    // handed to the provider, no answer yet
-  sent      // provider accepted it
-  failed    // provider rejected it, or the transport threw
+  queued // handed to the provider, no answer yet
+  sent // provider accepted it
+  failed // provider rejected it, or the transport threw
   delivered // provider later confirmed delivery (webhook)
-  bounced   // provider later reported a hard bounce (webhook)
-  skipped   // deliberately not sent (provider unconfigured / no recipient) — recorded, not silent
-  received  // INBOUND: it arrived. Not 'sent' — we did not send it, and none of the outbound
-            // statuses describe a message that came the other way.
+  bounced // provider later reported a hard bounce (webhook)
+  skipped // deliberately not sent (provider unconfigured / no recipient) — recorded, not silent
+  received // INBOUND: it arrived. Not 'sent' — we did not send it, and none of the outbound
+  // statuses describe a message that came the other way.
 }
 
 model NotificationLog {
@@ -2286,7 +2300,7 @@ model NotificationLog {
   sent_by_user String?
   // 'out' | 'in'. Was derived-and-always-outbound until inbound existed; now a real field, because
   // the answer varies. Defaults 'out' so every historical row keeps its correct meaning.
-  direction    String  @default("out")
+  direction    String    @default("out")
   // When the message ARRIVED (inbound only). sent_at is meaningless for a message we did not send
   // and stays null — the absence is the distinction, not a copied timestamp.
   received_at  DateTime?
@@ -2335,21 +2349,21 @@ model MessageThread {
 
   // Per-thread inbound token — the half of the address that makes resolution EXACT. Random and
   // rotatable for the same reasons as the tenant token.
-  thread_token    String?   @unique
+  thread_token           String?   @unique
   // Denormalised for the list view — derived from the messages, never authored.
-  last_message_at DateTime?
+  last_message_at        DateTime?
   // Direction of the MOST RECENT message. Derived in touchThread from the log, never authored.
   // 'in' here is what "unresponded" means: the customer spoke last and nobody has answered.
   last_message_direction String?
   // INBOUND messages not yet read. Structurally 0 today: there is no inbound path anywhere in the
   // product (no webhook, no parse route), so nothing can increment this. It is NOT a "no unread"
   // claim dressed up — it is the honest count of a thing that cannot yet happen.
-  unread_count    Int       @default(0)
+  unread_count           Int       @default(0)
   // 'open' | 'resolved'. No assignment to individual staff in v1 — a thread belongs to the garage.
-  state           String    @default("open")
+  state                  String    @default("open")
   // WHO read it last, and when. Clearing unread is an act by a person and is attributed like one.
-  last_read_at    DateTime?
-  last_read_by    String?
+  last_read_at           DateTime?
+  last_read_by           String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -2387,9 +2401,9 @@ model CustomerMagicLink {
   job_card_id String
   purpose     MagicLinkPurpose
 
-  token_hash String    @unique // sha256(raw) — the raw token exists only in the emailed URL
-  expires_at DateTime
-  revoked_at DateTime? // explicit kill switch (card cancelled, sent to the wrong address)
+  token_hash     String    @unique // sha256(raw) — the raw token exists only in the emailed URL
+  expires_at     DateTime
+  revoked_at     DateTime? // explicit kill switch (card cancelled, sent to the wrong address)
   // WHY it was killed — it decides the sentence the customer reads. One `revoked` bucket used to
   // tell everyone "this quote has been updated, ask for the current version", which is false for an
   // invoiced job: nothing was updated and there is no current version to ask for.
@@ -2397,10 +2411,10 @@ model CustomerMagicLink {
   // reason word, get the neutral sentence rather than a guessed one.
   revoked_reason String? // 'superseded' | 'invoiced' | 'declined' | 'cancelled' (see lib/magic-link)
 
-  recipient   String // who it was sent to, for the audit answer "who could see this?"
-  consumed_at DateTime? // FIRST use
+  recipient    String // who it was sent to, for the audit answer "who could see this?"
+  consumed_at  DateTime? // FIRST use
   last_used_at DateTime?
-  use_count   Int       @default(0)
+  use_count    Int       @default(0)
 
   created_at      DateTime @default(now())
   created_by_user String? // the staff User who caused it to be issued (null = system)
@@ -2423,9 +2437,9 @@ model CustomerMagicLink {
 // from it when one exists). That is the anti-drift guarantee: the customer is billed the rows they
 // accepted, identical by construction — not because two renderers happened to agree.
 enum QuoteVersionStatus {
-  sent       // out with the customer, awaiting a response
-  accepted   // customer accepted — frozen forever as the record of what was agreed
-  declined   // customer declined
+  sent // out with the customer, awaiting a response
+  accepted // customer accepted — frozen forever as the record of what was agreed
+  declined // customer declined
   superseded // a newer version was sent; this one's link is revoked
 }
 
@@ -2437,14 +2451,14 @@ model QuoteVersion {
   status      QuoteVersionStatus @default(sent)
 
   // Totals frozen at SEND, in pennies — never recomputed from live rows.
-  net_pennies   Int
-  vat_pennies   Int
-  gross_pennies Int
+  net_pennies    Int
+  vat_pennies    Int
+  gross_pennies  Int
   // VAT treatment frozen at send, exactly as the invoice freezes vat_registered_at_issue.
   vat_registered Boolean
-  tax_label      String @default("VAT")
+  tax_label      String  @default("VAT")
 
-  sent_at         DateTime  @default(now())
+  sent_at         DateTime @default(now())
   sent_to         String? // the address it was emailed to; null = link handed over by hand
   // The operator's note explaining THIS revision — why the price moved. Belongs to the version
   // because it explains that version: v4's note must never surface on v6. Optional, always.
@@ -2477,16 +2491,16 @@ model QuoteVersion {
 // The frozen line snapshot. Mirrors InvoiceLine's money columns so the copy into InvoiceLine at
 // issue is field-for-field — no arithmetic in between, nothing to round differently.
 model QuoteVersionLine {
-  id               String   @id @default(uuid())
-  quote_version_id String
-  position         Int
-  item_type        ItemType
-  description      String
-  qty              Decimal  @db.Decimal(12, 2)
-  unit_price       Decimal  @db.Decimal(12, 2)
-  vat_rate         Decimal  @db.Decimal(5, 2)
-  line_vat         Decimal  @db.Decimal(12, 2)
-  line_total       Decimal  @db.Decimal(12, 2)
+  id                String   @id @default(uuid())
+  quote_version_id  String
+  position          Int
+  item_type         ItemType
+  description       String
+  qty               Decimal  @db.Decimal(12, 2)
+  unit_price        Decimal  @db.Decimal(12, 2)
+  vat_rate          Decimal  @db.Decimal(5, 2)
+  line_vat          Decimal  @db.Decimal(12, 2)
+  line_total        Decimal  @db.Decimal(12, 2)
   // Internal grain, carried so the invoice freeze stays lossless. NEVER rendered to a customer.
   unit_cost         Decimal? @db.Decimal(12, 2)
   labour_hours      Decimal? @db.Decimal(6, 2)
@@ -2497,7 +2511,6 @@ model QuoteVersionLine {
   @@index([quote_version_id, position])
 }
 
-
 // COMING-SOON WAITLIST (country-first onboarding). When a visitor picks an unsupported country the
 // flow ends on a friendly gate and captures their email here, WITH the country — so demand by
 // country is directly queryable (GROUP BY country_code). group_id is set when the capture happens
@@ -2505,7 +2518,7 @@ model QuoteVersionLine {
 model CountryWaitlist {
   id           String   @id @default(uuid())
   email        String
-  country_code String   // ISO 3166-1 alpha-2 of the unsupported country they asked for
+  country_code String // ISO 3166-1 alpha-2 of the unsupported country they asked for
   group_id     String?
   created_at   DateTime @default(now())
 

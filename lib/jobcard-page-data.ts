@@ -124,7 +124,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     (async () => {
       const ownerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
       const or = ownerId
-        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true } })
+        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true } })
         : (row.customer ?? null);
       return { edgeOwnerId: ownerId, ownerRow: or };
     })(),
@@ -203,6 +203,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, phoneE164: (ownerRow as any)?.phone_e164 ?? null,
     email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null,
     smsOptOut: (ownerRow as any)?.sms_opt_out ?? null, emailOptOut: (ownerRow as any)?.email_opt_out ?? null,
+    // NULL all the way to the screen: no terms is "pays on collection", not "we don't know".
+    accountTermsDays: (ownerRow as any)?.account_terms_days ?? null,
+    accountName: (ownerRow as any)?.account_name ?? null,
   };
 
   const booking: CardBooking = isBookedCard(row as any)

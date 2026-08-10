@@ -8,8 +8,9 @@
  * pending) are meaningful without a period; a period, when passed, still applies on their basis.
  */
 import { effectiveIssueDateWhere, effectivePaidDate } from '@/lib/invoice';
+import { overdueWhere } from '@/lib/account-terms';
 
-export const LIST_STATUS_KEYS = ['all', 'unpaid', 'pending', 'paid', 'warranty', 'issued', 'void', 'historical'] as const;
+export const LIST_STATUS_KEYS = ['all', 'unpaid', 'overdue', 'pending', 'paid', 'warranty', 'issued', 'void', 'historical'] as const;
 export type ListStatusKey = typeof LIST_STATUS_KEYS[number];
 
 const STATUS_WHERE: Record<ListStatusKey, object> = {
@@ -21,6 +22,14 @@ const STATUS_WHERE: Record<ListStatusKey, object> = {
   // Names a status, so a VOID is already excluded — a retired document is not a debt. Do NOT
   // spread `notVoided` in here: it would clobber `status: 'issued'` and start counting paid ones.
   unpaid: { status: 'issued', series: 'chargeable', is_imported: false }, // the debtors view (point-in-time)
+  // OVERDUE is a STRICT SUBSET of unpaid — the same chaser exclusions, plus a deadline that has
+  // passed. It answers a different question: `unpaid` is "what is out there", most of which is
+  // cars still on the ramp, while this is "who is actually late".
+  //
+  // The NULL exclusion inside overdueWhere carries the whole back catalogue: every invoice raised
+  // before due_date existed has one, and they are retail work paid on collection. Reading NULL as
+  // "due immediately" would have declared years of settled trade overdue on the day this deployed.
+  overdue: { ...overdueWhere(), series: 'chargeable', is_imported: false },
   pending: { status: 'paid_pending' },                // clearance window (point-in-time)
   paid: { status: 'paid' },
   warranty: { series: 'warranty' },
@@ -37,7 +46,7 @@ const STATUS_WHERE: Record<ListStatusKey, object> = {
 };
 
 const PERIOD_BASIS: Record<ListStatusKey, 'paid' | 'issue'> = {
-  all: 'issue', unpaid: 'issue', pending: 'issue', warranty: 'issue', issued: 'issue', void: 'issue', historical: 'issue',
+  all: 'issue', unpaid: 'issue', overdue: 'issue', pending: 'issue', warranty: 'issue', issued: 'issue', void: 'issue', historical: 'issue',
   paid: 'paid',
 };
 
@@ -49,7 +58,12 @@ export function isListStatusKey(v: string): v is ListStatusKey {
  *  period can't be expressed in SQL (date_paid ?? paid_at) — the caller must also apply
  *  paidPeriodFilter to the fetched rows. */
 export function listWhere(key: ListStatusKey, range: { from: Date; to: Date } | null) {
-  const base = STATUS_WHERE[key];
+  // `overdue` is the one key whose predicate depends on the clock, so it is rebuilt per call.
+  // Taken from the frozen table it would compare against whenever the process booted — invisible
+  // in a serverless function that lives seconds, and quietly wrong in one that lives days.
+  const base = key === 'overdue'
+    ? { ...STATUS_WHERE.overdue, ...overdueWhere() }
+    : STATUS_WHERE[key];
   if (!range) return { where: base, paidRange: null as { from: Date; to: Date } | null };
   if (PERIOD_BASIS[key] === 'paid') return { where: base, paidRange: range };
   return { where: { ...base, ...effectiveIssueDateWhere(range.from, range.to) }, paidRange: null };

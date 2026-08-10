@@ -22,10 +22,17 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
+import { normaliseTermsDays } from '@/lib/account-terms';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
-type OwnerIn = { name?: string; phone?: string; email?: string; address?: string; sms_opt_out?: boolean | null; email_opt_out?: boolean | null };
+type OwnerIn = {
+  name?: string; phone?: string; email?: string; address?: string;
+  sms_opt_out?: boolean | null; email_opt_out?: boolean | null;
+  // Arrives as typed (the form sends a string, '' included) — normaliseTermsDays is the only thing
+  // that decides what it means, so the wire type stays deliberately loose.
+  account_terms_days?: number | string | null; account_name?: string;
+};
 type VehicleIn = {
   registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
   // MOT metadata (the manual DVSA re-lookup persists these; ISO date strings yyyy-mm-dd)
@@ -106,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (owner && ownerId) {
-        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true } })) as any;
+        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true } })) as any;
         const next: any = {};
         const diff: any = {};
         const set = (k: string, v: any, curV: any) => { if (v !== undefined && v !== curV) { next[k] = v; diff[k] = { from: curV, to: v }; } };
@@ -131,6 +138,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
         pref('sms_opt_out', owner.sms_opt_out);
         pref('email_opt_out', owner.email_opt_out);
+        // ── ON ACCOUNT ────────────────────────────────────────────────────────────────────────
+        // Normalised through the one rule (lib/account-terms), so "0", "" and nonsense all land as
+        // NULL — a retail customer — rather than as an account with impossible terms. Changing
+        // this does NOT move any existing invoice: due_date froze at issue, deliberately.
+        if (owner.account_terms_days !== undefined) {
+          set('account_terms_days', normaliseTermsDays(owner.account_terms_days), cur.account_terms_days);
+        }
+        if (owner.account_name !== undefined) set('account_name', clean(owner.account_name), cur.account_name);
         if (Object.keys(next).length) {
           await tx.customer.update({ where: { id: ownerId }, data: next });
           await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff: { ...diff, via } });
