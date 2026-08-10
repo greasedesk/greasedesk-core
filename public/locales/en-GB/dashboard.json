@@ -60,7 +60,12 @@
       "red": "Utilisation is below {{red}}% of the hours available so far.",
       "amber": "Utilisation is between {{red}}% and {{amber}}% of the hours available so far.",
       "green": "Utilisation is at or above {{amber}}% of the hours available so far."
-    }
+    },
+    "noteMonths": "Sellable labour value against what you actually sold, month by month. The gap is capacity you did not sell.",
+    "partial": "part month",
+    "noData": "not trading",
+    "noCapacity": "no capacity set",
+    "clipped": "Measured from {{from}} — your records do not go back further, so earlier months are not counted."
   },
   "pnl": {
     "title": "Profit & loss",

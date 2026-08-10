@@ -23,9 +23,10 @@ import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { monthParamsForSelection, monthNameOf, rollingMonths } from '@/lib/dashboard-periods';
+import { monthParamsForSelection, monthNameOf, rollingMonths, isMonthlyComparison, rollingTwelveMonths } from '@/lib/dashboard-periods';
 import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
+import CapacityMonthsChart, { type MonthBar } from '@/components/dashboard/CapacityMonthsChart';
 import { isLapsedStatus } from '@/lib/billing';
 import { utilisationLight, thresholdsFromGroup, defaultThresholds, type UtilisationThresholds } from '@/lib/utilisation-light';
 
@@ -294,7 +295,7 @@ export default function AdminDashboard(props: PageProps) {
       if (raw) {
         const s = JSON.parse(raw) as { preset?: string; customFrom?: string; customTo?: string };
         const valid = new Set<string>([
-          'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom',
+          'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12',
           ...rollingMonths(pickerNow, props.locale).map((m) => m.value),
         ]);
         if (s.preset && valid.has(s.preset) && (s.preset !== 'custom' || (s.customFrom && s.customTo))) {
@@ -463,6 +464,32 @@ export default function AdminDashboard(props: PageProps) {
         const withheld = cap?.imported?.suppressDerived === true;
         const maxVal = cap ? Math.max(cap.sellableHours ?? 0, ...cap.series.map((s: any) => s.billed), 1) : 1;
         const maxY = Math.max(10, Math.ceil(maxVal / 10) * 10);
+        // ONE place decides which chart this is — lib/dashboard-periods, the same answer the server
+        // used when it built (or withheld) the monthly split.
+        const monthlyMode = isMonthlyComparison(preset) && Array.isArray(cap?.monthly);
+        const nowKey = `${pickerNow.getUTCFullYear()}-${String(pickerNow.getUTCMonth() + 1).padStart(2, '0')}`;
+        const monthBars: MonthBar[] = monthlyMode
+          ? rollingTwelveMonths(pickerNow).map((m) => {
+            const row = (cap.monthly as any[]).find((x) => x.key === m.key) ?? null;
+            const d = new Date(`${m.key}-01T00:00:00.000Z`);
+            // A year boundary gets the year, so "Jan" after "Dec" is not ambiguous.
+            const showYear = d.getUTCMonth() === 0 || m.key === (cap.monthly as any[])[0]?.key;
+            const live = m.key === nowKey;
+            const daysIn = Math.round((m.to.getTime() - m.from.getTime()) / 86_400_000);
+            return {
+              key: m.key,
+              label: d.toLocaleDateString(props.locale, { month: 'short', ...(showYear ? { year: '2-digit' } : {}), timeZone: 'UTC' }),
+              // ABSENT is the row not being there at all — the server clipped it off, because the
+              // tenant did not exist. Distinct from a row whose figures are zero.
+              sellablePennies: row?.sellablePennies ?? null,
+              soldPennies: row?.soldPennies ?? 0,
+              ratio: row?.ratio ?? null,
+              absent: row == null,
+              live,
+              elapsedFraction: live ? Math.min(1, (monthMeta?.daysElapsed ?? daysIn) / daysIn) : 1,
+            };
+          })
+          : [];
         return (
           <div className={`bg-surface p-5 rounded-xl border border-line mb-6 ${loading ? 'opacity-60' : ''}`}>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
@@ -474,8 +501,39 @@ export default function AdminDashboard(props: PageProps) {
                 </span>
               )}
             </div>
-            <p className="text-xs text-muted mb-3">{t('capacity.note')}</p>
-            {cap == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : (
+            {/* The subtitle used to read "across the month" over a financial year. It names the
+                shape of the chart that is actually drawn. */}
+            <p className="text-xs text-muted mb-3">{monthlyMode ? t('capacity.noteMonths') : t('capacity.note')}</p>
+            {/* THE PERIOD WAS SHORTENED — say so. A figure quietly describing a different window
+                than the label above it is the same failure the clip exists to fix, one step on. */}
+            {cap?.clippedToDataStart && (
+              <p className="text-xs text-warn mb-3">
+                {t('capacity.clipped', { from: new Date(cap.measuredFromISO).toLocaleDateString(props.locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) })}
+              </p>
+            )}
+            {cap == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : monthlyMode ? (
+              <CapacityMonthsChart
+                bars={monthBars}
+                money={(p) => formatMoney(Math.floor(p / 100) * 100, { currency: props.currency, locale: props.locale, maximumFractionDigits: 0 })}
+                labels={{
+                  sellable: t('capacity.totalSellable'), sold: t('capacity.totalSold'),
+                  partial: t('capacity.partial'), noData: t('capacity.noData'), noCapacity: t('capacity.noCapacity'),
+                }}
+                /* CURRENT MONTH ONLY. Twelve lights would be twelve subtly different claims: the
+                   light judges PACE inside a live month, which a closed month does not have. */
+                light={(() => {
+                  const liveBar = monthBars.find((b) => b.live);
+                  if (!liveBar || liveBar.ratio === null) return undefined;
+                  const l = utilisationLight({ soldToDate: liveBar.soldPennies, availableToDate: (liveBar.sellablePennies ?? 0) * Math.max(0.0001, liveBar.elapsedFraction) }, utilThresholds);
+                  if (!l) return undefined;
+                  return {
+                    colour: l.colour,
+                    label: t(`capacity.light.${l.colour}`, { red: utilThresholds.redBelow, amber: utilThresholds.amberBelow }),
+                    figure: `${l.pct.toFixed(2)}%`,
+                  };
+                })()}
+              />
+            ) : (
               <>
                 <CapacityChart series={cap.series} daysInMonth={daysInMonth} elapsed={elapsed} maxY={maxY} locale={props.locale}
                   hoursLabel={t('capacity.hours')}

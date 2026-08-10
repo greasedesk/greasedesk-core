@@ -49,7 +49,7 @@ export default function PeriodPicker({ value, onChange, fyStartMonth, locale, st
       const raw = localStorage.getItem(storageKey);
       if (raw) {
         const s = JSON.parse(raw) as Partial<PeriodSelection>;
-        const valid = new Set<string>(['this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom',
+        const valid = new Set<string>(['this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12',
           ...groups.flatMap((g) => g.options.map((o) => o.value))]);
         if (s.preset && valid.has(s.preset) && !(s.preset === 'custom' && !(s.customFrom && s.customTo))) {
           onChange({ preset: s.preset, customFrom: s.customFrom ?? '', customTo: s.customTo ?? '' });
@@ -78,6 +78,11 @@ export default function PeriodPicker({ value, onChange, fyStartMonth, locale, st
             {g.options.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
           </optgroup>
         ))}
+        {/* Its own group: it is not one month, one quarter or one FY — it is twelve months side by
+            side, and it changes the chart as well as the window. */}
+        <optgroup label={t('groupCompare')}>
+          <option value="rolling_12">{t('rolling_12')}</option>
+        </optgroup>
         <optgroup label={t('groupQuarters')}>
           <option value="this_quarter">{t('this_quarter')}</option>
           <option value="last_quarter">{t('last_quarter')}</option>

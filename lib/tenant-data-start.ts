@@ -48,3 +48,40 @@ export function precedesData(windowTo: Date, dataStart: Date | null): boolean {
   if (dataStart == null) return true;
   return windowTo.getTime() <= dataStart.getTime();
 }
+
+export type ClippedWindow = {
+  from: Date; to: Date;
+  /** The window began before the first record and its start was moved forward. */
+  clipped: boolean;
+  /** Nothing in the window was ever measured — do not report a figure for it at all. */
+  empty: boolean;
+};
+
+/**
+ * ── THE STRADDLING WINDOW, WHICH precedesData ALONE CANNOT SEE ──────────────────────────────────
+ * precedesData asks whether the WHOLE window closes before the first record. That is the right
+ * question for a period entirely in the void, and the wrong one for a period with one foot in it.
+ *
+ * Measured on production before this existed: a tenant whose records begin 2025-08-11, asked for
+ * the financial year 2025-04-01 → 2026-04-01, was told it ran at 38.17% and shown a RED light. The
+ * four and a half months before it existed contributed 977.6 sellable hours and, necessarily, no
+ * sales. The months the garage actually traded ran at 62.66% — amber. The guard did not fire,
+ * because the window's END is long after the first record; nothing was lying, the denominator was
+ * simply counting capacity for months nobody lived through.
+ *
+ * SO THE START IS CLIPPED, NOT THE FIGURE SUPPRESSED. Sellable capacity is a projection from the
+ * roster and it will happily accrue for any dates you hand it, including dates before the garage
+ * opened; the sold side cannot, because invoices that do not exist cannot be counted. Clipping the
+ * window forward makes both sides describe the same stretch of time. Discarding the whole period
+ * instead would throw away eight true months to avoid four false ones.
+ *
+ * `clipped` travels with the result so a surface can SAY the period was shortened. A figure that
+ * quietly describes a different window than its label is the failure one step removed.
+ */
+export function clipToData(from: Date, to: Date, dataStart: Date | null): ClippedWindow {
+  if (dataStart == null || to.getTime() <= dataStart.getTime()) {
+    return { from, to, clipped: false, empty: true };
+  }
+  if (from.getTime() >= dataStart.getTime()) return { from, to, clipped: false, empty: false };
+  return { from: dataStart, to, clipped: true, empty: false };
+}

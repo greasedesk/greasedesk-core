@@ -70,7 +70,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dataStart: dataStart ? dataStart.toISOString() : null, beforeData: true,
     });
   }
-  const base = { groupId: user.group_id as string, siteIds, now }; // now reaches every compute (point-in-time ageing + in-progress-month window)
+  // dataStart reaches every compute; only the two capacity tiles act on it (see TileContext).
+  const base = { groupId: user.group_id as string, siteIds, now, dataStart }; // now reaches every compute (point-in-time ageing + in-progress-month window)
   const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
   // In-progress period (month, quarter OR financial year — any span containing `now`) → "N of M days,
   // fixed costs shown in full", net-profit reframes to "£X short of covering the period", and the

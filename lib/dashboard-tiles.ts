@@ -13,6 +13,7 @@ import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
+import { clipToData } from '@/lib/tenant-data-start';
 import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
@@ -20,7 +21,16 @@ import { notVoided } from '@/lib/invoice-void';
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
 // so a tile's output is a pure function of its context (goldens are reproducible).
-export type TileContext = { groupId: string; siteIds: string[]; from: Date; to: Date; now: Date };
+export type TileContext = {
+  groupId: string; siteIds: string[]; from: Date; to: Date; now: Date;
+  /**
+   * The tenant's first record, so the CAPACITY side can refuse to accrue before it. Only the two
+   * capacity tiles read it: every other tile counts things that exist, and a thing that does not
+   * exist contributes nothing whether or not the window is clipped. Sellable hours are a projection
+   * from the roster, which is the one figure happy to be produced for months nobody lived through.
+   */
+  dataStart?: Date | null;
+};
 export type MonthTileContext = TileContext & { months: number };
 
 // Date bases (ONE chokepoint each, lib/invoice): paid tiles bucket by effectivePaidDate
@@ -297,7 +307,13 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // of the month, valued at each site's LABOUR_HR rate, plus diary hours already booked in that window
   // (a DIFFERENT measure — bay occupancy, not sellable labour — surfaced side-by-side, never subtracted).
   // CLOSED month (to ≤ now) or multi-month span → the window is [from, to] unchanged → byte-identical.
-  utilisation: async ({ groupId, siteIds, from, to, months, now }) => {
+  utilisation: async ({ groupId, siteIds, from, to, months, now, dataStart }) => {
+    // CLIP FIRST. A window straddling the tenant's first record counted capacity for months before
+    // the garage existed and reported the average as failure (38.17% where the traded months ran
+    // 62.66%). See lib/tenant-data-start::clipToData.
+    const clip = clipToData(from, to, dataStart ?? null);
+    if (clip.empty) return { beforeData: true };
+    from = clip.from;
     // Utilisation divides committed charged hours by the WHOLE period's sellable capacity, so a
     // part-imported month reports a near-zero ratio that means nothing (May: 0.3%). Withheld.
     const importedU = await periodImportState(groupId, siteIds, from, to);
@@ -432,7 +448,14 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // On-chart end labels: Total Sellable Hours → potential (sellable×rate); Total Hours Sold → actual
   // (charged×rate). Statements below: headline rate (LABOUR_HR) and effective rate (charged×rate ÷
   // sellable). All valued PER SITE so mixed-rate groups stay honest.
-  capacity: async ({ groupId, siteIds, from, to, months, now }) => {
+  capacity: async ({ groupId, siteIds, from, to, months, now, dataStart }) => {
+    // Same clip as utilisation, and for the same reason: getDailyCapacity draws its accrual line
+    // from `from`, so an unclipped straddling window renders a dashed line climbing through months
+    // in which the sold line is flat on zero by construction.
+    const clipC = clipToData(from, to, dataStart ?? null);
+    if (clipC.empty) return { beforeData: true };
+    const periodFrom = from;            // what the LABEL says
+    from = clipC.from;                  // what was actually measured
     // To-date window for the ACTUALS (charged / effective): elapsed portion for a live period (month,
     // quarter OR financial year — any span containing `now`), else the full period. This is what makes
     // "sellable to date" and the effective rate compute against the elapsed part of a partial quarter/FY.
@@ -456,7 +479,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // 2) Billed — charged labour hours dated by effective issue date; total === the "Hours charged" tile.
     const invs = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, ...notVoided, ...effectiveIssueDateWhere(from, to) },
-      select: { date_issued: true, issued_at: true, series: true, lines: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
+      // site_id joins the monthly split to the site's labour rate — a mixed-rate group must not
+      // value one site's hours at another's rate.
+      select: { date_issued: true, issued_at: true, series: true, site_id: true, lines: { select: { item_type: true, qty: true, labour_hours: true, labour_outsourced: true } } },
     })) as any[];
     const billedByDay = new Map<string, number>();
     let billedTotalCenti = 0;
@@ -510,8 +535,74 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // month, so the figure and calculation are unchanged (June: £6,543.75 ÷ 168.40 = £38.86).
     const effectiveRatePennies = (!withheld && actualPennies > 0 && sellableToDateHours > 0) ? Math.round(actualPennies / sellableToDateHours) : null;
 
+    /**
+     * ── THE TWELVE-MONTH COMPARISON ────────────────────────────────────────────────────────────
+     * Twelve bars, not twelve queries. `daily.days` is CUMULATIVE sellable across the whole window
+     * in one pass, and `billedByDay` already holds every invoice's labour hours by day — both are
+     * computed above for the burn-up. A month is the difference across its own boundary, so the
+     * split is arithmetic. Verified against twelve separate getGroupUtilisation calls: every month
+     * agrees exactly, at 820ms instead of 2s (and 5.7s if the twelve are run in parallel, which
+     * also drops connections — 6 queries per call × 12 is not a thing to do to a pooler).
+     *
+     * FOUR STATES, AND THEY MUST NOT LOOK ALIKE:
+     *   beforeData  the tenant did not exist → NO BAR. Not a zero-height one.
+     *   ratio null  no capacity configured → a bar, but NO percentage. Unknown, not nought.
+     *   0%          trading and sold nothing → full sellable bar, no sold bar. A real, bad number.
+     *   partial     the live month, drawn to the elapsed day so day 10 of 31 is not a collapse.
+     */
+    const monthly = months >= 12 ? (() => {
+      const lastCumul = new Map<string, number>();
+      for (const d of daily.days) lastCumul.set(d.dayKey.slice(0, 7), d.cumulativeSellable);
+      const keys = [...lastCumul.keys()].sort();
+      const soldByMonth = new Map<string, number>();
+      for (const [dayK, centi] of billedByDay) {
+        const k = dayK.slice(0, 7);
+        soldByMonth.set(k, (soldByMonth.get(k) ?? 0) + centi);
+      }
+      // Sold VALUE stays actual labour revenue, not hours × rate — that gap IS the effective rate.
+      const revByMonth = new Map<string, number>();
+      for (const inv of invs) {
+        const c = chargedLabourCentihours([{ series: inv.series, lines: inv.lines }]);
+        if (c.centihours === 0) continue;
+        const rate = rateBySite.get((inv as any).site_id);
+        if (rate == null) continue;
+        const k = dayKey(effectiveIssueDate(inv)).slice(0, 7);
+        revByMonth.set(k, (revByMonth.get(k) ?? 0) + Math.round((c.centihours / 100) * rate * 100));
+      }
+      const nowKey = dayKey(now).slice(0, 7);
+      let prev = 0;
+      return keys.map((k) => {
+        const sellableH = Math.round((lastCumul.get(k)! - prev) * 100) / 100;
+        prev = lastCumul.get(k)!;
+        // The month is before the first record if its LAST day is still before it — the clip above
+        // already removed whole pre-existence months from `daily.days`, so anything present here
+        // was at least partly lived through. A month only partly covered by the clip is marked.
+        const mFrom = new Date(`${k}-01T00:00:00.000Z`);
+        const mTo = new Date(Date.UTC(mFrom.getUTCFullYear(), mFrom.getUTCMonth() + 1, 1));
+        const partialStart = clipC.clipped && clipC.from > mFrom && clipC.from < mTo;
+        const live = k === nowKey;
+        const soldPennies = revByMonth.get(k) ?? 0;
+        const sellablePennies = (() => {
+          if (distinct.length === 1) return Math.round(sellableH * distinct[0] * 100);
+          return null; // mixed rates: a single monthly bar cannot honestly carry two rates
+        })();
+        return {
+          key: k, sellableHours: sellableH,
+          sellablePennies, soldPennies,
+          soldHours: Math.round(soldByMonth.get(k) ?? 0) / 100,
+          // NULL, never 0 — no capacity configured is unknown, not nought.
+          ratio: sellableH > 0 ? Math.round(((soldByMonth.get(k) ?? 0) / 100 / sellableH) * 1000) / 1000 : null,
+          live, partialStart,
+        };
+      });
+    })() : null;
+
     return {
-      series, sellableHours, chargedHours,
+      series, sellableHours, chargedHours, monthly,
+      // The surface must be able to say the period was shortened; a figure quietly describing a
+      // different window than its label is the same failure one step removed.
+      clippedToDataStart: clipC.clipped,
+      periodFromISO: periodFrom.toISOString(), measuredFromISO: from.toISOString(),
       headlineRatePennies, headlineRateMixed: distinct.length > 1,
       potentialPennies: withheld ? null : potentialPennies,
       actualPennies: withheld ? null : actualPennies,

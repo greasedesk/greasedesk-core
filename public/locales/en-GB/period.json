@@ -13,5 +13,7 @@
   "groupFy": "Financial year",
   "groupOther": "Other",
   "custom": "Custom range…",
-  "groupMonthsYear": "Months — {{year}}"
+  "groupMonthsYear": "Months — {{year}}",
+  "groupCompare": "Compare",
+  "rolling_12": "Last 12 months (by month)"
 }

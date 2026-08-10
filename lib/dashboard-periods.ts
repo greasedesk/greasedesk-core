@@ -10,6 +10,11 @@ export const PERIOD_PRESETS = [
   'this_month', 'last_month', 'mtd',
   'this_quarter', 'last_quarter', 'qtd',
   'this_fy', 'last_fy', 'ytd',
+  // TWELVE WHOLE MONTHS ENDING WITH THIS ONE, so the last bar is the live month and the eleven
+  // before it are closed. A first-class preset rather than a custom range: a custom range cannot be
+  // recognised later, so the tiles, the deep links and the chart mode would each have to re-derive
+  // "is this the twelve-month view" from its dates and would eventually disagree.
+  'rolling_12',
 ] as const;
 export type PeriodPreset = typeof PERIOD_PRESETS[number];
 
@@ -32,6 +37,10 @@ export function presetRange(preset: PeriodPreset, fyStartMonth: number, now: Dat
     case 'mtd': return { from: monthStart(y, m0), to: now };
     case 'qtd': return { from: monthStart(y, q0), to: now };
     case 'ytd': return { from: monthStart(y, 0), to: now };
+    // m0-11 … m0 inclusive → `to` is the first instant of next month. WHOLE months on both ends:
+    // the comparison is month against month, so a part-month at the far end would be one short bar
+    // that means nothing, and eleven that mean something.
+    case 'rolling_12': return { from: monthStart(y, m0 - 11), to: monthStart(y, m0 + 1) };
   }
 }
 
@@ -53,7 +62,7 @@ export function resolveRange(q: { preset?: string; from?: string; to?: string },
 // ---------- Month-grained spans (the P&L strip) ----------
 // Profit tiles are calendar-month-grained BY DESIGN: the wage bill is a monthly lump, so a
 // partial-month profit figure would be fiction. Only whole-month spans exist here.
-export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy'] as const;
+export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'rolling_12'] as const;
 export type MonthPreset = typeof MONTH_PRESETS[number];
 
 export type MonthSpan = { from: Date; to: Date; months: number };
@@ -117,6 +126,28 @@ export function monthParamsForSelection(
 // Shared by every screen that offers the picker. They live beside presetRange because they describe
 // the SAME windows — a label that drifts from the range it names is the bug this file exists to
 // prevent.
+
+/**
+ * Does this selection want the MONTHLY COMPARISON chart rather than the daily burn-up?
+ *
+ * Asked here, once, so the server compute and the client renderer cannot answer it differently. It
+ * is keyed on the PRESET, not on "the span is longer than N days": a 92-day quarter and a 365-day
+ * FY are both burn-ups, and the distinction is what the reader is being asked to compare — days
+ * within one period, or periods against each other.
+ */
+export const isMonthlyComparison = (preset: string | null | undefined): boolean => preset === 'rolling_12';
+
+/** The twelve months of a rolling-12 selection, oldest first, as [from, to) pairs + a YYYY-MM key. */
+export function rollingTwelveMonths(now: Date = new Date()): Array<{ key: string; from: Date; to: Date }> {
+  const y = now.getUTCFullYear(), m0 = now.getUTCMonth();
+  return Array.from({ length: 12 }, (_, i) => {
+    const from = monthStart(y, m0 - 11 + i);
+    return {
+      key: `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`,
+      from, to: monthStart(y, m0 - 11 + i + 1),
+    };
+  });
+}
 
 export const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
   new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });
