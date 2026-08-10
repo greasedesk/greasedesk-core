@@ -33,6 +33,8 @@ type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
   perMonthLabel: string; perSiteLabel: string;
   subscriptionStatus: string | null; siteCount: number;
+  /** A demo has no subscription and nobody's card behind it — see the banner's own note. */
+  isDemo: boolean;
   currency: string; locale: string;
   fyStartMonth: number; // Group.fy_start_month (1–12) — drives the FY period labels
   sites: Array<{ id: string; name: string }>; // the caller's VISIBLE sites (server-resolved)
@@ -180,7 +182,18 @@ function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string):
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
-function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string }) {
+function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel, isDemo }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string; isDemo: boolean }) {
+  // ── A DEMO SAYS NOTHING ABOUT MONEY ───────────────────────────────────────────────────────────
+  // Every sentence below is a statement about a subscription, and a demo has none: no GroupBilling
+  // row, no card, no trial that ends, nobody who will ever be charged £75. Shown across a desk to a
+  // garage owner, "Trial active — £75 per location per month after the trial unless you cancel"
+  // reads as a charge notice for the thing they are being shown, which is the opposite of true.
+  //
+  // The refusal lives HERE rather than at the call site so a second caller cannot reintroduce it,
+  // and it is first so no branch below can be reached — the lapsed branch included, since a demo
+  // whose status drifts must still not start talking about resubscribing.
+  if (isDemo) return null;
+
   const endLabel = trialEndsAt ? new Date(trialEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : null;
   const perMonth = perMonthLabel; // country-profile pricing, computed server-side (£75 / $100 / €90)
 
@@ -328,7 +341,7 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
-      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} />
+      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} isDemo={props.isDemo} />
 
       {/* NOTHING WAS MEASURED IN THIS PERIOD — said plainly, and said INSTEAD of figures. The
           twelve-month picker reaches back further than most tenants have existed, and a computed
@@ -1085,8 +1098,8 @@ export const getServerSideProps = withI18n(['dashboard', 'period'])(async (ctx) 
   }
   const group = (await prisma.group.findUnique({
     where: { id: user.group_id },
-    select: { group_name: true, ref: true, country_code: true, status: true, trial_ends_at: true, fy_start_month: true },
-  })) as { group_name: string; ref: string; country_code: string | null; status: string; trial_ends_at: Date | null; fy_start_month: number } | null;
+    select: { group_name: true, ref: true, country_code: true, status: true, trial_ends_at: true, fy_start_month: true, is_demo: true },
+  })) as { group_name: string; ref: string; country_code: string | null; status: string; trial_ends_at: Date | null; fy_start_month: number; is_demo: boolean } | null;
   const billing = (await prisma.groupBilling.findUnique({ where: { group_id: user.group_id }, select: { subscription_status: true } })) as { subscription_status: string | null } | null;
   const siteCount = await prisma.site.count({ where: { group_id: user.group_id } });
   const site = vis.primarySiteId
@@ -1106,6 +1119,7 @@ export const getServerSideProps = withI18n(['dashboard', 'period'])(async (ctx) 
       status: group?.status ?? 'trial',
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
       subscriptionStatus: billing?.subscription_status ?? null,
+      isDemo: !!group?.is_demo,
       siteCount,
       perMonthLabel: monthlyPriceLabelFor(resolveTenantProfile(group), siteCount),
       perSiteLabel: perLocationLabelFor(resolveTenantProfile(group)),
