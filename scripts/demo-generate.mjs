@@ -16,6 +16,9 @@ import { getGroupUtilisation } from '../lib/capacity.ts';
 import { fetchLedgerInvoices, labourGrossMargin, chargedLabourCentihours } from '../lib/charged-labour.ts';
 import { utilisationLight, defaultThresholds } from '../lib/utilisation-light.ts';
 import { getSetupSignals } from '../lib/setup-signals.ts';
+import { uncostedParts } from '../lib/charged-labour.ts';
+import { computeQuotesMetrics } from '../lib/quotes-metrics.ts';
+import { wipCardsWhere, wipCardValuePennies } from '../lib/wip.ts';
 import { purgeTenant } from '../lib/tenant-purge.ts';
 
 const KEEP = process.argv.includes('--keep');
@@ -136,6 +139,44 @@ try {
   check('warranty invoices are settled, never paid, and total £0',
     warranty.length > 0 && warranty.every((i) => i.status === 'settled' && Math.abs(total(i)) < 1),
     warranty.length ? `${warranty.length} settled at £0` : 'NONE — vacuous');
+
+  // ── UNCOSTED PARTS: the P&L's own exposure read, not my arithmetic ──────────────────────────
+  const exposure = uncostedParts(invoices);
+  check('the P&L sees NO uncosted parts', exposure.lines === 0,
+    exposure.lines ? `${exposure.lines} lines, ${money(exposure.retailPennies)} retail across ${exposure.invoices.length} invoices` : 'clean');
+  // The JOB CARD line is where the catalogue link lives. An invoice snapshotted from an accepted
+  // quote version carries catalogue_item_id: null BY DESIGN — "the frozen line is the record; the
+  // product link is not re-resolved" — so asserting it on the invoice would be asserting against
+  // the product. Asserted where it is actually true, and where the estimate screen reads it.
+  const linkedCard = await prisma.jobCardItem.count({ where: { job_card: { is: { group_id: res.groupId } }, catalogue_item_id: { not: null } } });
+  const allCard = await prisma.jobCardItem.count({ where: { job_card: { is: { group_id: res.groupId } } } });
+  check('job-card lines carry their catalogue id', linkedCard > allCard * 0.4, `${linkedCard} of ${allCard} linked`);
+  // And the invoice's own defence: a real, non-zero cost on every part-ish line.
+  const zeroCostLines = await prisma.invoiceLine.count({
+    where: { invoice: { is: { group_id: res.groupId } }, item_type: { not: 'labour' }, unit_price: { gt: 0 }, OR: [{ unit_cost: null }, { unit_cost: 0 }] },
+  });
+  check('no priced invoice line has a zero or absent cost', zeroCostLines === 0, `${zeroCostLines} lines`);
+
+  // ── WIP: a real figure against the open cards ────────────────────────────────────────────────
+  const wipCards = await prisma.jobCard.findMany({
+    where: wipCardsWhere([res.siteId]),
+    select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true },
+  });
+  const wipPennies = wipCards.reduce((s2, c) => s2 + wipCardValuePennies(c), 0);
+  console.log(`\n  WIP: ${wipCards.length} open cards worth ${money(wipPennies)}`);
+  check('there are open cards', wipCards.length > 0, `${wipCards.length}`);
+  check('WIP carries a real value, not £0', wipPennies > 0, money(wipPennies));
+
+  // ── QUOTES: a believable conversion rate ─────────────────────────────────────────────────────
+  const qm = await computeQuotesMetrics({ groupId: res.groupId, siteIds: [res.siteId], from, to });
+  console.log(`  quotes: ${qm.cohortSentCount} sent, ${qm.cohortAcceptedCount} accepted, ${qm.declinedCount} declined, ${qm.expiredCount} expired  → ${qm.conversionPct}%`);
+  check('quotes exist at all', qm.cohortSentCount > 0, `${qm.cohortSentCount} sent`);
+  check('the conversion rate is believable (50–75%)', qm.conversionPct !== null && qm.conversionPct >= 50 && qm.conversionPct <= 75,
+    `${qm.conversionPct}%`);
+  check('there are declines AND expiries, not just wins', qm.declinedCount > 0 && qm.expiredCount > 0,
+    `${qm.declinedCount} declined, ${qm.expiredCount} expired`);
+  const superseded = await prisma.quoteVersion.count({ where: { group_id: res.groupId, status: 'superseded' } });
+  check('some declines were re-quoted (supersede history)', superseded > 0, `${superseded} superseded versions`);
 
   // ── SETUP: every signal complete ─────────────────────────────────────────────────────────────
   const setup = await getSetupSignals(res.groupId, res.siteId);

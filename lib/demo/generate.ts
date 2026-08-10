@@ -31,6 +31,9 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard } from '@/lib/invoice-issue';
 import { tServer } from '@/lib/server-i18n';
+import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
+import { freezeQuoteVersion } from '@/lib/quote-version';
+import { acceptQuote } from '@/lib/quote-acceptance';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
@@ -154,10 +157,39 @@ function capacityByDay(from: Date, to: Date, closed: Set<string>, leave: Map<str
   return out;
 }
 
+/**
+ * ── THE QUOTE BOOK ──────────────────────────────────────────────────────────────────────────────
+ * A demo with no quotes reads "0 issued, 0 accepted" on the conversion tile, which is the one place
+ * an owner looks to judge whether the product would tell them anything.
+ *
+ * 62% conversion: high enough to look like a business run properly, low enough that the tile is
+ * worth opening. The lost work is split between an outright NO and the silence that is actually
+ * more common — a quote nobody ever answers, which expires with its magic link.
+ *
+ * DECLINES SKEW EXPENSIVE. A timing chain gets turned down; an MOT does not. Weighting the decline
+ * draw toward the big-ticket archetypes is what makes average declined value sit ABOVE average
+ * accepted — the true and slightly uncomfortable shape of a garage's lost work.
+ */
+const QUOTE_MIX = {
+  declinedPct: 14,
+  expiredPct: 16,
+  openPct: 8,
+  /** …the remaining 62% are accepted and became the jobs the history already holds. */
+  /** A decline that gets a revised quote — the "let me sharpen my pencil" conversation. */
+  supersedeAfterDeclinePct: 20,
+  /** Cheap routine work is accepted almost always; the decline draw avoids it. */
+  rarelyDeclined: ['mot', 'service_minor', 'brake_fluid', 'valet'] as string[],
+} as const;
+
 // ── the job model ────────────────────────────────────────────────────────────────────────────────
 type PlannedLine = {
   description: string; itemType: 'labour' | 'part' | 'fixed' | 'misc';
   qty: number; unitPrice: number; unitCost: number | null; labourHours: number | null; outsourced: boolean;
+  /** The catalogue item this line came off, when it came off one. NOT decoration: lib/charged-labour
+   *  treats a catalogue-linked line as costed by construction ("cost is known/inherited"), which is
+   *  what lets a genuine £0 mean £0. An unlinked line with no cost is indistinguishable from one
+   *  nobody has costed yet, and the P&L is right to flag it. */
+  archetypeKey?: string;
 };
 type PlannedJob = {
   start: Date; durationMinutes: number; chargedHours: number;
@@ -172,8 +204,11 @@ function planJob(r: Rand, opts: { comeback: boolean }): Omit<PlannedJob, 'start'
   const primary = weighted(r, ARCHETYPES.map((a) => [a, a.shareOfLines] as [typeof ARCHETYPES[number], number]));
   lines.push({
     description: primary.title, itemType: primary.itemType as PlannedLine['itemType'],
-    qty: 1, unitPrice: primary.priceGbp, unitCost: primary.partsCostGbp || null,
+    // THE REAL COST, ZERO INCLUDED. `|| null` was fixed in the catalogue last round and left here:
+    // 275 invoice lines (243 diagnostics, 32 valets) went out with a null cost and 100% margin.
+    qty: 1, unitPrice: primary.priceGbp, unitCost: primary.partsCostGbp,
     labourHours: primary.labourHours || null, outsourced: primary.outsourcedLabour,
+    archetypeKey: primary.key,
   });
   if (!primary.outsourcedLabour) hours += primary.labourHours;
 
@@ -182,8 +217,9 @@ function planJob(r: Rand, opts: { comeback: boolean }): Omit<PlannedJob, 'start'
     const extra = weighted(r, ARCHETYPES.filter((a) => a.key !== primary.key).map((a) => [a, a.shareOfLines] as [typeof ARCHETYPES[number], number]));
     lines.push({
       description: extra.title, itemType: extra.itemType as PlannedLine['itemType'],
-      qty: 1, unitPrice: extra.priceGbp, unitCost: extra.partsCostGbp || null,
+      qty: 1, unitPrice: extra.priceGbp, unitCost: extra.partsCostGbp,
       labourHours: extra.labourHours || null, outsourced: extra.outsourcedLabour,
+      archetypeKey: extra.key,
     });
     if (!extra.outsourcedLabour) hours += extra.labourHours;
   }
@@ -324,7 +360,10 @@ function startTime(r: Rand, day: Date): Date {
 
 export type DemoGenerationResult = {
   groupId: string; ownerUserId: string; siteId: string;
-  counts: { customers: number; vehicles: number; jobCards: number; invoices: number; bookings: number };
+  counts: {
+    customers: number; vehicles: number; jobCards: number; invoices: number; bookings: number;
+    quotesAccepted: number; quotesDeclined: number; quotesExpired: number; quotesOpen: number; quotesSuperseded: number;
+  };
   targetChargedHours: number; plannedChargedHours: number;
   elapsedMonthTarget: { availableToDate: number; soldToDate: number; ratio: number };
 };
@@ -444,8 +483,9 @@ export async function generateDemoTenant(opts: {
       default_labour_rate: DEMO_SPEC.labourRateGbp, default_duration_minutes: 60, vat_rate: 20,
     },
   });
+  const catalogueIdByKey = new Map<string, string>();
   for (const [i, a] of ARCHETYPES.entries()) {
-    await prisma.catalogueItem.create({
+    const ci = await prisma.catalogueItem.create({
       data: {
         group_id: group.id, code: `DEMO${String(i + 1).padStart(3, '0')}`, name: a.title, title: a.title,
         item_type: a.itemType as any,
@@ -459,7 +499,9 @@ export async function generateDemoTenant(opts: {
         unit_cost: a.partsCostGbp,
         labour_hours: a.labourHours || null, labour_outsourced: a.outsourcedLabour, vat_rate: 20, active: true,
       },
+      select: { id: true },
     });
+    catalogueIdByKey.set(a.key, ci.id);
   }
 
   // ── OVERHEADS. A setup signal, and the P&L is thin without them. ─────────────────────────────
@@ -558,6 +600,52 @@ export async function generateDemoTenant(opts: {
   }
 
   // ── plan every job, oldest first ─────────────────────────────────────────────────────────────
+
+  /** Write a card's lines AND persist the totals the product persists. */
+  const writeLines = async (cardId: string, job: PlannedJob) => {
+    await prisma.jobCardItem.createMany({
+      data: job.lines.map((l) => ({
+        job_card_id: cardId, description: l.description, item_type: l.itemType as any,
+        qty: l.qty, unit_price: l.unitPrice, unit_cost: l.unitCost,
+        vat_amount: Math.round(l.qty * l.unitPrice * 0.2 * 100) / 100,
+        labour_hours: l.labourHours, labour_outsourced: l.outsourced, vat_rate: 20,
+        catalogue_item_id: l.archetypeKey ? catalogueIdByKey.get(l.archetypeKey) ?? null : null,
+      })),
+    });
+    // ── THE WIP TILE READS THE PERSISTED TOTALS, NOT THE LINES ────────────────────────────────
+    // lib/wip values an open card from labour_bill_numeric + parts_bill_numeric, which the product
+    // writes from computeQuoteTotals on every save. The generator wrote the lines and never those
+    // columns, so 13 open cards carrying real estimates showed as £0.00 of work in progress.
+    // Computed through the SAME chokepoint rather than summed here — the whole point of those
+    // columns is that they ARE the quote chokepoint's answer.
+    // FIELD NAMES MATTER MORE THAN THE CAST. The first version passed camelCase (itemType,
+    // unitPrice, unitCost) into a chokepoint that takes item_type / unit_price_pennies /
+    // unit_cost_pennies, and an `as any` swallowed it: every field arrived undefined, every total
+    // came back zero, and 19 open cards carrying real estimates showed £0.00 of work in progress.
+    // No cast here — if the shape drifts, the compiler says so.
+    const totals = computeQuoteTotals(
+      job.lines.map((l) => ({
+        item_type: l.itemType,
+        qty: l.qty,
+        unit_price_pennies: Math.round(l.unitPrice * 100),
+        unit_cost_pennies: l.unitCost == null ? null : Math.round(l.unitCost * 100),
+        vatable: true,
+      })),
+      20, { vatRegistered: true },
+    );
+    await prisma.jobCard.update({
+      where: { id: cardId },
+      data: {
+        vat_rate: new Prisma.Decimal(totals.vat_rate),
+        labour_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_pennies)),
+        parts_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_pennies)),
+        labour_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_cost_pennies)),
+        parts_cost_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_cost_pennies)),
+      },
+    });
+    return totals;
+  };
+
   say('planning');
   const planned: PlannedJob[] = [];
   const lifts = [...resources.map((x) => x.id)];
@@ -636,22 +724,33 @@ export async function generateDemoTenant(opts: {
     const card = await prisma.jobCard.create({
       data: {
         group_id: group.id, site_id: site.id, customer_id: pair.customerId, vehicle_id: pair.vehicleId,
-        status: 'paid', is_comeback: job.isComeback,
+        // Starts at `quoted` so acceptQuote has a legal transition to make — the status table is
+        // the authority and it will not invent a route the product does not allow. Advanced to
+        // `paid` below, after the acceptance and the invoice.
+        status: 'quoted', is_comeback: job.isComeback,
         resource_id: usesMotBay ? motBay.id : lifts[liftIdx++ % lifts.length],
         start_at: job.start, booking_duration_minutes: job.durationMinutes,
         end_at: new Date(job.start.getTime() + job.durationMinutes * 60_000),
         scheduled_date: dayStart(job.start),
         odometer_in: Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100,
-        accepted_at: addDays(job.start, -1),
       },
       select: { id: true },
     });
-    await prisma.jobCardItem.createMany({
-      data: job.lines.map((l) => ({
-        job_card_id: card.id, description: l.description, item_type: l.itemType as any,
-        qty: l.qty, unit_price: l.unitPrice, unit_cost: l.unitCost,
-        labour_hours: l.labourHours, labour_outsourced: l.outsourced, vat_rate: 20,
-      })),
+    await writeLines(card.id, job);
+
+    // ── QUOTE → ACCEPT, THROUGH THE REAL CHOKEPOINTS ──────────────────────────────────────────
+    // Every job in the history was quoted before it was worked. Freezing a version and then calling
+    // acceptQuote (rather than stamping accepted_at by hand) is what makes the conversion tile,
+    // the acceptance date and the audit trail all agree — the tile reads a cohort of SENT versions
+    // and the acceptances resolve through the same precedence the live tenant uses.
+    const quotedAt = addDays(job.start, -(1 + Math.floor(r() * 3)));
+    await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+    await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await acceptQuote(tx, {
+        groupId: group.id, jobCardId: card.id, via: 'counter',
+        actorUserId: owner.id, attested: null, at: quotedAt,
+      });
     });
     // ── A COMEBACK MINTS A WARRANTY INVOICE, NOT A BILL ───────────────────────────────────────
     // The generator called the chargeable mint for every card, so 29 comebacks went out at full
@@ -670,6 +769,8 @@ export async function generateDemoTenant(opts: {
     });
     // The mint stamps today; the demo needs the invoice to sit on the day the work happened.
     await prisma.invoice.updateMany({ where: { job_card_id: card.id }, data: { date_issued: dayStart(job.start), issued_at: job.start } });
+
+    await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'paid' } });
 
     // ── AND THEN IT GETS PAID, because a workshop takes the money when the car goes ────────────
     // Every invoice left at `issued` is a debtor. Minting 800 and paying none put £229,835 of
@@ -704,6 +805,78 @@ export async function generateDemoTenant(opts: {
     invoices += 1;
   }
 
+  // ── THE LOST WORK ────────────────────────────────────────────────────────────────────────────
+  // Quotes that never became jobs: the declines, and the larger pile nobody ever answered. Sized
+  // against the accepted history so the conversion rate is a consequence of the mix rather than a
+  // number written on the tile.
+  say('quotes');
+  const acceptedCount = planned.length;
+  const lostTarget = Math.round(acceptedCount * (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct) / 62);
+  const declinedTarget = Math.round(lostTarget * QUOTE_MIX.declinedPct / (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct));
+  const expiredTarget = Math.round(lostTarget * QUOTE_MIX.expiredPct / (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct));
+  let declinedMade = 0, expiredMade = 0, openMade = 0, supersededMade = 0;
+
+  for (let n = 0; n < lostTarget; n++) {
+    const outcome = n < declinedTarget ? 'declined' : n < declinedTarget + expiredTarget ? 'expired' : 'open';
+    // An OPEN quote is recent by definition — nobody leaves a live quote sitting for eight months.
+    // A declined or expired one can be any age.
+    const daysBack = outcome === 'open' ? Math.floor(r() * 21) : 1 + Math.floor(r() * 350);
+    let quotedAt = addDays(dayStart(now), -daysBack);
+    while (!isWorkday(quotedAt) || closedKeys.has(iso(quotedAt))) quotedAt = addDays(quotedAt, -1);
+
+    // Declines skew expensive: draw until we get something worth turning down.
+    let job = planJob(r, { comeback: false });
+    if (outcome === 'declined') {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (!job.lines.some((l) => l.archetypeKey && QUOTE_MIX.rarelyDeclined.includes(l.archetypeKey))) break;
+        job = planJob(r, { comeback: false });
+      }
+    }
+
+    const pair = fleet[Math.floor(r() * fleet.length)];
+    const card = await prisma.jobCard.create({
+      data: {
+        group_id: group.id, site_id: site.id, customer_id: pair.customerId, vehicle_id: pair.vehicleId,
+        status: 'quoted', created_at: quotedAt,
+      },
+      select: { id: true },
+    });
+    const full: PlannedJob = { ...job, start: quotedAt, durationMinutes: 60 };
+    await writeLines(card.id, full);
+    await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+
+    if (outcome === 'declined') {
+      // ONE IN FIVE DECLINES GETS A SECOND GO — the "let me sharpen my pencil" conversation, which
+      // is also the only thing in the demo that exercises supersession. Freezing again mints v2 and
+      // marks v1 superseded through the chokepoint's own rule, rather than writing the status here.
+      if (chance(r, QUOTE_MIX.supersedeAfterDeclinePct)) {
+        await prisma.jobCardItem.updateMany({
+          where: { job_card_id: card.id, item_type: 'labour' },
+          data: { unit_price: Math.round(DEMO_SPEC.labourRateGbp * 0.9 * 100) / 100 },
+        });
+        await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+        supersededMade += 1;
+      }
+      const live = await prisma.quoteVersion.findFirst({
+        where: { job_card_id: card.id }, orderBy: { version: 'desc' }, select: { id: true },
+      });
+      await prisma.quoteVersion.update({
+        where: { id: live!.id },
+        data: { status: 'declined', responded_at: addDays(quotedAt, 1 + Math.floor(r() * 5)) },
+      });
+      await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'cancelled' } });
+      declinedMade += 1;
+    } else {
+      // EXPIRED IS DERIVED, NOT STORED. lib/quotes-list computes it from sent_at + the magic-link
+      // lifetime, so an expired quote is simply an old `sent` one — writing a status would put a
+      // second definition of expiry in the database.
+      if (outcome === 'expired') expiredMade += 1; else openMade += 1;
+    }
+    // The version's own sent date is the quote date, not the moment the generator ran.
+    await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
+  }
+  say('quotes', `${acceptedCount} accepted, ${declinedMade} declined, ${expiredMade} expired, ${openMade} open, ${supersededMade} superseded`);
+
   say('forward book');
   const FORWARD_STATUSES = ['accepted', 'accepted', 'quoted', 'in_progress'] as const;
   for (const job of forward) {
@@ -720,13 +893,7 @@ export async function generateDemoTenant(opts: {
       },
       select: { id: true },
     });
-    await prisma.jobCardItem.createMany({
-      data: job.lines.map((l) => ({
-        job_card_id: card.id, description: l.description, item_type: l.itemType as any,
-        qty: l.qty, unit_price: l.unitPrice, unit_cost: l.unitCost,
-        labour_hours: l.labourHours, labour_outsourced: l.outsourced, vat_rate: 20,
-      })),
-    });
+    await writeLines(card.id, job);
   }
 
   // What the elapsed month should look like — reported so the caller can assert it rather than
@@ -741,7 +908,8 @@ export async function generateDemoTenant(opts: {
   say('done');
   return {
     groupId: group.id, ownerUserId: owner.id, siteId: site.id,
-    counts: { customers: customerCount, vehicles: customerCount, jobCards: planned.length + forward.length, invoices, bookings: forward.length },
+    counts: { customers: customerCount, vehicles: customerCount, jobCards: planned.length + forward.length, invoices, bookings: forward.length,
+      quotesAccepted: acceptedCount, quotesDeclined: declinedMade, quotesExpired: expiredMade, quotesOpen: openMade, quotesSuperseded: supersededMade },
     targetChargedHours: Math.round(totalTargetHours * 10) / 10,
     plannedChargedHours: Math.round(planned.reduce((s, j) => s + j.chargedHours, 0) * 10) / 10,
     elapsedMonthTarget: {

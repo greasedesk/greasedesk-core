@@ -280,7 +280,7 @@ export const DISTRIBUTIONS = {
 /** Booked diary time ÷ labour hours sold. The footprint is LONGER than the work: road test, parts
  *  wait, cleanup. Book only the charged hours and the diary looks half empty while the utilisation
  *  tile says 62% — the first contradiction anyone would notice. */
-export const FOOTPRINT_RATIO = 1.34;
+export const FOOTPRINT_RATIO = 1.32;
 
 /** Line composition, as a share of all lines. */
 export const LINE_TYPE_MIX = {
@@ -298,12 +298,12 @@ export const WEEKDAY_SHARE = [1.1,17.4,18.5,14.6,18.5,28.1,1.7] as const;
  *  which is what a diary actually looks like). */
 export const START_HOUR_SHARE = {
   "8": 0.5,
-  "9": 57.3,
-  "10": 5.3,
-  "11": 15,
+  "9": 58.1,
+  "10": 5.1,
+  "11": 14.4,
   "12": 0.5,
-  "14": 15.5,
-  "15": 3.9,
+  "14": 15.8,
+  "15": 3.7,
   "16": 1.9
 } as const;
 
@@ -313,7 +313,7 @@ export const START_HOUR_SHARE = {
 export const RETURN_INTERVAL_MONTHS = 11;
 
 /** Rework. A comeback is £0 revenue with the parts cost still landing (lib/comeback). */
-export const COMEBACK_RATE_PCT = 3.3;
+export const COMEBACK_RATE_PCT = 3.2;
 export const WARRANTY_INVOICE_RATE_PCT = 2.2;
 /** Negative lines — discount codes and goodwill. Worth reproducing: they exercise real features. */
 export const NEGATIVE_LINE_RATE_PCT = 5.5;
@@ -369,7 +369,7 @@ export const ARCHETYPES = [
     "itemType": "fixed",
     "outsourcedLabour": false,
     "priceGbp": 65,
-    "partsCostGbp": 0,
+    "partsCostGbp": 5,
     "labourHours": 0.5,
     "shareOfLines": 10.6
   },
@@ -439,7 +439,7 @@ export const ARCHETYPES = [
     "itemType": "fixed",
     "outsourcedLabour": true,
     "priceGbp": 20,
-    "partsCostGbp": 0,
+    "partsCostGbp": 5,
     "labourHours": 0.25,
     "shareOfLines": 1.3
   }

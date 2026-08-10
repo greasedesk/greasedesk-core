@@ -266,6 +266,8 @@ const TO = new Date('2026-08-01T00:00:00Z');
 
 // ── rounding, so no emitted figure is one real job's number ──────────────────────────────────────
 const r5 = (pennies) => Math.round(pennies / 500) * 5;          // → whole £5
+/** Shop supplies on a service that consumes no parts. See the note at partsCostGbp. */
+const CONSUMABLES_FLOOR_GBP = 5;
 const rQuarter = (h) => Math.round(h * 4) / 4;                   // → 0.25 h
 const r1000 = (m) => Math.round(m / 1000) * 1000;
 const r5min = (m) => Math.round(m / 5) * 5;
@@ -347,7 +349,22 @@ for (const a of ARCHETYPES) {
     itemType: hits[0].type,
     outsourcedLabour: hits.filter((h) => h.outsourced).length > hits.length / 2,
     priceGbp: r5(med(hits.map((h) => h.price))),
-    partsCostGbp: costed.length ? r5(med(costed)) : 0,
+    // ── A SOLD SERVICE WITH NO COST AT ALL IS A DATA-QUALITY WARNING, NOT A FACT ────────────────
+    // Two archetypes derive a £0 cost because the source garage never recorded one against them.
+    // Reproducing that faithfully reproduces the warning: lib/charged-labour's uncostedParts flags
+    // a zero-cost line exactly as it flags a null one, and rightly — "we bought nothing" and
+    // "nobody recorded what we bought" are indistinguishable on an ad-hoc line.
+    //
+    // Linking the line to its catalogue item does NOT rescue it either: an invoice snapshotted from
+    // an accepted quote version carries catalogue_item_id: null by design ("the frozen line is the
+    // record; the product link is not re-resolved"), so every invoice in a demo whose acceptances
+    // run through the real chokepoint is unlinked.
+    //
+    // So the floor is a genuine consumables cost, and it is the one place the demo is deliberately
+    // BETTER than the source rather than faithful to it: a real diagnostic burns shop supplies and a
+    // real valet burns cleaning materials, both garages just fail to book them. A demo should not
+    // showcase a gap in somebody else's bookkeeping.
+    partsCostGbp: costed.length && r5(med(costed)) > 0 ? r5(med(costed)) : CONSUMABLES_FLOOR_GBP,
     labourHours: rQuarter(med(hits.map((h) => h.hours))),
     shareOfLines: pct1(hits.length / win.reduce((n, i) => n + i.lines.length, 0)),
   });
