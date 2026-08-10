@@ -34,7 +34,6 @@ import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
   RETURN_INTERVAL_MONTHS, COMEBACK_RATE_PCT, NEGATIVE_LINE_RATE_PCT,
-  NEVER_DIESEL, EV_CAPABLE, EV_FROM, HYBRID_CAPABLE, HYBRID_FROM,
 } from '@/lib/demo/profile';
 
 // ── the shape of a demo ──────────────────────────────────────────────────────────────────────────
@@ -257,22 +256,51 @@ const JOB_MIX = {
   partMarkup: 1.45,
 } as const;
 
+/** One entry from VEHICLE_MIX's per-model table. */
+export type DemoModel = { name: string; from: number; ev: number | null; hyb: number | null; diesel: boolean };
+export type DemoVehicle = { make: string; model: string; year: number; fuel: string };
+
 /**
- * A fuel the car could actually have had. Drawing from FUEL_MIX alone produced a diesel Aygo and a
- * 2015 electric 2008 — 36 of 612 vehicles were impossible, and this demo is shown to people who
- * would spot one on the first screen.
+ * ── FUEL FIRST, THEN THE CAR THAT COULD HAVE IT ─────────────────────────────────────────────────
+ * The obvious order — draw an age, draw a model, then pick a fuel it could have — cannot hit a fuel
+ * target, and the failure is arithmetic rather than a bug. The source fleet's median car is ELEVEN
+ * years old, so barely a quarter of it is new enough for any electrified version to exist; drawing
+ * fuel last put electric at 0.2% and hybrid at 1.6% against an intended 4% and 8%. Renormalising the
+ * weights over the allowed fuels did not help, because for most cars the allowed set is just petrol
+ * and diesel.
  *
- * Each constraint is checked against its OWN list. An earlier version treated "never a diesel" as
- * "always petrol", which also silenced the Yaris and Jazz hybrids — two of the commonest hybrids
- * on the road, removed from the demo by a rule meant to exclude a diesel Aygo.
+ * So the causal order is inverted: choose what the car RUNS ON first, then choose a car that could
+ * have run on it, then an age consistent with both. The intended mix is hit exactly, and the side
+ * effect is not a distortion but a fact — the electrified cars come out younger than the fleet
+ * average, which is true of every real garage's book.
+ *
+ * Make shares are preserved within each fuel, so an electric book leans to the makes that actually
+ * sold electric cars. Also true.
  */
-export function fuelFor(r: Rand, model: string, year: number): string {
-  const draw = weighted(r, FUEL_MIX.map((f) => [f.fuel, f.share] as [string, number]));
-  const has = (xs: readonly string[]) => xs.includes(model);
-  if (draw === 'Diesel' && has(NEVER_DIESEL)) return 'Petrol';
-  if (draw === 'Electric' && (year < EV_FROM || !has(EV_CAPABLE))) return 'Petrol';
-  if (draw === 'Hybrid' && (year < HYBRID_FROM || !has(HYBRID_CAPABLE))) return 'Petrol';
-  return draw;
+export function pickVehicle(r: Rand, thisYear: number, drawAge: () => number): DemoVehicle {
+  const fuel = weighted(r, FUEL_MIX.map((f) => [f.fuel, f.share] as [string, number]));
+  const supports = (m: DemoModel) =>
+    fuel === 'Petrol' ? true
+      : fuel === 'Diesel' ? m.diesel
+        : fuel === 'Hybrid' ? m.hyb != null
+          : m.ev != null;
+
+  const candidates: Array<[{ make: string; model: DemoModel }, number]> = [];
+  for (const mk of VEHICLE_MIX) {
+    for (const m of mk.models as readonly DemoModel[]) {
+      if (supports(m)) candidates.push([{ make: mk.make, model: m }, mk.share]);
+    }
+  }
+  // Petrol is universal, so this can only fire if the table is edited into an odd state. Falling
+  // back to petrol here is the one place it IS right: no car exists that runs on nothing.
+  if (!candidates.length) return pickVehicle(r, thisYear, drawAge);
+
+  const { make, model } = weighted(r, candidates);
+  // The year floor is the LATER of the nameplate's launch and the fuel's own arrival. Clamping
+  // rather than re-drawing keeps recently-launched models honestly young — there are no old Karoqs.
+  const floor = Math.max(model.from, fuel === 'Electric' ? (model.ev as number) : fuel === 'Hybrid' ? (model.hyb as number) : 0);
+  const year = Math.max(floor, thisYear - Math.max(0, Math.round(drawAge())));
+  return { make, model: model.name, year, fuel };
 }
 
 /** AUTHORED part names — generic consumables, nothing from any tenant. */
@@ -477,18 +505,14 @@ export async function generateDemoTenant(opts: {
       },
       select: { id: true },
     });
-    const mk = weighted(r, VEHICLE_MIX.map((v) => [v, v.share] as [typeof VEHICLE_MIX[number], number]));
-    const age = Math.max(0, Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleAgeYears)));
-    const modelName = pick(r, mk.models);
-    const vehicleYear = now.getUTCFullYear() - age;
+    const v = pickVehicle(r, now.getUTCFullYear(), () => fromQuantiles(r, DISTRIBUTIONS.vehicleAgeYears));
     const identity = await prisma.vehicleIdentity.create({ data: { group_id: group.id }, select: { id: true } });
     const reg = `${pick(r, ['AB', 'CD', 'EF', 'GH', 'KL', 'MN'])}${String(10 + Math.floor(r() * 64)).padStart(2, '0')} ${pick(r, ['XAB', 'YCD', 'ZEF', 'PGH', 'RJK'])}`;
     const veh = await prisma.vehicle.create({
       data: {
         group_id: group.id, identity_id: identity.id, registration: reg,
         registration_normalized: reg.replace(/\s/g, '').toUpperCase(),
-        make: mk.make, model: modelName, year: vehicleYear,
-        fuel_type: fuelFor(r, modelName, vehicleYear),
+        make: v.make, model: v.model, year: v.year, fuel_type: v.fuel,
         mileage_at_create: Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100,
       },
       select: { id: true },

@@ -60,75 +60,138 @@ const HEADER = `/**
  *     business, and stops believing the rest of it.
  */`;
 
-/** UK car parc, approximate and AUTHORED — a general independent's Tuesday morning. Shares are
- *  rounded percentages of vehicles seen; they do not need to sum exactly and the generator
- *  normalises. Nothing here comes from the source tenant. */
+/** UK car parc, approximate and AUTHORED — a general independent's Tuesday morning. Nothing here
+ *  comes from the source tenant. */
 const VEHICLE_MIX = `
+/**
+ * ── EVERY MODEL CARRIES ITS OWN DATES ───────────────────────────────────────────────────────────
+ * A flat list of model names plus a global year floor was not enough, and the failures were visible
+ * in the data: 59 of 612 vehicles predated their own nameplate — a 2002 Vauxhall Insignia (launched
+ * 2008), a 2002 SEAT Arona (2017), eleven Ford Pumas before the name came back in 2019. Age was
+ * drawn from one distribution and the model from another, and nothing connected them.
+ *
+ *   from    the year the NAMEPLATE went on sale in the UK. A generated year is clamped up to it, so
+ *           a Karoq is simply never old — which is true, and is why the clamp is not a distortion.
+ *   ev      first year a battery-electric version existed, or null for never.
+ *   hyb     first year a hybrid or mild-hybrid version existed, or null for never.
+ *   diesel  whether it was ever sold here as a diesel.
+ *
+ * Approximate, authored, and occasionally arguable at the margins (mild hybrids especially). Being
+ * a year out on the Corolla is invisible; being twenty years out on an Arona is not.
+ */
 export const VEHICLE_MIX = [
-  { make: 'Ford',          share: 14, models: ['Fiesta', 'Focus', 'Kuga', 'Puma', 'Transit Custom'] },
-  { make: 'Vauxhall',      share: 11, models: ['Corsa', 'Astra', 'Mokka', 'Insignia'] },
-  { make: 'Volkswagen',    share: 11, models: ['Golf', 'Polo', 'Tiguan', 'Passat', 'Up'] },
-  { make: 'BMW',           share:  8, models: ['1 Series', '3 Series', '5 Series', 'X1', 'X3'] },
-  { make: 'Audi',          share:  8, models: ['A1', 'A3', 'A4', 'Q2', 'Q3'] },
-  { make: 'Mercedes-Benz', share:  6, models: ['A-Class', 'C-Class', 'E-Class', 'GLA'] },
-  { make: 'Toyota',        share:  6, models: ['Yaris', 'Corolla', 'Aygo', 'RAV4'] },
-  { make: 'Nissan',        share:  6, models: ['Qashqai', 'Juke', 'Micra', 'X-Trail'] },
-  { make: 'Peugeot',       share:  5, models: ['208', '308', '2008', '3008'] },
-  { make: 'Kia',           share:  5, models: ['Picanto', 'Ceed', 'Sportage', 'Niro'] },
-  { make: 'Hyundai',       share:  5, models: ['i10', 'i20', 'i30', 'Tucson'] },
-  { make: 'Renault',       share:  4, models: ['Clio', 'Captur', 'Megane'] },
-  { make: 'Honda',         share:  3, models: ['Jazz', 'Civic', 'CR-V'] },
-  { make: 'Skoda',         share:  3, models: ['Fabia', 'Octavia', 'Karoq'] },
-  { make: 'SEAT',          share:  3, models: ['Ibiza', 'Leon', 'Arona'] },
-  { make: 'MINI',          share:  2, models: ['Cooper', 'Countryman'] },
+  { make: 'Ford', share: 14, models: [
+    { name: 'Fiesta',          from: 1976, ev: null, hyb: 2020, diesel: true },
+    { name: 'Focus',           from: 1998, ev: null, hyb: 2020, diesel: true },
+    { name: 'Kuga',            from: 2008, ev: null, hyb: 2020, diesel: true },
+    { name: 'Puma',            from: 2019, ev: 2024, hyb: 2019, diesel: true },
+    { name: 'Transit Custom',  from: 2012, ev: 2023, hyb: 2019, diesel: true },
+  ] },
+  { make: 'Vauxhall', share: 11, models: [
+    { name: 'Corsa',           from: 1993, ev: 2020, hyb: null, diesel: true },
+    { name: 'Astra',           from: 1980, ev: 2023, hyb: 2022, diesel: true },
+    { name: 'Mokka',           from: 2012, ev: 2021, hyb: null, diesel: true },
+    { name: 'Insignia',        from: 2008, ev: null, hyb: null, diesel: true },
+  ] },
+  { make: 'Volkswagen', share: 11, models: [
+    { name: 'Golf',            from: 1974, ev: 2014, hyb: 2015, diesel: true },
+    { name: 'Polo',            from: 1975, ev: null, hyb: null, diesel: true },
+    { name: 'Tiguan',          from: 2007, ev: null, hyb: 2021, diesel: true },
+    { name: 'Passat',          from: 1973, ev: null, hyb: 2015, diesel: true },
+    { name: 'Up',              from: 2011, ev: 2013, hyb: null, diesel: false },
+  ] },
+  { make: 'BMW', share: 8, models: [
+    { name: '1 Series',        from: 2004, ev: null, hyb: null, diesel: true },
+    { name: '3 Series',        from: 1975, ev: null, hyb: 2016, diesel: true },
+    { name: '5 Series',        from: 1972, ev: null, hyb: 2017, diesel: true },
+    { name: 'X1',              from: 2009, ev: 2023, hyb: 2020, diesel: true },
+    { name: 'X3',              from: 2003, ev: null, hyb: 2020, diesel: true },
+  ] },
+  { make: 'Audi', share: 8, models: [
+    { name: 'A1',              from: 2010, ev: null, hyb: null, diesel: true },
+    { name: 'A3',              from: 1996, ev: null, hyb: 2014, diesel: true },
+    { name: 'A4',              from: 1994, ev: null, hyb: 2019, diesel: true },
+    { name: 'Q2',              from: 2016, ev: null, hyb: null, diesel: true },
+    { name: 'Q3',              from: 2011, ev: null, hyb: 2020, diesel: true },
+  ] },
+  { make: 'Mercedes-Benz', share: 6, models: [
+    { name: 'A-Class',         from: 1997, ev: null, hyb: 2019, diesel: true },
+    { name: 'C-Class',         from: 1993, ev: null, hyb: 2015, diesel: true },
+    { name: 'E-Class',         from: 1993, ev: null, hyb: 2016, diesel: true },
+    { name: 'GLA',             from: 2013, ev: null, hyb: 2020, diesel: true },
+  ] },
+  { make: 'Toyota', share: 6, models: [
+    { name: 'Yaris',           from: 1999, ev: null, hyb: 2012, diesel: false },
+    { name: 'Corolla',         from: 1966, ev: null, hyb: 2019, diesel: true },
+    { name: 'Aygo',            from: 2005, ev: null, hyb: null, diesel: false },
+    { name: 'RAV4',            from: 1994, ev: null, hyb: 2016, diesel: true },
+  ] },
+  { make: 'Nissan', share: 6, models: [
+    { name: 'Qashqai',         from: 2006, ev: null, hyb: 2022, diesel: true },
+    { name: 'Juke',            from: 2010, ev: null, hyb: 2022, diesel: true },
+    { name: 'Micra',           from: 1982, ev: null, hyb: null, diesel: false },
+    { name: 'X-Trail',         from: 2001, ev: null, hyb: 2022, diesel: true },
+  ] },
+  { make: 'Peugeot', share: 5, models: [
+    { name: '208',             from: 2012, ev: 2020, hyb: null, diesel: true },
+    { name: '308',             from: 2007, ev: null, hyb: 2021, diesel: true },
+    { name: '2008',            from: 2013, ev: 2020, hyb: null, diesel: true },
+    { name: '3008',            from: 2009, ev: null, hyb: 2019, diesel: true },
+  ] },
+  { make: 'Kia', share: 5, models: [
+    { name: 'Picanto',         from: 2004, ev: null, hyb: null, diesel: false },
+    { name: 'Ceed',            from: 2006, ev: null, hyb: 2019, diesel: true },
+    { name: 'Sportage',        from: 1993, ev: null, hyb: 2021, diesel: true },
+    { name: 'Niro',            from: 2016, ev: 2018, hyb: 2016, diesel: false },
+  ] },
+  { make: 'Hyundai', share: 5, models: [
+    { name: 'i10',             from: 2007, ev: null, hyb: null, diesel: false },
+    { name: 'i20',             from: 2008, ev: null, hyb: 2020, diesel: true },
+    { name: 'i30',             from: 2007, ev: null, hyb: 2019, diesel: true },
+    { name: 'Tucson',          from: 2004, ev: null, hyb: 2021, diesel: true },
+  ] },
+  { make: 'Renault', share: 4, models: [
+    { name: 'Clio',            from: 1990, ev: null, hyb: 2020, diesel: true },
+    { name: 'Captur',          from: 2013, ev: null, hyb: 2020, diesel: true },
+    { name: 'Megane',          from: 1995, ev: null, hyb: 2020, diesel: true },
+  ] },
+  { make: 'Honda', share: 3, models: [
+    { name: 'Jazz',            from: 2001, ev: null, hyb: 2020, diesel: false },
+    { name: 'Civic',           from: 1972, ev: null, hyb: 2022, diesel: true },
+    { name: 'CR-V',            from: 1995, ev: null, hyb: 2019, diesel: true },
+  ] },
+  { make: 'Skoda', share: 3, models: [
+    { name: 'Fabia',           from: 1999, ev: null, hyb: null, diesel: true },
+    { name: 'Octavia',         from: 1996, ev: null, hyb: 2020, diesel: true },
+    { name: 'Karoq',           from: 2017, ev: null, hyb: null, diesel: true },
+  ] },
+  { make: 'SEAT', share: 3, models: [
+    { name: 'Ibiza',           from: 1984, ev: null, hyb: null, diesel: true },
+    { name: 'Leon',            from: 1999, ev: null, hyb: 2020, diesel: true },
+    { name: 'Arona',           from: 2017, ev: null, hyb: null, diesel: true },
+  ] },
+  { make: 'MINI', share: 2, models: [
+    { name: 'Cooper',          from: 2001, ev: 2020, hyb: null, diesel: true },
+    { name: 'Countryman',      from: 2010, ev: null, hyb: 2017, diesel: true },
+  ] },
 ] as const;
 
-/** Fuel split, AUTHORED to a plausible GB independent's book — an older parc than the new-car
- *  market, so still petrol-heavy with a thin but present electrified tail. */
+/**
+ * The fuel split a general independent's book SHOULD look like. It is a target for the whole fleet,
+ * not a per-car probability: a model that was never sold as an EV redraws among the fuels it could
+ * have had, with the weights renormalised. Falling back to petrol instead — the first attempt —
+ * reshaped the book to 73/24/2/0.5 and left three electric cars in six hundred.
+ *
+ * The realised mix still cannot equal this exactly, and the reason is worth stating: a fleet whose
+ * median car is eleven years old cannot be 4% electric, because those cars did not exist when most
+ * of it was built. The gate asserts the realised mix against what the constraints ALLOW, and prints
+ * both, rather than pretending the target is reachable.
+ */
 export const FUEL_MIX = [
   { fuel: 'Petrol', share: 58 },
   { fuel: 'Diesel', share: 30 },
   { fuel: 'Hybrid', share:  8 },
   { fuel: 'Electric', share: 4 },
-] as const;
-
-/**
- * ── FUEL HAS TO SUIT THE CAR, OR A MECHANIC SPOTS IT IN A SECOND ────────────────────────────────
- * Drawing fuel independently of the model produced a diesel Toyota Aygo and a 2015 electric
- * Peugeot 2008 in the first generated tenant — 36 of 612 vehicles were impossible. Neither of those
- * cars has ever existed, and the audience for this demo is people who would know that immediately:
- * one implausible row costs more credibility than the other nine hundred earn.
- *
- * THREE INDEPENDENT CONSTRAINTS, because the first attempt collapsed them into one and got it
- * wrong. "Never sold as a diesel" is not the same as "always petrol": a Yaris Hybrid and a Jazz
- * Hybrid are two of the commonest hybrids on a UK forecourt, and a rule that forced those models to
- * petrol would have removed them from the demo entirely.
- *
- *   NEVER_DIESEL     — city cars and small petrol models never sold as diesels here.
- *   EV_CAPABLE       — models with a battery-electric version at all; + EV_FROM for the year.
- *   HYBRID_CAPABLE   — models with a hybrid version at all; + HYBRID_FROM for the year.
- *
- * Anything a model cannot be falls back to petrol.
- */
-export const NEVER_DIESEL = [
-  'Aygo', 'Picanto', 'i10', 'Up', 'Micra', 'Jazz', 'Yaris', 'Ibiza', 'Fabia', 'Panda',
-] as const;
-
-export const EV_FROM = 2016;
-export const EV_CAPABLE = [
-  'Corsa', 'Mokka', 'Astra', '208', '2008', 'Niro', 'Golf', 'Up',
-  'X1', 'A-Class', 'Puma', 'Fiesta', 'Captur', 'Clio', 'Yaris', 'Corolla',
-] as const;
-
-/**
- * 2012 was too loose on its own — it allowed a 2012 hybrid Insignia, which never existed. The year
- * floor only makes sense paired with a model list, and the earliest of these (the Yaris Hybrid,
- * 2012) is what sets it.
- */
-export const HYBRID_FROM = 2012;
-export const HYBRID_CAPABLE = [
-  'Yaris', 'Corolla', 'RAV4', 'Jazz', 'CR-V', 'Civic', 'Niro', 'Sportage', 'Tucson',
-  'Puma', 'Kuga', 'Clio', 'Captur', 'Golf', 'Passat', 'A-Class', 'C-Class', 'X1', 'Q3',
 ] as const;
 `;
 
