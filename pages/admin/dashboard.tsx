@@ -27,6 +27,7 @@ import { monthParamsForSelection, monthNameOf, rollingMonths, isMonthlyCompariso
 import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
 import CapacityMonthsChart, { type MonthBar } from '@/components/dashboard/CapacityMonthsChart';
+import Figure from '@/components/dashboard/Figure';
 import { isLapsedStatus } from '@/lib/billing';
 import { utilisationLight, thresholdsFromGroup, defaultThresholds, type UtilisationThresholds } from '@/lib/utilisation-light';
 
@@ -61,7 +62,7 @@ const TILE_RENDERERS: TileRenderer[] = [
     key: 'revenue',
     render: (d, f) => (
       <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
-        <p className="text-3xl font-bold text-ink tabular-nums">{f.money(d.grossPennies)}</p>
+        <Figure className="text-3xl font-bold text-ink tabular-nums">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.revenueSub', { count: d.count })}</p>
         {d.perSite?.length > 0 && (
           <div className="mt-2 space-y-0.5">
@@ -80,10 +81,10 @@ const TILE_RENDERERS: TileRenderer[] = [
     render: (d, f) => (
       <div className="space-y-1.5">
         <Link href={`/admin/invoices?status=issued${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
-          <span className="text-xs text-muted">{f.t('tiles.issued')}</span><span className="text-lg font-semibold text-ink tabular-nums">{d.issuedCount} · {f.money(d.issuedPennies)}</span>
+          <span className="text-xs text-muted shrink-0 mr-2">{f.t('tiles.issued')}</span><Figure className="text-lg font-semibold text-ink tabular-nums text-right">{d.issuedCount} · {f.money(d.issuedPennies)}</Figure>
         </Link>
         <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
-          <span className="text-xs text-muted">{f.t('tiles.paid')}</span><span className="text-lg font-semibold text-ok tabular-nums">{d.paidCount} · {f.money(d.paidPennies)}</span>
+          <span className="text-xs text-muted shrink-0 mr-2">{f.t('tiles.paid')}</span><Figure className="text-lg font-semibold text-ok tabular-nums text-right">{d.paidCount} · {f.money(d.paidPennies)}</Figure>
         </Link>
       </div>
     ),
@@ -97,7 +98,7 @@ const TILE_RENDERERS: TileRenderer[] = [
       return (
         <div>
           <Link href={`/admin/invoices?status=warranty${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
-            <p className="text-3xl font-bold text-ink tabular-nums">{d.count}</p>
+            <Figure className="text-3xl font-bold text-ink tabular-nums">{d.count}</Figure>
             <p className="text-xs text-muted mt-1">{f.t('tiles.warrantySub')}</p>
           </Link>
           {d.count > 0 && (
@@ -132,7 +133,7 @@ const TILE_RENDERERS: TileRenderer[] = [
     pointInTime: true, // current clearance window — ignores the period selector BY DESIGN
     render: (d, f) => (
       <Link href="/admin/invoices?status=pending" className={tileLink}>
-        <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
+        <Figure className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.pendingClearanceSub', { count: d.count })}</p>
       </Link>
     ),
@@ -142,7 +143,7 @@ const TILE_RENDERERS: TileRenderer[] = [
     pointInTime: true, // current outstanding — ignores the period selector BY DESIGN
     render: (d, f) => (
       <Link href="/admin/invoices?status=unpaid" className={tileLink}>
-        <p className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</p>
+        <Figure className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.debtorsSub', { count: d.count })}</p>
       </Link>
     ),
@@ -154,7 +155,7 @@ const TILE_RENDERERS: TileRenderer[] = [
     // site scope so the list total reconciles with this tile (lib/wip is the shared definition).
     render: (d, f) => (
       <Link href={`/admin/jobcards?filter=wip&site=${encodeURIComponent(f.site)}`} className={tileLink}>
-        <p className="text-3xl font-bold text-ink tabular-nums">{f.money(d.exVatPennies)}</p>
+        <Figure className="text-3xl font-bold text-ink tabular-nums">{f.money(d.exVatPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.wipSub', { count: d.count })}</p>
         {d.agedCount > 0
           ? <p className="text-xs text-warn mt-2">{f.t('tiles.wipAged', { count: d.agedCount, days: d.ageDays })}</p>
@@ -221,7 +222,16 @@ export default function AdminDashboard(props: PageProps) {
   const { t } = useTranslation('dashboard');
   const pickerNow = new Date(); // labels only (rolling months / FY ranges); the server resolves windows
   // A selection is a preset ('this_month' … 'last_fy'), 'custom', or a named month 'm:YYYY-MM'.
-  const [preset, setPreset] = useState<string>('this_month');
+  //
+  // ── THE LANDING VIEW IS THE PATTERN, NOT THE SNAPSHOT ─────────────────────────────────────────
+  // A single month cannot tell a garage whether 62% is good; twelve can, at a glance, and the month
+  // is then the drill-down. Safe to change because nothing keys off the value: the tile deep links
+  // build `preset=${preset}` generically and every target resolves it through resolveRange, which
+  // knows rolling_12 because it is a first-class PERIOD_PRESET; the P&L strip follows it as whole
+  // months (no `degraded` notice); and the traffic light comes from the live BAR in this mode, the
+  // same judgement from the same figures. A stored selection still wins — this is the default for
+  // someone who has never chosen, not an override of someone who has.
+  const [preset, setPreset] = useState<string>('rolling_12');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   // Site scope — sibling of the period control, scopes the ENTIRE dashboard (both strips).
@@ -409,7 +419,7 @@ export default function AdminDashboard(props: PageProps) {
             {canCompose && <div className="border-t border-line mb-2" />}
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="w-28 shrink-0 text-sm font-semibold text-ink">{t('marginStrip.grossProfit')}</span>
-              <span className="text-2xl font-bold tabular-nums text-ink">{money(grossProfit)}</span>
+              <Figure className="text-2xl font-bold tabular-nums text-ink">{money(grossProfit)}</Figure>
               <span className="text-sm text-muted">· {pctStr(grossPct)} {t('marginStrip.ofRevenue', { revenue: money(totalRevenue) })}</span>
               {monthWindow && <span className="ml-auto text-xs text-muted">{monthLabel(monthWindow, props.locale)}</span>}
             </div>
