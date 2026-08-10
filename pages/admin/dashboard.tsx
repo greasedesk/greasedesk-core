@@ -625,10 +625,10 @@ export default function AdminDashboard(props: PageProps) {
               <Link href="/admin/quotes" className="text-xs text-accent hover:underline">Quotes →</Link>
             </div>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mt-2">
-              <span className="text-2xl font-extrabold text-ink tabular-nums">{q.issued}</span>
+              <Figure className="text-2xl font-extrabold text-ink tabular-nums">{q.issued}</Figure>
               <span className="text-sm text-muted">issued</span>
               <span className="text-muted">·</span>
-              <span className="text-2xl font-extrabold text-ok tabular-nums">{q.accepted}</span>
+              <Figure className="text-2xl font-extrabold text-ok tabular-nums">{q.accepted}</Figure>
               <span className="text-sm text-muted">accepted</span>
               {q.ratePct != null && (<>
                 <span className="text-muted">·</span>
@@ -798,7 +798,7 @@ export default function AdminDashboard(props: PageProps) {
                   {/* HEADLINE = the ABSENCE total (the actionable figure) — gross capacity is the
                       least actionable number in the chain and lives in the drill. 0 renders as
                       a clean 0h, never a dash. */}
-                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</p>
+                  <Figure className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</Figure>
                   <p className="text-xs text-muted mt-1">{t('pnl.hoursWentSub')}</p>
                   {/* Rework sits ALONGSIDE absence: hours spent redoing work for free. */}
                   {rw > 0 && <p className="text-xs text-warn mt-1">{t('pnl.hoursWentRework', { hours: h3(rw) })}</p>}
@@ -829,7 +829,7 @@ export default function AdminDashboard(props: PageProps) {
               return (
                 <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
                   <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.stillToSell')}</h3>
-                  <p className="text-2xl font-bold tabular-nums text-ink">{h3(u3.remainingSellable ?? 0)}</p>
+                  <Figure className="text-2xl font-bold tabular-nums text-ink">{h3(u3.remainingSellable ?? 0)}</Figure>
                   <p className="text-xs text-muted mt-1">{t('pnl.stillToSellValue', { money: fmt.money(u3.remainingValuePennies ?? 0) })}</p>
                   <p className="text-xs text-muted mt-0.5">{t('pnl.stillToSellBooked', { booked: h3(u3.bookedHoursRemaining ?? 0) })}</p>
                   {(u3.remainingNoRate?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: u3.remainingNoRate.join(', ') })}</p>}
@@ -845,12 +845,12 @@ export default function AdminDashboard(props: PageProps) {
                 <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.unsold')}</h3>
                 {overtime ? (
                   <>
-                    <p className="text-2xl font-bold tabular-nums text-ok">{t('pnl.unsoldOvertime')}</p>
+                    <Figure className="text-2xl font-bold tabular-nums text-ok">{t('pnl.unsoldOvertime')}</Figure>
                     <p className="text-xs text-muted mt-1">{t('pnl.unsoldOvertimeSub', { charged: h3(u3.charged), available: h3(u3.available) })}</p>
                   </>
                 ) : (
                   <>
-                    <p className="text-2xl font-bold tabular-nums text-ink">{h3(unsold)}</p>
+                    <Figure className="text-2xl font-bold tabular-nums text-ink">{h3(unsold)}</Figure>
                     <p className="text-xs text-muted mt-1">{unsoldPennies > 0 ? t('pnl.unsoldSub', { money: fmt.money(unsoldPennies) }) : t('pnl.unsoldSubNoMoney')}</p>
                     {noRate.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: noRate.join(', ') })}</p>}
                   </>
@@ -874,7 +874,7 @@ export default function AdminDashboard(props: PageProps) {
                 <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
                 {cb == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : k === 'costBase' ? (
                   <>
-                    <p className="text-2xl font-bold tabular-nums text-ink">{fmt.money(cb.costBasePennies)}</p>
+                    <Figure className="text-2xl font-bold tabular-nums text-ink">{fmt.money(cb.costBasePennies)}</Figure>
                     <p className="text-xs text-muted mt-1">{t('pnl.costBaseSub')}</p>
                     <details className="mt-2">
                       <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
@@ -893,7 +893,7 @@ export default function AdminDashboard(props: PageProps) {
                     const residualHours = residual != null && rate ? residual / (rate * 100) : null;
                     return (
                       <>
-                        <p className="text-2xl font-bold tabular-nums text-ink">{cb.breakEvenCentihours > 0 ? hrs(cb.breakEvenCentihours) : '—'}</p>
+                        <Figure className="text-2xl font-bold tabular-nums text-ink">{cb.breakEvenCentihours > 0 ? hrs(cb.breakEvenCentihours) : '—'}</Figure>
                         <p className="text-xs text-muted mt-1">{t('pnl.breakEvenSub')}</p>
                         {cb.ratesMissing.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: cb.ratesMissing.join(', ') })}</p>}
                         <details className="mt-2">
@@ -942,7 +942,7 @@ export default function AdminDashboard(props: PageProps) {
                     <>
                       {/* The factor is baked into the denominator — 100% IS the target by
                           construction, so no separate target line may reappear here. */}
-                      <p className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</p>
+                      <Figure className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</Figure>
                       <p className="text-xs text-ink mt-0.5">{t('pnl.utilHundred')}</p>
                       {u.inProgress && monthWindow && (
                         <p className="text-xs text-accent mt-0.5">{t('pnl.utilToDate', { period: elapsedLabel(monthWindow, monthMeta?.daysElapsed ?? 0, props.locale) })}</p>
@@ -1051,7 +1051,7 @@ export default function AdminDashboard(props: PageProps) {
               <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
               {v != null ? (
                 <>
-                  <p className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(npShort ? -v : v)}</p>
+                  <Figure className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(npShort ? -v : v)}</Figure>
                   {npInProgress ? (
                     <p className="text-xs text-muted mt-1">{npShort ? t('pnl.netProfitShort') : t('pnl.netProfitAhead')}</p>
                   ) : (
