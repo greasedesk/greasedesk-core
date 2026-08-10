@@ -736,7 +736,7 @@ export default function AdminDashboard(props: PageProps) {
                 <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.partsMargin')}</h3>
                 {!ready ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : (
                   <>
-                    <p className="text-2xl font-bold tabular-nums text-ink">{pmPct == null ? '—' : `${pmPct.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`}</p>
+                    <Figure className="text-2xl font-bold tabular-nums text-ink">{pmPct == null ? '—' : `${pmPct.toLocaleString(props.locale, { maximumFractionDigits: 1 })}%`}</Figure>
                     <p className="text-xs text-muted mt-1">{t('pnl.partsMarginSub')}</p>
                     <div className="text-xs mt-2 space-y-0.5">
                       <div className="flex justify-between"><span className="text-muted">{t('pnl.partsRevenue')}</span><span className="tabular-nums text-ink">{fmt.money(partsRevenue!)}</span></div>
@@ -935,7 +935,7 @@ export default function AdminDashboard(props: PageProps) {
                     </p>
                   ) : u.available === 0 ? (
                     <>
-                      <p className="text-2xl font-bold tabular-nums text-muted">—</p>
+                      <Figure className="text-2xl font-bold tabular-nums text-muted">—</Figure>
                       <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail')}</p>
                     </>
                   ) : (
@@ -1007,7 +1007,7 @@ export default function AdminDashboard(props: PageProps) {
                 <h3 className="text-sm font-semibold text-muted mb-2">{t('pnl.hoursCharged')}</h3>
                 {hrs != null ? (
                   <>
-                    <p className="text-2xl font-bold tabular-nums text-ink">{(hrs / 100).toLocaleString(props.locale, { maximumFractionDigits: 2 })}h</p>
+                    <Figure className="text-2xl font-bold tabular-nums text-ink">{(hrs / 100).toLocaleString(props.locale, { maximumFractionDigits: 2 })}h</Figure>
                     <p className="text-xs text-muted mt-1">{t('pnl.hoursChargedSub')}</p>
                     {/* The amber is now a DRILL (same expander pattern as the utilisation tile):
                         distinct products → the product editor (labour_hours set once fixes every
@@ -1126,9 +1126,9 @@ export default function AdminDashboard(props: PageProps) {
                 {(mp ? cells : Array.from({ length: 8 }, (_, i) => ({ key: `sk${i}`, value: null, sub: '', reconciles: true, names: undefined }))).map((c) => (
                   <div key={c.key} data-testid={`manpower-${c.key}`} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
                     <h3 className="text-sm font-semibold text-muted mb-2">{mp ? t(`manpower.${c.key}`) : ''}</h3>
-                    <p className="text-2xl font-bold tabular-nums text-ink" data-testid={`manpower-${c.key}-value`}>
+                    <Figure className="text-2xl font-bold tabular-nums text-ink" data-testid={`manpower-${c.key}-value`}>
                       {c.value ?? (loading ? t('loading') : '—')}
-                    </p>
+                    </Figure>
                     {c.sub && <p className="text-xs text-muted mt-1">{c.sub}</p>}
                     {/* NOT AN INPUT. Said on the tile, not in a footnote — the number is prominent
                         and would otherwise read as something the figures above depend on. */}

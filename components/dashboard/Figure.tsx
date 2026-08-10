@@ -50,8 +50,18 @@ export default function Figure({ children, className = '', minScale = 0.6, title
     const available = el.clientWidth;
     if (!available || natural <= available + 1) return; // fits → leave the class alone entirely
     const base = parseFloat(window.getComputedStyle(el).fontSize) || 16;
-    const scale = Math.max(minScale, available / natural);
-    el.style.fontSize = `${(base * scale).toFixed(2)}px`;
+    // Text width is NOT perfectly linear in font-size — letter-spacing, hinting and sub-pixel
+    // rounding all take a cut — so a single ratio lands a few pixels long. Measured on the served
+    // page: £259,350.55 went 193px → 133px in a 129px box, still clipped. So: a small margin, then
+    // re-measure and correct, at most three passes. Converges in one or two in practice.
+    let size = base * Math.max(minScale, (available / natural) * 0.985);
+    for (let pass = 0; pass < 3; pass++) {
+      el.style.fontSize = `${size.toFixed(2)}px`;
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      const floor = base * minScale;
+      if (size <= floor + 0.01) return;   // at the floor: small-but-legible beats a smear
+      size = Math.max(floor, size * Math.max(0.8, (el.clientWidth / el.scrollWidth) * 0.99));
+    }
   }, [minScale]);
 
   useLayoutEffect(fit);
