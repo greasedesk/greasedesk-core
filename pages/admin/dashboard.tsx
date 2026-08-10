@@ -57,6 +57,9 @@ type Fmt = { money: (p: number) => string; t: (k: string, o?: any) => string; qs
 const tileLink = 'block -m-3 p-3 rounded-lg hover:bg-surface-muted/60 cursor-pointer transition-colors';
 type TileRenderer = { key: string; pointInTime?: boolean; render: (data: any, f: Fmt) => React.ReactNode };
 
+/** Manpower cells whose value is a phrase rather than a figure — they wrap, they do not shrink. */
+const PROSE_MANPOWER_CELLS = new Set(['headcount']);
+
 const TILE_RENDERERS: TileRenderer[] = [
   {
     key: 'revenue',
@@ -1126,9 +1129,21 @@ export default function AdminDashboard(props: PageProps) {
                 {(mp ? cells : Array.from({ length: 8 }, (_, i) => ({ key: `sk${i}`, value: null, sub: '', reconciles: true, names: undefined }))).map((c) => (
                   <div key={c.key} data-testid={`manpower-${c.key}`} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
                     <h3 className="text-sm font-semibold text-muted mb-2">{mp ? t(`manpower.${c.key}`) : ''}</h3>
-                    <Figure className="text-2xl font-bold tabular-nums text-ink" data-testid={`manpower-${c.key}-value`}>
-                      {c.value ?? (loading ? t('loading') : '—')}
-                    </Figure>
+                    {/* MOST of these cells are numbers; `headcount` is a SENTENCE — "3 employed ·
+                        2 counted in capacity". Shrink-to-fit is the right rule for a figure and the
+                        wrong one for prose: it drove that phrase to the floor size and it STILL did
+                        not fit, because words in a nowrap box cannot. Prose wraps, numbers shrink.
+                        (It overflowed identically on a monthly period, so this predates the
+                        twelve-month view — the sweep simply made it visible.) */}
+                    {PROSE_MANPOWER_CELLS.has(c.key) ? (
+                      <p className="text-xl font-bold text-ink leading-snug" data-testid={`manpower-${c.key}-value`}>
+                        {c.value ?? (loading ? t('loading') : '—')}
+                      </p>
+                    ) : (
+                      <Figure className="text-2xl font-bold tabular-nums text-ink" data-testid={`manpower-${c.key}-value`}>
+                        {c.value ?? (loading ? t('loading') : '—')}
+                      </Figure>
+                    )}
                     {c.sub && <p className="text-xs text-muted mt-1">{c.sub}</p>}
                     {/* NOT AN INPUT. Said on the tile, not in a footnote — the number is prominent
                         and would otherwise read as something the figures above depend on. */}
