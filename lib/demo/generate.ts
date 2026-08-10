@@ -387,6 +387,53 @@ export type DemoGenerationResult = {
   elapsedMonthTarget: { availableToDate: number; soldToDate: number; ratio: number };
 };
 
+/**
+ * Prisma's 5s transaction default is sized for a request handler next to its database. This is a
+ * bulk writer talking to a remote pooler for minutes at a stretch, and a slow patch on Neon killed
+ * a run at card 550 of 810 with P2028 — nothing wrong with the work, just no patience for a stall.
+ * The transactions themselves are unchanged: one acceptQuote, or one mint.
+ */
+const DEMO_TX = { maxWait: 30_000, timeout: 60_000 };
+
+/**
+ * A five-minute write against a serverless Postgres will meet a stall. Three consecutive runs died
+ * mid-history — P1001 twice, P2028 once — while a 60-shot soak of the same endpoint came back clean
+ * both pooled and direct, so these are transient drops on a long-lived connection rather than an
+ * outage. Losing 550 cards of work to one of them is not a real failure mode, it is impatience.
+ *
+ * ONLY connection-class codes are retried, and only those:
+ *   P1001 unreachable · P1002 timed out · P1017 server closed it · P2024 pool timeout · P2028 tx gone
+ * A constraint violation, a gate refusal or a bad write is NOT retried — those are the generator
+ * being wrong, and repeating them would just hide it.
+ *
+ * Callers pass an `already` probe where a repeat could duplicate. A mint that committed and then
+ * lost its answer looks identical to one that never landed; the probe is what tells them apart, and
+ * Invoice.job_card_id is @unique so the constraint catches anything the probe misses.
+ */
+const TRANSIENT = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2024', 'P2028']);
+
+async function resilient<T>(
+  what: string,
+  fn: () => Promise<T>,
+  opts: { already?: () => Promise<boolean>; tries?: number } = {},
+): Promise<T | null> {
+  const tries = opts.tries ?? 6;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      if (!TRANSIENT.has(e?.code) || attempt >= tries) throw e;
+      // Did it actually land? If so this is a lost answer, not lost work.
+      if (opts.already) {
+        try { if (await opts.already()) return null; } catch { /* the probe is best-effort */ }
+      }
+      const backoff = Math.min(8_000, 400 * 2 ** (attempt - 1));
+      console.log(`   … ${what}: ${e.code} on attempt ${attempt}, retrying in ${backoff}ms`);
+      await new Promise((res) => setTimeout(res, backoff));
+    }
+  }
+}
+
 export async function generateDemoTenant(opts: {
   seed: string;
   now: Date;
@@ -765,18 +812,20 @@ export async function generateDemoTenant(opts: {
     const quotedAt = addDays(job.start, -(1 + Math.floor(r() * 3)));
     await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
     await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await resilient('accept', () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await acceptQuote(tx, {
         groupId: group.id, jobCardId: card.id, via: 'counter',
         actorUserId: owner.id, attested: null, at: quotedAt,
       });
+    }, DEMO_TX), {
+      already: async () => !!(await prisma.jobCard.findUnique({ where: { id: card.id }, select: { accepted_at: true } }))?.accepted_at,
     });
     // ── A COMEBACK MINTS A WARRANTY INVOICE, NOT A BILL ───────────────────────────────────────
     // The generator called the chargeable mint for every card, so 29 comebacks went out at full
     // retail — the exact opposite of the model (£0 revenue, parts cost still lands, hours booked
     // to rework and never sold). The two mints are separate functions and the CALLER chooses; this
     // one was not choosing. Texts resolved the same way jobcard-status resolves them.
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await resilient('mint', () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (job.isComeback) {
         await issueWarrantyInvoiceForCard(tx, card.id, group.id, {
           goodwill: tServer('en-GB', 'invoice', 'warrantyGoodwill'),
@@ -785,6 +834,10 @@ export async function generateDemoTenant(opts: {
       } else {
         await issueInvoiceForCard(tx, card.id, group.id);
       }
+    }, DEMO_TX), {
+      // The one place a blind retry could mint twice. One invoice per card, so its existence is the
+      // whole answer — and the @unique on job_card_id backstops the probe.
+      already: async () => (await prisma.invoice.count({ where: { job_card_id: card.id } })) > 0,
     });
     // The mint stamps today; the demo needs the invoice to sit on the day the work happened.
     await prisma.invoice.updateMany({ where: { job_card_id: card.id }, data: { date_issued: dayStart(job.start), issued_at: job.start } });
@@ -925,11 +978,13 @@ export async function generateDemoTenant(opts: {
     await writeLines(card.id, { ...job, start: quotedAt, durationMinutes: 60 });
     await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
     await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await resilient('accept-unbooked', () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await acceptQuote(tx, {
         groupId: group.id, jobCardId: card.id, via: 'counter',
         actorUserId: owner.id, attested: null, at: addDays(quotedAt, 1),
       });
+    }, DEMO_TX), {
+      already: async () => !!(await prisma.jobCard.findUnique({ where: { id: card.id }, select: { accepted_at: true } }))?.accepted_at,
     });
     unbookedMade += 1;
   }
@@ -966,11 +1021,13 @@ export async function generateDemoTenant(opts: {
     const sentAt = addDays(dayStart(now), -(1 + Math.floor(r() * 6)));
     await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: sentAt } });
     if (status !== 'quoted') {
-      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await resilient('accept-forward', () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await acceptQuote(tx, {
           groupId: group.id, jobCardId: card.id, via: 'booked',
           actorUserId: owner.id, attested: null, at: sentAt,
         });
+      }, DEMO_TX), {
+        already: async () => !!(await prisma.jobCard.findUnique({ where: { id: card.id }, select: { accepted_at: true } }))?.accepted_at,
       });
       if (status === 'in_progress') {
         await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'in_progress' } });

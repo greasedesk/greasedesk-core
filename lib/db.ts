@@ -6,22 +6,76 @@
  * It uses a "singleton" pattern to prevent multiple instances
  * of Prisma Client from being created in the development environment
  * due to Next.js's hot-reloading.
+ *
+ * ── OPT-IN RETRY FOR LONG LOCAL RUNS (DB_RETRY_TRANSIENT=1) ─────────────────────────────────────
+ * OFF unless the env var is set, so nothing about a Vercel request changes. It exists for the bulk
+ * scripts — the demo generator writes for five minutes straight, and four consecutive runs died
+ * partway through on transient drops while a 60-shot soak of the same endpoint came back clean on
+ * both the pooled and direct URLs. Losing 550 cards of work to one stalled round-trip is not a
+ * failure worth respecting.
+ *
+ * WHICH ERRORS, AND WHY THE SPLIT MATTERS. A retry is only safe when the statement did not run.
+ *   P1001/P1002/P2024 — raised while OBTAINING a connection, so nothing was sent. Any operation,
+ *                       including a create, can be retried: there is nothing to duplicate.
+ *   P1017/P2028       — the server closed a connection, or a transaction vanished, MID-FLIGHT. A
+ *                       write may well have committed before the answer was lost, so only naturally
+ *                       idempotent operations are retried here. A create is allowed to fail.
+ * Anything else — a constraint violation, a gate refusal — is never retried. Those are the caller
+ * being wrong, and repeating them only hides it.
  */
 import { PrismaClient } from '@prisma/client';
+
+/** Never sent: the connection itself could not be obtained. Safe to repeat anything. */
+const NEVER_SENT = new Set(['P1001', 'P1002', 'P2024']);
+/** Possibly sent: only repeat operations that are the same run twice as once. */
+const MAYBE_SENT = new Set(['P1017', 'P2028']);
+/** Same result whether applied once or five times. `create` is conspicuously absent. */
+const IDEMPOTENT = new Set([
+  'findUnique', 'findUniqueOrThrow', 'findFirst', 'findFirstOrThrow', 'findMany',
+  'count', 'aggregate', 'groupBy',
+  'update', 'updateMany', 'upsert', 'delete', 'deleteMany',
+]);
+
+const RETRIES = 6;
 
 // We declare a global variable to hold the Prisma instance.
 // We have to cast 'globalThis' to 'any' to attach our custom property.
 const globalForPrisma = globalThis as any;
+
+function baseClient() {
+  return new PrismaClient({
+    // Optional: uncomment the line below to see your database queries in the terminal
+    // log: ['query'],
+  });
+}
+
+function withTransientRetry(client: PrismaClient) {
+  return client.$extends({
+    query: {
+      async $allOperations({ operation, args, query }: any) {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await query(args);
+          } catch (e: any) {
+            const code = e?.code;
+            const canRetry = NEVER_SENT.has(code) || (MAYBE_SENT.has(code) && IDEMPOTENT.has(operation));
+            if (!canRetry || attempt >= RETRIES) throw e;
+            const backoff = Math.min(8_000, 400 * 2 ** (attempt - 1));
+            console.warn(`[db] ${code} on ${operation}, attempt ${attempt}/${RETRIES} — retrying in ${backoff}ms`);
+            await new Promise((res) => setTimeout(res, backoff));
+          }
+        }
+      },
+    },
+  });
+}
 
 // Check if prisma is already attached to the global object.
 // If not, create a new instance and attach it.
 // This is crucial for Next.js hot-reloading.
 export const prisma =
   globalForPrisma.prisma ??
-  new PrismaClient({
-    // Optional: uncomment the line below to see your database queries in the terminal
-    // log: ['query'],
-  });
+  (process.env.DB_RETRY_TRANSIENT === '1' ? withTransientRetry(baseClient()) : baseClient());
 
 // REMOVED: export default prisma; <--- THIS WAS THE CONFLICTING LINE
 
