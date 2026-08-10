@@ -80,7 +80,15 @@ export default function Figure({ children, className = '', minScale = 0.6, title
       title={title}
       // min-w-0 lets it shrink inside a flex row instead of pushing the label off; overflow-hidden
       // is what makes scrollWidth mean "natural width" rather than "whatever fitted".
-      className={`block min-w-0 overflow-hidden whitespace-nowrap ${className}`}
+      //
+      // basis-0 grow (flex-1) matters more than it looks: as a CONTENT-SIZED flex item, the width
+      // this measures against changes when the font-size does, so resetting to base to take a clean
+      // reading also handed it more room, it reported "fits", and it settled back overflowing —
+      // measured on the served page as a stubborn 133px in a 129px box that no number of passes
+      // fixed. With a zero basis the width comes from the ROW, so scrollWidth is honestly the
+      // content and clientWidth is honestly the space. Ignored outside a flex parent, so the
+      // block-level tiles are unaffected.
+      className={`block min-w-0 flex-1 overflow-hidden whitespace-nowrap ${className}`}
       {...rest}
     >
       {children}
