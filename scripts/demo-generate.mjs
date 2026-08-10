@@ -178,6 +178,25 @@ try {
   const superseded = await prisma.quoteVersion.count({ where: { group_id: res.groupId, status: 'superseded' } });
   check('some declines were re-quoted (supersede history)', superseded > 0, `${superseded} superseded versions`);
 
+  // ── THE QUOTES SCREEN, not just the metrics. The two read different things by design, and the
+  // list is the one an owner clicks: a tab reading (0) looks broken whatever the tile says.
+  const { listQuotes } = await import('../lib/quotes-list.ts');
+  const rows = await listQuotes({ groupId: res.groupId, siteIds: [res.siteId], now: NOW });
+  const byStatus = {};
+  for (const row of rows) byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
+  console.log(`  quotes screen: ${JSON.stringify(byStatus)}`);
+  check('the Declined tab is not empty', (byStatus.declined ?? 0) > 0, `${byStatus.declined ?? 0}`);
+  check('the Accepted & booked tab is not empty', (byStatus.accepted_booked ?? 0) > 0, `${byStatus.accepted_booked ?? 0}`);
+  check('the live pipeline is a pipeline, not a backlog', (byStatus.awaiting ?? 0) > 0 && (byStatus.awaiting ?? 0) <= 25,
+    `${byStatus.awaiting ?? 0} awaiting`);
+
+  // The dashboard tile is PERIOD-scoped and the demo lands on the current month, so that is the
+  // number an owner actually sees first.
+  const mq = await computeQuotesMetrics({ groupId: res.groupId, siteIds: [res.siteId], from: monthStart, to });
+  console.log(`  this month: ${mq.cohortSentCount} issued, ${mq.cohortAcceptedCount} accepted → ${mq.conversionPct}%`);
+  check('the CURRENT MONTH conversion is not embarrassing', mq.conversionPct !== null && mq.conversionPct >= 45,
+    `${mq.conversionPct}%`);
+
   // ── SETUP: every signal complete ─────────────────────────────────────────────────────────────
   const setup = await getSetupSignals(res.groupId, res.siteId);
   const todo = setup.signals.filter((x) => x.state === 'todo');

@@ -34,6 +34,7 @@ import { tServer } from '@/lib/server-i18n';
 import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
 import { freezeQuoteVersion } from '@/lib/quote-version';
 import { acceptQuote } from '@/lib/quote-acceptance';
+import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
@@ -172,8 +173,17 @@ function capacityByDay(from: Date, to: Date, closed: Set<string>, leave: Map<str
  */
 const QUOTE_MIX = {
   declinedPct: 14,
-  expiredPct: 16,
-  openPct: 8,
+  expiredPct: 24,
+  /**
+   * OPEN IS A PIPELINE, NOT A SHARE OF THE YEAR. Sizing it as 8% of annual volume put 78 quotes
+   * live at once — a garage turning fourteen jobs a week does not have seventy-eight unanswered
+   * quotes, and it wrecked the dashboard: the conversion tile is period-scoped, so a current month
+   * stuffed with unresolved cohort read 58 issued / 19 accepted / 32.8% against an annual 62%.
+   *
+   * A live quote is a few days old at most; anything older has been answered or has gone quiet.
+   */
+  openPipelineDays: 5,
+  openPerDay: 2,
   /** …the remaining 62% are accepted and became the jobs the history already holds. */
   /** A decline that gets a revised quote — the "let me sharpen my pencil" conversation. */
   supersedeAfterDeclinePct: 20,
@@ -811,16 +821,25 @@ export async function generateDemoTenant(opts: {
   // number written on the tile.
   say('quotes');
   const acceptedCount = planned.length;
-  const lostTarget = Math.round(acceptedCount * (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct) / 62);
-  const declinedTarget = Math.round(lostTarget * QUOTE_MIX.declinedPct / (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct));
-  const expiredTarget = Math.round(lostTarget * QUOTE_MIX.expiredPct / (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct + QUOTE_MIX.openPct));
+  const lostTarget = Math.round(acceptedCount * (QUOTE_MIX.declinedPct + QUOTE_MIX.expiredPct) / 62)
+    + QUOTE_MIX.openPipelineDays * QUOTE_MIX.openPerDay;
+  const declinedTarget = Math.round(acceptedCount * QUOTE_MIX.declinedPct / 62);
+  const expiredTarget = Math.round(acceptedCount * QUOTE_MIX.expiredPct / 62);
   let declinedMade = 0, expiredMade = 0, openMade = 0, supersededMade = 0;
 
   for (let n = 0; n < lostTarget; n++) {
     const outcome = n < declinedTarget ? 'declined' : n < declinedTarget + expiredTarget ? 'expired' : 'open';
-    // An OPEN quote is recent by definition — nobody leaves a live quote sitting for eight months.
-    // A declined or expired one can be any age.
-    const daysBack = outcome === 'open' ? Math.floor(r() * 21) : 1 + Math.floor(r() * 350);
+    // An OPEN quote is DAYS old, not months. Anything older has been answered or has gone quiet,
+    // and the quotes screen's own framing agrees: awaiting is "the chase list".
+    // AN EXPIRED QUOTE HAS TO BE PAST ITS LINK. Expiry is derived from sent_at + MAGIC_LINK_DAYS,
+    // so dating one 3 days ago does not make it expired — it makes it awaiting, and 12 of them
+    // quietly inflated the chase list past what a garage this size would ever hold. The floor is
+    // the link lifetime itself, read from lib/magic-link rather than typed as 14 here.
+    const daysBack = outcome === 'open'
+      ? Math.floor(r() * QUOTE_MIX.openPipelineDays)
+      : outcome === 'expired'
+        ? MAGIC_LINK_DAYS + 1 + Math.floor(r() * 330)
+        : 1 + Math.floor(r() * 350);
     let quotedAt = addDays(dayStart(now), -daysBack);
     while (!isWorkday(quotedAt) || closedKeys.has(iso(quotedAt))) quotedAt = addDays(quotedAt, -1);
 
@@ -864,7 +883,10 @@ export async function generateDemoTenant(opts: {
         where: { id: live!.id },
         data: { status: 'declined', responded_at: addDays(quotedAt, 1 + Math.floor(r() * 5)) },
       });
-      await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'cancelled' } });
+      // THE CARD STAYS `quoted`. Cancelling it is a different act — the garage withdrawing the
+      // offer — and it is in QUOTE_CLOSED_CARD_STATUSES, so it removed all 173 declines from the
+      // Declined tab. lib/quotes-list is explicit that a decline "stays visible (a follow-up
+      // opportunity, not a dead record)"; closing the card contradicts that.
       declinedMade += 1;
     } else {
       // EXPIRED IS DERIVED, NOT STORED. lib/quotes-list computes it from sent_at + the magic-link
@@ -882,10 +904,13 @@ export async function generateDemoTenant(opts: {
   for (const job of forward) {
     const pair = fleet[Math.floor(r() * fleet.length)];
     const usesMotBay = job.lines.some((l) => l.description === 'MOT test');
+    // Chosen BEFORE the create so the acceptance below knows what it is building. The card always
+    // starts `quoted` — acceptQuote needs a legal transition and the status table is the authority.
+    const status = pick(r, FORWARD_STATUSES);
     const card = await prisma.jobCard.create({
       data: {
         group_id: group.id, site_id: site.id, customer_id: pair.customerId, vehicle_id: pair.vehicleId,
-        status: pick(r, FORWARD_STATUSES),
+        status: 'quoted',
         resource_id: usesMotBay ? motBay.id : lifts[liftIdx++ % lifts.length],
         start_at: job.start, booking_duration_minutes: job.durationMinutes,
         end_at: new Date(job.start.getTime() + job.durationMinutes * 60_000),
@@ -894,6 +919,26 @@ export async function generateDemoTenant(opts: {
       select: { id: true },
     });
     await writeLines(card.id, job);
+
+    // ── THE FORWARD BOOK IS AGREED WORK, AND HAS TO LOOK LIKE IT ──────────────────────────────
+    // Without a quote version these cards are invisible to the quotes screen, so "Accepted &
+    // booked (0)" sat next to a diary with a fortnight in it. The ones that are accepted or under
+    // way get a frozen version and a real acceptance; the ones still `quoted` stay in the chase
+    // list, which is where a quote awaiting an answer belongs.
+    await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+    const sentAt = addDays(dayStart(now), -(1 + Math.floor(r() * 6)));
+    await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: sentAt } });
+    if (status !== 'quoted') {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await acceptQuote(tx, {
+          groupId: group.id, jobCardId: card.id, via: 'booked',
+          actorUserId: owner.id, attested: null, at: sentAt,
+        });
+      });
+      if (status === 'in_progress') {
+        await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'in_progress' } });
+      }
+    }
   }
 
   // What the elapsed month should look like — reported so the caller can assert it rather than
