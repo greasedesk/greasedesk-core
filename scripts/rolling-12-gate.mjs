@@ -4,7 +4,7 @@
  */
 import { prisma } from '../lib/db.ts';
 import { computeTiles } from '../lib/dashboard-tiles.ts';
-import { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, PERIOD_PRESETS, MONTH_PRESETS } from '../lib/dashboard-periods.ts';
+import { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, monthsOfRange, PERIOD_PRESETS, MONTH_PRESETS } from '../lib/dashboard-periods.ts';
 import { getGroupUtilisation } from '../lib/capacity.ts';
 import { getTenantDataStart } from '../lib/tenant-data-start.ts';
 
@@ -110,6 +110,47 @@ try {
     check('… and a real month\'s figures are IDENTICAL to the unclipped run — the clip removes months, it does not alter them',
       (() => { const a = c.monthly.find((m) => m.key === nowKey), b2 = cap.monthly.find((m) => m.key === nowKey);
         return a && b2 && a.sellableHours === b2.sellableHours && a.soldPennies === b2.soldPennies; })());
+  }
+
+  // ── THE TWO CLOSED FISCAL COMPARISONS ─────────────────────────────────────────────────────────
+  // Same chart, a different window, and NO live month in either — so no light, by construction
+  // rather than by a rule that remembers to switch it off.
+  for (const [preset, offset] of [['fy_last_by_month', -1], ['fy_prior_by_month', -2]]) {
+    const fr = presetRange(preset, 4, NOW), fs = monthPresetSpan(preset, 4, NOW);
+    const plain = presetRange(offset === -1 ? 'last_fy' : 'this_fy', 4, NOW);
+    check(`${preset}: twelve whole months`, fs.months === 12, `${fr.from.toISOString().slice(0,10)} → ${fr.to.toISOString().slice(0,10)}`);
+    check(`${preset}: renders the comparison chart`, isMonthlyComparison(preset));
+    if (offset === -1) {
+      check(`${preset}: the SAME window last_fy already reports — one definition of a fiscal year`,
+        fr.from.getTime() === plain.from.getTime() && fr.to.getTime() === plain.to.getTime());
+    }
+    check(`${preset}: starts on the tenant's fiscal month, not January`,
+      fr.from.getUTCMonth() === 3, `month ${fr.from.getUTCMonth() + 1} for fyStartMonth=4`);
+    // A non-April tenant must get its own year — the gap this would hide if fy were hardcoded.
+    const july = presetRange(preset, 7, NOW);
+    check(`${preset}: a July fiscal year starts in July`, july.from.getUTCMonth() === 6,
+      `${july.from.toISOString().slice(0,10)} → ${july.to.toISOString().slice(0,10)}`);
+    check(`${preset}: and monthsOfRange follows it — Jul…Jun, not Jan…Dec`,
+      (() => { const ms = monthsOfRange(july.from, july.to); return ms.length === 12 && ms[0].from.getUTCMonth() === 6 && ms[11].from.getUTCMonth() === 5; })());
+
+    const ft = await computeTiles({ ...base, from: fr.from, to: fr.to }, { ...base, from: fs.from, to: fs.to, months: fs.months });
+    const fc = ft.capacity;
+    // A fiscal year entirely before the tenant existed is SUPPOSED to produce nothing. Asserting a
+    // split here would demand the very fabrication clipToData exists to prevent.
+    const entirelyBefore = fr.to <= dataStart;
+    if (entirelyBefore) {
+      check(`${preset}: entirely before the tenant → NOTHING, not twelve empty bars`,
+        fc.beforeData === true && fc.monthly === undefined, JSON.stringify(fc));
+      check(`${preset}: … and the card renders no chart at all for it`,
+        fc.beforeData === true || !Array.isArray(fc.series),
+        'the client guard tests beforeData AND a missing series, not just cap == null');
+      continue;
+    }
+    check(`${preset}: the monthly split is produced`, Array.isArray(fc.monthly), `${fc.monthly?.length ?? 0} months`);
+    check(`${preset}: NO month is live — so the chart cannot draw a light`,
+      fc.monthly.every((m) => !m.live), fc.monthly.filter((m) => m.live).map((m) => m.key).join(',') || 'none live');
+    check(`${preset}: it reads clipToData like the rolling view`,
+      fc.clippedToDataStart === (dataStart > fr.from), `clipped=${fc.clippedToDataStart}`);
   }
 
   // ── AND THE SINGLE-MONTH VIEW IS UNTOUCHED ────────────────────────────────────────────────────

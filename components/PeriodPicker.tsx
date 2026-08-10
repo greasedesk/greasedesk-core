@@ -49,7 +49,7 @@ export default function PeriodPicker({ value, onChange, fyStartMonth, locale, st
       const raw = localStorage.getItem(storageKey);
       if (raw) {
         const s = JSON.parse(raw) as Partial<PeriodSelection>;
-        const valid = new Set<string>(['this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12',
+        const valid = new Set<string>(['this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12', 'fy_last_by_month', 'fy_prior_by_month',
           ...groups.flatMap((g) => g.options.map((o) => o.value))]);
         if (s.preset && valid.has(s.preset) && !(s.preset === 'custom' && !(s.customFrom && s.customTo))) {
           onChange({ preset: s.preset, customFrom: s.customFrom ?? '', customTo: s.customTo ?? '' });
@@ -82,6 +82,10 @@ export default function PeriodPicker({ value, onChange, fyStartMonth, locale, st
             side, and it changes the chart as well as the window. */}
         <optgroup label={t('groupCompare')}>
           <option value="rolling_12">{t('rolling_12')}</option>
+          {/* The same two fiscal windows last_fy already offers, drawn as bars instead of a
+              burn-up. Labelled with their real ranges, from the tenant's own fy_start_month. */}
+          <option value="fy_last_by_month">{t('fyByMonth', { range: fyRangeLabel(now, fyStartMonth, -1, locale) })}</option>
+          <option value="fy_prior_by_month">{t('fyByMonth', { range: fyRangeLabel(now, fyStartMonth, -2, locale) })}</option>
         </optgroup>
         <optgroup label={t('groupQuarters')}>
           <option value="this_quarter">{t('this_quarter')}</option>

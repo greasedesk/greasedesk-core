@@ -15,6 +15,9 @@ export const PERIOD_PRESETS = [
   // recognised later, so the tiles, the deep links and the chart mode would each have to re-derive
   // "is this the twelve-month view" from its dates and would eventually disagree.
   'rolling_12',
+  // The two CLOSED fiscal years, as month-by-month comparisons. Same chart, no live month in
+  // either, so neither carries a light — the light judges pace inside a month still running.
+  'fy_last_by_month', 'fy_prior_by_month',
 ] as const;
 export type PeriodPreset = typeof PERIOD_PRESETS[number];
 
@@ -41,6 +44,11 @@ export function presetRange(preset: PeriodPreset, fyStartMonth: number, now: Dat
     // the comparison is month against month, so a part-month at the far end would be one short bar
     // that means nothing, and eleven that mean something.
     case 'rolling_12': return { from: monthStart(y, m0 - 11), to: monthStart(y, m0 + 1) };
+    // Deliberately the SAME windows as last_fy and the year before it — one definition of where a
+    // fiscal year starts, so the bar view and the burn-up can never disagree about which year is
+    // being shown. Only the rendering differs.
+    case 'fy_last_by_month': return { from: monthStart(fyStartYear - 1, fy0), to: monthStart(fyStartYear, fy0) };
+    case 'fy_prior_by_month': return { from: monthStart(fyStartYear - 2, fy0), to: monthStart(fyStartYear - 1, fy0) };
   }
 }
 
@@ -62,7 +70,8 @@ export function resolveRange(q: { preset?: string; from?: string; to?: string },
 // ---------- Month-grained spans (the P&L strip) ----------
 // Profit tiles are calendar-month-grained BY DESIGN: the wage bill is a monthly lump, so a
 // partial-month profit figure would be fiction. Only whole-month spans exist here.
-export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'rolling_12'] as const;
+export const MONTH_PRESETS = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy',
+  'rolling_12', 'fy_last_by_month', 'fy_prior_by_month'] as const;
 export type MonthPreset = typeof MONTH_PRESETS[number];
 
 export type MonthSpan = { from: Date; to: Date; months: number };
@@ -135,19 +144,31 @@ export function monthParamsForSelection(
  * FY are both burn-ups, and the distinction is what the reader is being asked to compare — days
  * within one period, or periods against each other.
  */
-export const isMonthlyComparison = (preset: string | null | undefined): boolean => preset === 'rolling_12';
+const MONTHLY_COMPARISONS = new Set(['rolling_12', 'fy_last_by_month', 'fy_prior_by_month']);
+export const isMonthlyComparison = (preset: string | null | undefined): boolean =>
+  !!preset && MONTHLY_COMPARISONS.has(preset);
 
-/** The twelve months of a rolling-12 selection, oldest first, as [from, to) pairs + a YYYY-MM key. */
-export function rollingTwelveMonths(now: Date = new Date()): Array<{ key: string; from: Date; to: Date }> {
-  const y = now.getUTCFullYear(), m0 = now.getUTCMonth();
-  return Array.from({ length: 12 }, (_, i) => {
-    const from = monthStart(y, m0 - 11 + i);
-    return {
-      key: `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`,
-      from, to: monthStart(y, m0 - 11 + i + 1),
-    };
-  });
+/**
+ * The whole months of ANY window, oldest first, as [from, to) pairs + a YYYY-MM key.
+ *
+ * Derived from the range rather than from the preset, so a fiscal year starting in July produces
+ * Jul…Jun without anything here knowing what a fiscal year is. The month list and the window the
+ * server measured therefore cannot drift: both come from presetRange.
+ */
+export function monthsOfRange(from: Date, to: Date): Array<{ key: string; from: Date; to: Date }> {
+  const out: Array<{ key: string; from: Date; to: Date }> = [];
+  let cur = monthStart(from.getUTCFullYear(), from.getUTCMonth());
+  while (cur.getTime() < to.getTime()) {
+    const next = monthStart(cur.getUTCFullYear(), cur.getUTCMonth() + 1);
+    out.push({ key: `${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, '0')}`, from: cur, to: next });
+    cur = next;
+  }
+  return out;
 }
+
+/** The twelve months of a rolling-12 selection, oldest first. */
+export const rollingTwelveMonths = (now: Date = new Date()) =>
+  monthsOfRange(monthStart(now.getUTCFullYear(), now.getUTCMonth() - 11), monthStart(now.getUTCFullYear(), now.getUTCMonth() + 1));
 
 export const monthNameOf = (y: number, m0: number, locale: string, style: 'long' | 'short' = 'long') =>
   new Date(Date.UTC(y, m0, 1)).toLocaleDateString(locale, { month: style, year: 'numeric', timeZone: 'UTC' });

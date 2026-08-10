@@ -23,7 +23,7 @@ import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
 import { withI18n } from '@/lib/gssp-i18n';
-import { monthParamsForSelection, monthNameOf, rollingMonths, isMonthlyComparison, rollingTwelveMonths } from '@/lib/dashboard-periods';
+import { monthParamsForSelection, monthNameOf, rollingMonths, isMonthlyComparison, monthsOfRange } from '@/lib/dashboard-periods';
 import PeriodPicker from '@/components/PeriodPicker';
 import CapacityChart from '@/components/dashboard/CapacityChart';
 import CapacityMonthsChart, { type MonthBar } from '@/components/dashboard/CapacityMonthsChart';
@@ -295,7 +295,7 @@ export default function AdminDashboard(props: PageProps) {
       if (raw) {
         const s = JSON.parse(raw) as { preset?: string; customFrom?: string; customTo?: string };
         const valid = new Set<string>([
-          'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12',
+          'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom', 'rolling_12', 'fy_last_by_month', 'fy_prior_by_month',
           ...rollingMonths(pickerNow, props.locale).map((m) => m.value),
         ]);
         if (s.preset && valid.has(s.preset) && (s.preset !== 'custom' || (s.customFrom && s.customTo))) {
@@ -455,7 +455,14 @@ export default function AdminDashboard(props: PageProps) {
         // No capacity tile → no chart. It used to render the shell, the heading and the axes off
         // `cap?.`, which for a period the tenant never traded drew a sellable-hours curve for a
         // month in which there was no garage. Same guard the P&L block above already uses.
-        if (cap == null) return null;
+        //
+        // `beforeData` is the SECOND way to have nothing to draw, and it arrives as a populated
+        // object rather than as undefined: the tile answers it per-window now, so a selection whose
+        // whole span predates the tenant returns { beforeData: true } and no series. The API-level
+        // guard also catches that case today, which is exactly why this must not depend on it —
+        // two guards for one condition, and the day they disagree the chart is handed an undefined
+        // series. Caught by the gate on the fiscal year before the tenant existed.
+        if (cap == null || cap.beforeData === true || !Array.isArray(cap.series)) return null;
         const money = (p: number | null) => (p == null ? '—' : fmt.money(p));
         // Whole-pound (no pence) figure for the on-chart end labels — floored, currency-aware.
         const whole = (p: number | null) => (p == null ? '—' : formatMoney(Math.floor(p / 100) * 100, { currency: props.currency, locale: props.locale, maximumFractionDigits: 0 }));
@@ -468,12 +475,16 @@ export default function AdminDashboard(props: PageProps) {
         // used when it built (or withheld) the monthly split.
         const monthlyMode = isMonthlyComparison(preset) && Array.isArray(cap?.monthly);
         const nowKey = `${pickerNow.getUTCFullYear()}-${String(pickerNow.getUTCMonth() + 1).padStart(2, '0')}`;
+        // The bar list comes from the window the SERVER echoed back, not from a client-side idea of
+        // which months these are. A fiscal year starting in July must produce Jul…Jun, and only the
+        // range knows that.
+        const barMonths = monthlyMode && monthWindow ? monthsOfRange(new Date(monthWindow.from), new Date(monthWindow.to)) : [];
         const monthBars: MonthBar[] = monthlyMode
-          ? rollingTwelveMonths(pickerNow).map((m) => {
+          ? barMonths.map((m) => {
             const row = (cap.monthly as any[]).find((x) => x.key === m.key) ?? null;
             const d = new Date(`${m.key}-01T00:00:00.000Z`);
             // A year boundary gets the year, so "Jan" after "Dec" is not ambiguous.
-            const showYear = d.getUTCMonth() === 0 || m.key === (cap.monthly as any[])[0]?.key;
+            const showYear = d.getUTCMonth() === 0 || m.key === barMonths[0]?.key;
             const live = m.key === nowKey;
             const daysIn = Math.round((m.to.getTime() - m.from.getTime()) / 86_400_000);
             return {
