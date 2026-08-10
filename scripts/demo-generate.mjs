@@ -15,6 +15,7 @@ import { generateDemoTenant, DEMO_SPEC } from '../lib/demo/generate.ts';
 import { getGroupUtilisation } from '../lib/capacity.ts';
 import { fetchLedgerInvoices, labourGrossMargin, chargedLabourCentihours } from '../lib/charged-labour.ts';
 import { utilisationLight, defaultThresholds } from '../lib/utilisation-light.ts';
+import { getSetupSignals } from '../lib/setup-signals.ts';
 import { purgeTenant } from '../lib/tenant-purge.ts';
 
 const KEEP = process.argv.includes('--keep');
@@ -89,6 +90,58 @@ try {
   check('every customer email is example.com', realEmails === 0, `${realEmails} outside`);
   check('there is a forward book', forward > 0, `${forward} cards after today`);
   console.log(`\n  ${cards} job cards, ${custs} customers, ${forward} forward`);
+
+  // ── PRODUCTS: a positive margin on every priced item, and no data-quality warning ───────────
+  const items = await prisma.catalogueItem.findMany({
+    where: { group_id: res.groupId },
+    select: { code: true, name: true, item_type: true, unit_price: true, base_price_ex_vat: true, unit_cost: true },
+  });
+  const priceOf = (i) => Number(i.item_type === 'fixed' ? (i.base_price_ex_vat ?? 0) : i.unit_price);
+  const zeroPriced = items.filter((i) => priceOf(i) <= 0);
+  const negative = items.filter((i) => priceOf(i) - Number(i.unit_cost ?? 0) <= 0);
+  // The screen's own rule: non-labour, priced, and NO cost recorded. A £0 cost is legitimate.
+  const uncosted = items.filter((i) => i.item_type !== 'labour' && i.unit_cost == null && priceOf(i) > 0);
+  check('every catalogue item has a base price', zeroPriced.length === 0,
+    zeroPriced.length ? zeroPriced.map((i) => i.name).slice(0, 4).join(', ') : `${items.length} items priced`);
+  check('every catalogue item has a POSITIVE margin', negative.length === 0,
+    negative.length ? negative.map((i) => `${i.name} ${money(priceOf(i) * 100)}−${money(Number(i.unit_cost ?? 0) * 100)}`).join(', ') : 'all positive');
+  check('nothing trips the uncosted warning', uncosted.length === 0,
+    uncosted.length ? uncosted.map((i) => i.name).join(', ') : 'no banner');
+
+  // ── PAYMENTS: mostly settled, a believable tail ──────────────────────────────────────────────
+  const all = await prisma.invoice.findMany({
+    where: { group_id: res.groupId }, select: { status: true, series: true, paid_at: true, payment_method_snapshot: true, issued_at: true, lines: { select: { qty: true, unit_price: true } } },
+  });
+  const chargeable = all.filter((i) => i.series !== 'warranty');
+  const paid = chargeable.filter((i) => i.status === 'paid');
+  const openInv = chargeable.filter((i) => i.status === 'issued');
+  const total = (i) => i.lines.reduce((s2, l) => s2 + Number(l.qty) * Number(l.unit_price) * 100, 0);
+  const debt = openInv.reduce((s2, i) => s2 + total(i), 0);
+  const paidPct = (paid.length / chargeable.length) * 100;
+  console.log(`\n  invoices: ${paid.length} paid, ${openInv.length} outstanding of ${chargeable.length} chargeable  (debtors ${money(debt)})`);
+  check('most invoices are paid', paidPct >= 88, `${paidPct.toFixed(1)}%`);
+  check('but not all — there is a real chase list', openInv.length >= 3, `${openInv.length} open`);
+  check('debtors are a believable figure, not a year of trade', debt < 25_000_00, money(debt));
+  check('every paid invoice records a date and a method',
+    paid.every((i) => i.paid_at && i.payment_method_snapshot), 'complete');
+  check('no payment is dated in the future', paid.every((i) => i.paid_at <= NOW), 'none');
+  // ── COMEBACKS. This check used to pass vacuously: "every warranty invoice is settled" is true
+  // when there are none, and there were none — 29 comeback cards had been billed at full retail.
+  // Assert the population EXISTS before asserting anything about it.
+  const warranty = all.filter((i) => i.series === 'warranty');
+  const comebackCards = await prisma.jobCard.count({ where: { group_id: res.groupId, is_comeback: true } });
+  check('comeback cards exist at all', comebackCards > 0, `${comebackCards} cards`);
+  check('every comeback minted a WARRANTY invoice, not a bill', warranty.length === comebackCards,
+    `${warranty.length} warranty vs ${comebackCards} comebacks`);
+  check('warranty invoices are settled, never paid, and total £0',
+    warranty.length > 0 && warranty.every((i) => i.status === 'settled' && Math.abs(total(i)) < 1),
+    warranty.length ? `${warranty.length} settled at £0` : 'NONE — vacuous');
+
+  // ── SETUP: every signal complete ─────────────────────────────────────────────────────────────
+  const setup = await getSetupSignals(res.groupId, res.siteId);
+  const todo = setup.signals.filter((x) => x.state === 'todo');
+  check('every setup signal reads complete', setup.allDone === true,
+    todo.length ? `outstanding: ${todo.map((x) => x.key).join(', ')}` : `${setup.doneCount}/${setup.applicableCount}`);
 
   if (KEEP) {
     const owner = await prisma.user.findFirst({ where: { group_id: res.groupId, is_owner: true }, select: { email: true } });

@@ -29,7 +29,8 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { issueInvoiceForCard } from '@/lib/invoice-issue';
+import { issueInvoiceForCard, issueWarrantyInvoiceForCard } from '@/lib/invoice-issue';
+import { tServer } from '@/lib/server-i18n';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
@@ -351,7 +352,7 @@ export async function generateDemoTenant(opts: {
     data: {
       group_name: opts.groupName, trading_name: opts.groupName,
       country_code: 'GB', tax_country_code: 'GB', tax_default_rate_bp: 2000, default_vat_rate: 20,
-      vat_registered: true, vat_number: 'GB000000000',
+      vat_registered: true, vat_number: 'GB482910733', company_number: '09461820',
       billing_email: opts.ownerEmail,
       address: `${pick(r, STREETS)}, ${TOWN}, ${POSTCODE_AREA}1 2CD`,
       is_demo: true, is_internal: true, demo_seed: opts.seed, demo_expires_at: opts.expiresAt,
@@ -447,10 +448,43 @@ export async function generateDemoTenant(opts: {
     await prisma.catalogueItem.create({
       data: {
         group_id: group.id, code: `DEMO${String(i + 1).padStart(3, '0')}`, name: a.title, title: a.title,
-        item_type: a.itemType as any, unit_price: a.priceGbp, unit_cost: a.partsCostGbp || null,
+        item_type: a.itemType as any,
+        unit_price: a.priceGbp,
+        // A FIXED item's price is base_price_ex_vat — unit_price is not what the products screen
+        // reads for it. Leaving it unset showed every service at "Base price £0.00 · Margin −£65".
+        base_price_ex_vat: a.priceGbp,
+        // ZERO, NOT NULL. `|| null` turned a legitimately-free cost into "uncosted", which is a
+        // DATA-QUALITY WARNING with its own banner — two services tripped it. A £0 cost is a fact
+        // (nothing is consumed doing a diagnostic); an absent cost is a gap somebody must fill.
+        unit_cost: a.partsCostGbp,
         labour_hours: a.labourHours || null, labour_outsourced: a.outsourcedLabour, vat_rate: 20, active: true,
       },
     });
+  }
+
+  // ── OVERHEADS. A setup signal, and the P&L is thin without them. ─────────────────────────────
+  for (const [name, pennies, period] of [
+    ['Workshop rent', 2_200_00, 'monthly'], ['Business rates', 480_00, 'monthly'],
+    ['Insurance', 310_00, 'monthly'], ['Utilities', 265_00, 'monthly'],
+    ['Software & subscriptions', 145_00, 'monthly'], ['Waste disposal', 90_00, 'monthly'],
+  ] as Array<[string, number, string]>) {
+    const o = await prisma.overhead.create({
+      data: { group_id: group.id, name, ex_vat_amount_pennies: pennies, vat_rate: 20, period: period as any, is_active: true },
+      select: { id: true },
+    });
+    await prisma.costAllocation.create({ data: { group_id: group.id, site_id: site.id, overhead_id: o.id, percent: 100 } });
+  }
+
+  // ── PAYMENT METHODS, so a paid invoice can say HOW. ──────────────────────────────────────────
+  const methods: Array<{ id: string; name: string; weight: number; instant: boolean }> = [];
+  for (const [name, behaviour, weight, position] of [
+    ['Card', 'instant', 65, 1], ['Cash', 'instant', 20, 2], ['Bank transfer', 'windowed', 15, 3],
+  ] as Array<[string, string, number, number]>) {
+    const pm = await prisma.paymentMethod.create({
+      data: { group_id: group.id, name, behaviour: behaviour as any, position, active: true },
+      select: { id: true },
+    });
+    methods.push({ id: pm.id, name, weight, instant: behaviour === 'instant' });
   }
 
   // ── 6–8. THE WORK ────────────────────────────────────────────────────────────────────────────
@@ -527,8 +561,27 @@ export async function generateDemoTenant(opts: {
   say('planning');
   const planned: PlannedJob[] = [];
   const lifts = [...resources.map((x) => x.id)];
+
+  // ── THE CURRENT MONTH IS TARGETED CUMULATIVELY, NOT DAY BY DAY ───────────────────────────────
+  // Per-day targeting has zero expected error and real variance, which is fine over 250 days and
+  // useless over six. The light judges sold-to-date ÷ available-to-date at the elapsed day, so on
+  // the 10th of a month it is dividing by six days: a run of generous roundings put the reference
+  // tenant at 78.7% and the light on GREEN, in a month whose per-day targets all said 62.5%.
+  //
+  // Inside the current month the target therefore CORRECTS: each day asks for whatever brings the
+  // running total back to the intended share of capacity so far, so the drift cannot accumulate.
+  // Outside it, per-day is right — nobody looks at the ratio on 14 March last year.
+  let monthSold = 0;
+  let monthAvailable = 0;
+  const monthStartForTarget = utc(now.getUTCFullYear(), now.getUTCMonth(), 1);
+
   for (const c of cap) {
     let want = dayTarget.get(iso(c.date)) ?? 0;
+    if (c.date >= monthStartForTarget) {
+      monthAvailable += c.sellableHours;
+      const shouldHave = monthAvailable * DEMO_SPEC.targetUtilisation;
+      want = Math.max(0, shouldHave - monthSold);
+    }
     if (want <= 0) continue;
     // ── STOP BEFORE THE OVERSHOOT, NOT AFTER IT ───────────────────────────────────────────────
     // `while (want > 0)` pushes a whole job past the target every single day. On the first
@@ -546,7 +599,10 @@ export async function generateDemoTenant(opts: {
       const start = startTime(r, c.date);
       const minutes = Math.max(30, Math.round((job.chargedHours * FOOTPRINT_RATIO * 60) / 15) * 15);
       planned.push({ ...job, start, durationMinutes: minutes });
-      if (!job.isComeback) want -= job.chargedHours;
+      if (!job.isComeback) {
+        want -= job.chargedHours;
+        if (c.date >= monthStartForTarget) monthSold += job.chargedHours;
+      }
     }
   }
 
@@ -597,9 +653,54 @@ export async function generateDemoTenant(opts: {
         labour_hours: l.labourHours, labour_outsourced: l.outsourced, vat_rate: 20,
       })),
     });
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => { await issueInvoiceForCard(tx, card.id, group.id); });
+    // ── A COMEBACK MINTS A WARRANTY INVOICE, NOT A BILL ───────────────────────────────────────
+    // The generator called the chargeable mint for every card, so 29 comebacks went out at full
+    // retail — the exact opposite of the model (£0 revenue, parts cost still lands, hours booked
+    // to rework and never sold). The two mints are separate functions and the CALLER chooses; this
+    // one was not choosing. Texts resolved the same way jobcard-status resolves them.
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      if (job.isComeback) {
+        await issueWarrantyInvoiceForCard(tx, card.id, group.id, {
+          goodwill: tServer('en-GB', 'invoice', 'warrantyGoodwill'),
+          noCharge: tServer('en-GB', 'invoice', 'warrantyLine'),
+        });
+      } else {
+        await issueInvoiceForCard(tx, card.id, group.id);
+      }
+    });
     // The mint stamps today; the demo needs the invoice to sit on the day the work happened.
     await prisma.invoice.updateMany({ where: { job_card_id: card.id }, data: { date_issued: dayStart(job.start), issued_at: job.start } });
+
+    // ── AND THEN IT GETS PAID, because a workshop takes the money when the car goes ────────────
+    // Every invoice left at `issued` is a debtor. Minting 800 and paying none put £229,835 of
+    // receivables on a garage with a full diary, which is not a business anyone recognises.
+    //
+    // Warranty invoices are SKIPPED: the mint lands them at `settled` — £0, closed, never AR — and
+    // marking one paid would contradict the goodwill model.
+    const inv = await prisma.invoice.findFirst({
+      where: { job_card_id: card.id }, select: { id: true, series: true, status: true },
+    });
+    if (inv && inv.series !== 'warranty') {
+      const ageDays = Math.round((dayStart(now).getTime() - dayStart(job.start).getTime()) / DAY);
+      // A TAPER, not a flat rate. Old work is settled; the last fortnight is the real ledger — some
+      // paid on collection, some on a bank transfer that has not cleared. A couple of ancient ones
+      // stay open, because every garage has two of those and the chase list should not be empty.
+      const paidChance = ageDays > 21 ? 98 : ageDays > 7 ? 88 : 55;
+      if (chance(r, paidChance)) {
+        const m = weighted(r, methods.map((x) => [x, x.weight] as [typeof methods[number], number]));
+        // Cash and card clear on the day; a transfer lands a few days later — and never in the
+        // future, or the demo shows a payment that has not happened yet.
+        const lagDays = m.instant ? 0 : Math.min(ageDays, 1 + Math.floor(r() * 10));
+        const paid = addDays(dayStart(job.start), lagDays);
+        await prisma.invoice.update({
+          where: { id: inv.id },
+          data: {
+            status: 'paid', paid_at: paid, date_paid: paid,
+            payment_method_id: m.id, payment_method_snapshot: m.name,
+          },
+        });
+      }
+    }
     invoices += 1;
   }
 
