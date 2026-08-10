@@ -113,7 +113,10 @@ try {
 
   // ── PAYMENTS: mostly settled, a believable tail ──────────────────────────────────────────────
   const all = await prisma.invoice.findMany({
-    where: { group_id: res.groupId }, select: { status: true, series: true, paid_at: true, payment_method_snapshot: true, issued_at: true, lines: { select: { qty: true, unit_price: true } } },
+    where: { group_id: res.groupId },
+    select: { status: true, series: true, paid_at: true, date_issued: true, due_date: true, payment_method_snapshot: true, issued_at: true,
+              job_card: { select: { customer: { select: { id: true, name: true, account_terms_days: true } } } },
+              lines: { select: { qty: true, unit_price: true } } },
   });
   const chargeable = all.filter((i) => i.series !== 'warranty');
   const paid = chargeable.filter((i) => i.status === 'paid');
@@ -125,6 +128,52 @@ try {
   check('most invoices are paid', paidPct >= 88, `${paidPct.toFixed(1)}%`);
   check('but not all — there is a real chase list', openInv.length >= 3, `${openInv.length} open`);
   check('debtors are a believable figure, not a year of trade', debt < 25_000_00, money(debt));
+
+  // ── THE DEBTOR BOOK HAS A SHAPE ──────────────────────────────────────────────────────────────
+  // A garage does not release a car until the bill is paid, so an open RETAIL invoice is a car in
+  // the yard. 27 of them across 27 different customers — the old taper — was not a chase list, it
+  // was a random draw. What follows asserts the shape, not just the total.
+  const onAcct = (i) => typeof i.job_card?.customer?.account_terms_days === 'number';
+  const openAcct = openInv.filter(onAcct);
+  const openRetail = openInv.filter((i) => !onAcct(i));
+  const acctDebt = openAcct.reduce((s2, i) => s2 + total(i), 0);
+  const acctShare = debt > 0 ? (acctDebt / debt) * 100 : 0;
+  const owing = new Set(openInv.map((i) => i.job_card?.customer?.id).filter(Boolean));
+  const accounts = await prisma.customer.findMany({
+    where: { group_id: res.groupId, account_terms_days: { not: null } },
+    select: { name: true, account_terms_days: true, job_cards: { select: { id: true } } },
+  });
+  console.log(`\n  accounts: ${accounts.map((a) => `${a.name} (${a.account_terms_days}d, ${a.job_cards.length} jobs)`).join(' · ')}`);
+  console.log(`  open: ${openAcct.length} on account ${money(acctDebt)} + ${openRetail.length} uncollected ${money(debt - acctDebt)}`);
+
+  check('there are trade accounts at all', accounts.length >= 3 && accounts.length <= 5, `${accounts.length}`);
+  check('every account carries real terms', accounts.every((a) => a.account_terms_days >= 7 && a.account_terms_days <= 60),
+    accounts.map((a) => a.account_terms_days).join('/'));
+  check('accounts are the BIGGEST customers, not just loyal ones',
+    accounts.every((a) => a.job_cards.length >= 15), accounts.map((a) => a.job_cards.length).join('/'));
+  check('accounts carry most of the balance (85-90% intended)', acctShare >= 75, `${acctShare.toFixed(1)}%`);
+  check('the chase list is a handful of names, not a crowd', owing.size <= 8, `${owing.size} customers owing`);
+  check('open retail = a couple of cars not yet collected', openRetail.length <= 3, `${openRetail.length}`);
+  check('and every one of them was invoiced in the last few days',
+    openRetail.every((i) => (NOW - new Date(i.date_issued)) / 86400000 <= 4),
+    openRetail.map((i) => `${Math.round((NOW - new Date(i.date_issued)) / 86400000)}d`).join(', ') || 'none');
+  check('NO retail invoice is left open from months ago',
+    !openRetail.some((i) => (NOW - new Date(i.date_issued)) / 86400000 > 14), 'no abandoned cars');
+  check('a retail invoice is paid the DAY the car is collected',
+    paid.filter((i) => !onAcct(i)).every((i) => Math.abs(new Date(i.paid_at) - new Date(i.date_issued)) / 86400000 < 1.5),
+    `${paid.filter((i) => !onAcct(i)).length} retail payments`);
+
+  // ── DUE DATES AND OVERDUE ────────────────────────────────────────────────────────────────────
+  const withDue = chargeable.filter((i) => i.due_date);
+  check('only account invoices carry a due date', withDue.every(onAcct), `${withDue.length} with a due date`);
+  check('and every account invoice has one', chargeable.filter(onAcct).every((i) => i.due_date),
+    `${chargeable.filter(onAcct).length} account invoices`);
+  check('the due date is exactly the terms after issue',
+    withDue.every((i) => Math.abs((new Date(i.due_date) - new Date(i.date_issued)) / 86400000 - i.job_card.customer.account_terms_days) < 0.01),
+    'frozen at issue');
+  const overdue = openAcct.filter((i) => new Date(i.due_date) < NOW);
+  check('some accounts are actually late — a chase list needs someone on it', overdue.length >= 1, `${overdue.length} overdue`);
+  check('but late is the minority of what is open', overdue.length < openAcct.length, `${overdue.length} of ${openAcct.length}`);
   check('every paid invoice records a date and a method',
     paid.every((i) => i.paid_at && i.payment_method_snapshot), 'complete');
   check('no payment is dated in the future', paid.every((i) => i.paid_at <= NOW), 'none');

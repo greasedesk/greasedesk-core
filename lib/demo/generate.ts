@@ -34,6 +34,7 @@ import { tServer } from '@/lib/server-i18n';
 import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
 import { freezeQuoteVersion } from '@/lib/quote-version';
 import { acceptQuote } from '@/lib/quote-acceptance';
+import { dueDateFor } from '@/lib/account-terms';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
@@ -185,6 +186,25 @@ const QUOTE_MIX = {
   openPipelineDays: 5,
   openPerDay: 2,
   /** …the remaining 62% are accepted and became the jobs the history already holds. */
+  /**
+   * ── HOW A GARAGE ACTUALLY GETS PAID ───────────────────────────────────────────────────────────
+   * It does not release the car until the bill is settled, so retail work is paid ON COLLECTION and
+   * there is no retail receivable. The old model was a taper on invoice age — 98% paid after three
+   * weeks, 55% inside the first — which produced 27 open invoices across 27 DIFFERENT customers.
+   * No customer owed twice. That is not a debtor ledger, it is a random draw, and read literally it
+   * meant 27 cars sitting in the yard uncollected.
+   *
+   * A real debtor book has a shape: a handful of trade accounts on terms carrying nearly all of the
+   * balance, and one or two cars invoiced yesterday that nobody has picked up yet.
+   */
+  /** Taxi firms, small van fleets, a local dealer — the ones who get an account. */
+  accountCustomers: 4,
+  /** Terms they are on. 30 days is the default in the trade; one gets 14 so it is not uniform. */
+  accountTermsDays: [30, 30, 30, 14],
+  /** Jobs a year each, versus ~1.1 for a retail customer. They must LOOK like the biggest names. */
+  accountJobsPerYear: [46, 34, 27, 21],
+  /** Cars invoiced in the last day or two and not yet collected. The only retail debt there is. */
+  uncollectedCars: 2,
   /** A decline that gets a revised quote — the "let me sharpen my pencil" conversation. */
   supersedeAfterDeclinePct: 20,
   /**
@@ -627,6 +647,10 @@ export async function generateDemoTenant(opts: {
 
   // ── customers and vehicles ───────────────────────────────────────────────────────────────────
   say('customers');
+  // Generic trade names, same rule as the vehicle mix and the catalogue: the SHAPE is real, the
+  // particulars are invented.
+  const TRADE_NAMES = ['Northgate', 'Riverside', 'Kingsway', 'Fairlop', 'Bramley', 'Colwyn', 'Hartfield'];
+  const TRADE_SUFFIXES = ['Taxis', 'Couriers', 'Plant Hire', 'Motors', 'Logistics', 'Contracts'];
   const totalTargetHours = [...dayTarget.values()].reduce((a, b) => a + b, 0);
   const meanJobHours = 2.24; // measured from JOB_MIX in the offline calibration, not guessed
   const estJobs = Math.max(40, Math.round(totalTargetHours / meanJobHours));
@@ -634,12 +658,21 @@ export async function generateDemoTenant(opts: {
   const visitsPerCustomer = Math.max(1, DEMO_SPEC.historyMonths / RETURN_INTERVAL_MONTHS);
   const customerCount = Math.max(30, Math.round(estJobs / visitsPerCustomer));
 
-  const fleet: Array<{ customerId: string; vehicleId: string }> = [];
+  const fleet: Array<{ customerId: string; vehicleId: string; accountIdx: number | null }> = [];
   for (let i = 0; i < customerCount; i++) {
+    // The first few are TRADE ACCOUNTS. Named as businesses, on terms, and given far more work
+    // below — so on the customer list they read as the garage's biggest names rather than as
+    // unusually loyal individuals who happen to pay late.
+    const accountIdx = i < QUOTE_MIX.accountCustomers ? i : null;
     const first = pick(r, FIRST_NAMES), last = pick(r, LAST_NAMES);
+    const tradingName = accountIdx !== null ? `${pick(r, TRADE_NAMES)} ${pick(r, TRADE_SUFFIXES)}` : null;
     const cust = await prisma.customer.create({
       data: {
-        group_id: group.id, name: `${first} ${last}`,
+        group_id: group.id, name: tradingName ?? `${first} ${last}`,
+        ...(accountIdx !== null ? {
+          account_terms_days: QUOTE_MIX.accountTermsDays[accountIdx % QUOTE_MIX.accountTermsDays.length],
+          account_name: tradingName,
+        } : {}),
         email: `${first}.${last}${i}`.toLowerCase() + '@example.com',
         // Ofcom's reserved drama range — unroutable, and lib/demo-tenant refuses the send anyway.
         phone: `07700 900${String(i % 1000).padStart(3, '0')}`,
@@ -662,8 +695,28 @@ export async function generateDemoTenant(opts: {
     // The OWNERSHIP EDGE is the owner of record (car-first re-root) — Vehicle.customer_id is
     // retired and deliberately left unwritten.
     await prisma.vehicleOwnership.create({ data: { vehicle_id: veh.id, customer_id: cust.id, is_current: true, valid_from: historyFrom } });
-    fleet.push({ customerId: cust.id, vehicleId: veh.id });
+    fleet.push({ customerId: cust.id, vehicleId: veh.id, accountIdx });
   }
+
+  /**
+   * WHO IS THIS JOB FOR? Retail customers come back about once a year; an account comes in most
+   * weeks. Picking uniformly gave the busiest customer in the whole garage 8 jobs, which is not a
+   * fleet — so accounts carry an explicit weight taken from their annual volume, and everyone else
+   * shares what is left. The weights are relative, so this holds at any total job count.
+   */
+  const accountWeight = (idx: number) =>
+    QUOTE_MIX.accountJobsPerYear[idx % QUOTE_MIX.accountJobsPerYear.length] * (DEMO_SPEC.historyMonths / 12);
+  const fleetWeights = fleet.map((f) => (f.accountIdx === null ? 1 : accountWeight(f.accountIdx)));
+  const weightTotal = fleetWeights.reduce((a, b) => a + b, 0);
+  function pickOwner() {
+    let x = r() * weightTotal;
+    for (let i = 0; i < fleet.length; i++) { x -= fleetWeights[i]; if (x <= 0) return fleet[i]; }
+    return fleet[fleet.length - 1];
+  }
+
+  // Consumed by the payment model below: the only retail invoices left open are the last couple of
+  // cars nobody has collected yet. A count, not a probability — see the note at the payment model.
+  let uncollectedLeft = QUOTE_MIX.uncollectedCars;
 
   // ── plan every job, oldest first ─────────────────────────────────────────────────────────────
 
@@ -785,7 +838,7 @@ export async function generateDemoTenant(opts: {
   let invoices = 0, liftIdx = 0;
   for (const [n, job] of planned.entries()) {
     if (n % 50 === 0) say('writing', `${n}/${planned.length}`);
-    const pair = fleet[Math.floor(r() * fleet.length)];
+    const pair = pickOwner();
     const usesMotBay = job.lines.some((l) => l.description === 'MOT test');
     const card = await prisma.jobCard.create({
       data: {
@@ -840,7 +893,23 @@ export async function generateDemoTenant(opts: {
       already: async () => (await prisma.invoice.count({ where: { job_card_id: card.id } })) > 0,
     });
     // The mint stamps today; the demo needs the invoice to sit on the day the work happened.
-    await prisma.invoice.updateMany({ where: { job_card_id: card.id }, data: { date_issued: dayStart(job.start), issued_at: job.start } });
+    //
+    // AND THE DUE DATE MOVES WITH IT. due_date froze correctly at the mint — today plus the terms —
+    // but a year of history that all falls due next month is not a debtor book, and nothing in it
+    // could ever be late. Backdating the document date without re-deriving the date that hangs off
+    // it left every account invoice due in September; the gate caught it as zero overdue.
+    // Re-derived through the SAME function the product uses, so the relationship the product
+    // guarantees still holds on every row the demo writes.
+    const backdated = dayStart(job.start);
+    await prisma.invoice.updateMany({
+      where: { job_card_id: card.id },
+      data: {
+        date_issued: backdated, issued_at: job.start,
+        ...(pair.accountIdx !== null
+          ? { due_date: dueDateFor({ account_terms_days: QUOTE_MIX.accountTermsDays[pair.accountIdx % QUOTE_MIX.accountTermsDays.length] }, backdated) }
+          : {}),
+      },
+    });
 
     await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'paid' } });
 
@@ -855,20 +924,48 @@ export async function generateDemoTenant(opts: {
     });
     if (inv && inv.series !== 'warranty') {
       const ageDays = Math.round((dayStart(now).getTime() - dayStart(job.start).getTime()) / DAY);
-      // A TAPER, not a flat rate. Old work is settled; the last fortnight is the real ledger — some
-      // paid on collection, some on a bank transfer that has not cleared. A couple of ancient ones
-      // stay open, because every garage has two of those and the chase list should not be empty.
-      const paidChance = ageDays > 21 ? 98 : ageDays > 7 ? 88 : 55;
-      if (chance(r, paidChance)) {
-        const m = weighted(r, methods.map((x) => [x, x.weight] as [typeof methods[number], number]));
-        // Cash and card clear on the day; a transfer lands a few days later — and never in the
-        // future, or the demo shows a payment that has not happened yet.
-        const lagDays = m.instant ? 0 : Math.min(ageDays, 1 + Math.floor(r() * 10));
-        const paid = addDays(dayStart(job.start), lagDays);
+      const onAccount = pair.accountIdx !== null;
+      const terms = onAccount
+        ? QUOTE_MIX.accountTermsDays[pair.accountIdx! % QUOTE_MIX.accountTermsDays.length]
+        : null;
+
+      /**
+       * ── PAID ON COLLECTION, OR ON TERMS. THERE IS NO THIRD KIND. ─────────────────────────────
+       * RETAIL: the car is not released until the bill is settled, so payment lands the SAME DAY,
+       * full stop. The only retail exception is a car invoiced in the last day or two that nobody
+       * has picked up yet — which is why `uncollectedCars` is a small count of recent jobs and not
+       * a probability sprinkled across the year. An old unpaid retail invoice would mean a car
+       * abandoned in the yard since March.
+       *
+       * ACCOUNT: pays on terms, so anything invoiced within the terms window is still legitimately
+       * open. Most settle a few days either side of the due date; one in six runs late, because a
+       * debtor book with nobody late in it is not a debtor book.
+       */
+      let paidOn: Date | null = null;
+      let late = false;
+      if (onAccount) {
+        // Days from invoice to payment: usually around the terms, sometimes over.
+        late = chance(r, 17);
+        const lag = late ? terms! + 5 + Math.floor(r() * 25) : Math.max(2, terms! - 6 + Math.floor(r() * 10));
+        if (lag <= ageDays) paidOn = addDays(dayStart(job.start), lag);
+        // lag > ageDays → still within terms, still open. That IS the debtor book.
+      } else {
+        // Retail: same day, unless this is one of the last few cars still on the forecourt.
+        const uncollected = ageDays <= 2 && uncollectedLeft > 0;
+        if (uncollected) { uncollectedLeft -= 1; } else { paidOn = dayStart(job.start); }
+      }
+
+      if (paidOn) {
+        // An account settles by transfer; a retail customer hands over cash or a card at the desk.
+        const pool = onAccount ? methods.filter((x) => !x.instant) : methods.filter((x) => x.instant);
+        const usable = pool.length ? pool : methods;
+        const m = weighted(r, usable.map((x) => [x, x.weight] as [typeof methods[number], number]));
+        // Never in the future, or the demo shows a payment that has not happened yet.
+        if (paidOn.getTime() > dayStart(now).getTime()) paidOn = dayStart(now);
         await prisma.invoice.update({
           where: { id: inv.id },
           data: {
-            status: 'paid', paid_at: paid, date_paid: paid,
+            status: 'paid', paid_at: paidOn, date_paid: paidOn,
             payment_method_id: m.id, payment_method_snapshot: m.name,
           },
         });
@@ -914,7 +1011,7 @@ export async function generateDemoTenant(opts: {
       }
     }
 
-    const pair = fleet[Math.floor(r() * fleet.length)];
+    const pair = pickOwner();
     const card = await prisma.jobCard.create({
       data: {
         group_id: group.id, site_id: site.id, customer_id: pair.customerId, vehicle_id: pair.vehicleId,
@@ -964,7 +1061,7 @@ export async function generateDemoTenant(opts: {
   // absence is the entire point — this is work the garage has won and not yet put on a lift.
   let unbookedMade = 0;
   for (let n = 0; n < QUOTE_MIX.acceptedUnbooked; n++) {
-    const pair = fleet[Math.floor(r() * fleet.length)];
+    const pair = pickOwner();
     const job = planJob(r, { comeback: false });
     let quotedAt = addDays(dayStart(now), -(2 + Math.floor(r() * 12)));
     while (!isWorkday(quotedAt) || closedKeys.has(iso(quotedAt))) quotedAt = addDays(quotedAt, -1);
@@ -994,7 +1091,7 @@ export async function generateDemoTenant(opts: {
   say('forward book');
   const FORWARD_STATUSES = ['accepted', 'accepted', 'quoted', 'in_progress'] as const;
   for (const job of forward) {
-    const pair = fleet[Math.floor(r() * fleet.length)];
+    const pair = pickOwner();
     const usesMotBay = job.lines.some((l) => l.description === 'MOT test');
     // Chosen BEFORE the create so the acceptance below knows what it is building. The card always
     // starts `quoted` — acceptQuote needs a legal transition and the status table is the authority.
