@@ -4,6 +4,13 @@
  * count, and hosts the two hosted-Stripe actions: Start subscription (Checkout) and Manage billing
  * (Billing Portal — card, plan changes, cancellation all live there; we build no bespoke cancel).
  * A LAPSED tenant sees the read-only guarantee loudly.
+ *
+ * ── A DEMO IS NOT A DEFICIENT REAL ACCOUNT ──────────────────────────────────────────────────────
+ * Rendered against a demo this page said "Status: No subscription", "Monthly £75" and offered a
+ * Start subscription button. Every word of that is about a subscription the tenant cannot have and
+ * must not buy: the group is deleted by the demo cron, so a card entered here would be attached to
+ * something that vanishes. The endpoints refuse regardless (lib/demo-tenant), but a page offering a
+ * button that always fails is its own defect — so the demo gets its own panel, with no price on it.
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
@@ -22,6 +29,7 @@ type PageProps = {
   hasCustomer: boolean;
   siteCount: number;
   perMonthLabel: string; perLocationLbl: string;
+  isDemo: boolean;
   billingConfigured: boolean;
   isAdmin: boolean;
 };
@@ -41,7 +49,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lapsed = isLapsedStatus(subscriptionStatus); // the ONE vocabulary (lib/billing)
@@ -55,6 +63,25 @@ export default function LicencesSettings(props: PageProps) {
       if (!res.ok || !data?.url) throw new Error(data?.message || 'Could not open billing.');
       window.location.href = data.url;
     } catch (e: any) { setError(e?.message || 'Something went wrong.'); setBusy(false); }
+  }
+
+  if (isDemo) {
+    return (
+      <SettingsLayout isAdmin={isAdmin}>
+        <Head><title>Licence & Subscriptions - GreaseDesk</title></Head>
+        <p className="text-muted mb-6">This is a demo garage.</p>
+        <div className="bg-surface border border-line rounded-xl p-6 max-w-xl">
+          <Row label="Account" value={groupName} />
+          <Row label="Type" value="Demo — not a subscription" />
+          <Row label="Current locations" value={siteCount} />
+        </div>
+        <p className="text-sm text-muted mt-4 max-w-xl">
+          Nothing here is billable and no card is held. Every customer, car and invoice in this
+          garage is invented, and it will be deleted when the demo ends. When you want to begin with
+          your own work, start a trial and you will get an empty diary of your own.
+        </p>
+      </SettingsLayout>
+    );
   }
 
   return (
@@ -104,7 +131,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const { vis } = gate;
 
   const [group, billing, siteCount] = await Promise.all([
-    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true, country_code: true, ref: true } }),
+    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true } }),
     prisma.groupBilling.findUnique({ where: { group_id: vis.groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
     prisma.site.count({ where: { group_id: vis.groupId } }),
   ]);
@@ -120,6 +147,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       perMonthLabel: monthlyPriceLabelFor(resolveTenantProfile(group), siteCount),
       perLocationLbl: perLocationLabelFor(resolveTenantProfile(group)),
       billingConfigured: !!process.env.STRIPE_SECRET_KEY,
+      isDemo: !!(group as any)?.is_demo,
       isAdmin: true,
     },
   };

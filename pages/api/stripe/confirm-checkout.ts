@@ -11,6 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe } from '@/lib/stripe';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
 
@@ -22,6 +23,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await requireAdminApi(req, res); if (!vis) return;
   const groupId = vis.groupId as string;
   if (!groupId) return res.status(400).json({ message: 'No group in scope.' });
+
+  // The third endpoint, and the one that WRITES. Guarding the two that open Stripe pages while
+  // leaving the cache writer open would mean a demo could still end up holding a subscription
+  // record — by any route that produced a session id, including a stale tab.
+  if (await refuseDemoBilling(res, groupId)) return;
 
   const sessionId = (req.body && (req.body as any).session_id) as string | undefined;
   if (!sessionId) return res.status(400).json({ message: 'Missing session_id.' });

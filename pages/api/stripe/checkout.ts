@@ -18,6 +18,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
 import { createHash } from 'node:crypto';
 import type Stripe from 'stripe';
@@ -42,6 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const groupId = vis.groupId as string;
   if (!groupId) return res.status(400).json({ message: 'No group in scope.' });
+  // BEFORE the Price lookup and before the session — a demo that reaches Stripe has already had a
+  // real card typed into it, for a tenant the demo cron deletes. See lib/demo-tenant.
+  if (await refuseDemoBilling(res, groupId)) return;
   const [group, siteCount, billing] = await Promise.all([
     prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, billing_email: true, country_code: true, ref: true } }),
     prisma.site.count({ where: { group_id: groupId } }),

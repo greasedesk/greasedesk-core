@@ -38,6 +38,51 @@ export const isReservedPhone = (v: string | null | undefined): boolean => {
 export const isReservedEmail = (v: string | null | undefined): boolean =>
   /@(example\.(com|net|org)|.*\.invalid)$/i.test(String(v ?? '').trim());
 
+/** Is this tenant a demo? One indexed lookup, and the only place the question is asked. */
+export async function isDemoGroup(groupId: string | null | undefined): Promise<boolean> {
+  if (!groupId) return false;
+  const g = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { is_demo: true },
+  })) as { is_demo: boolean } | null;
+  return !!g?.is_demo;
+}
+
+/**
+ * ── A DEMO MUST NOT REACH STRIPE ────────────────────────────────────────────────────────────────
+ * Checkout on a demo would SUCCEED, and that is worse than failing. The endpoint has no idea the
+ * tenant is disposable: it would create a real Checkout session with payment_method_collection
+ * 'always', take a real card through real 3DS, and the webhook would write a real subscription —
+ * against a group the demo cron hard-deletes days later. Somebody would have subscribed the
+ * showroom model, and then watched it be deleted with everything in it.
+ *
+ * The refusal is 403 with a code the client can branch on, not a 503 "billing isn't configured":
+ * billing is configured perfectly well, this tenant simply has nothing to buy. Callers get the same
+ * sentence from all three endpoints because they are the same refusal.
+ */
+export const DEMO_BILLING_REFUSAL = {
+  status: 403,
+  code: 'demo_tenant' as const,
+  message: 'This is a demo garage, so there is nothing to subscribe — nothing in it is real. Start a trial when you want to set up your own.',
+};
+
+/**
+ * Guard for a billing endpoint. Returns true when it has ALREADY answered the request, so a caller
+ * is one line: `if (await refuseDemoBilling(res, groupId)) return;`
+ *
+ * Placed before any Stripe call and before any write, on purpose — a demo that gets as far as a
+ * session id has already had a card typed into it.
+ */
+export async function refuseDemoBilling(
+  res: { status: (c: number) => { json: (b: any) => any } },
+  groupId: string | null | undefined,
+): Promise<boolean> {
+  if (!(await isDemoGroup(groupId))) return false;
+  res.status(DEMO_BILLING_REFUSAL.status).json({
+    message: DEMO_BILLING_REFUSAL.message, code: DEMO_BILLING_REFUSAL.code,
+  });
+  return true;
+}
+
 export type DemoSendDecision =
   | { block: false }
   | { block: true; reason: string };
@@ -53,10 +98,7 @@ export async function demoSendDecision(
   recipient: string,
 ): Promise<DemoSendDecision> {
   if (!groupId) return { block: false }; // platform-level send — no tenant to be a demo
-  const g = (await prisma.group.findUnique({
-    where: { id: groupId }, select: { is_demo: true },
-  })) as { is_demo: boolean } | null;
-  if (!g?.is_demo) return { block: false };
+  if (!(await isDemoGroup(groupId))) return { block: false };
 
   const owner = (await prisma.user.findFirst({
     where: { group_id: groupId, is_owner: true }, select: { email: true },

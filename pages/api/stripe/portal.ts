@@ -7,12 +7,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
+import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, appBaseUrl } from '@/lib/stripe';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
   const vis = await requireAdminApi(req, res); if (!vis) return;
+
+  // A demo has no customer, so the 409 below would already stop it — but the refusal is stated
+  // here anyway. Relying on "there happens to be no row" makes the guarantee an accident of data;
+  // the moment anything writes a GroupBilling row for a demo, the accident stops holding.
+  if (await refuseDemoBilling(res, vis.groupId)) return;
 
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
