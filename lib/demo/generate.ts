@@ -187,6 +187,14 @@ const QUOTE_MIX = {
   /** …the remaining 62% are accepted and became the jobs the history already holds. */
   /** A decline that gets a revised quote — the "let me sharpen my pencil" conversation. */
   supersedeAfterDeclinePct: 20,
+  /**
+   * AGREED BUT NOT IN THE DIARY — "yes, ring me to book it in". The quotes screen has a whole tab
+   * for this and it read (0), which wastes the one thing that tab exists to catch: lib/quotes-list
+   * calls it "the gap nothing else in the product catches — an accepted job with no lift and no
+   * date is invisible on the diary and finished on the quotes list, so it can sit indefinitely".
+   * A demo showing that queue empty teaches an owner the feature does nothing.
+   */
+  acceptedUnbooked: 4,
   /** Cheap routine work is accepted almost always; the decline draw avoids it. */
   rarelyDeclined: ['mot', 'service_minor', 'brake_fluid', 'valet'] as string[],
 } as const;
@@ -372,7 +380,8 @@ export type DemoGenerationResult = {
   groupId: string; ownerUserId: string; siteId: string;
   counts: {
     customers: number; vehicles: number; jobCards: number; invoices: number; bookings: number;
-    quotesAccepted: number; quotesDeclined: number; quotesExpired: number; quotesOpen: number; quotesSuperseded: number;
+    quotesAccepted: number; quotesDeclined: number; quotesExpired: number; quotesOpen: number;
+    quotesUnbooked: number; quotesSuperseded: number;
   };
   targetChargedHours: number; plannedChargedHours: number;
   elapsedMonthTarget: { availableToDate: number; soldToDate: number; ratio: number };
@@ -897,7 +906,35 @@ export async function generateDemoTenant(opts: {
     // The version's own sent date is the quote date, not the moment the generator ran.
     await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
   }
-  say('quotes', `${acceptedCount} accepted, ${declinedMade} declined, ${expiredMade} expired, ${openMade} open, ${supersededMade} superseded`);
+  // ── AGREED, NOT YET BOOKED ───────────────────────────────────────────────────────────────────
+  // Deliberately NO resource_id, start_at or end_at: isBookedCard needs all three, and their
+  // absence is the entire point — this is work the garage has won and not yet put on a lift.
+  let unbookedMade = 0;
+  for (let n = 0; n < QUOTE_MIX.acceptedUnbooked; n++) {
+    const pair = fleet[Math.floor(r() * fleet.length)];
+    const job = planJob(r, { comeback: false });
+    let quotedAt = addDays(dayStart(now), -(2 + Math.floor(r() * 12)));
+    while (!isWorkday(quotedAt) || closedKeys.has(iso(quotedAt))) quotedAt = addDays(quotedAt, -1);
+    const card = await prisma.jobCard.create({
+      data: {
+        group_id: group.id, site_id: site.id, customer_id: pair.customerId, vehicle_id: pair.vehicleId,
+        status: 'quoted', created_at: quotedAt,
+      },
+      select: { id: true },
+    });
+    await writeLines(card.id, { ...job, start: quotedAt, durationMinutes: 60 });
+    await freezeQuoteVersion({ groupId: group.id, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+    await prisma.quoteVersion.updateMany({ where: { job_card_id: card.id }, data: { sent_at: quotedAt } });
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await acceptQuote(tx, {
+        groupId: group.id, jobCardId: card.id, via: 'counter',
+        actorUserId: owner.id, attested: null, at: addDays(quotedAt, 1),
+      });
+    });
+    unbookedMade += 1;
+  }
+
+  say('quotes', `${acceptedCount} accepted, ${declinedMade} declined, ${expiredMade} expired, ${openMade} open, ${unbookedMade} agreed-unbooked, ${supersededMade} superseded`);
 
   say('forward book');
   const FORWARD_STATUSES = ['accepted', 'accepted', 'quoted', 'in_progress'] as const;
@@ -954,7 +991,8 @@ export async function generateDemoTenant(opts: {
   return {
     groupId: group.id, ownerUserId: owner.id, siteId: site.id,
     counts: { customers: customerCount, vehicles: customerCount, jobCards: planned.length + forward.length, invoices, bookings: forward.length,
-      quotesAccepted: acceptedCount, quotesDeclined: declinedMade, quotesExpired: expiredMade, quotesOpen: openMade, quotesSuperseded: supersededMade },
+      quotesAccepted: acceptedCount, quotesDeclined: declinedMade, quotesExpired: expiredMade,
+      quotesOpen: openMade, quotesUnbooked: unbookedMade, quotesSuperseded: supersededMade },
     targetChargedHours: Math.round(totalTargetHours * 10) / 10,
     plannedChargedHours: Math.round(planned.reduce((s, j) => s + j.chargedHours, 0) * 10) / 10,
     elapsedMonthTarget: {

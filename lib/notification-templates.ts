@@ -205,6 +205,34 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  /**
+   * The demo is about to end. Goes to the OWNER'S REAL ADDRESS — the one exception lib/demo-tenant
+   * allows through the send block, because a person who started a demo has to be told it is
+   * finishing and nothing else in the product can tell them.
+   *
+   * The link is the point of the email. After the purge their user row is gone, so signing in
+   * returns the same "Invalid email or password" a typo produces; ?demo=expired is what lets the
+   * login page say what actually happened.
+   */
+  demo_expiring: {
+    label: 'Your GreaseDesk demo is ending',
+    security: true,
+    email: (d) => ({
+      subject: `Your GreaseDesk demo ends ${d.when ? esc(d.when) : 'tomorrow'}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">Your demo ends ${d.when ? esc(d.when) : 'tomorrow'}</h2>
+        <p>Hi ${esc(d.name ?? 'there')},</p>
+        <p>The demo garage you have been trying — invented customers, invented cars, a year of
+           invented history — is due to be deleted ${d.when ? esc(d.when) : 'tomorrow'}. Nothing in it
+           was real, so there is nothing to export and nothing to lose.</p>
+        <p>If you would like to carry on with your OWN garage, start a trial and you will begin with
+           an empty diary and your own work in it.</p>
+        ${button(String(d.link ?? ''), 'Start a real trial')}
+        <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your
+           browser:<br/>${esc(d.link)}</p>`),
+    }),
+  },
+
   signup_verify: {
     label: 'Verify your email (signup)',
     security: true,

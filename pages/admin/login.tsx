@@ -21,6 +21,10 @@ export async function getServerSideProps(context: any) {
       error: context.query.error || null,
       email: context.query.email || null,
       status: context.query.status || null,
+      // ?demo=expired — carried by the demo's own expiry email. Without it a purged demo user hits
+      // the generic "Invalid email or password", which is what a typo produces, and concludes they
+      // have forgotten their password rather than that the demo ended.
+      demo: context.query.demo || null,
       // RELATIVE paths only — a crafted ?callbackUrl=https://evil.example must never win.
       callbackUrl: (typeof context.query.callbackUrl === 'string' && context.query.callbackUrl.startsWith('/') && !context.query.callbackUrl.startsWith('//'))
         ? context.query.callbackUrl
@@ -29,7 +33,7 @@ export async function getServerSideProps(context: any) {
   };
 }
 
-export default function AdminLoginPage({ csrfToken, error, email, status, callbackUrl }: { csrfToken: string, error: string | null, email: string | null, status: string | null, callbackUrl: string }) {
+export default function AdminLoginPage({ csrfToken, error, email, status, demo, callbackUrl }: { csrfToken: string, error: string | null, email: string | null, status: string | null, demo: string | null, callbackUrl: string }) {
   const [loginEmail, setLoginEmail] = useState(email || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false); // oily-thumb reveal — typos are the norm in a workshop
@@ -91,6 +95,12 @@ export default function AdminLoginPage({ csrfToken, error, email, status, callba
   };
 
   const getErrorMessage = () => {
+    // FIRST, and ahead of InvalidCredentials on purpose: a purged demo user arriving from the
+    // expiry email has no account left, so a sign-in attempt WOULD produce the credentials error.
+    // Saying what actually happened matters more than reporting what the form returned.
+    if (demo === 'expired') {
+      return 'Your demo garage has ended and its invented data has been deleted. Start a trial to begin with your own.';
+    }
     if (error === 'InvalidCredentials') {
       return 'Invalid email or password.';
     }

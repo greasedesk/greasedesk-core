@@ -189,6 +189,8 @@ try {
   check('the Accepted & booked tab is not empty', (byStatus.accepted_booked ?? 0) > 0, `${byStatus.accepted_booked ?? 0}`);
   check('the live pipeline is a pipeline, not a backlog', (byStatus.awaiting ?? 0) > 0 && (byStatus.awaiting ?? 0) <= 25,
     `${byStatus.awaiting ?? 0} awaiting`);
+  // The tab that exists to catch agreed work nobody has scheduled. Empty teaches the opposite.
+  check('the Accepted (unbooked) tab is not empty', (byStatus.accepted ?? 0) > 0, `${byStatus.accepted ?? 0}`);
 
   // The dashboard tile is PERIOD-scoped and the demo lands on the current month, so that is the
   // number an owner actually sees first.
