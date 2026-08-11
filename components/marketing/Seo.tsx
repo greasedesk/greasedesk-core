@@ -7,6 +7,7 @@
 import Head from 'next/head';
 import { COMPANY, absoluteUrl, officeOneLine } from '@/lib/company-info';
 import { MONTHLY_PRICE_POUNDS, garageVatRegistered } from '@/lib/billing-pricing';
+import { TRIAL_PERIOD_DAYS } from '@/lib/stripe';
 
 type Props = {
   title: string;         // full <title> (page-specific)
@@ -22,6 +23,14 @@ const organizationLd = () => ({
   legalName: COMPANY.legalName,
   url: COMPANY.siteUrl,
   logo: absoluteUrl(COMPANY.logoPath),
+  // Companies House registered number. schema.org has no `companyNumber`; an identifier with an
+  // explicit propertyID is the correct expression, and says WHICH register the number belongs to.
+  identifier: {
+    '@type': 'PropertyValue',
+    propertyID: 'GB:CRN',
+    value: COMPANY.companyNumber,
+  },
+  areaServed: { '@type': 'Country', name: 'GB' },
   // NO email in the schema (would be scrapable) — phone + address only.
   telephone: COMPANY.phoneE164,
   address: {
@@ -43,21 +52,62 @@ const softwareAppLd = () => ({
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: COMPANY.tradingName,
+  url: COMPANY.siteUrl,
   applicationCategory: 'BusinessApplication',
+  applicationSubCategory: 'Garage management software',
   operatingSystem: 'Web',
   description: 'Garage management software: job cards, bookings, invoicing and a live profit-and-loss view.',
-  offers: {
-    '@type': 'Offer',
-    price: String(MONTHLY_PRICE_POUNDS),
-    priceCurrency: 'GBP',
-    // Price shown is per location, per month. The claim is made in BOTH directions rather than
-    // omitted in one: registered → the £75 INCLUDES VAT (the Stripe price is tax-inclusive and
-    // Terms v2 says so); not registered → no VAT is charged at all. Leaving the field out when
-    // registered, as this did, let a search result imply nothing where we now have something
-    // definite to say.
-    valueAddedTaxIncluded: garageVatRegistered(),
-  },
+  // GB-only by admission rule (one allow-list in the country writer), so the schema says so rather
+  // than implying we sell everywhere.
+  areaServed: { '@type': 'Country', name: 'GB' },
+  audience: { '@type': 'Audience', audienceType: 'Independent vehicle repair garages' },
+  // What the product actually does. Every line is a shipped surface — nothing part-built is
+  // claimed, because a feature list is a promise a search result will repeat back to a garage.
+  featureList: [
+    'Job cards with a gated workflow',
+    'Diary and bookings with capacity planning',
+    'Quotes with versioning and customer acceptance',
+    'VAT invoicing on a gapless numbered series',
+    'Payments, account customers on terms, and debtor tracking',
+    'Live profit-and-loss, capacity and utilisation dashboards',
+    'Parts and labour catalogue with cost and margin',
+    'Customer messaging by email and SMS',
+    'Mobile app for mechanics',
+  ],
+  offers: [
+    {
+      '@type': 'Offer',
+      name: 'Subscription',
+      price: String(MONTHLY_PRICE_POUNDS),
+      priceCurrency: 'GBP',
+      // A BARE price reads as a flat £75 for the product. It is £75 PER LOCATION PER MONTH, and
+      // UnitPriceSpecification is the only way to say that in a machine-readable way.
+      priceSpecification: {
+        '@type': 'UnitPriceSpecification',
+        price: String(MONTHLY_PRICE_POUNDS),
+        priceCurrency: 'GBP',
+        unitCode: 'MON',
+        referenceQuantity: { '@type': 'QuantitativeValue', value: 1, unitText: 'location' },
+        // ── OMITTED WHEN NOT REGISTERED, NEVER `false` (ruling 2026-08-11) ──────────────────────
+        // `false` is a positive claim that the price EXCLUDES VAT, which implies VAT will be added
+        // on top. GreaseDesk Ltd is not VAT-registered, so no VAT applies at all and there is
+        // nothing to add — saying `false` would advertise a charge that does not exist. When
+        // registration lands the flag flips to true and the field appears, which is what Terms v2
+        // already states: VAT is INCLUDED in the £75.
+        ...(garageVatRegistered() ? { valueAddedTaxIncluded: true } : {}),
+      },
+    },
+    {
+      '@type': 'Offer',
+      name: `${TRIAL_PERIOD_DAYS}-day free trial`,
+      price: '0',
+      priceCurrency: 'GBP',
+      eligibleDuration: { '@type': 'QuantitativeValue', value: TRIAL_PERIOD_DAYS, unitCode: 'DAY' },
+    },
+  ],
   publisher: { '@type': 'Organization', name: COMPANY.legalName },
+  // DELIBERATELY ABSENT: aggregateRating and review. There are none. Emitting them would be a
+  // fabrication and a structured-data violation, and no amount of SEO benefit buys that back.
 });
 
 export default function Seo({ title, description, path, softwareApp = false }: Props) {

@@ -35,6 +35,26 @@ export async function resolvePublished(db: Db, slug: string, country = 'GB') {
   return (await pick(country)) ?? (country !== 'GB' ? await pick('GB') : null);
 }
 
+/**
+ * Every slug with a published version, and when it last changed — the PUBLIC surface of the content
+ * system, as a set rather than one lookup at a time.
+ *
+ * Exists because the sitemap listed five hardcoded paths, so /cookies, /privacy and /terms were
+ * invisible to search: the whole point of the content system is that a document gets a URL with no
+ * deploy, and a hardcoded list quietly undoes that for the next document as well. DISTINCT slugs,
+ * because a doc key has many published versions and the sitemap wants one URL each.
+ */
+export async function publishedSlugs(db: Db, country = 'GB'): Promise<Array<{ slug: string; lastModified: Date | null }>> {
+  const rows = (await (db as any).document.findMany({
+    where: { status: 'published', country_code: country },
+    select: { slug: true, published_at: true },
+    orderBy: { published_at: 'desc' },
+  })) as Array<{ slug: string; published_at: Date | null }>;
+  const seen = new Map<string, Date | null>();
+  for (const r of rows) if (r.slug && !seen.has(r.slug)) seen.set(r.slug, r.published_at); // newest first
+  return [...seen.entries()].map(([slug, lastModified]) => ({ slug, lastModified })).sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
 /** Published version history for a doc key, newest first (what changed, who published, when). */
 export function publishedHistory(db: Db, slug: string, country: string) {
   return (db as any).document.findMany({ where: { slug, country_code: country, status: 'published' }, orderBy: { published_at: 'desc' } });
