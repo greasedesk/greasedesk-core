@@ -33,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const siteId = vis.primarySiteId;
   if (!siteId) return res.status(400).json({ message: 'No location yet — complete onboarding first.' });
 
-  const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true, phone: true, whatsapp: true } });
+  const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true, phone: true, whatsapp: true, company_number: true, company_number_not_applicable: true } });
   const profile = resolveTenantProfile(group);
 
   if (req.method === 'GET') {
@@ -75,6 +75,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       overheads_basic: { items: overheads.map((o: any) => ({ id: o.id, name: o.name, exVatAmountPennies: o.ex_vat_amount_pennies, vatRate: Number(o.vat_rate), period: o.period })) },
       contact_details: { phone: group?.phone ?? '', whatsapp: group?.whatsapp ?? '' },
+      company_number: {
+        companyNumber: (group as any)?.company_number ?? '',
+        notApplicable: !!(group as any)?.company_number_not_applicable,
+      },
     };
 
     const complete: Record<string, boolean> = {
@@ -84,6 +88,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       technicians: people.some((p: any) => p.is_active),
       overheads_basic: overheads.length > 0,
       contact_details: !!(group?.phone || group?.whatsapp),
+      // DONE means ANSWERED, not "has a number". "I'm a sole trader" is a complete answer — the
+      // same three-state rule lib/setup-signals already applies, read here so the wizard and the
+      // setup panel cannot disagree about whether this step is finished.
+      company_number: !!((group as any)?.company_number?.trim() || (group as any)?.company_number_not_applicable),
     };
 
     // Derived resume: first enabled REQUIRED step whose handler is incomplete (no stored cursor).

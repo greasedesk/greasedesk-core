@@ -30,6 +30,10 @@ export default function CompanyDetails(props: PageProps) {
   const router = useRouter();
   const [name, setName] = useState(groupName);
   const [num, setNum] = useState(companyNumber);
+  // "Not registered" is an ANSWER, not an empty field. Without it this page was a dead end for a
+  // sole trader: the setup signal links here, and the only way to satisfy it was to invent a
+  // company number they do not have.
+  const [noCoNumber, setNoCoNumber] = useState<boolean>(!!(props as any).companyNumberNotApplicable);
   const [addr, setAddr] = useState(address);
   const [vatReg, setVatReg] = useState(vatRegistered);
   const [vat, setVat] = useState(vatNumber);
@@ -47,7 +51,7 @@ export default function CompanyDetails(props: PageProps) {
       const res = await fetch('/api/company', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          group_name: name, company_number: num, address: addr,
+          group_name: name, company_number: noCoNumber ? '' : num, address: addr,
           phone: phoneVal, whatsapp: waVal,
           vin_hint_text: vinHintText,
           vat_registered: vatReg, vat_number: vatReg ? vat : '', // clear number when de-registering
@@ -56,6 +60,13 @@ export default function CompanyDetails(props: PageProps) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setMsg({ text: data?.message || t('details.error'), ok: false }); setBusy(false); return; }
+      // The declaration is a separate write because it is a separate FACT — the number lives on the
+      // company record, the "there isn't one" lives on the setup applicability flag that
+      // lib/setup-signals reads. Sent in both directions so ticking and unticking both take effect.
+      await fetch('/api/setup/not-applicable', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signal: 'company_number', notApplicable: noCoNumber && !num.trim() }),
+      }).catch(() => { /* the company details themselves saved; this is not worth failing over */ });
       // Guided-setup walkthrough: if a company number was provided (signal now done), return to the
       // sequence so it advances (item-13). Blank save just stays here.
       if (router.query.setup === '1' && num.trim() !== '') { router.push('/admin/setup?walk=1'); return; }
@@ -73,7 +84,20 @@ export default function CompanyDetails(props: PageProps) {
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         <form onSubmit={save} className="space-y-3">
           <div><label className={labelClass}>{t('details.name')} *</label><input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} /></div>
-          <div><label className={labelClass}>{companyNumberLabel}</label><input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass} placeholder={companyNumberPlaceholder} /></div>
+          <div>
+            <label className={labelClass}>{companyNumberLabel}</label>
+            <input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass}
+              placeholder={companyNumberPlaceholder} disabled={noCoNumber} data-testid="company-number" />
+            <label className="flex items-start gap-2 mt-2 text-sm text-muted cursor-pointer">
+              <input type="checkbox" checked={noCoNumber} data-testid="company-number-na"
+                onChange={(e) => setNoCoNumber(e.target.checked)} className="mt-0.5" />
+              <span>I’m a sole trader or not registered at Companies House</span>
+            </label>
+            <p className="text-xs text-muted mt-1">
+              Leave this blank if you’re a sole trader or a partnership — you won’t have a company
+              number, and nothing in GreaseDesk needs one.
+            </p>
+          </div>
           <div><label className={labelClass}>{t('details.address')}</label><input value={addr} onChange={(e) => setAddr(e.target.value)} className={inputClass} /></div>
           {/* Phone-card VIN hint — tenant-worded, free text; EMPTY ships no hint (never a marque default). */}
           {/* Customer-facing contact routes. WhatsApp is INDEPENDENT of the phone — a garage may run
@@ -119,13 +143,14 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      group_name: true, company_number: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true, country_code: true, ref: true,
+      group_name: true, company_number: true, company_number_not_applicable: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true, country_code: true, ref: true,
     },
   })) as any;
   return {
     props: {
       groupName: g?.group_name ?? '',
       companyNumber: g?.company_number ?? '',
+      companyNumberNotApplicable: !!(g as any)?.company_number_not_applicable,
       address: g?.address ?? '',
       vatRegistered: !!g?.vat_registered,
       vatNumber: g?.vat_number ?? '',

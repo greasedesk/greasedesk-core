@@ -21,7 +21,8 @@ export type HandlerKey =
   | 'resources_other'
   | 'technicians'
   | 'overheads_basic'
-  | 'contact_details';
+  | 'contact_details'
+  | 'company_number';
 
 /** The fixed registry. `mustFollow` is the partial-order constraint operator ordering cannot
  *  violate — a step is clamped after every step it must follow, whatever position says. */
@@ -32,6 +33,12 @@ export const WIZARD_HANDLERS: Record<HandlerKey, { mustFollow: HandlerKey[] }> =
   technicians: { mustFollow: [] },
   overheads_basic: { mustFollow: [] },
   contact_details: { mustFollow: [] },
+  // ── THE SIGNAL THAT HAD NO STEP ───────────────────────────────────────────────────────────────
+  // Of the four optional setup signals, resources / employees / overheads each had a step here and
+  // company_number did not — so a real signup that answered everything the product asked still
+  // read 7 of 8, with the missing item collected on a settings page nothing routes to. Not
+  // required: a company number is information we would LIKE, and a sole trader has none to give.
+  company_number: { mustFollow: [] },
 };
 
 export const isHandlerKey = (k: string): k is HandlerKey => k in WIZARD_HANDLERS;

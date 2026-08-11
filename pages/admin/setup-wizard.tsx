@@ -107,6 +107,7 @@ function StepBody({ step, data, busy, setBusy, setErr, reload, advance }: {
   if (h === 'technicians') return <TechStep state={data.state[h]} currencySymbol={data.currencySymbol} busy={busy} setBusy={setBusy} setErr={setErr} reload={reload} advance={advance} />;
   if (h === 'overheads_basic') return <CostsStep state={data.state[h]} currencySymbol={data.currencySymbol} primarySiteId={data.primarySiteId} busy={busy} setBusy={setBusy} setErr={setErr} reload={reload} advance={advance} />;
   if (h === 'contact_details') return <ContactStep state={data.state[h]} phonePlaceholder={data.phonePlaceholder} busy={busy} setBusy={setBusy} setErr={setErr} reload={reload} advance={advance} />;
+  if (h === 'company_number') return <CompanyNumberStep state={data.state[h]} busy={busy} setBusy={setBusy} setErr={setErr} reload={reload} advance={advance} />;
   return <p className="text-sm text-muted">This step isn’t available.</p>;
 }
 
@@ -315,6 +316,63 @@ function ContactStep({ state, phonePlaceholder, busy, setBusy, setErr, reload, a
       <div><label className={labelClass}>Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} className={inputClass} placeholder={phonePlaceholder} /></div>
       <div><label className={labelClass}>WhatsApp</label><input value={wa} onChange={(e) => setWa(e.target.value)} className={inputClass} placeholder={phonePlaceholder} /></div>
       <div className="sm:col-span-2"><button onClick={save} disabled={busy} className={btnPrimary} data-testid="save-step">Save & finish</button></div>
+    </div>
+  );
+}
+
+/**
+ * ── COMPANY NUMBER, AND THE SOLE TRADER WHO HAS NONE ────────────────────────────────────────────
+ * Two ways to finish, presented as equals. A sole trader is not skipping a step or failing one —
+ * they are giving the correct answer to the question, and the copy has to say that plainly rather
+ * than dressing a refusal up as "skip for now". Roughly a fifth of UK garages are unincorporated;
+ * this is a normal answer, not an edge case.
+ *
+ * The two buttons write to different places by necessity — the number to Group.company_number via
+ * /api/company, the declaration to Group.company_number_not_applicable via the not-applicable
+ * endpoint that lib/setup-signals already reads. Both make the SAME signal read done, which is why
+ * the completion rule for this handler tests either.
+ */
+function CompanyNumberStep({ state, busy, setBusy, setErr, reload, advance }: any) {
+  const [num, setNum] = useState(state?.companyNumber ?? '');
+  async function saveNumber() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company_number: num }) });
+      if (!r.ok) { setErr((await r.json().catch(() => ({})))?.message || 'Could not save.'); return; }
+      // Entering a number RETRACTS a previous "not registered" — otherwise the two answers sit in
+      // the row contradicting each other and only one of them is true.
+      if (state?.notApplicable && num.trim()) {
+        await fetch('/api/setup/not-applicable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signal: 'company_number', notApplicable: false }) }).catch(() => {});
+      }
+      await reload(); advance();
+    } finally { setBusy(false); }
+  }
+  async function declareNone() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/setup/not-applicable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signal: 'company_number', notApplicable: true }) });
+      if (!r.ok) { setErr((await r.json().catch(() => ({})))?.message || 'Could not save.'); return; }
+      await reload(); advance();
+    } finally { setBusy(false); }
+  }
+  return (
+    <div className="grid grid-cols-1 gap-3 max-w-md">
+      <div>
+        <label className={labelClass}>Company number</label>
+        <input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass}
+          placeholder="e.g. 12345678" autoCapitalize="characters" data-testid="wizard-company-number" />
+        <p className="text-xs text-muted mt-1">
+          It’s on your certificate of incorporation, and on your Companies House record. We print it
+          on your invoices.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={saveNumber} disabled={busy || !num.trim()} className={btnPrimary} data-testid="save-step">Save &amp; finish</button>
+        <button onClick={declareNone} disabled={busy} data-testid="wizard-sole-trader"
+          className="rounded-lg border border-line px-4 py-2.5 text-sm font-medium text-ink hover:bg-surface-muted disabled:opacity-50">
+          I’m a sole trader — not registered
+        </button>
+      </div>
     </div>
   );
 }
