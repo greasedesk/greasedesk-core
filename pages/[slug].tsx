@@ -9,11 +9,15 @@ import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
 import PublicDocument from '@/components/content/PublicDocument';
 import { documentPageDynamic, type PublicDocProps } from '@/lib/content-page';
+import { brandTitle, brandDescription } from '@/lib/brand';
 
 export default function DocumentPage(props: PublicDocProps) {
   return (
     <SiteChrome>
-      <Seo title={props.title} description={props.title} path={`/${props.slug}`} />
+      {/* The document's own title is the <h1> and stays bare; the BRANDED form is for the tab, the
+          search result and the share card. The description was `props.title` too, so /cookies
+          served `description="Cookie policy"` — two words — on the page, og: and twitter: alike. */}
+      <Seo title={brandTitle(props.title)} description={brandDescription(props.title)} path={`/${props.slug}`} />
       <PublicDocument {...props} />
     </SiteChrome>
   );
