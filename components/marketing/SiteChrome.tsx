@@ -68,7 +68,11 @@ function Header() {
           <img src={COMPANY.markPath} alt="" width={32} height={32} className="w-8 h-8" />
           <span className="flex flex-col">
             <span className="text-xl font-extrabold text-ink tracking-tight leading-tight">GreaseDesk</span>
-            <span className="hidden md:block text-xs text-muted font-normal leading-tight">{STRAPLINE}</span>
+            {/* SEMIBOLD, not regular. This is the smallest the strapline ever appears (12px), and
+                the whole meaning rests on one thin bar through the equals — at regular weight that
+                stroke is doing all the work and is the first thing to disappear on a low-DPI screen
+                or a compressed screenshot. The extra weight costs nothing in a two-line lockup. */}
+            <span className="hidden md:block text-xs text-muted font-semibold leading-tight">{STRAPLINE}</span>
           </span>
         </Link>
 
