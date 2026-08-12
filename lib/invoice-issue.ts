@@ -19,6 +19,8 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { Prisma } from '@prisma/client';
+import { computeQuoteTotals } from '@/lib/quote-totals';
+import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
 import { resolveCompanyIdentity } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
@@ -105,6 +107,79 @@ async function createInvoiceRow(
 }
 
 /** Mint a chargeable invoice AND freeze its lines in the same tx (freeze-at-issue). */
+/**
+ * ── WOULD A RE-ISSUE ACTUALLY BILL WHAT THE CARD NOW SAYS? ──────────────────────────────────────
+ * Re-issue re-runs snapshotInvoiceLines, which resolves to the ACCEPTED quote version whenever one
+ * exists. So on an accepted card the button re-freezes the agreed figure no matter what the
+ * estimate has become: an admin can unlock, add £75 of work, re-issue, get a success message, and
+ * receive the same £850 document back. Observed on invoice 100003203 — four unlock/re-issue cycles
+ * in three minutes, the last of them five seconds after the £75 line was saved, and the invoice
+ * never moved. A button that runs, succeeds and changes nothing is worse than one that refuses.
+ *
+ * The freeze itself is CORRECT and stays: a re-issue must never silently reprice a document against
+ * work the customer never agreed to. What was missing is the refusal that says so.
+ *
+ * ── THE TEST IS THE MONEY, NOT THE LINE SHAPE ───────────────────────────────────────────────────
+ * Deliberately gross-vs-gross rather than lib/quote-version's material bag. The bag counts
+ * description+qty+unit_price, so it separates 1 × £112.50 from 1.5 × £75.00 — the same money in a
+ * different shape, which really happens (invoice 100003195 carries exactly that pair). Refusing
+ * there would block a re-issue that has nothing to correct. What harms a garage is being paid a
+ * different amount from the one the card shows, so that is what this measures.
+ *
+ * Returns null when a re-issue would be honest — including every card with no accepted version at
+ * all, where the snapshot already reads the live lines and there is nothing to diverge from.
+ */
+export async function reissueDivergence(
+  db: Prisma.TransactionClient | typeof import('@/lib/db').prisma,
+  invoice: { id: string; job_card_id: string; series: string; vat_registered_at_issue?: boolean | null },
+): Promise<{ agreedPennies: number; livePennies: number; version: number } | null> {
+  if (invoice.series !== 'chargeable') return null; // warranty settles at £0; historical records elsewhere
+
+  const accepted = (await (db as any).quoteVersion.findFirst({
+    where: { job_card_id: invoice.job_card_id, status: 'accepted' },
+    orderBy: { version: 'desc' },
+    select: { version: true, gross_pennies: true },
+  })) as { version: number; gross_pennies: number } | null;
+  if (!accepted) return null; // snapshot already reads the live card — nothing can diverge
+
+  const card = (await (db as any).jobCard.findUnique({
+    where: { id: invoice.job_card_id },
+    select: {
+      group_id: true,
+      items: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, labour_hours: true, labour_outsourced: true } },
+    },
+  })) as any;
+  if (!card) return null;
+
+  // Through lib/tenant-vat, the same resolver the estimate screen uses. Reading Group.default_vat_rate
+  // raw looked equivalent and was not: the column is nullable and the chokepoint supplies the
+  // country default when it is null, so the raw read valued a VAT-registered garage's card at 0%
+  // VAT and put a NET figure in a refusal that compares against a GROSS one. Caught before shipping
+  // because the two known-bad invoices reported £783.33 where the card plainly says £940.
+  const vat = await getTenantVat(card.group_id);
+
+  // Through the same totals chokepoint the estimate itself uses — never a hand-rolled sum, or the
+  // figure in the refusal would be one the garage cannot find anywhere on screen.
+  const totals = computeQuoteTotals(
+    card.items.map((i: any) => ({
+      item_type: i.item_type,
+      qty: Number(i.qty),
+      unit_price_pennies: Math.round(Number(i.unit_price) * 100),
+      unit_cost_pennies: i.unit_cost == null ? null : Math.round(Number(i.unit_cost) * 100),
+      // `vatable` is REQUIRED by the contract and is the round-trip of what the estimate stored:
+      // jobcard-quote writes JobCardItem.vat_rate as the rate when the line is vatable and 0 when
+      // it is not, so a positive rate IS the flag. Omitting it silently valued every line at 0%
+      // VAT and produced a NET figure — £783.33 against a card that plainly reads £940.
+      vatable: Number(i.vat_rate ?? 0) > 0,
+    })),
+    vat.defaultRate,
+    { vatRegistered: vat.registered },
+  );
+  const livePennies = totals.total_pennies; // labour + parts + VAT — the gross the card shows
+  if (livePennies === accepted.gross_pennies) return null;
+  return { agreedPennies: accepted.gross_pennies, livePennies, version: accepted.version };
+}
+
 export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'chargeable');
   const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
