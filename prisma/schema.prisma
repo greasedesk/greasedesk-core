@@ -234,7 +234,7 @@ model Group {
 
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
-  ref           String       @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
+  ref String @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
 
   // ── STRIPE CONNECT: THE GARAGE'S OWN PAYMENTS ACCOUNT ─────────────────────────────────────────
   // Deliberately NOT on GroupBilling. That table mirrors GreaseDesk's OWN subscription and its
@@ -246,9 +246,9 @@ model Group {
   // dashboard, and carries its own losses. The Express-equivalent config would have put every
   // connected garage's unrecoverable chargebacks onto GreaseDesk — an open-ended liability against
   // a £75/month product, which no application-fee percentage repairs.
-  stripe_account_id       String?   @unique // acct_…
-  stripe_charges_enabled  Boolean   @default(false)
-  stripe_payouts_enabled  Boolean   @default(false)
+  stripe_account_id       String?      @unique // acct_…
+  stripe_charges_enabled  Boolean      @default(false)
+  stripe_payouts_enabled  Boolean      @default(false)
   // Stripe's own reason string, stored VERBATIM. Paraphrasing it here is how the product ends up
   // telling a garage something Stripe's dashboard contradicts.
   stripe_disabled_reason  String?
@@ -257,16 +257,16 @@ model Group {
   stripe_requirements_due Json?
   stripe_connected_at     DateTime?
   stripe_disconnected_at  DateTime?
-  status        TenantStatus @default(trial) // tenant lifecycle (console-managed later)
-  trial_ends_at DateTime? // set on signup to now + TRIAL_DAYS
+  status                  TenantStatus @default(trial) // tenant lifecycle (console-managed later)
+  trial_ends_at           DateTime? // set on signup to now + TRIAL_DAYS
   // SuperAdmin soft-delete (operator portal). Non-null = ARCHIVED: login blocked (authorize()),
   // hidden from active use, ALL data kept, fully reversible (un-archive clears it). Set only via
   // /api/superadmin/archive — never a tenant-facing action.
-  archived_at   DateTime?
+  archived_at             DateTime?
   // GreaseDesk-owned tenant (gate/test), never a paying customer. Set EXPLICITLY, never inferred from
   // the name (a real "ZZ Motors" must not silently vanish). Excluded from the tenant count, forecast,
   // and any revenue/commission figure; badged in the Engine Room. NULL = a normal customer tenant.
-  is_internal   Boolean?
+  is_internal             Boolean?
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
@@ -360,6 +360,8 @@ model Group {
   magicLinks         CustomerMagicLink[]
   countryWaitlist    CountryWaitlist[]
   quoteVersions      QuoteVersion[]
+  payments           Payment[]
+  refunds            Refund[]
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
@@ -459,7 +461,6 @@ model CommissionRate {
    * amount per transaction, not a flat sum per collected month), and CommissionEntry.rate_id is a
    * FROZEN link to the rate applied. Adding this column after a year of live entries would be a
    * migration over frozen money; adding it now, defaulted, costs nothing and changes nothing.
-   *
    * THIS IS NOT A DECISION TO PAY REPS ON TRANSACTION REVENUE. It is the column that keeps the
    * question answerable later.
    */
@@ -511,7 +512,9 @@ model CommissionEntry {
   period         String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
   kind           String // 'accrual' | 'clawback'
   tier           String
-  /** Which revenue produced this entry — see CommissionRate.revenue_stream. 'subscription' today. */
+  /**
+   * Which revenue produced this entry — see CommissionRate.revenue_stream. 'subscription' today.
+   */
   revenue_stream String   @default("subscription")
   rate_id        String // FROZEN link to the CommissionRate applied
   share_bp       Int
@@ -659,6 +662,17 @@ model TwoFactorRecoveryCode {
 model StripeEvent {
   event_id     String   @id // Stripe event.id — the natural idempotency key
   type         String
+  /**
+   * WAS THIS REAL MONEY? Straight from event.livemode, never inferred.
+   * Mode used to be worked out from an `sk_live_` key prefix, which a RESTRICTED live key
+   * (`rk_live_…`) fails — so the platform reported "test" about a live account whose objects
+   * returned livemode:true, and that wrong answer then outlived the code, got written into notes,
+   * and was repeated as fact. Every Stripe object carries its own livemode; recording it here makes
+   * the question answerable from data instead of from an API call or somebody's memory.
+   * NULLABLE: rows written before this column genuinely don't know, and 'false' would be a claim
+   * that they were test events. Unknown, not test.
+   */
+  livemode     Boolean?
   processed_at DateTime @default(now())
 }
 
@@ -1532,7 +1546,6 @@ model Invoice {
    * the product cannot say the sentence a garage says every week — "£551.26 received, £30 still
    * outstanding". Marking it paid claims £30 that never arrived; leaving it unpaid overstates the
    * debt by £551.26. There was no third option because there was nowhere to put the number.
-   *
    * Written at mark-paid from the total AT THAT MOMENT, and preserved through unlock and re-issue.
    * Everything else derives: balance = total − amount_paid; positive is outstanding, negative is a
    * refund owed. NULL on every invoice that predates this column — unknown, never 0, because 0
@@ -1582,6 +1595,7 @@ model Invoice {
   job_card       JobCard        @relation(fields: [job_card_id], references: [id], onDelete: NoAction)
   lines          InvoiceLine[]
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
+  payments       Payment[]
 
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
@@ -1641,6 +1655,130 @@ model VinReadShadow {
   @@index([group_id, created_at])
 }
 
+/**
+ * MONEY THAT ACTUALLY ARRIVED. One row per receipt of funds, whatever the route.
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
+ * Payment used to BE the invoice: status `paid`, one date, one method, and (since 2026-08-12) one
+ * amount. That works until an invoice is corrected after payment, or paid in two parts, or refunded
+ * — none of which a scalar on Invoice can express. "£120.00 received, £60.00 outstanding" is a
+ * sentence a garage says every week and the model could not hold it.
+ * ── ONE LEDGER, NOT TWO ─────────────────────────────────────────────────────────────────────────
+ * Cash and bank transfers write rows here too (`provider: 'manual'`). A separate Stripe-only table
+ * would mean every reader asking two questions and eventually asking only one of them.
+ * ── Invoice.amount_paid_pennies BECOMES A CACHE ─────────────────────────────────────────────────
+ * Σ succeeded payments − Σ refunds, reconciled in the same transaction that writes either. It stays
+ * a column because a dozen readers want it cheaply; it stops being a source of truth.
+ * Idempotency copies CommissionEntry, which already models money events correctly: `source_ref` is
+ * the natural key of the thing that caused the row, so a redelivered webhook writes once.
+ */
+model Payment {
+  id         String  @id @default(uuid())
+  group_id   String
+  invoice_id String
+  site_id    String?
+
+  /**
+   * 'stripe' | 'manual' — how the money arrived, not what the garage called it.
+   */
+  provider String @default("manual")
+  /**
+   * 'succeeded' | 'processing' | 'requires_action' | 'failed' | 'canceled'.
+   * Only `succeeded` counts towards the cache. A card payment has a lifecycle; cash does not, and
+   * arrives as `succeeded`.
+   */
+  status   String @default("succeeded")
+
+  /**
+   * What arrived, in pennies. Always positive — a refund is a Refund row, never a negative payment.
+   */
+  amount_pennies Int
+  currency       String @default("GBP")
+
+  // ── Stripe grain. NULL on a manual payment, and NULL is honest there: there was no processor. ──
+  payment_intent_id       String? @unique // pi_…
+  charge_id               String? // ch_…
+  /**
+   * Stripe's own processing fee, from the BalanceTransaction. NULL = unknown, never 0.
+   */
+  stripe_fee_pennies      Int?
+  /**
+   * Our application fee on this charge. NULL on manual, and NULL when we took none.
+   */
+  application_fee_pennies Int?
+  application_fee_id      String? // fee_…
+  /**
+   * FROZEN link to the ApplicationFeeRate applied, so what was charged can be explained later.
+   */
+  fee_rate_id             String?
+
+  // ── The garage's own label for the method, same shape the invoice already carries. ──
+  payment_method_id       String?
+  payment_method_snapshot String? // name at the time; renames never rewrite history
+
+  /**
+   * IDEMPOTENCY. The Stripe event/object id for a real payment; `backfill:<invoice_id>` for a
+   * reconstructed one. Unique, so a redelivered webhook is a no-op rather than a double count.
+   */
+  source_ref String @unique
+
+  /**
+   * RECONSTRUCTED, NOT OBSERVED. True for rows the backfill inferred from an invoice that was
+   * marked paid before this table existed. The amount is entailed — "paid" meant paid in full,
+   * because partial payment did not exist — but nobody typed it, and a row that cannot say so
+   * becomes a quiet fabrication in three years.
+   */
+  reconstructed Boolean @default(false)
+
+  /**
+   * When the money arrived (the document fact), not when the row was written.
+   */
+  collected_at DateTime
+  created_at   DateTime @default(now())
+  created_by   String? // User.id, or NULL for a webhook / the backfill
+
+  group          Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  invoice        Invoice        @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
+  refunds        Refund[]
+
+  @@index([group_id, collected_at])
+  @@index([invoice_id])
+  @@index([status])
+}
+
+/**
+ * MONEY GIVEN BACK. Its own row rather than a negative Payment, so "what arrived" and "what was
+ * returned" are never summed into a single figure that hides both.
+ * ── THE APPLICATION FEE MUST COME BACK TOO ──────────────────────────────────────────────────────
+ * Stripe does NOT refund the platform fee automatically: refund a job without
+ * `refund_application_fee: true` and the GARAGE loses our cut on money they have handed back.
+ * `application_fee_refunded_pennies` records what actually came back so that failure is visible in
+ * the data rather than only on their statement.
+ */
+model Refund {
+  id         String @id @default(uuid())
+  group_id   String
+  payment_id String
+
+  amount_pennies                   Int // positive; the amount returned to the customer
+  currency                         String  @default("GBP")
+  reason                           String?
+  refund_id                        String? @unique // re_…
+  /**
+   * What Stripe actually returned of our fee. NULL on a manual refund; 0 means we kept it.
+   */
+  application_fee_refunded_pennies Int?
+
+  source_ref String   @unique // Stripe refund id, or 'manual:<uuid>'
+  created_at DateTime @default(now())
+  created_by String?
+
+  group   Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [payment_id], references: [id], onDelete: Cascade)
+
+  @@index([group_id, created_at])
+}
+
 model PaymentMethod {
   id         String           @id @default(uuid())
   group_id   String
@@ -1652,6 +1790,7 @@ model PaymentMethod {
 
   group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
   invoices Invoice[]
+  payments Payment[]
 
   @@index([group_id])
 }

@@ -59,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // an account sync run twice is harmless, but a create would not be, and the next handler added
   // here inherits the guard for free.
   try {
-    await prisma.stripeEvent.create({ data: { event_id: event.id, type: event.type } });
+    await prisma.stripeEvent.create({ data: { event_id: event.id, type: event.type, livemode: event.livemode } });
   } catch {
     return res.status(200).json({ received: true, duplicate: true });
   }

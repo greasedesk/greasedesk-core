@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Dedupe: record the event.id FIRST; a replay collides and is skipped (return 200 so Stripe stops).
   try {
-    await prisma.stripeEvent.create({ data: { event_id: event.id, type: event.type } });
+    await prisma.stripeEvent.create({ data: { event_id: event.id, type: event.type, livemode: event.livemode } });
   } catch {
     return res.status(200).json({ received: true, duplicate: true });
   }

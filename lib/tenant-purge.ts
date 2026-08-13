@@ -115,7 +115,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     users, sites, siteFeatures, profitCentres, resources, userSites, roles, groupFeatures, groupBilling,
     customers, vehicles, vehicleIdentities, vehicleOwnerships, serviceCatalogue, partCatalogue, taxRates,
     bookings, jobCards, jobCardPhotos, jobCardItems, diaryNotes, auditLogs,
-    invoices, invoiceLines, invoiceSequence, paymentMethods,
+    invoices, invoiceLines, invoiceSequence, paymentMethods, payments, refunds,
     catalogueItems, catalogueComponents, catalogueTierPrices, serviceTiers, promos, promoTargets,
     costPeople, overheads, costAllocations, leaveRecords, publicHolidays, employmentEvents,
     vinReadShadow, uploadTelemetry,
@@ -146,6 +146,11 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     prisma.invoiceLine.count({ where: { invoice: { group_id: groupId } } }),
     prisma.invoiceSequence.count({ where: { group_id: groupId } }),
     prisma.paymentMethod.count({ where: { group_id: groupId } }),
+    // Payment and Refund CASCADE from Group, so the purge already removes them — but the count list
+    // IS the proof, and a table missing from it is a table the after-check cannot say anything
+    // about. Money rows are the last thing that should be verified by assumption.
+    prisma.payment.count({ where: { group_id: groupId } }),
+    prisma.refund.count({ where: { group_id: groupId } }),
     prisma.catalogueItem.count({ where: { group_id: groupId } }),
     prisma.catalogueComponent.count({ where: { item: { group_id: groupId } } }),
     prisma.catalogueItemTierPrice.count({ where: { item: { group_id: groupId } } }),
@@ -182,6 +187,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     ServiceCatalogue: serviceCatalogue, PartCatalogue: partCatalogue, TaxRate: taxRates,
     Booking: bookings, JobCard: jobCards, JobCardPhoto: jobCardPhotos, JobCardItem: jobCardItems, DiaryNote: diaryNotes, AuditLog: auditLogs,
     Invoice: invoices, InvoiceLine: invoiceLines, InvoiceSequence: invoiceSequence, PaymentMethod: paymentMethods,
+    Payment: payments, Refund: refunds,
     CatalogueItem: catalogueItems, CatalogueComponent: catalogueComponents, CatalogueItemTierPrice: catalogueTierPrices,
     ServiceTier: serviceTiers, Promo: promos, PromoTarget: promoTargets,
     CostPerson: costPeople, Overhead: overheads, CostAllocation: costAllocations,
