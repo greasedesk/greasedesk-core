@@ -235,6 +235,28 @@ model Group {
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
   ref           String       @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
+
+  // ── STRIPE CONNECT: THE GARAGE'S OWN PAYMENTS ACCOUNT ─────────────────────────────────────────
+  // Deliberately NOT on GroupBilling. That table mirrors GreaseDesk's OWN subscription and its
+  // webhook already writes it; two Stripe relationships in one row get confused eventually, and one
+  // of them decides whether a garage can trade. NULL everywhere = not connected, which is true of
+  // every tenant today.
+  //
+  // STANDARD accounts (ruling 2026-08-13): the garage holds the Stripe relationship, gets the full
+  // dashboard, and carries its own losses. The Express-equivalent config would have put every
+  // connected garage's unrecoverable chargebacks onto GreaseDesk — an open-ended liability against
+  // a £75/month product, which no application-fee percentage repairs.
+  stripe_account_id       String?   @unique // acct_…
+  stripe_charges_enabled  Boolean   @default(false)
+  stripe_payouts_enabled  Boolean   @default(false)
+  // Stripe's own reason string, stored VERBATIM. Paraphrasing it here is how the product ends up
+  // telling a garage something Stripe's dashboard contradicts.
+  stripe_disabled_reason  String?
+  // requirements.currently_due, kept so the product can SAY what is outstanding rather than leaving
+  // the garage to discover it in an email from Stripe.
+  stripe_requirements_due Json?
+  stripe_connected_at     DateTime?
+  stripe_disconnected_at  DateTime?
   status        TenantStatus @default(trial) // tenant lifecycle (console-managed later)
   trial_ends_at DateTime? // set on signup to now + TRIAL_DAYS
   // SuperAdmin soft-delete (operator portal). Non-null = ARCHIVED: login blocked (authorize()),

@@ -6,7 +6,13 @@
  * logic). Credentials are server-only; never shipped to the client.
  *
  * Env (Vercel, sensitive OFF per standing rule):
- *   STRIPE_SECRET_KEY        — sk_test_… (sandbox)
+ *   STRIPE_SECRET_KEY        — the platform secret key. DO NOT INFER THE MODE FROM ITS PREFIX:
+ *                              production runs on a RESTRICTED LIVE key (rk_live_…), which fails an
+ *                              `sk_live_` test and reported "sandbox" about a live account. Every
+ *                              Stripe object carries its own `livemode`; ask the object, not the
+ *                              key. This comment said "sk_test_… (sandbox)" until 2026-08-13 and
+ *                              was itself the source of a wrong claim about whether real money was
+ *                              involved.
  *   STRIPE_WEBHOOK_SECRET    — whsec_… (from the webhook endpoint config)
  *   STRIPE_PRICE_ID          — THE one recurring Price (licensed, per-site quantity). Since
  *                              2026-08-09: GBP-ONLY, £75.00, TAX-INCLUSIVE, on product
