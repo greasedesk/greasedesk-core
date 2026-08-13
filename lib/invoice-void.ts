@@ -157,7 +157,13 @@ export function amendmentRequirement(
 ): AmendmentRequirement {
   if (!inv) return { level: 'none' };
   const sent = sentAuditExists || !!inv.receipt_sent_at;
-  if (inv.status === 'paid') {
+  // PAID IS NOT A STATUS ANY MORE — it is a payment record. Unlock steps the status back to
+  // `issued` while the lines are gone, so reading `status === 'paid'` classified a paid invoice
+  // mid-correction as merely "sent", and the re-issue confirmation dropped the amount received and
+  // the balance at precisely the moment they mattered. The durable signals are the ones the unlock
+  // now preserves: an amount, or a payment date.
+  const wasPaid = inv.status === 'paid' || inv.amount_paid_pennies != null || !!inv.paid_at || !!inv.date_paid;
+  if (wasPaid) {
     return {
       level: 'confirm_paid',
       number: inv.invoice_number ?? null,
