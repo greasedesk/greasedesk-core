@@ -1097,11 +1097,11 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
       </p>
       <dl className="mt-2 text-sm text-ink space-y-1">
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">{fix.invoiced ? `Invoiced from v${fix.agreedVersion}` : `Agreed, v${fix.agreedVersion}`}</dt>
+          <dt className="text-muted">{fix.invoiced ? 'Invoiced at' : 'Price agreed'}</dt>
           <dd className="tabular-nums font-medium" data-testid="fix-agreed">{m(fix.agreedPennies)}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-muted">Latest quote sent, v{fix.sentVersion}</dt>
+          <dt className="text-muted">This job now comes to</dt>
           <dd className="tabular-nums font-medium" data-testid="fix-sent">{m(fix.sentPennies)}</dd>
         </div>
         <div className="flex justify-between gap-3 pt-1 border-t border-warn">
@@ -1114,15 +1114,17 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
       {!msg && (
         <button type="button" disabled={disabled || busy} onClick={record}
           className="mt-3 w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">
-          {busy ? 'Recording…' : `Record that the customer agreed v${fix.sentVersion} by phone`}
+          {busy ? 'Recording…' : `${fix.customerName ?? 'The customer'} agreed ${m(fix.sentPennies)}`}
         </button>
       )}
       <p className="mt-2 text-xs text-muted">
+        {/* NO VERSION NUMBERS. A mechanic bills an extra hour he agreed on the phone; he should
+            not have to learn what a quote version is to do it. The mechanism is still exact in the
+            audit row and in the confirm dialog — plain-spoken on screen, precise in the record. */}
         {fix.invoiced
-          ? 'Logged as a garage-recorded agreement, not a customer-signed one. Recording it does not change the invoice — unlock and re-issue it afterwards to bill the agreed figures.'
-          /* THE FACT THAT COSTS MONEY, said plainly. Editing the estimate does not fix this: the
-             invoice is a column-copy of the agreed version and never reads the estimate. */
-          : 'This job has an agreed quote, so the invoice will be built from that version — adding lines to the estimate will not change it. Record the agreed version to bill the newer figure. Logged as a garage-recorded agreement, not a customer-signed one.'}
+          ? 'The invoice was already raised at the old price, so confirming here does not change it — an admin will need to unlock and re-issue it. Recorded as agreed by the garage, not signed by the customer.'
+          /* THE FACT THAT COSTS MONEY, said plainly: adding lines does NOT change what gets billed. */
+          : 'Until you confirm the new price, this job will invoice at the price the customer already agreed — adding lines on their own does not change it. Recorded as agreed by the garage, not signed by the customer.'}
       </p>
       {msg && <p className="mt-2 text-sm text-ok" data-testid="fix-done">{msg}</p>}
       {err && <p className="mt-2 text-sm text-danger" data-testid="fix-error">{err}</p>}
