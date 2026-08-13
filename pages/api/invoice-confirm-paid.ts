@@ -14,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
+import { settleProcessing } from '@/lib/payments';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { refuseIfVoid } from '@/lib/invoice-void';
 
@@ -47,6 +48,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const claimed = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const r = await tx.invoice.updateMany({ where: { id: invoice.id, status: 'paid_pending' }, data: { status: 'paid' } });
+      // The money is real now: the ledger row moves with the invoice, in the same transaction.
+      // settleProcessing is idempotent, which matters because this races the clearance sweep by
+      // design — the claim-first updateMany above decides the winner and both reconcile the same.
+      if (r.count === 1) await settleProcessing(tx, invoice.id, new Date());
       if (r.count !== 1) return false; // raced the cron — it confirmed first, fine
       await writeAudit(tx, {
         groupId: user.group_id as string, userId: user.id as string, jobCardId: invoice.job_card_id,

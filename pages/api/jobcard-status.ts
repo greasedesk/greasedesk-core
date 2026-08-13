@@ -21,6 +21,7 @@ import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
+import { recordPayment } from '@/lib/payments';
 import { tServer } from '@/lib/server-i18n';
 import { refuseIfVoid } from '@/lib/invoice-void';
 
@@ -204,18 +205,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const docDate = paidDate ?? now; // date_paid = the chosen DOCUMENT date; paid_at stays the attestation
           // ── RECORD WHAT WAS RECEIVED, not just that something was ─────────────────────────
           // Read from the lines FROZEN a few statements above, so it is the figure on the document
-          // the customer is paying — not a live recomputation that could round differently. This is
-          // the number every later balance derives from when the invoice is corrected after payment.
+          // the customer is paying — not a live recomputation that could round differently.
           const frozen = await tx.invoiceLine.findMany({ where: { invoice_id: inv.id }, select: { line_total: true, line_vat: true } });
           const amountPaidPennies = frozen.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
-          const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name, amount_paid_pennies: amountPaidPennies };
+          // amount_paid_pennies is NO LONGER WRITTEN HERE. It is a cache of the Payment ledger now,
+          // reconciled by lib/payments in this same transaction — two writers of one figure is how
+          // a cache and its source start disagreeing.
+          const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };
           if (method.behaviour === 'instant') {
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
+            // INSTANT clearance = the money is already in the drawer. Succeeded at once.
+            await recordPayment(tx, {
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              amountPennies: amountPaidPennies, status: 'succeeded',
+              paymentMethodId: method.id, paymentMethodSnapshot: method.name,
+              collectedAt: docDate, createdBy: user.id as string,
+            });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'instant' } });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid_confirmed', diff: { method: method.name, instant: true } });
             instantConfirmedInvoiceId = inv.id; // receipt sends post-tx through the ONE send path
           } else if (method.behaviour === 'manual') {
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
+            // MANUAL clearance: recorded, not yet cleared. `processing` keeps it out of the cache
+            // until somebody confirms the money actually arrived.
+            await recordPayment(tx, {
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              amountPennies: amountPaidPennies, status: 'processing',
+              paymentMethodId: method.id, paymentMethodSnapshot: method.name,
+              collectedAt: docDate, createdBy: user.id as string,
+            });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'manual' } });
           } else {
             const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
@@ -223,6 +241,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             await tx.invoice.update({
               where: { id: inv.id },
               data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: new Date(Date.now() + windowH * 3600_000), ...methodGrain },
+            });
+            // WINDOWED clearance: same reasoning as manual. The window exists precisely because the
+            // money might not arrive, so it cannot count until it has.
+            await recordPayment(tx, {
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              amountPennies: amountPaidPennies, status: 'processing',
+              paymentMethodId: method.id, paymentMethodSnapshot: method.name,
+              collectedAt: docDate, createdBy: user.id as string,
             });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'windowed', pendingHours: windowH } });
           }

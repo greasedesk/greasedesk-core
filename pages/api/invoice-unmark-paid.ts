@@ -15,6 +15,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
+import { cancelProcessing } from '@/lib/payments';
 import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -58,6 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         data: { status: 'issued', paid_at: null, date_paid: null, confirm_due_at: null, payment_method_id: null, payment_method_snapshot: null },
       });
       if (r.count !== 1) throw new Error('RACE_LOST');
+      // CANCELLED, not deleted. Someone did record a payment and the audit trail says so; a ledger
+      // that quietly loses its mistakes is worse at explaining itself than one that keeps them.
+      // Cancelled rows never count, so the cache falls back to nothing received.
+      await cancelProcessing(tx, invoice.id);
       await tx.invoiceLine.deleteMany({ where: { invoice_id: invoice.id } }); // drop the frozen snapshot
       if (invoice.job_card?.status === 'paid') {
         await tx.jobCard.update({ where: { id: invoice.job_card_id }, data: { status: 'invoiced' } });

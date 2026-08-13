@@ -13,6 +13,7 @@
  * Called by /api/cron/confirm-paid (hourly Vercel Cron); `now` injectable for tests.
  */
 import { prisma } from '@/lib/db';
+import { settleProcessing } from '@/lib/payments';
 import { Prisma } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
@@ -31,6 +32,9 @@ export async function runConfirmPaidSweep(now: Date = new Date()): Promise<Confi
       // THE claim: flips only if still pending — second runs and unmarked invoices claim nothing.
       const claimed = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const r = await tx.invoice.updateMany({ where: { id: inv.id, status: 'paid_pending' }, data: { status: 'paid' } });
+        // Same move as the manual confirm, same idempotency: the window closed, so the pending
+        // ledger row becomes real money and the cache follows it inside this transaction.
+        if (r.count === 1) await settleProcessing(tx, inv.id, new Date());
         if (r.count !== 1) return false;
         await writeAudit(tx, {
           groupId: inv.group_id, userId: null, jobCardId: inv.job_card_id,
