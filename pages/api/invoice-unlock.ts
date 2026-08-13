@@ -66,51 +66,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const voided = refuseIfVoid(invoice);
   if (voided) return res.status(409).json(voided);
 
-  // ALREADY WITH THE CUSTOMER → CONFIRM, no longer refuse (ruling 2026-08-13). The garage owns the
-  // customer relationship; the product should not decide on their behalf that a £30 correction is
-  // impossible. What it insists on is that the person doing it has seen the consequence, and that
-  // the re-issued document says it was amended — see the amendment log written below.
+  // The `invoice.sent` signal is needed by BOTH branches — the re-issue confirmation below, and
+  // the unlock audit — so it is read once, here.
   const sentAudit = await prisma.auditLog.findFirst({
     where: { entity_id: invoice.job_card_id, action: 'invoice.sent' },
     select: { id: true },
   });
-  const requirement = amendmentRequirement(invoice, !!sentAudit);
-  if (requirement.level !== 'none' && !confirm) {
-    const gbp = (p: number) => `£${(p / 100).toFixed(2)}`;
-    // WHAT THIS WILL BECOME. Three sources, in order of who actually knows:
-    //   1. a divergence — the card and the agreed price disagree, so the card's figure is the news;
-    //   2. the ACCEPTED version — what a re-issue will snapshot. Essential once unlocked, because
-    //      the frozen lines are already deleted and reading them gives £0.00, which is what the
-    //      first gate run put in front of the user;
-    //   3. the frozen lines — the ordinary pre-unlock case.
-    const frozenTotal = invoice.lines.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
-    const live = await billingDivergence(prisma, invoice.job_card_id, { series: invoice.series });
-    const acceptedNow = frozenTotal === 0
-      ? await prisma.quoteVersion.findFirst({ where: { job_card_id: invoice.job_card_id, status: 'accepted' }, orderBy: { version: 'desc' }, select: { gross_pennies: true } })
-      : null;
-    const becoming = live ? live.livePennies : (acceptedNow?.gross_pennies ?? frozenTotal);
-    const paidPart = requirement.level === 'confirm_paid'
-      ? (requirement.amountPaidPennies == null
-        // Paid before the amount was ever recorded: say unknown rather than assume the total.
-        ? `This invoice is marked paid, but the amount received was not recorded. `
-        : `This invoice was paid: ${gbp(requirement.amountPaidPennies)}${requirement.methodLabel ? ` by ${requirement.methodLabel}` : ''}${requirement.paidAt ? ` on ${requirement.paidAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}. `)
-      : `${requirement.number ?? 'This invoice'} has already been sent to the customer. `;
-    const balance = requirement.level === 'confirm_paid' && requirement.amountPaidPennies != null
-      ? becoming - requirement.amountPaidPennies : null;
-    return res.status(409).json({
-      code: 'confirm_required',
-      level: requirement.level,
-      message: `${paidPart}The job card now comes to ${gbp(becoming)}.`
-        + (balance == null ? '' : balance > 0 ? ` That would leave ${gbp(balance)} outstanding.` : balance < 0 ? ` That would leave ${gbp(-balance)} to refund.` : ' That settles it exactly.')
-        + ` The payment record is kept, and the re-issued invoice will say it was amended so the customer can tell the two copies apart.`,
-      becomingPennies: becoming,
-      amountPaidPennies: requirement.level === 'confirm_paid' ? requirement.amountPaidPennies : null,
-    });
-  }
 
   if (act === 'reissue') {
     // Re-freeze the corrected card lines and re-lock. Only meaningful while unlocked (no lines).
     if (invoice.lines.length > 0) return res.status(409).json({ message: 'This invoice is already frozen — unlock it first to make corrections.' });
+
+    // ── ONE DIALOG, AT THE MOMENT IT CAN TELL THE TRUTH (ruling 2026-08-13) ─────────────────────
+    // This used to ask at unlock as well. At unlock nothing has changed yet, so the only honest
+    // sentence is "paid £120.00 … the job card comes to £120.00. That settles it exactly." — a
+    // warning that names no new figure, because none exists. RE-ISSUE is where the customer's
+    // document actually changes and where all three numbers are real: what was paid, what it now
+    // comes to, and what that leaves outstanding. Two dialogs taught people to click through both.
+    //
+    // Unlock is now safe to take without ceremony: it preserves the payment and deletes only the
+    // frozen lines, and re-freezing them unchanged puts the invoice back exactly as it was.
+    const requirement = amendmentRequirement(invoice, !!sentAudit);
+    if (requirement.level !== 'none' && !confirm) {
+      const gbp = (p: number) => `£${(p / 100).toFixed(2)}`;
+      // WHAT THIS WILL BECOME. Three sources, in order of who actually knows:
+      //   1. a divergence — the card and the agreed price disagree, so the card's figure is the news;
+      //   2. the ACCEPTED version — what a re-issue will snapshot. Essential once unlocked, because
+      //      the frozen lines are already deleted and reading them gives £0.00, which is what the
+      //      first gate run put in front of the user;
+      //   3. the frozen lines — the ordinary pre-unlock case.
+      const frozenTotal = invoice.lines.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
+      const live = await billingDivergence(prisma, invoice.job_card_id, { series: invoice.series });
+      const acceptedNow = frozenTotal === 0
+        ? await prisma.quoteVersion.findFirst({ where: { job_card_id: invoice.job_card_id, status: 'accepted' }, orderBy: { version: 'desc' }, select: { gross_pennies: true } })
+        : null;
+      const becoming = live ? live.livePennies : (acceptedNow?.gross_pennies ?? frozenTotal);
+      const paidPart = requirement.level === 'confirm_paid'
+        ? (requirement.amountPaidPennies == null
+          // Paid before the amount was ever recorded: say unknown rather than assume the total.
+          ? `This invoice is marked paid, but the amount received was not recorded. `
+          : `This invoice was paid: ${gbp(requirement.amountPaidPennies)}${requirement.methodLabel ? ` by ${requirement.methodLabel}` : ''}${requirement.paidAt ? ` on ${requirement.paidAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}. `)
+        : `${requirement.number ?? 'This invoice'} has already been sent to the customer. `;
+      const balance = requirement.level === 'confirm_paid' && requirement.amountPaidPennies != null
+        ? becoming - requirement.amountPaidPennies : null;
+      return res.status(409).json({
+        code: 'confirm_required',
+        level: requirement.level,
+        message: `${paidPart}The job card now comes to ${gbp(becoming)}.`
+          + (balance == null ? '' : balance > 0 ? ` That would leave ${gbp(balance)} outstanding.` : balance < 0 ? ` That would leave ${gbp(-balance)} to refund.` : ' That settles it exactly.')
+          + ` The payment record is kept, and the re-issued invoice will say it was amended so the customer can tell the two copies apart.`,
+        becomingPennies: becoming,
+        amountPaidPennies: requirement.level === 'confirm_paid' ? requirement.amountPaidPennies : null,
+      });
+    }
+
     // What the customer's copy says today. Captured BEFORE the re-snapshot, or the log records the
     // new figure twice and the amendment becomes invisible.
     const beforeRow = await prisma.invoice.findUnique({
