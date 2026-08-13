@@ -77,9 +77,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const requirement = amendmentRequirement(invoice, !!sentAudit);
   if (requirement.level !== 'none' && !confirm) {
     const gbp = (p: number) => `£${(p / 100).toFixed(2)}`;
+    // WHAT THIS WILL BECOME. Three sources, in order of who actually knows:
+    //   1. a divergence — the card and the agreed price disagree, so the card's figure is the news;
+    //   2. the ACCEPTED version — what a re-issue will snapshot. Essential once unlocked, because
+    //      the frozen lines are already deleted and reading them gives £0.00, which is what the
+    //      first gate run put in front of the user;
+    //   3. the frozen lines — the ordinary pre-unlock case.
     const frozenTotal = invoice.lines.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
     const live = await billingDivergence(prisma, invoice.job_card_id, { series: invoice.series });
-    const becoming = live ? live.livePennies : frozenTotal;
+    const acceptedNow = frozenTotal === 0
+      ? await prisma.quoteVersion.findFirst({ where: { job_card_id: invoice.job_card_id, status: 'accepted' }, orderBy: { version: 'desc' }, select: { gross_pennies: true } })
+      : null;
+    const becoming = live ? live.livePennies : (acceptedNow?.gross_pennies ?? frozenTotal);
     const paidPart = requirement.level === 'confirm_paid'
       ? (requirement.amountPaidPennies == null
         // Paid before the amount was ever recorded: say unknown rather than assume the total.
@@ -108,11 +117,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       where: { id: invoice.id },
       select: { amendments: true },
     });
+    // WHAT THE CUSTOMER'S COPY SAYS. By re-issue time the frozen lines are gone, so this cannot be
+    // read from the invoice — it is captured at UNLOCK, before they are deleted, and kept in the
+    // append-only audit row. Falling back to 0 (as the first version did) put "from £0.00" in the
+    // amendment log, which would have told a customer their invoice went from nothing to £180.
+    const unlockRow = await prisma.auditLog.findFirst({
+      where: { entity_id: invoice.job_card_id, action: 'invoice.unlocked' },
+      orderBy: { created_at: 'desc' }, select: { diff_json: true },
+    });
     const beforePennies: number = (() => {
+      const fromUnlock = (unlockRow?.diff_json as any)?.totalBefore;
+      if (typeof fromUnlock === 'number') return fromUnlock;
       const log = Array.isArray(beforeRow?.amendments) ? (beforeRow!.amendments as any[]) : [];
-      // The last amendment's `toPennies` is what the customer last received; failing that, the
-      // amount they paid; failing that, unknown → 0, which the `toPennies !== beforePennies` test
-      // treats as "changed", so an unknown history errs towards SAYING it was amended.
       if (log.length) return Number(log[log.length - 1]?.toPennies ?? 0);
       return invoice.amount_paid_pennies ?? 0;
     })();
@@ -157,7 +173,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Only a change of FIGURE is an amendment worth telling the customer about. A re-issue that
         // lands on the same total (a description tidied, a line reordered) leaves the log alone —
         // otherwise the document collects "amended" notices that mean nothing.
-        if (toPennies !== beforePennies) {
+        // AND ONLY IF THEY HAVE A COPY. An invoice nobody has seen has no second version to be
+        // distinguished from; stamping "amended" on it would be a notice about nothing, and the
+        // first gate run produced exactly that on a quiet invoice.
+        if (toPennies !== beforePennies && (entry.wasSent || entry.wasPaid)) {
           await tx.invoice.update({ where: { id: invoice.id }, data: { amendments: [...priorLog, entry] as any } });
         }
         await writeAudit(tx, {
@@ -218,7 +237,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userId: user.id as string,
         jobCardId: invoice.job_card_id,
         action: 'invoice.unlocked',
-        diff: { number: invoice.invoice_number, statusBefore: invoice.status, cardStatusBefore: invoice.job_card?.status },
+        // totalBefore is the figure on the copy the customer holds. Recorded HERE because this is
+        // the last moment it exists — the frozen lines are deleted in this same transaction.
+        diff: {
+          number: invoice.invoice_number, statusBefore: invoice.status, cardStatusBefore: invoice.job_card?.status,
+          totalBefore: invoice.lines.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0),
+          amountPaidPennies: invoice.amount_paid_pennies ?? null,
+        },
       });
     });
   } catch (e) {
