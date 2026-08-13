@@ -430,6 +430,18 @@ model CommissionRate {
   country_code   String // ISO-2 (the tenant's tax_country_code)
   currency       String // ISO-4217 (the collected payment's currency)
   tier           String // 'first_12m' | 'thereafter'
+  /**
+   * WHICH REVENUE THIS RATE PRICES. 'subscription' today — the £75/month a tenant pays us — and
+   * nothing else exists yet. Added ahead of need (2026-08-13) purely so it CAN exist: application
+   * fees on garage card takings would be a second, differently-shaped stream (a share of a variable
+   * amount per transaction, not a flat sum per collected month), and CommissionEntry.rate_id is a
+   * FROZEN link to the rate applied. Adding this column after a year of live entries would be a
+   * migration over frozen money; adding it now, defaulted, costs nothing and changes nothing.
+   *
+   * THIS IS NOT A DECISION TO PAY REPS ON TRANSACTION REVENUE. It is the column that keeps the
+   * question answerable later.
+   */
+  revenue_stream String   @default("subscription")
   effective_from DateTime
   amount_pennies Int // flat commission per collected month at this tier, in `currency`
   created_by     String? // operator id (audit)
@@ -441,7 +453,9 @@ model CommissionRate {
   // day?) — so the boundary point must be unique. This UNIQUE index is that rule made physical:
   // a clean, non-overlapping timeline per key. It also serves the engine's resolveRate lookup
   // (same leading columns), so it replaces the old non-unique index rather than adding to it.
-  @@unique([country_code, currency, tier, effective_from])
+  // The timeline is per STREAM as well as per key: a transaction-fee rate must not collide with, or
+  // be mistaken for, a subscription rate on the same date.
+  @@unique([revenue_stream, country_code, currency, tier, effective_from])
 }
 
 // A JOIN, not a field on the tenant — a garage can attribute to a rep AND a regional manager at
@@ -475,6 +489,8 @@ model CommissionEntry {
   period         String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
   kind           String // 'accrual' | 'clawback'
   tier           String
+  /** Which revenue produced this entry — see CommissionRate.revenue_stream. 'subscription' today. */
+  revenue_stream String   @default("subscription")
   rate_id        String // FROZEN link to the CommissionRate applied
   share_bp       Int
   amount_pennies Int // + accrual, − clawback

@@ -29,6 +29,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { SUBSCRIPTION } from '@/lib/commission';
 import { requireOperatorApi } from '@/lib/operator-auth';
 
 const TIERS = ['first_12m', 'thereafter'] as const;
@@ -75,6 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── LIST ───────────────────────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const rows = await prisma.commissionRate.findMany({
+      // The Rates screen manages subscription rates only. A future stream gets its own surface
+      // rather than a mixed list where the tier column means two different things.
       orderBy: [{ country_code: 'asc' }, { currency: 'asc' }, { tier: 'asc' }, { effective_from: 'asc' }],
     });
     // Which rate_ids have commission computed against them → immutable regardless of date.
@@ -115,8 +118,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!effective_from) return res.status(400).json({ message: 'Effective-from must be a valid date (YYYY-MM-DD).' });
 
     // Append-only-forward: the new boundary must be strictly after the latest existing one for the key.
+    // SCOPED TO THE STREAM. Without this the forward-only check compares a subscription rate
+    // against a transaction-fee rate and refuses a perfectly valid boundary because an unrelated
+    // stream happens to have a later one. Today only 'subscription' exists, so this is inert —
+    // which is exactly when it is cheap to get right.
     const latest = await prisma.commissionRate.findFirst({
-      where: { country_code, currency, tier }, orderBy: { effective_from: 'desc' },
+      where: { revenue_stream: SUBSCRIPTION, country_code, currency, tier }, orderBy: { effective_from: 'desc' },
     });
     if (latest) {
       if (+effective_from === +latest.effective_from) {
@@ -130,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let created;
     try {
       created = await prisma.commissionRate.create({
-        data: { country_code, currency, tier, amount_pennies, effective_from, created_by: actor.userId },
+        data: { revenue_stream: SUBSCRIPTION, country_code, currency, tier, amount_pennies, effective_from, created_by: actor.userId },
       });
     } catch (e: any) {
       if (e?.code === 'P2002') return res.status(409).json({ code: 'overlap', message: 'That exact boundary already exists.' }); // DB unique backstop

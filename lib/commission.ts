@@ -89,13 +89,22 @@ async function loadTenant(db: Db, groupId: string): Promise<Tenant> {
   return { groupId: g.id, activation: g.trial_ends_at ?? null, country: g.tax_country_code };
 }
 
+/**
+ * The only revenue stream that exists today: the platform subscription. Named rather than inlined
+ * so the resolver, the entry writer and the Engine Room rates screen cannot drift on the spelling.
+ */
+export const SUBSCRIPTION = 'subscription';
+
 /** Rate at a payment's collected_at: latest effective_from ≤ collected_at. THROWS if none (honest-null). */
 async function resolveRate(db: Db, country: string, currency: string, tier: Tier, collectedAt: Date) {
   const r = await (db as any).commissionRate.findFirst({
-    where: { country_code: country, currency, tier, effective_from: { lte: collectedAt } },
+    // SCOPED TO THE STREAM. Today every rate is a subscription rate and this clause changes nothing;
+    // the day a transaction-fee rate exists it is the only thing stopping this resolver picking one
+    // up and paying a rep a per-transaction share as though it were a monthly subscription rate.
+    where: { revenue_stream: SUBSCRIPTION, country_code: country, currency, tier, effective_from: { lte: collectedAt } },
     orderBy: { effective_from: 'desc' },
   });
-  if (!r) throw new Error(`COMMISSION: no rate for ${country}/${currency}/${tier} at ${collectedAt.toISOString()} — refusing to invent one`);
+  if (!r) throw new Error(`COMMISSION: no ${SUBSCRIPTION} rate for ${country}/${currency}/${tier} at ${collectedAt.toISOString()} — refusing to invent one`);
   return r as { id: string; amount_pennies: number };
 }
 
@@ -163,7 +172,9 @@ export async function accruePayment(db: Db, groupId: string, p: Payment): Promis
   for (const l of await linesForPayment(db, tenant, p)) {
     const r = await insertIdempotent(db, {
       group_id: groupId, party_type: l.party_type, party_id: l.party_id, period: periodOf(p.collected_at),
-      kind: 'accrual', tier: l.tier, rate_id: l.rate_id, share_bp: l.share_bp, amount_pennies: l.amount_pennies,
+      // Written EXPLICITLY, not left to the column default: the writer should say which revenue it
+      // is recording, so a second stream added later is a new value here rather than a silent one.
+      kind: 'accrual', revenue_stream: SUBSCRIPTION, tier: l.tier, rate_id: l.rate_id, share_bp: l.share_bp, amount_pennies: l.amount_pennies,
       currency: l.currency, source_ref: p.ref, payment_ref: p.ref, status: 'pending',
     });
     r === 'written' ? written++ : noop++;
@@ -184,7 +195,7 @@ export async function clawbackRefund(db: Db, groupId: string, r: Refund, orig: P
   for (const l of await linesForPayment(db, tenant, orig)) {
     const res = await insertIdempotent(db, {
       group_id: groupId, party_type: l.party_type, party_id: l.party_id, period: periodOf(r.refunded_at),
-      kind: 'clawback', tier: l.tier, rate_id: l.rate_id, share_bp: l.share_bp,
+      kind: 'clawback', revenue_stream: SUBSCRIPTION, tier: l.tier, rate_id: l.rate_id, share_bp: l.share_bp,
       amount_pennies: -Math.round(l.amount_pennies * fraction), currency: l.currency,
       source_ref: r.ref, payment_ref: orig.ref, status: 'pending',
     });
