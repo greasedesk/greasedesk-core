@@ -34,7 +34,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { recordAgreedVersion, isAgreedVersionRefusal } from '@/lib/quote-acceptance';
-import { refuseIfVoid, refuseIfSent } from '@/lib/invoice-void';
+import { refuseIfVoid } from '@/lib/invoice-void';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -73,22 +73,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const voided = refuseIfVoid(invoice);
     if (voided) return res.status(409).json(voided);
 
-    // MONEY HAS MOVED → a different conversation. Unmark the payment first if it was recorded wrongly.
-    if (invoice.status === 'paid' || invoice.status === 'paid_pending') {
+    // ── PAID OR SENT NO LONGER REFUSE HERE (ruling 2026-08-13) ────────────────────────────────
+    // RECORDING WHAT THE CUSTOMER AGREED CHANGES NO DOCUMENT. It marks a quote version accepted;
+    // the invoice is untouched until somebody unlocks and re-issues it, which is where the
+    // confirmation and the amendment log live. Refusing here was the more damaging half of the old
+    // guard: it stopped a garage writing down the agreement that JUSTIFIES the correction, so an
+    // amendment could only ever be made with no recorded reason behind it.
+    //
+    // A pending payment is still its own conversation — the clearance window is running and
+    // unmarking is the right move — but that is the payment's business, not the agreement's.
+    if (invoice.status === 'paid_pending') {
       return res.status(409).json({
-        code: 'already_paid',
-        message: 'This invoice has been paid, so its lines can no longer change. Unmark the payment first if it was recorded in error.',
+        code: 'payment_pending',
+        message: 'This payment is still clearing. Unmark it first if it was recorded in error, then record what the customer agreed.',
       });
     }
-
-    // ALREADY WITH THE CUSTOMER → refuse. `invoice.sent` is audited against the JOB CARD (see
-    // lib/invoice-void.refuseIfSent), which is unambiguous because a card has at most one invoice.
-    const sentAudit = await prisma.auditLog.findFirst({
-      where: { entity_id: card.id, action: 'invoice.sent' },
-      select: { id: true },
-    });
-    const sent = refuseIfSent(invoice, !!sentAudit);
-    if (sent) return res.status(409).json(sent);
   }
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) =>

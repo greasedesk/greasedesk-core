@@ -86,6 +86,23 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
           </View>
         </View>
 
+        {/* ── AMENDED AFTER ISSUE ────────────────────────────────────────────────────────────
+            The invoice keeps its NUMBER through a correction, so the customer can be holding two
+            documents with the same reference and different totals. This line is what tells them
+            which one they are looking at, and it is the piece of friction the ruling deliberately
+            keeps: it protects the garage in a dispute far more than it costs them.
+            Deliberately on the face of the document, not in the footer. */}
+        {doc.amendedAt ? (
+          <View style={S.voidNote}>
+            <Text>{t('amendedNotice', {
+              when: new Date(doc.amendedAt).toLocaleDateString(doc.locale),
+              from: doc.amendedFromPennies == null ? '—' : fmt(doc.amendedFromPennies),
+            })}</Text>
+            {doc.amendmentCount > 1 ? (
+              <Text style={{ marginTop: 4, fontSize: 8 }}>{t('amendedCount', { n: doc.amendmentCount })}</Text>
+            ) : null}
+          </View>
+        ) : null}
         {/* THE REASON, on the face of the document. The watermark says it is void; this says why,
             which is the half VATREC5010 actually asks for. */}
         {doc.status === 'void' ? (

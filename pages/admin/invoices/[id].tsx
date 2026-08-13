@@ -39,6 +39,13 @@ type PageProps = {
   voidReason: string | null;
   voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
+  /** The customer holds a copy. Only decides whether to show the GENERIC warning — the server's
+   *  own, figure-bearing confirmation is what actually gates an amendment. */
+  wasSent: boolean;
+  /** Amendment history, so the document page says what the customer's copy will say. */
+  amendedAt: string | null;
+  amendedFromPennies: number | null;
+  amendmentCount: number;
   series: 'chargeable' | 'warranty' | 'historical';
   confirmDueAt: string | null;   // pending: when the clearance window elapses
   paymentMethod: string | null;
@@ -92,13 +99,37 @@ export default function InvoicePage(props: PageProps) {
     setBusy(null);
   }
 
+  /**
+   * ── THE SERVER DECIDES WHAT NEEDS CONFIRMING; THIS ONLY ASKS ────────────────────────────────
+   * Post without `confirm`. If the invoice has left the building — sent, or sent and paid — the
+   * endpoint answers 409 `confirm_required` with a sentence naming the figures, and we put that
+   * sentence in front of the human verbatim and post again with their answer.
+   *
+   * Deliberately NOT a client-side "is it paid?" check that decides whether to ask. The client
+   * would then be the thing that knows the rule, and a screen that forgot to ask would amend a paid
+   * invoice silently. The server refuses an unconfirmed amendment on its own account; this is the
+   * dialog, not the gate.
+   */
+  async function postUnlock(action: 'unlock' | 'reissue', errKey: string): Promise<boolean> {
+    const call = (confirm?: boolean) => fetch('/api/invoice-unlock', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceId: props.invoiceId, action, ...(confirm ? { confirm: true } : {}) }),
+    });
+    let res = await call();
+    let data = await res.json().catch(() => ({}));
+    if (res.status === 409 && data?.code === 'confirm_required') {
+      if (!window.confirm(`${data.message}\n\nContinue?`)) return false;
+      res = await call(true);
+      data = await res.json().catch(() => ({}));
+    }
+    if (!res.ok) { setMsg({ text: data?.message || t(errKey), ok: false }); return false; }
+    return true;
+  }
+
   async function reissue() {
     setBusy('reissue'); setMsg(null);
     try {
-      const res = await fetch('/api/invoice-unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId, action: 'reissue' }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ text: data?.message || t('reissueError'), ok: false }); return; }
-      await router.replace(router.asPath);
+      if (await postUnlock('reissue', 'reissueError')) await router.replace(router.asPath);
     } catch { setMsg({ text: t('reissueError'), ok: false }); }
     finally { setBusy(null); }
   }
@@ -131,14 +162,15 @@ export default function InvoicePage(props: PageProps) {
   }
 
   async function unlock() {
-    if (!window.confirm(t('unlockConfirm'))) return;
+    // The generic warning only for an invoice nobody has seen. Where the customer holds a copy, or
+    // has paid, the SERVER's sentence is the one that names the figures — asking twice would train
+    // people to click through both.
+    if (props.status !== 'paid' && !props.wasSent && !window.confirm(t('unlockConfirm'))) return;
     setBusy('unlock'); setMsg(null);
     try {
-      const res = await fetch('/api/invoice-unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setMsg({ text: data?.message || t('unlockError'), ok: false }); setBusy(null); return; }
-      router.replace(router.asPath); // full state change (paid → issued) — reload the document
-    } catch { setMsg({ text: t('unlockError'), ok: false }); setBusy(null); }
+      if (await postUnlock('unlock', 'unlockError')) router.replace(router.asPath);
+    } catch { setMsg({ text: t('unlockError'), ok: false }); }
+    finally { setBusy(null); }
   }
 
   // Manual/early confirmation — "the money actually arrived" (manager/admin, audited, receipt sends).
@@ -296,6 +328,17 @@ export default function InvoicePage(props: PageProps) {
           );
         })()}
 
+        {/* AMENDED: the same sentence the customer's PDF carries, so the garage can see exactly
+            what their copy says before anyone rings up about it. */}
+        {props.amendedAt && (
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3" data-testid="detail-amended-notice">
+            {t('amendedNotice', {
+              when: new Date(props.amendedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }),
+              from: props.amendedFromPennies == null ? '—' : fmt(props.amendedFromPennies),
+            })}
+            {props.amendmentCount > 1 && <span className="block mt-1 text-xs">{t('amendedCount', { n: props.amendmentCount })}</span>}
+          </div>
+        )}
         {props.status === 'void' && (
           <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-3" data-testid="detail-void-notice">
             {t('voidNotice', { when: props.voidedAt ?? '—', reason: props.voidReason || t('voidNoReason') })}
@@ -582,6 +625,10 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       status: doc.status,
       series: doc.series,
       hasFrozenLines: doc.lines.length > 0, // freeze-at-issue: empty = admin-unlocked, under correction
+      wasSent: !!doc.receiptSentAt,
+      amendedAt: (doc as any).amendedAt ?? null,
+      amendedFromPennies: (doc as any).amendedFromPennies ?? null,
+      amendmentCount: (doc as any).amendmentCount ?? 0,
       confirmDueAt: doc.confirmDueAt ? doc.confirmDueAt.toLocaleString(doc.locale, { timeZone: 'UTC' }) : null,
       paymentMethod: doc.paymentMethod,
       manualPending: doc.manualPending,

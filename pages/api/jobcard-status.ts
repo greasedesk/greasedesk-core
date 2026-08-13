@@ -202,7 +202,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }, { freezeVehicleFacts: true });
           const now = new Date();
           const docDate = paidDate ?? now; // date_paid = the chosen DOCUMENT date; paid_at stays the attestation
-          const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name };
+          // ── RECORD WHAT WAS RECEIVED, not just that something was ─────────────────────────
+          // Read from the lines FROZEN a few statements above, so it is the figure on the document
+          // the customer is paying — not a live recomputation that could round differently. This is
+          // the number every later balance derives from when the invoice is corrected after payment.
+          const frozen = await tx.invoiceLine.findMany({ where: { invoice_id: inv.id }, select: { line_total: true, line_vat: true } });
+          const amountPaidPennies = frozen.reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
+          const methodGrain = { payment_method_id: method.id, payment_method_snapshot: method.name, amount_paid_pennies: amountPaidPennies };
           if (method.behaviour === 'instant') {
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'instant' } });

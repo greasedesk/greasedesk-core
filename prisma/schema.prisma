@@ -1487,6 +1487,27 @@ model Invoice {
    * MOMENT. Re-deriving it later would let a change of terms silently re-age last year's invoices.
    */
   due_date                DateTime?
+  /**
+   * ── WHAT WAS ACTUALLY RECEIVED, in pennies. NULLABLE = UNKNOWN. ────────────────────────────────
+   * Payment used to be a boolean wearing a date: status `paid` plus paid_at, with no amount
+   * anywhere. That works right up until an invoice is corrected AFTER it has been paid, and then
+   * the product cannot say the sentence a garage says every week — "£551.26 received, £30 still
+   * outstanding". Marking it paid claims £30 that never arrived; leaving it unpaid overstates the
+   * debt by £551.26. There was no third option because there was nowhere to put the number.
+   *
+   * Written at mark-paid from the total AT THAT MOMENT, and preserved through unlock and re-issue.
+   * Everything else derives: balance = total − amount_paid; positive is outstanding, negative is a
+   * refund owed. NULL on every invoice that predates this column — unknown, never 0, because 0
+   * would read as "nothing was received" on invoices that were paid in full years ago.
+   */
+  amount_paid_pennies     Int?
+  /**
+   * APPEND-ONLY amendment log: [{ at, by, fromPennies, toPennies, wasSent, wasPaid }]. Same shape
+   * as void_reason_corrections and EmploymentEvent.correction_json. A re-issue keeps the invoice
+   * NUMBER, so the customer can end up holding two documents that differ; this is what makes them
+   * distinguishable, and it is append-only so a second amendment cannot erase the first.
+   */
+  amendments              Json?
   paid_at                 DateTime?
   date_paid               DateTime? // the DOCUMENT fact (defaults from mark-paid; manager-editable, audited) — paid_at stays the attestation
   payment_method_id       String? // how it was paid (grain for method reporting — banked tile)

@@ -46,6 +46,15 @@ export type InvoiceDoc = {
    *  the current text — an amended reason must never look like the only thing ever written. */
   voidReasonOriginal: string | null;
   voidAmendedAt: string | null;
+  /**
+   * When this document was last amended after issue, and what it replaced. The invoice keeps its
+   * NUMBER through a correction, so a customer can be holding two copies that differ — this is the
+   * line that lets them tell which is which, and it is the one piece of friction the ruling
+   * deliberately keeps (2026-08-13). Null on a document that has never been amended.
+   */
+  amendedAt: string | null;
+  amendedFromPennies: number | null;
+  amendmentCount: number;
   voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   confirmDueAt: Date | null;
   receiptSentAt: Date | null;
@@ -73,7 +82,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true,
+      id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true, amendments: true, amount_paid_pennies: true,
       voided_at: true, void_reason: true, void_reason_corrections: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
@@ -133,6 +142,15 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     paidAt: inv.paid_at ? new Date(inv.paid_at) : null,
     confirmDueAt: inv.confirm_due_at ? new Date(inv.confirm_due_at) : null,
     receiptSentAt: inv.receipt_sent_at ? new Date(inv.receipt_sent_at) : null,
+    ...(() => {
+      const log = Array.isArray((inv as any).amendments) ? ((inv as any).amendments as any[]) : [];
+      const last = log.length ? log[log.length - 1] : null;
+      return {
+        amendedAt: last?.at ?? null,
+        amendedFromPennies: last?.fromPennies ?? null,
+        amendmentCount: log.length,
+      };
+    })(),
     datePaid: inv.date_paid ? new Date(inv.date_paid) : (inv.paid_at ? new Date(inv.paid_at) : null),
     paymentMethod: inv.payment_method_snapshot ?? null,
     manualPending: inv.status === 'paid_pending' && !inv.confirm_due_at,

@@ -37,11 +37,21 @@ export type MonthTileContext = TileContext & { months: number };
 // (date_paid ?? paid_at — cash basis); issued/warranty/P&L bucket by the effective ISSUE date
 // (date_issued ?? issued_at — billing basis) via effectiveIssueDateWhere.
 
-const PAID_SELECT = { site_id: true, date_paid: true, paid_at: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, site: { select: { site_name: true } } } as const;
+const PAID_SELECT = { site_id: true, date_paid: true, paid_at: true, amount_paid_pennies: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } }, site: { select: { site_name: true } } } as const;
 // FREEZE-AT-ISSUE: every invoice carries frozen lines from mint, so issued and paid money read
 // the SAME snapshot — one gross, no live-card recomputation anywhere in the tiles.
-const grossOfPaid = (r: any) => invoiceTotals(r.lines).grossPennies;
-const grossOfIssued = grossOfPaid;
+// ── RECEIVED, NOT BILLED ────────────────────────────────────────────────────────────────────────
+// Paid revenue is what ARRIVED. Those are the same number right up until an invoice is corrected
+// after payment: amend a paid £551.26 up to £581.26 and the frozen lines say £581.26 while £551.26
+// is what the bank saw. Preserving the payment through an unlock keeps the DATE honest; this keeps
+// the AMOUNT honest, and both are needed or a £30 correction quietly adds £30 to a month's takings.
+//
+// NULL falls back to the invoice total, which is every row written before amount_paid_pennies
+// existed — unknown, and their total is the best statement available about them. Nothing changes
+// for them, by construction.
+const grossOfPaid = (r: any) => (r.amount_paid_pennies ?? invoiceTotals(r.lines).grossPennies);
+// ISSUED is what was BILLED — the frozen lines, always. A part-paid invoice was still issued in full.
+const grossOfIssued = (r: any) => invoiceTotals(r.lines).grossPennies;
 
 export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown>> = {
   // Confirmed paid revenue in the period (paid ledger; three-state: only `paid` counts).

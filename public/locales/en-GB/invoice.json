@@ -126,5 +126,7 @@
     "historyOriginal": "Originally recorded",
     "historyEntry": "Amended {{when}}"
   },
-  "voidAmended": "Reason amended {{when}}. Originally recorded as: \"{{original}}\""
+  "voidAmended": "Reason amended {{when}}. Originally recorded as: \"{{original}}\"",
+  "amendedNotice": "This invoice was amended on {{when}} and replaces the version previously issued for {{from}}. It keeps the same invoice number.",
+  "amendedCount": "Amended {{n}} times since it was first issued."
 }
