@@ -184,6 +184,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         agreedPennies: acceptedVersionRow.gross_pennies,
         differencePennies: latestSent.gross_pennies - acceptedVersionRow.gross_pennies,
         agreedProvenance: acceptanceProvenance(acceptedVersionRow),
+        customerName: ownerRow?.name ?? null,
         // NULL = no invoice yet: the control drops the unlock/re-issue second step and says the
         // invoice will simply be raised at the agreed figure.
         invoiceNumber: invoiceRow?.invoice_number ?? null,

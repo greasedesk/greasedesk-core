@@ -39,6 +39,8 @@ export type AgreedVersionFix = {
   versionId: string;
   sentVersion: number; sentPennies: number;
   agreedVersion: number; agreedPennies: number;
+  /** Named in the confirm so it reads as a conversation the mechanic actually had. */
+  customerName?: string | null;
   differencePennies: number;
   agreedProvenance: 'customer' | 'garage' | 'unknown';
   /** FALSE = no invoice yet. There is then no second step: the invoice is simply raised at the
@@ -487,7 +489,13 @@ export default function JobCardWorkspace(p: Props) {
     );
     // THE AGREED-VERSION CORRECTION, wherever the invoice link renders (normal + comeback). Absent
     // unless the server shaped a real mismatch for an admin — no client-side eligibility logic.
-    const agreedVersionPanel = p.agreedVersionFix && p.agreedVersionFix.invoiced && !cancelled && (
+    // The `.invoiced` gate is GONE. The panel has always carried copy for the not-yet-invoiced case
+    // — "The invoice will be raised at the OLD agreed price" — and that branch could never render,
+    // so the one warning designed for the moment the estimate diverges was invisible at exactly that
+    // moment. It is also the moment the mechanic can still fix it in one click, before a number is
+    // burned. (Until estimate-save minted a revision there was nothing to compare either, so both
+    // halves had to change together.)
+    const agreedVersionPanel = p.agreedVersionFix && !cancelled && (
       <AgreedVersionFixPanel
         jobCardId={p.jobCardId} fix={p.agreedVersionFix} disabled={busy !== null}
         currency={p.currency} locale={p.locale} onDone={refreshCard}
@@ -1054,12 +1062,15 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
   const up = fix.differencePennies >= 0;
 
   async function record() {
+    // PLAIN-SPOKEN ON SCREEN, PRECISE IN THE RECORD. The mechanic is asked about a price and a
+    // customer; the row that lands says which version, who recorded it, and that no customer
+    // signed anything (responded_by_user set, IP null — lib/acceptance-provenance).
     if (!window.confirm(
-      `Record that the customer agreed version ${fix.sentVersion} (${m(fix.sentPennies)}) by phone?\n\n`
-      + `This is logged as a garage-recorded agreement, not a customer-signed one.\n\n`
+      `Confirm that ${fix.customerName ?? 'the customer'} agreed the new price of ${m(fix.sentPennies)}?\n\n`
+      + `Recorded as agreed by the garage — we log who confirmed it and when.\n\n`
       + (fix.invoiced
-        ? `It does NOT change invoice ${fix.invoiceNumber ?? ''} — you must unlock and re-issue it afterwards.`
-        : `The invoice for this job will then be raised at ${m(fix.sentPennies)} instead of ${m(fix.agreedPennies)}.`),
+        ? `Invoice ${fix.invoiceNumber ?? ''} has already been raised at ${m(fix.agreedPennies)}. You will need to unlock and re-issue it to bill the new price.`
+        : `This job will then invoice at ${m(fix.sentPennies)} instead of ${m(fix.agreedPennies)}.`),
     )) return;
     setBusy(true); setErr(null); setMsg(null);
     try {
@@ -1077,8 +1088,12 @@ function AgreedVersionFixPanel({ jobCardId, fix, disabled, currency, locale, onD
 
   return (
     <div className="border border-warn rounded-xl p-4 bg-warn-soft" data-testid="agreed-version-fix">
+      {/* Money, not vocabulary. A mechanic should never need to know what a quote version is to
+          bill an extra hour he has already agreed on the phone. */}
       <p className="text-sm font-semibold text-warn">
-        {fix.invoiced ? 'The agreed quote doesn’t match this invoice' : 'The invoice will be raised at the OLD agreed price'}
+        {fix.invoiced
+          ? `This invoice was raised at ${m(fix.agreedPennies)}, but the job now comes to ${m(fix.sentPennies)}`
+          : `This job now comes to ${m(fix.sentPennies)} — the agreed price is ${m(fix.agreedPennies)}`}
       </p>
       <dl className="mt-2 text-sm text-ink space-y-1">
         <div className="flex justify-between gap-3">

@@ -17,7 +17,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canEditEstimate, financeVisibility } from '@/lib/permissions';
 import { writeAudit } from '@/lib/audit';
 import { getTenantVat } from '@/lib/tenant-vat';
-import { supersedeOnMaterialEdit } from '@/lib/quote-version';
+import { supersedeOnMaterialEdit, reviseAcceptedQuote } from '@/lib/quote-version';
 import { canEditInvoice } from '@/lib/invoice';
 import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, clampVatRate } from '@/lib/quote-totals';
 
@@ -325,6 +325,28 @@ export async function performEstimateSave(args: {
       action: 'quote.edit_immaterial',
       diff: { version: sup.liveVersion, reason: 'estimate re-saved with no customer-visible change — quote left live' },
     }).catch(() => {});
+  }
+
+  // ── EDITING AN AGREED JOB MINTS A REVISION ───────────────────────────────────────────────────
+  // Nothing is sent and nothing is agreed by this: it creates the thing the garage can then agree
+  // to, and the card's banner offers that in one click. Only reached when no version is still open,
+  // so it never competes with the supersede path above.
+  if (sup.superseded === 0 && !sup.immaterial) {
+    const revised = await reviseAcceptedQuote({
+      groupId, jobCardId, incoming: material,
+      // The SAME registration flag the lines above were priced with — not a second read, which
+      // could disagree with the rows this very save just wrote.
+      vatRegistered, taxLabel: 'VAT',
+      createdByUserId: args.actorUserId ?? null,
+    }).catch(() => null);
+    if (revised) {
+      await writeAudit(prisma, {
+        groupId, userId: args.actorUserId ?? null, jobCardId,
+        action: 'quote.revised_after_agreement',
+        diff: { version: revised.version, grossPennies: revised.grossPennies, sent: false,
+                reason: 'estimate changed after the customer had agreed — revision minted for the garage to confirm' },
+      }).catch(() => {});
+    }
   }
 
   return { totals };
