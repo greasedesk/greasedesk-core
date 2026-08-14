@@ -20,10 +20,12 @@
  * legacy Stripe state — so "restore to empty" is a restore and not a deletion of somebody's real
  * connection. If either is occupied it refuses and writes nothing. Enforced here, not remembered.
  */
+import Stripe from 'stripe';
 import { prisma } from '../lib/db.ts';
 import { providerState } from '../lib/provider-connection.ts';
 import { paymentsAccessFor, sessionComponentsFor } from '../lib/stripe-account-session.ts';
 import { PROVIDERS } from '../lib/payment-providers.ts';
+import { classifyStripeError, stripeErrorFields } from '../lib/stripe-errors.ts';
 
 const GATE_REF = 'GB-GD2141'; // ZZ Gate Garage. Resolved by its unique ref, never by name.
 const PANELS_RENDERED = new Set(['payments', 'payouts', 'account']); // what StripeEmbeddedPanel switches on
@@ -121,6 +123,81 @@ try {
     return s.panels.find((p) => p.key === 'account')?.mayAuthenticate === true
       && s.panels.filter((p) => p.key !== 'account').every((p) => p.mayAuthenticate === false);
   })(), 'an unexplained popup reads as phishing');
+
+  // ── 3b. STRIPE ERROR CLASSIFICATION ────────────────────────────────────────────────────────
+  // Built with the SDK's OWN generator, so these are real StripeError instances and not my idea of
+  // what one looks like. The whole point of the change is that these five stop being one 502.
+  console.log('\n— stripe error classification —');
+  const mk = (statusCode, extra = {}) => Stripe.errors.generateV1Error({
+    statusCode, type: 'invalid_request_error', message: 'STRIPE SAID THIS', requestId: 'req_gate1', ...extra,
+  });
+  const net = new Stripe.errors.StripeConnectionError({ message: 'socket hang up' });
+  const seen = {
+    key_rejected: classifyStripeError(mk(401)),
+    key_not_permitted: classifyStripeError(mk(403)),
+    refused: classifyStripeError(mk(400, { code: 'account_invalid', doc_url: 'https://stripe.com/docs/connect' })),
+    rate: classifyStripeError(mk(429)),
+    api: classifyStripeError(mk(500)),
+    net: classifyStripeError(net),
+    notStripe: classifyStripeError(new Error('a Prisma failure, say')),
+  };
+
+  check('a rejected key is settled, not a network problem', seen.key_rejected.code === 'key_rejected'
+    && seen.key_rejected.status === 409 && seen.key_rejected.retryable === false);
+  check('a key without Connect permission is settled', seen.key_not_permitted.code === 'key_not_permitted'
+    && seen.key_not_permitted.status === 409 && seen.key_not_permitted.retryable === false);
+  check('a capability refusal is settled and carries the doc link', seen.refused.code === 'refused_by_stripe'
+    && seen.refused.status === 409 && seen.refused.retryable === false && !!seen.refused.docUrl,
+    'this is the shape "Connect isn’t enabled for this platform" arrives in');
+  check('a rate limit is retryable but is NOT a 502', seen.rate.retryable === true && seen.rate.status === 429);
+  check('only connection and API failures keep 502 + try again',
+    seen.net.status === 502 && seen.net.retryable === true
+    && seen.api.status === 502 && seen.api.retryable === true
+    && [seen.key_rejected, seen.key_not_permitted, seen.refused, seen.rate].every((f) => f.status !== 502),
+    'the instruction, asserted directly');
+  check('every classified code is distinct where the cause is distinct',
+    new Set([seen.key_rejected.code, seen.key_not_permitted.code, seen.refused.code, seen.rate.code, seen.net.code, seen.api.code]).size === 6,
+    'six causes, six codes — the defect was one code for all of them');
+  check('Stripe’s own message is carried verbatim on every refusal',
+    [seen.key_rejected, seen.key_not_permitted, seen.refused, seen.rate, seen.api].every((f) => f.stripeMessage === 'STRIPE SAID THIS'),
+    'never our paraphrase');
+  check('our sentence is never Stripe’s message',
+    [seen.key_rejected, seen.key_not_permitted, seen.refused].every((f) => f.message !== f.stripeMessage && f.message.length > 20),
+    'two different jobs: what it means, and what happened');
+  check('no settled refusal tells the garage to try again',
+    [seen.key_rejected, seen.key_not_permitted, seen.refused].every((f) => !/try again/i.test(f.message)),
+    'on this path every retry re-enters accounts.create');
+  // Caught by RENDERING it: the copy said "quote the reference below" while Stripe, which rejects a
+  // bad key at its edge, returns no request id — so the line it pointed at was never drawn.
+  check('no sentence promises a reference that may not exist',
+    Object.values(seen).every((f) => !/reference below|quote the reference/i.test(f.message)),
+    'the reference is shown when it exists; the copy never depends on it');
+  check('a connection failure claims no status, no request id and no Stripe message',
+    seen.net.requestId === null && seen.net.stripeMessage === null && stripeErrorFields(net).statusCode === null,
+    'there was no response — rendering 0 or "" would invent one');
+  check('a non-Stripe throw is not dressed as Stripe', seen.notStripe.code === 'unknown'
+    && seen.notStripe.status === 500 && seen.notStripe.stripeMessage === null);
+  check('an unrecognised Stripe class does NOT default to retryable', (() => {
+    const future = Stripe.errors.generateV1Error({ statusCode: 418, type: 'some_future_error', message: 'new thing' });
+    future.type = 'StripeSomeFutureError'; // a class this table has never heard of
+    const f = classifyStripeError(future);
+    return f.retryable === false && f.status === 409 && f.stripeMessage === 'new thing';
+  })(), 'defaulting an unknown refusal to "try again" is the exact bug being replaced');
+  check('all four log fields the diagnosis needed are extracted', (() => {
+    const f = stripeErrorFields(mk(403, { code: 'account_invalid' }));
+    return f.type === 'StripePermissionError' && f.code === 'account_invalid' && f.statusCode === 403 && f.requestId === 'req_gate1';
+  })(), 'type, code, statusCode, requestId — the log recorded only message before');
+
+  // THE GATE MUST BE ABLE TO FAIL. The behaviour being replaced — everything 502, everything
+  // retryable — must be caught by the assertions above, or they are decoration.
+  check('these checks would have caught the old behaviour', (() => {
+    const old = (e) => ({ code: 'unreachable', status: 502, retryable: true, message: 'Stripe couldn’t be reached. Please try again.', stripeMessage: null, requestId: null, docUrl: null });
+    const asOld = [mk(401), mk(403), mk(400)].map(old);
+    const distinct = new Set(asOld.map((f) => f.code)).size === 3;
+    const noneAre502 = asOld.every((f) => f.status !== 502);
+    const carriesMessage = asOld.every((f) => f.stripeMessage === 'STRIPE SAID THIS');
+    return !distinct && !noneAre502 && !carriesMessage; // every one of the three checks fails
+  })(), 'one code, all 502, no Stripe message — three assertions above go red');
 
   // ── 4. THE BACKFILL PROJECTION, AGAINST REAL COLUMNS ───────────────────────────────────────
   console.log('\n— backfill projection (fixture on the gate tenant) —');

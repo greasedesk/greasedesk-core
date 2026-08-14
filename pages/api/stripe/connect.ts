@@ -13,6 +13,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { appBaseUrl } from '@/lib/stripe';
 import { readConnection, providerState } from '@/lib/provider-connection';
 import { refuseConnect, startOnboarding, syncAccount } from '@/lib/stripe-connect';
+import { logStripeFailure, stripeFailureBody } from '@/lib/stripe-errors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -29,7 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // delayed one must not leave a garage staring at a stale "finish setting up" for a day.
     if (row?.external_id) {
       try { return res.status(200).json({ state: await syncAccount(groupId, row.external_id) }); }
-      catch (e: any) { console.error('[connect] resync failed', e?.message); }
+      // A failed resync is not worth an error page — the cached state is still true enough to
+      // render. But it IS worth a log that says which of the six ways it failed.
+      catch (e: any) { logStripeFailure('accounts.retrieve', e); }
     }
     return res.status(200).json({ state: providerState(row) });
   }
@@ -52,9 +55,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return res.status(200).json({ url });
   } catch (e: any) {
+    // Our own preconditions first — they are not Stripe's failures and must not be dressed as them.
     const msg = String(e?.message ?? '');
-    if (msg.startsWith('CONNECT:')) return res.status(409).json({ message: 'Could not start Stripe setup — please try again.' });
-    console.error('[connect] onboarding error', msg);
-    return res.status(502).json({ message: 'Stripe couldn’t be reached. Please try again.' });
+    if (msg.startsWith('CONNECT:')) {
+      console.error('[stripe] startOnboarding refused by us', msg);
+      return res.status(409).json({ code: 'precondition', message: 'Could not start Stripe setup — please get in touch.', retryable: false });
+    }
+    // Everything else is Stripe's answer, and it gets classified rather than flattened. `scope` is
+    // the OPERATION: accounts.create is where this path has actually been failing, and naming the
+    // endpoint instead would have hidden that.
+    const f = logStripeFailure('accounts.create/accountLinks.create', e);
+    return res.status(f.status).json(stripeFailureBody(f));
   }
 }

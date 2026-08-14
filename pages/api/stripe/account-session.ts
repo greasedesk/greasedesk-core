@@ -17,6 +17,7 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { stripePublishableKey } from '@/lib/stripe';
 import { readConnection, providerState } from '@/lib/provider-connection';
 import { paymentsAccessFor, createAccountSession } from '@/lib/stripe-account-session';
+import { logStripeFailure, stripeFailureBody } from '@/lib/stripe-errors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -49,8 +50,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ clientSecret, expiresAt, publishableKey, access });
   } catch (e: any) {
     const msg = String(e?.message ?? '');
-    if (msg.startsWith('CONNECT:')) return res.status(409).json({ message: 'The payments view isn’t available right now.' });
-    console.error('[account-session] mint failed', msg);
-    return res.status(502).json({ message: 'Stripe couldn’t be reached. Please try again.' });
+    if (msg.startsWith('CONNECT:')) {
+      console.error('[stripe] accountSessions.create refused by us', msg);
+      return res.status(409).json({ code: 'precondition', message: 'The payments view isn’t available right now.', retryable: false });
+    }
+    const f = logStripeFailure('accountSessions.create', e);
+    return res.status(f.status).json(stripeFailureBody(f));
   }
 }

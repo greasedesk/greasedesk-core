@@ -40,10 +40,44 @@ const CHIP: Record<ProviderState['status'], { label: string; cls: string }> = {
   unreachable: { label: 'Unavailable', cls: 'bg-danger-soft text-danger' },
 };
 
+/**
+ * A refusal, as the page shows it. OUR sentence, then the provider's own words verbatim, then the
+ * reference. The detail lines exist because this page is admin-only and the alternative was reading
+ * Stripe's dashboard to find out why a button did nothing.
+ */
+type Failure = { message: string; stripeMessage?: string | null; requestId?: string | null; docUrl?: string | null; retryable?: boolean };
+
+function FailureNotice({ f }: { f: Failure }) {
+  return (
+    <div className="mt-3 bg-danger-soft border border-line rounded-lg p-3" data-testid="connect-error">
+      <p className="text-sm text-danger font-semibold">{f.message}</p>
+      {/* Verbatim, never paraphrased — the same rule the disabled_reason follows. */}
+      {f.stripeMessage && (
+        <p className="text-xs text-muted mt-1.5" data-testid="connect-error-detail">
+          Stripe said: <span className="text-ink">{f.stripeMessage}</span>
+        </p>
+      )}
+      {f.requestId && (
+        <p className="text-xs text-muted mt-1" data-testid="connect-error-ref">
+          Reference: <code className="text-ink">{f.requestId}</code>
+        </p>
+      )}
+      {f.docUrl && (
+        <p className="text-xs mt-1"><a href={f.docUrl} target="_blank" rel="noreferrer" className="text-accent hover:underline">What Stripe says about this</a></p>
+      )}
+      {/* Said only when it is TRUE. Telling someone to retry a settled refusal is what this whole
+          change exists to stop — and on this path every retry re-enters accounts.create. */}
+      {f.retryable === false && (
+        <p className="text-xs text-muted mt-1.5" data-testid="connect-error-settled">Trying again won’t change this.</p>
+      )}
+    </div>
+  );
+}
+
 function ProviderCard({ def, state: initial }: Row) {
   const [state, setState] = React.useState<ProviderState>(initial);
   const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<Failure | null>(null);
 
   // RESYNC ON MOUNT. The server rendered our cached view of the provider's truth, which is right
   // almost always — but a garage landing back here from an onboarding flow expects the page to know
@@ -64,10 +98,24 @@ function ProviderCard({ def, state: initial }: Row) {
     try {
       const r = await fetch(def.connectPath, { method: 'POST' });
       const d = await r.json().catch(() => ({}));
-      // A refusal carries a sentence written for a garage owner — show it, don't flatten it.
-      if (!r.ok || !d?.url) { setErr(d?.message || `Could not start ${def.name} setup.`); return; }
+      // A refusal carries a sentence written for a garage owner AND the provider's own words —
+      // show both, don't flatten them into one shrug.
+      if (!r.ok || !d?.url) {
+        setErr({
+          message: d?.message || `Could not start ${def.name} setup.`,
+          stripeMessage: d?.stripeMessage ?? null,
+          requestId: d?.requestId ?? null,
+          docUrl: d?.docUrl ?? null,
+          retryable: d?.retryable,
+        });
+        return;
+      }
       window.location.href = d.url;
-    } catch { setErr(`Could not start ${def.name} setup.`); }
+    } catch {
+      // The fetch itself failed, so there is no provider message to carry — and this one genuinely
+      // IS a network problem, which is the only case the old blanket sentence was ever true of.
+      setErr({ message: `Couldn’t reach GreaseDesk to start ${def.name} setup. Please try again.`, retryable: true });
+    }
     finally { setBusy(false); }
   }
 
@@ -146,7 +194,7 @@ function ProviderCard({ def, state: initial }: Row) {
           </span>
         </div>
         <div className="mt-3">{body()}</div>
-        {err && <p className="mt-2 text-sm text-danger" data-testid="connect-error">{err}</p>}
+        {err && <FailureNotice f={err} />}
       </div>
 
       {/* The in-page view exists only where there is money to show and a provider that can show it. */}
