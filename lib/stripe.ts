@@ -47,6 +47,31 @@ export function getStripe(): Stripe | null {
 export const stripeConfigured = (): boolean => !!process.env.STRIPE_SECRET_KEY;
 export const stripePriceId = (): string | null => process.env.STRIPE_PRICE_ID ?? null;
 export const stripeWebhookSecret = (): string | null => process.env.STRIPE_WEBHOOK_SECRET ?? null;
+/**
+ * WHICH MODE IS THIS KEY IN? Asked of Stripe, once, and cached for the process.
+ *
+ * There is no honest local way to know. The key prefix lies — production runs a restricted live key
+ * (`rk_live_…`) that fails an `sk_live_` test — and the Account object, inconveniently, carries no
+ * `livemode` at all. Balance does, so one cheap read answers it authoritatively.
+ *
+ * Returns null when Stripe is unconfigured or unreachable: unknown, never a guess. Callers that are
+ * about to record which mode something belongs to must treat null as "don't claim".
+ */
+let _livemode: boolean | null | undefined;
+export async function platformLivemode(): Promise<boolean | null> {
+  if (_livemode !== undefined) return _livemode;
+  const stripe = getStripe();
+  if (!stripe) { _livemode = null; return _livemode; }
+  try {
+    const balance = await stripe.balance.retrieve();
+    _livemode = balance.livemode;
+  } catch (e: any) {
+    console.error('[stripe] could not determine livemode', e?.message);
+    _livemode = null;
+  }
+  return _livemode;
+}
+
 export const appBaseUrl = (): string => process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'https://greasedesk.com';
 
 /** THE trial length, single source (mirrors lib/trial TRIAL_DAYS). Stripe owns the clock once a

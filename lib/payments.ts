@@ -50,6 +50,27 @@ export type RecordPaymentArgs = {
   provider?: 'manual' | 'stripe';
 };
 
+/**
+ * THE RULE, as a pure function: what should Invoice.amount_paid_pennies be, given this invoice's
+ * ledger? Exported so the standing gate can assert against the REAL rule rather than a copy — a
+ * gate that reimplements the arithmetic only ever proves it agrees with itself.
+ *
+ *   no rows        → null   (unknown: every invoice paid before this table existed)
+ *   rows, none succeeded → 0    (we know nothing has cleared — not the same as not knowing)
+ *   otherwise      → Σ succeeded − Σ refunded
+ */
+export function expectedCachePennies(
+  payments: Array<{ status: string; amount_pennies: number }>,
+  refunds: Array<{ amount_pennies: number }>,
+): number | null {
+  if (payments.length === 0) return null;
+  const received = payments
+    .filter((p) => (COUNTED_STATUSES as readonly string[]).includes(p.status))
+    .reduce((a, p) => a + p.amount_pennies, 0);
+  const returned = refunds.reduce((a, r) => a + r.amount_pennies, 0);
+  return received - returned;
+}
+
 /** Write a payment and reconcile the invoice. Returns the row, or null if `sourceRef` already existed. */
 export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
   const source_ref = args.sourceRef ?? `manual:${randomUUID()}`;
@@ -90,13 +111,8 @@ export async function reconcileInvoice(tx: Tx, invoiceId: string): Promise<numbe
   ]);
   // No rows at all → leave it UNKNOWN. This is what keeps every historic invoice honest until the
   // backfill runs: absence of a ledger is not evidence that nothing was paid.
-  if (payments.length === 0) return null;
-
-  const received = payments
-    .filter((p: any) => (COUNTED_STATUSES as readonly string[]).includes(p.status))
-    .reduce((a: number, p: any) => a + p.amount_pennies, 0);
-  const returned = refunds.reduce((a: number, r: any) => a + r.amount_pennies, 0);
-  const net = received - returned;
+  const net = expectedCachePennies(payments, refunds);
+  if (net === null) return null;
 
   await (tx as any).invoice.update({ where: { id: invoiceId }, data: { amount_paid_pennies: net } });
   return net;

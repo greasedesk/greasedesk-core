@@ -23,7 +23,7 @@
  */
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
-import { getStripe, appBaseUrl } from '@/lib/stripe';
+import { getStripe, appBaseUrl, platformLivemode } from '@/lib/stripe';
 import { isDemoGroup } from '@/lib/demo-tenant';
 
 /** Countries where a garage may connect. GB only, the same admission rule the product already has. */
@@ -39,7 +39,13 @@ export type ConnectState =
   /** Stripe has switched charges off — the reason is Stripe's own wording. */
   | { status: 'restricted'; accountId: string; reason: string | null; requirementsDue: string[] }
   /** The garage revoked our access from their Stripe dashboard. */
-  | { status: 'disconnected'; disconnectedAt: Date };
+  | { status: 'disconnected'; disconnectedAt: Date }
+  /**
+   * The stored account cannot be read with this environment's key. Overwhelmingly this means a
+   * MODE MISMATCH — an account created in a sandbox being read by the live deployment, or the
+   * reverse — which Stripe reports as a bare "no such account" that means nothing to a garage.
+   */
+  | { status: 'unreachable'; accountId: string; accountLivemode: boolean | null; reason: string };
 
 type GroupConnect = {
   stripe_account_id: string | null;
@@ -134,7 +140,14 @@ export async function startOnboarding(args: {
       where: { id: args.groupId },
       // connected_at is stamped at CREATION, not at completion — it is when the account came into
       // existence. Whether it can trade is charges_enabled's job and nothing else's.
-      data: { stripe_account_id: accountId, stripe_connected_at: new Date(), stripe_disconnected_at: null },
+      // The ACCOUNT object carries no livemode — inconveniently, since it is the one object where
+      // mode matters most. lib/stripe::platformLivemode asks Stripe (via Balance, which does carry
+      // it) and caches the answer for the process. NULL if it could not be determined: unknown,
+      // never a guess.
+      data: {
+        stripe_account_id: accountId, stripe_account_livemode: await platformLivemode(),
+        stripe_connected_at: new Date(), stripe_disconnected_at: null,
+      },
     });
   }
 
@@ -155,16 +168,43 @@ export async function startOnboarding(args: {
 export async function syncAccount(groupId: string, accountId: string): Promise<ConnectState> {
   const stripe = getStripe();
   if (!stripe) throw new Error('CONNECT:not_configured');
-  const acct = await stripe.accounts.retrieve(accountId);
+  let acct: Stripe.Account;
+  try {
+    acct = await stripe.accounts.retrieve(accountId);
+  } catch (e: any) {
+    // ── SAY WHY, RATHER THAN PASSING ON "no such account" ────────────────────────────────────
+    // A key can only see accounts in its own mode, so the single likeliest cause of a missing
+    // account we created ourselves is that it belongs to the other mode. Stripe's raw error is
+    // accurate and useless; the recorded livemode lets us name the actual problem.
+    if (e?.type === 'StripeInvalidRequestError' || e?.statusCode === 403 || e?.statusCode === 404) {
+      const g = (await prisma.group.findUnique({ where: { id: groupId }, select: { stripe_account_livemode: true } })) as any;
+      const mode = g?.stripe_account_livemode;
+      return {
+        status: 'unreachable',
+        accountId,
+        accountLivemode: mode ?? null,
+        reason: mode === false
+          ? 'This Stripe account was created in a sandbox and cannot be used by the live site. Disconnect it and set card payments up again.'
+          : mode === true
+            ? 'This Stripe account is a live account and cannot be read by a test environment.'
+            : 'This Stripe account can’t be reached with the current Stripe credentials.',
+      };
+    }
+    throw e;
+  }
   return applyAccount(groupId, acct);
 }
 
 /** Write a retrieved (or webhook-delivered) account onto the tenant. The ONE writer of these columns. */
-export async function applyAccount(groupId: string, acct: Stripe.Account): Promise<ConnectState> {
+export async function applyAccount(groupId: string, acct: Stripe.Account, livemode?: boolean | null): Promise<ConnectState> {
   const due = acct.requirements?.currently_due ?? [];
+  // The webhook knows the mode for free — the EVENT carries livemode even though the account does
+  // not — so it passes it in. A direct sync has to ask. Either way it is recorded, never inferred.
+  const mode = livemode === undefined ? await platformLivemode() : livemode;
   const g = (await prisma.group.update({
     where: { id: groupId },
     data: {
+      ...(mode === null ? {} : { stripe_account_livemode: mode }),
       stripe_charges_enabled: !!acct.charges_enabled,
       stripe_payouts_enabled: !!acct.payouts_enabled,
       stripe_disabled_reason: acct.requirements?.disabled_reason ?? null,

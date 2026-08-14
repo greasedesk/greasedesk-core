@@ -247,6 +247,18 @@ model Group {
   // connected garage's unrecoverable chargebacks onto GreaseDesk — an open-ended liability against
   // a £75/month product, which no application-fee percentage repairs.
   stripe_account_id       String?      @unique // acct_…
+  /**
+   * WHICH MODE THIS ACCOUNT LIVES IN. Straight from the account's own `livemode`, never inferred.
+   * A test `acct_…` and a live `acct_…` are indistinguishable by inspection, and the platform key
+   * cannot be trusted to tell you either — production runs a RESTRICTED live key (`rk_live_…`) that
+   * fails an `sk_live_` prefix test, which is how mode was got wrong once already and then repeated
+   * from a stale note. Same fix as StripeEvent.livemode, one table over, on the object where getting
+   * it wrong is worst: a garage's real KYC submitted into a sandbox is a wasted onboarding nobody
+   * can undo.
+   * NULLABLE = unknown, for any row predating this column. Live code refuses an account it cannot
+   * confirm, and says so in words.
+   */
+  stripe_account_livemode Boolean?
   stripe_charges_enabled  Boolean      @default(false)
   stripe_payouts_enabled  Boolean      @default(false)
   // Stripe's own reason string, stored VERBATIM. Paraphrasing it here is how the product ends up

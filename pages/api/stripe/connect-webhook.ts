@@ -73,7 +73,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // can take money.
         const g = await prisma.group.findFirst({ where: { stripe_account_id: acct.id }, select: { id: true } });
         if (!g) { console.warn('[connect-webhook] account.updated for an unknown account', acct.id); break; }
-        await applyAccount(g.id, acct);
+        // The event carries livemode; pass it rather than making applyAccount ask Stripe again.
+        await applyAccount(g.id, acct, event.livemode);
         break;
       }
       case 'account.application.deauthorized': {
