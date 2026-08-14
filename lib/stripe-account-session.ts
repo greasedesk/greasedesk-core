@@ -63,14 +63,18 @@ export function sessionComponentsFor(access: PaymentsAccess): Record<string, any
   const full = access === 'full';
   return {
     // Payments and payment details do not authenticate. The features are what turn a list into a
-    // set of powers, so they are named explicitly rather than left to Stripe's defaults — every one
-    // of them defaults to TRUE, and a read-only session inheriting those defaults would be a
-    // read-only session that can issue refunds.
+    // set of powers, so EVERY ONE is named explicitly rather than left to Stripe's defaults —
+    // refund, dispute, capture and smart-dispute management all default to TRUE, and a read-only
+    // session inheriting those defaults would be a read-only session that can issue refunds.
+    // smart_disputes_management was the one initially missed: unreachable, because only 'full' is
+    // minted today, but it would have become a hole the moment read_only was switched on. The gate
+    // now asserts every default-true feature is NAMED, not merely that the three I thought of are.
     payments: {
       enabled: true,
       features: {
         refund_management: full,
         dispute_management: full,
+        smart_disputes_management: full,
         capture_payments: full,
         destination_on_behalf_of_charge_management: false,
       },
@@ -80,6 +84,7 @@ export function sessionComponentsFor(access: PaymentsAccess): Record<string, any
       features: {
         refund_management: full,
         dispute_management: full,
+        smart_disputes_management: full,
         capture_payments: full,
         destination_on_behalf_of_charge_management: false,
       },

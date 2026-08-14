@@ -29,6 +29,12 @@ import { classifyStripeError, stripeErrorFields } from '../lib/stripe-errors.ts'
 
 const GATE_REF = 'GB-GD2141'; // ZZ Gate Garage. Resolved by its unique ref, never by name.
 const PANELS_RENDERED = new Set(['payments', 'payouts', 'account']); // what StripeEmbeddedPanel switches on
+/**
+ * Features on the `payments` / `payment_details` components that Stripe defaults to TRUE — read off
+ * the Account Session create response, where an unrequested component still echoes its defaults.
+ * Every one must be named in our components block, because omitting one GRANTS it.
+ */
+const DEFAULT_TRUE = ['refund_management', 'dispute_management', 'smart_disputes_management', 'capture_payments'];
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -90,10 +96,39 @@ try {
   check('read-only access can NOT refund, dispute or capture — on BOTH payment components', (() => {
     for (const c of ['payments', 'payment_details']) {
       const f = ro[c]?.features ?? {};
-      if (f.refund_management || f.dispute_management || f.capture_payments) return false;
+      if (DEFAULT_TRUE.some((k) => f[k])) return false;
     }
     return true;
   })(), 'every one of these defaults to TRUE at Stripe, so silence would grant them');
+  // SILENCE MUST NEVER GRANT. Asserting the three features I happened to think of is how
+  // smart_disputes_management got missed — named nowhere, so a read_only session would have
+  // inherited Stripe's `true`. This checks the whole default-true set is PRESENT AS KEYS, so the
+  // next feature Stripe adds to this component fails here rather than quietly switching itself on.
+  check('every feature that defaults to TRUE is named explicitly, at both access levels', (() => {
+    for (const access of [full, ro]) {
+      for (const c of ['payments', 'payment_details']) {
+        const f = access[c]?.features ?? {};
+        if (!DEFAULT_TRUE.every((k) => Object.prototype.hasOwnProperty.call(f, k))) return false;
+      }
+    }
+    return true;
+  })(), DEFAULT_TRUE.join(', '));
+  check('full access gets all of them, read-only none of them', (() => {
+    for (const c of ['payments', 'payment_details']) {
+      if (!DEFAULT_TRUE.every((k) => full[c].features[k] === true)) return false;
+      if (!DEFAULT_TRUE.every((k) => ro[c].features[k] === false)) return false;
+    }
+    return true;
+  })(), 'these are all "manage money" powers — they move together');
+  // THE GATE MUST BE ABLE TO FAIL. Drop the feature that was actually missed and confirm both new
+  // checks go red — otherwise they are just restating the code back to itself.
+  check('the named-explicitly check catches an omission', (() => {
+    const sabotaged = JSON.parse(JSON.stringify(ro));
+    delete sabotaged.payments.features.smart_disputes_management;
+    const present = DEFAULT_TRUE.every((k) => Object.prototype.hasOwnProperty.call(sabotaged.payments.features, k));
+    const stillPresentInReal = DEFAULT_TRUE.every((k) => Object.prototype.hasOwnProperty.call(ro.payments.features, k));
+    return !present && stillPresentInReal;
+  })(), 'this is the exact shape of the hole that existed before this slice');
   check('read-only access gets no account management', !ro.account_management);
   check('nobody gets a component that authenticates when a quieter one exists', (() => {
     for (const a of ['full', 'read_only']) {
