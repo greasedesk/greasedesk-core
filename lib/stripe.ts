@@ -1,6 +1,6 @@
 /**
  * File: lib/stripe.ts
- * THE one server-side Stripe client (item-12). SANDBOX ONLY until live keys are deliberately added.
+ * THE one server-side Stripe client (item-12).
  * Env-gated: no STRIPE_SECRET_KEY → getStripe() returns null and every billing surface stays dormant
  * (the OCR-shadow pattern — the feature activates the moment its key lands in Vercel, no redeploy of
  * logic). Credentials are server-only; never shipped to the client.
@@ -13,6 +13,9 @@
  *                              key. This comment said "sk_test_… (sandbox)" until 2026-08-13 and
  *                              was itself the source of a wrong claim about whether real money was
  *                              involved.
+ *   STRIPE_PUBLISHABLE_KEY   — pk_… the platform publishable key. Required ONLY by the embedded
+ *                              Connect components on /admin/payments; absent, that page still
+ *                              renders the connection state and says the in-page view is off.
  *   STRIPE_WEBHOOK_SECRET    — whsec_… (from the webhook endpoint config)
  *   STRIPE_PRICE_ID          — THE one recurring Price (licensed, per-site quantity). Since
  *                              2026-08-09: GBP-ONLY, £75.00, TAX-INCLUSIVE, on product
@@ -45,6 +48,16 @@ export function getStripe(): Stripe | null {
 }
 
 export const stripeConfigured = (): boolean => !!process.env.STRIPE_SECRET_KEY;
+/**
+ * The PLATFORM publishable key, needed by Stripe's embedded components in the browser.
+ *
+ * DELIBERATELY NOT `NEXT_PUBLIC_`. A publishable key is safe to expose, but a NEXT_PUBLIC_ value is
+ * inlined at BUILD time — so it could not land without a redeploy, and the whole point of the
+ * env-gating pattern in this file is that a surface activates the moment its key reaches Vercel.
+ * It is handed to the client by an admin-authenticated endpoint instead, which costs nothing and
+ * keeps the deployment story the same as every other Stripe surface here.
+ */
+export const stripePublishableKey = (): string | null => process.env.STRIPE_PUBLISHABLE_KEY ?? null;
 export const stripePriceId = (): string | null => process.env.STRIPE_PRICE_ID ?? null;
 export const stripeWebhookSecret = (): string | null => process.env.STRIPE_WEBHOOK_SECRET ?? null;
 /**

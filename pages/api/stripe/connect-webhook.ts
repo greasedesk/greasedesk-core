@@ -19,7 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
-import { applyAccount, markDisconnected } from '@/lib/stripe-connect';
+import { applyAccount, markDisconnected, groupForAccount } from '@/lib/stripe-connect';
 
 export const config = { api: { bodyParser: false } };
 
@@ -71,10 +71,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Resolved by the account id we stored, NOT by the metadata we set at creation: metadata is
         // editable by anyone with access to that Stripe account, and this decides whether a garage
         // can take money.
-        const g = await prisma.group.findFirst({ where: { stripe_account_id: acct.id }, select: { id: true } });
-        if (!g) { console.warn('[connect-webhook] account.updated for an unknown account', acct.id); break; }
+        const groupId = await groupForAccount(acct.id);
+        if (!groupId) { console.warn('[connect-webhook] account.updated for an unknown account', acct.id); break; }
         // The event carries livemode; pass it rather than making applyAccount ask Stripe again.
-        await applyAccount(g.id, acct, event.livemode);
+        await applyAccount(groupId, acct, event.livemode);
         break;
       }
       case 'account.application.deauthorized': {

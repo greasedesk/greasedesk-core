@@ -38,6 +38,11 @@ const navItems: NavItemDef[] = [
   // is decoration; inbound made unread a real number. See lib/message-threads::unreadThreadCount.
   { key: 'messages', href: '/admin/messages', icon: '💬', ready: true, countKey: 'messages' },
   { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
+  // After the money that's owed, before the things that cost money. adminOnly for the same reason
+  // as HR: payout history and bank details are owner-grade, and a can_invoice mechanic may RAISE an
+  // invoice without having any business seeing what landed in the bank. The page re-checks
+  // server-side, and so does the Stripe account session it mints.
+  { key: 'payments', href: '/admin/payments', icon: '💳', ready: true, adminOnly: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
   { key: 'hr', href: '/admin/hr', icon: '🗂️', ready: true, adminOnly: true }, // wages live here — page + APIs re-check server-side

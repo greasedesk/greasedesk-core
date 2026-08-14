@@ -33,110 +33,26 @@ const labelClass = 'block text-xs text-muted';
 // Payment methods (admin CRUD via /api/payment-methods; follows the service-tiers pattern).
 // Behaviour changes affect FUTURE mark-paids only — clearance is decided at mark-paid time.
 /**
- * ── CARD PAYMENTS: THE GARAGE'S OWN STRIPE ACCOUNT ──────────────────────────────────────────────
- * Sited beside the payment methods because that is what it is — one more way of being paid, next to
- * Cash and Bank transfer. Nothing here takes a payment yet; connecting only makes card payments
- * possible later.
+ * ── WHERE CARD PAYMENTS WENT ────────────────────────────────────────────────────────────────────
+ * The Stripe connection panel used to live here. It moved to the Payments section, which now also
+ * shows the payments themselves and the payouts reaching the bank — more than a settings tab should
+ * hold, and more than one provider's worth of it once Payment Assist and Bumper arrive.
  *
- * EVERY STATE SAYS SOMETHING. A garage whose account is restricted otherwise discovers it when a
- * customer's card is declined at the counter, and the reason is Stripe's own wording rather than
- * our paraphrase of it — a paraphrase is how a product ends up contradicting Stripe's dashboard.
+ * The boundary that settled it: Settings → Invoicing is HOW YOU RECORD BEING PAID (the tenant's own
+ * Cash / Card machine / Bank transfer labels, used by mark-paid on every job card, which exist
+ * whether or not any provider is connected). Payments is WHO PROCESSES IT.
+ *
+ * This pointer stays. People will look here for months, and a section that silently loses a panel
+ * reads as a bug.
  */
-function CardPaymentsSection() {
-  const [state, setState] = React.useState<any>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState<string | null>(null);
-
-  const load = React.useCallback(async () => {
-    try {
-      const r = await fetch('/api/stripe/connect', { cache: 'no-store' });
-      if (r.ok) setState((await r.json()).state);
-    } catch { /* a settings panel is not worth breaking the page over */ }
-  }, []);
-  React.useEffect(() => { load(); }, [load]);
-
-  async function connect() {
-    setBusy(true); setErr(null);
-    try {
-      const r = await fetch('/api/stripe/connect', { method: 'POST' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d?.url) { setErr(d?.message || 'Could not start Stripe setup.'); return; }
-      window.location.href = d.url;
-    } catch { setErr('Could not start Stripe setup.'); }
-    finally { setBusy(false); }
-  }
-
-  if (!state) return null;
-  const box = 'bg-surface border border-line rounded-xl p-5 mb-6';
-  const btn = 'mt-3 text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50';
-
-  const body = () => {
-    switch (state.status) {
-      case 'ready':
-        return (
-          <>
-            <p className="text-sm text-ok font-semibold" data-testid="connect-ready">Card payments are set up</p>
-            <p className="text-sm text-muted mt-1">
-              Your Stripe account is connected and able to take payments.
-              {state.payoutsEnabled ? '' : ' Payouts to your bank aren’t enabled yet — Stripe will email you if it needs anything.'}
-            </p>
-          </>
-        );
-      case 'incomplete':
-        return (
-          <>
-            <p className="text-sm text-warn font-semibold" data-testid="connect-incomplete">Stripe setup isn’t finished</p>
-            <p className="text-sm text-muted mt-1">
-              You can’t take card payments until Stripe has what it needs
-              {state.requirementsDue?.length ? ` (${state.requirementsDue.length} item${state.requirementsDue.length === 1 ? '' : 's'} outstanding)` : ''}.
-            </p>
-            <button onClick={connect} disabled={busy} className={btn} data-testid="connect-continue">
-              {busy ? 'Opening…' : 'Finish setting up'}
-            </button>
-          </>
-        );
-      case 'restricted':
-        return (
-          <>
-            <p className="text-sm text-danger font-semibold" data-testid="connect-restricted">Stripe has paused card payments</p>
-            {/* Stripe's own reason, verbatim — never our summary of it. */}
-            <p className="text-sm text-muted mt-1">Reason given by Stripe: <span className="text-ink">{state.reason ?? 'not stated'}</span>.</p>
-            <p className="text-sm text-muted mt-1">Your other payment methods are unaffected — you can still take cash and bank transfers.</p>
-            <button onClick={connect} disabled={busy} className={btn} data-testid="connect-fix">
-              {busy ? 'Opening…' : 'Sort this out with Stripe'}
-            </button>
-          </>
-        );
-      case 'disconnected':
-        return (
-          <>
-            <p className="text-sm text-warn font-semibold" data-testid="connect-disconnected">Card payments are switched off</p>
-            <p className="text-sm text-muted mt-1">The Stripe connection was removed. Reconnect to take card payments again.</p>
-            <button onClick={connect} disabled={busy} className={btn} data-testid="connect-reconnect">
-              {busy ? 'Opening…' : 'Reconnect Stripe'}
-            </button>
-          </>
-        );
-      default:
-        return (
-          <>
-            <p className="text-sm text-ink font-semibold" data-testid="connect-none">Take card payments</p>
-            <p className="text-sm text-muted mt-1">
-              Connect a Stripe account so customers can pay their invoice by card. You keep your own
-              Stripe account and your own money; we never hold it.
-            </p>
-            <button onClick={connect} disabled={busy} className={btn} data-testid="connect-start">
-              {busy ? 'Opening…' : 'Set up card payments'}
-            </button>
-          </>
-        );
-    }
-  };
-
+function CardPaymentsPointer() {
   return (
-    <div className={box} data-testid="card-payments">
-      {body()}
-      {err && <p className="mt-2 text-sm text-danger" data-testid="connect-error">{err}</p>}
+    <div className="bg-surface border border-line rounded-xl p-5 mb-6" data-testid="card-payments-pointer">
+      <p className="text-sm font-semibold text-ink">Card payments</p>
+      <p className="text-sm text-muted mt-1">
+        Connecting a card payment provider, and the payments and payouts that come through it, are
+        under <a href="/admin/payments" className="text-accent hover:underline">Payments</a>.
+      </p>
     </div>
   );
 }
@@ -343,7 +259,7 @@ export default function InvoicingSettings(props: PageProps) {
             <p className="text-xs text-muted mt-1">{t('invoicing.logoHint')}</p>
           </div>
 
-          <CardPaymentsSection />
+          <CardPaymentsPointer />
           <PaymentMethodsSection t={t} />
 
           {/* --- Numbering (relocated from Company Details; the seed lock is preserved) --- */}

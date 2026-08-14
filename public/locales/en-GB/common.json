@@ -14,7 +14,8 @@
     "toggleMenu": "Toggle Menu",
     "allLocations": "All locations",
     "invoices": "Invoices",
-    "messages": "Messages"
+    "messages": "Messages",
+    "payments": "Payments"
   },
   "dashboard": {
     "welcome": "Welcome Back!",

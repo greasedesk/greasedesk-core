@@ -237,15 +237,18 @@ model Group {
   ref String @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
 
   // ── STRIPE CONNECT: THE GARAGE'S OWN PAYMENTS ACCOUNT ─────────────────────────────────────────
-  // Deliberately NOT on GroupBilling. That table mirrors GreaseDesk's OWN subscription and its
-  // webhook already writes it; two Stripe relationships in one row get confused eventually, and one
-  // of them decides whether a garage can trade. NULL everywhere = not connected, which is true of
-  // every tenant today.
+  // ⚠ VESTIGIAL AS OF THE PROVIDER-CONNECTION MIGRATION. Every column below was backfilled into
+  // ProviderConnection (provider = 'stripe') and NOTHING reads or writes them any more. Do not add
+  // a reader: lib/provider-connection is the store and lib/payment-providers derives the state.
+  // Retained rather than dropped because they are the only surviving record of the pre-migration
+  // state if the backfill ever has to be audited, and dropping them buys nothing.
   //
-  // STANDARD accounts (ruling 2026-08-13): the garage holds the Stripe relationship, gets the full
-  // dashboard, and carries its own losses. The Express-equivalent config would have put every
-  // connected garage's unrecoverable chargebacks onto GreaseDesk — an open-ended liability against
-  // a £75/month product, which no application-fee percentage repairs.
+  // Kept for the record — the reasoning that produced this shape, which still governs the new table:
+  // deliberately NOT on GroupBilling (that mirrors GreaseDesk's OWN subscription, and two Stripe
+  // relationships in one row get confused eventually, one of which decides whether a garage can
+  // trade); and STANDARD accounts (ruling 2026-08-13) because the Express-equivalent config forces
+  // `losses.payments: application`, putting every connected garage's unrecoverable chargebacks onto
+  // GreaseDesk — an open-ended liability against a £75/month product.
   stripe_account_id       String?      @unique // acct_…
   /**
    * WHICH MODE THIS ACCOUNT LIVES IN. Straight from the account's own `livemode`, never inferred.
@@ -374,6 +377,74 @@ model Group {
   quoteVersions      QuoteVersion[]
   payments           Payment[]
   refunds            Refund[]
+  providerConnections ProviderConnection[]
+}
+
+/**
+ * A TENANT'S CONNECTION TO ONE PAYMENT PROVIDER. One row per (group, provider).
+ *
+ * ── WHY THIS EXISTS RATHER THAN MORE COLUMNS ON Group ───────────────────────────────────────────
+ * Stripe alone took eight `stripe_*` columns on Group. Payment Assist and Bumper are next, both
+ * per-dealer credentialed, and the same treatment would mean twenty-odd mostly-null columns on the
+ * tenant row plus a third bespoke reader. The states a provider can be in are provider-independent
+ * — never connected, half set up, live, restricted, revoked — so they belong in one shape that a
+ * second provider joins by inserting a row.
+ *
+ * THE Group.stripe_* COLUMNS ARE NOW VESTIGIAL. They were backfilled into this table and nothing
+ * reads or writes them any more (see the comment at their definition). Left in place rather than
+ * dropped: a destructive migration buys nothing here, and the columns are the only record of what
+ * the pre-migration state was if the backfill ever needs auditing.
+ */
+model ProviderConnection {
+  id       String @id @default(uuid())
+  group_id String
+  /**
+   * 'stripe' | 'payment_assist' | 'bumper'. A STRING, not an enum, for the same reason
+   * Payment.provider is: adding a processor should be a row, not a migration.
+   */
+  provider String
+
+  /**
+   * The provider's own identifier for this connection — `acct_…` for Stripe, a dealer id for the
+   * others. NULL while a connection is being set up, and NULL forever for a provider that has no
+   * such concept. Unique per provider so one account cannot be claimed by two tenants; Postgres
+   * treats NULLs as distinct, so the many unconnected tenants don't collide.
+   */
+  external_id String?
+  /**
+   * Real money or a sandbox, from the provider's own object — never inferred from a key prefix.
+   * NULL = unknown. See Group.stripe_account_livemode for why that distinction is load-bearing.
+   */
+  livemode    Boolean?
+
+  /** Can the garage take money through this provider right now? The provider's answer, mirrored. */
+  charges_enabled Boolean @default(false)
+  /** Can the provider pay the garage out? Separate: Stripe routinely enables one without the other. */
+  payouts_enabled Boolean @default(false)
+  /**
+   * The provider's own reason string, stored VERBATIM. Paraphrasing is how a product ends up telling
+   * a garage something the provider's own dashboard contradicts.
+   */
+  disabled_reason String?
+  /** What the provider says is outstanding, so the product can name it rather than leave them guessing. */
+  requirements_due Json?
+
+  /** When the connection came into existence — NOT when it became able to trade. */
+  connected_at    DateTime?
+  /**
+   * The garage revoked us at the provider's end. Kept after external_id is cleared, so the product
+   * can say "this was switched off" instead of silently reverting to "never connected".
+   */
+  disconnected_at DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, provider])
+  @@unique([provider, external_id])
+  @@index([provider])
 }
 
 // Upload failure TELEMETRY (2026-07-14): the technical black-box recorder for the outbox drain —
