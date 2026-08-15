@@ -12,7 +12,11 @@
  * this module. Server-only.
  */
 import { prisma } from '@/lib/db';
-import { invoiceTotals, InvoiceTotals, effectiveIssueDate, isUnderCorrection } from '@/lib/invoice';
+import { invoiceTotals, effectiveIssueDate, isUnderCorrection } from '@/lib/invoice';
+// `import type` matters beyond tidiness: node --experimental-strip-types erases only marked type
+// imports, so a type pulled in as a value makes this module unloadable by the gate harness while
+// compiling perfectly under Next. The gates are the reason to keep the distinction honest.
+import type { InvoiceTotals } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { presignGet } from '@/lib/r2';
 import { readVoidCorrections } from '@/lib/invoice-void';
