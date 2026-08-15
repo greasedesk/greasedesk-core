@@ -379,6 +379,7 @@ model Group {
   refunds            Refund[]
   providerConnections ProviderConnection[]
   applicationFeeRates ApplicationFeeRate[]
+  smsTopUps           SmsTopUp[]
 }
 
 /**
@@ -461,6 +462,41 @@ model ApplicationFeeRate {
   // created in raw SQL — this plain index is for reads only and guarantees nothing.
   @@index([country_code, currency, effective_from])
   @@index([group_id])
+}
+
+/**
+ * A PURCHASE OF EXTRA SMS. An append-only record of packs bought, never a balance.
+ *
+ * ── WHY THERE IS NO `remaining` COLUMN ──────────────────────────────────────────────────────────
+ * The same reason Invoice.amount_paid_pennies is a cache of the Payment ledger and not a figure
+ * anyone writes: two writers of one number is how a counter and its truth start disagreeing. What
+ * has been USED is already recorded — every accepted send is a NotificationLog row — so the balance
+ * is derived from purchases minus usage (lib/sms-allowance). A decrement-on-send counter would be a
+ * second opinion that drifts the first time a send fails halfway.
+ *
+ * TOP-UPS DO NOT EXPIRE; the monthly included allowance does. A garage that buys a hundred on the
+ * 28th keeps them — they paid for a quantity, not for a month — while the included hundred is part
+ * of the subscription and resets with it. See lib/sms-allowance for the arithmetic.
+ */
+model SmsTopUp {
+  id       String @id @default(uuid())
+  group_id String
+
+  /** How many messages this pack added. Always positive; a correction is a new row, never an edit. */
+  quantity Int
+  /** What the garage paid, for the record. NULL for a pack granted rather than sold (goodwill, support). */
+  amount_pennies Int?
+  /** Stripe payment/invoice reference when it was sold. NULL when granted. */
+  source_ref String? @unique
+  /** Who granted it, when it was not a purchase. NULL = bought by the tenant. */
+  granted_by String?
+  note       String?
+
+  created_at DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@index([group_id, created_at])
 }
 
 model ProviderConnection {
@@ -2661,6 +2697,16 @@ model NotificationLog {
   // 'out' | 'in'. Was derived-and-always-outbound until inbound existed; now a real field, because
   // the answer varies. Defaults 'out' so every historical row keeps its correct meaning.
   direction    String    @default("out")
+  /**
+   * DOES THIS SPEND THE GARAGE'S SMS ALLOWANCE? Frozen at send time, never re-derived.
+   *
+   * False for `security: true` templates — a phone verification code is OUR account security, not
+   * the garage's customer messaging, and it is neither counted nor refused. Stored rather than
+   * looked up from the template registry at read time because a template's security flag can change
+   * and history must not change with it: what a garage was charged in March is a fact about March.
+   * Email rows carry `true` and are simply never queried by lib/sms-allowance.
+   */
+  counts_to_allowance Boolean @default(true)
   // When the message ARRIVED (inbound only). sent_at is meaningless for a message we did not send
   // and stays null — the absence is the distinction, not a copied timestamp.
   received_at  DateTime?

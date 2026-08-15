@@ -17,6 +17,7 @@ import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { sendNotification } from '@/lib/notify';
+import { smsAllowance } from '@/lib/sms-allowance';
 import { writeThreadAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
 import { listThreadMessages, threadReachability, reachabilityForJobCard, threadKeyForJobCard, ensureThread, ensureThreadToken, type NotifyChannelName } from '@/lib/message-threads';
@@ -61,7 +62,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!thread && req.method === 'GET') {
     // No conversation yet is not an error — return the empty one plus whether it can be written to.
-    return res.status(200).json({ messages: [], reachability: card ? await reachabilityForJobCard(prisma, card.id, 'email') : null });
+    return res.status(200).json({
+      messages: [],
+      reachability: card ? await reachabilityForJobCard(prisma, card.id, 'email') : null,
+      smsAllowance: await smsAllowance(prisma, user.group_id as string),
+    });
   }
   if (!thread) return res.status(404).json({ message: 'Conversation not found.' });
 
@@ -70,6 +75,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       messages: await listThreadMessages(prisma, thread.id),
       reachability: await threadReachability(prisma, thread.id, channel),
+      // WHAT IS LEFT, not what a message costs. The £75 includes a hundred a month and top-ups come
+      // in hundreds, so the useful number at the compose box is the remaining balance — a per-message
+      // price would be a figure the garage cannot act on and never agreed to.
+      smsAllowance: await smsAllowance(prisma, user.group_id as string),
     });
   }
 
@@ -135,6 +144,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const messages = await listThreadMessages(prisma, thread.id);
   if (sent.suppressed) {
     return res.status(409).json({ code: 'suppressed', message: `${reach.customerName} has opted out of ${channel} — nothing was sent. It is recorded in the conversation.`, messages });
+  }
+  // The allowance refusal happens inside sendNotification (one chokepoint, fourteen callers), so it
+  // arrives here as a skip with its own code. Surfaced as its own 409 because the remedy is
+  // different from every other refusal: this one is bought, not fixed.
+  if (sent.skipCode === 'allowance_spent') {
+    return res.status(409).json({
+      code: 'allowance_spent',
+      message: `Your SMS allowance is spent for this month — nothing was sent. It is recorded in the conversation. Top up to keep texting, or send this by email instead.`,
+      messages: await listThreadMessages(prisma, thread.id),
+      smsAllowance: await smsAllowance(prisma, user.group_id as string),
+    });
   }
   if (!sent.ok) {
     return res.status(502).json({ code: sent.status, message: sent.reason ?? 'The message was not accepted.', messages });

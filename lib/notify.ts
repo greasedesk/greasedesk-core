@@ -19,6 +19,7 @@ import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
 import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
+import { smsAllowance } from '@/lib/sms-allowance';
 import { demoSendDecision } from '@/lib/demo-tenant';
 
 export type NotifyChannel = 'email' | 'sms';
@@ -60,7 +61,7 @@ export type SendNotificationResult = {
    * real lie: a demo tenant's blocked code surfaced as "text messaging isn't switched on for
    * GreaseDesk yet", which is false — it is switched on, they are in a demo.
    */
-  skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template';
+  skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -194,6 +195,7 @@ async function record(args: {
   error?: string | null; subjectRef?: { type: string; id: string } | null; sentAt?: Date | null;
   body?: string | null; sentByUserId?: string | null; threadId?: string | null;
   providerMessageId?: string | null; providerMeta?: Record<string, unknown> | null;
+  countsToAllowance?: boolean;
 }): Promise<string | null> {
   try {
     const row = await prisma.notificationLog.create({
@@ -206,6 +208,7 @@ async function record(args: {
         recipient: args.recipient,
         subject: args.subject ?? null,
         error: args.error ?? null,
+        counts_to_allowance: args.countsToAllowance ?? true,
         subject_type: args.subjectRef?.type ?? null,
         subject_id: args.subjectRef?.id ?? null,
         sent_at: args.sentAt ?? null,
@@ -236,7 +239,10 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   const adapter = ADAPTERS[channel];
   const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; email?: Function; sms?: Function } | undefined;
   const common = { groupId: args.groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
-    body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null };
+    body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
+    // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
+    // the one place the template is resolved, so no caller decides whether its own message is free.
+    countsToAllowance: !tpl?.security };
 
   if (!args.recipient?.trim()) {
     const id = await record({ ...common, status: 'skipped', error: 'no recipient' });
@@ -270,6 +276,27 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (!tpl.security && await isSuppressed(args.groupId, channel, args.recipient)) {
     const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
     return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true, skipCode: 'opted_out' };
+  }
+
+  // ── THE SMS ALLOWANCE, AT THE CHOKEPOINT ─────────────────────────────────────────────────────
+  // Here and not at the call sites, for the same reason the demo block and the opt-out check are
+  // here: there are fourteen callers and the ones that would forget are the ones that matter.
+  //
+  // Checked BEFORE rendering and before any provider call, so an exhausted allowance costs nothing
+  // and is recorded as a `skipped` row with a reason rather than a failure. A garage reading their
+  // messages sees "not sent — allowance spent", which is true and actionable, instead of silence.
+  //
+  // SECURITY TEMPLATES ARE EXEMPT, and this is the same asymmetry as the opt-out above: a phone
+  // verification code is our account security, not the garage's customer messaging. Locking an
+  // owner out of their own account because they had sent a hundred quotes this month would be
+  // indefensible, and those sends are not counted either — see lib/sms-allowance.
+  if (channel === 'sms' && !tpl.security && args.groupId) {
+    const allowance = await smsAllowance(prisma, args.groupId);
+    if (allowance.remaining <= 0) {
+      const reason = `SMS allowance spent — ${allowance.usedThisMonth} sent this month, resets ${allowance.resetsAt.toISOString().slice(0, 10)}`;
+      const id = await record({ ...common, status: 'skipped', error: reason });
+      return { ok: false, notificationId: id, status: 'skipped', reason, skipCode: 'allowance_spent' };
+    }
   }
 
   // Render for the channel. A template with no renderer for this channel is a skip, never a guess.
