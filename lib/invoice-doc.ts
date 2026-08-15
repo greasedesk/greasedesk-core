@@ -12,7 +12,7 @@
  * this module. Server-only.
  */
 import { prisma } from '@/lib/db';
-import { invoiceTotals, InvoiceTotals, effectiveIssueDate } from '@/lib/invoice';
+import { invoiceTotals, InvoiceTotals, effectiveIssueDate, isUnderCorrection } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { presignGet } from '@/lib/r2';
 import { readVoidCorrections } from '@/lib/invoice-void';
@@ -38,6 +38,18 @@ export type InvoiceDoc = {
   siteId: string;
   number: string;
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void';
+  /**
+   * The invoice is UNLOCKED and its lines have been dropped: the garage is correcting it. Status is
+   * still `issued`, so nothing else distinguishes this from a live demand — which is exactly why it
+   * is stated here rather than left to each renderer to notice an empty `lines` array.
+   */
+  underCorrection: boolean;
+  /**
+   * What the ledger says has been received. NULL = UNKNOWN, and it is unknown on the whole back
+   * catalogue until the Payment backfill runs — never collapse it to zero. A renderer that prints
+   * "£0.00 paid" over an invoice settled in cash last March is stating a falsehood with confidence.
+   */
+  amountPaidPennies: number | null;
   /** Void grain — printed ON the document. A retained invoice must SAY it was retired and why,
    *  otherwise the retained copy is indistinguishable from a live demand for payment. */
   voidedAt: Date | null;
@@ -130,6 +142,11 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       ? (inv.invoice_number ?? null)
       : null,
     status: inv.status,
+    // UNDER CORRECTION — the invoice is unlocked and its frozen lines are gone. Carried on the doc
+    // so every renderer reads the state from one place instead of inferring it from an empty table.
+    // Derived through the SHARED predicate (lib/invoice), the same one the unlock guard uses.
+    underCorrection: isUnderCorrection({ status: inv.status, hasFrozenLines: inv.lines.length > 0 }),
+    amountPaidPennies: inv.amount_paid_pennies ?? null,
     voidedAt: inv.voided_at ?? null,
     voidReason: inv.void_reason ?? null,
     voidReasonOriginal: (() => { const l = readVoidCorrections(inv.void_reason_corrections); return l.length ? l[0].from : null; })(),

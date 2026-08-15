@@ -15,6 +15,21 @@ export function canEditInvoice(invoice: { status: string; hasFrozenLines: boolea
   return invoice.status === 'issued' && !invoice.hasFrozenLines;
 }
 
+/**
+ * THE SAME FACT, NAMED FROM THE CUSTOMER'S SIDE. An invoice whose lines have been dropped is
+ * "editable" to the garage and "being updated" to the customer — one state, two questions:
+ *   garage:   can I change this?            → canEditInvoice
+ *   customer: why is this document blank?   → isUnderCorrection
+ *
+ * Deliberately an ALIAS and not a second predicate. This state is invisible in the data — an
+ * unlocked invoice has status `issued` like any other, and only the ABSENCE of lines distinguishes
+ * it — so a reader who does not know the trick writes `status === 'issued'` and renders a real
+ * invoice number above an empty table with a £0.00 total. pages/api/invoice-unlock had the test
+ * open-coded, which is one copy away from the two drifting; a customer-facing renderer would have
+ * been the second. Two names over one function cannot disagree.
+ */
+export const isUnderCorrection = canEditInvoice;
+
 // ---- Effective document dates (ONE truth for recognition + rendering) ----
 // Each date exists twice: the editable DOCUMENT fact (date_issued / date_paid) and the system
 // attestation (issued_at / paid_at). Every reader — P&L, tiles, AR list, invoice view, PDF —

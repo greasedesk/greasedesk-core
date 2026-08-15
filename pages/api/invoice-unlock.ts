@@ -31,6 +31,7 @@ import { writeAudit } from '@/lib/audit';
 
 import { tServer } from '@/lib/server-i18n';
 import { refuseIfVoid, amendmentRequirement } from '@/lib/invoice-void';
+import { isUnderCorrection } from '@/lib/invoice';
 import { snapshotInvoiceLines, reissueDivergence, billingDivergence } from '@/lib/invoice-issue';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -218,7 +219,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (invoice.status === 'paid_pending') {
     return res.status(409).json({ message: 'This payment is still pending confirmation — unmark it instead (no unlock needed; nothing has been sent).' });
   }
-  if (invoice.status === 'issued' && invoice.lines.length === 0) {
+  // THE SHARED PREDICATE, not an open-coded copy of it. The customer-facing invoice view asks the
+  // same question from the other side (lib/invoice::isUnderCorrection) and must get the same answer.
+  if (isUnderCorrection({ status: invoice.status, hasFrozenLines: invoice.lines.length > 0 })) {
     return res.status(409).json({ message: 'This invoice is already unlocked — correct the estimate, then re-issue it.' });
   }
 

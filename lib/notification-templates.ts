@@ -172,6 +172,11 @@ export const NOTIFICATION_TEMPLATES = {
         <p>${esc(d.greeting)}</p>
         <p>${esc(d.body)}</p>
         ${d.vehicleLine ? `<p>${esc(d.vehicleLine)}</p>` : ''}
+        ${/* The pay link is ABSENT on a receipt, a void, an unlocked invoice and a £0 document —
+              lib/invoice-pay-link decides, and its null renders nothing at all rather than a
+              disabled-looking button. The PDF is still attached either way. */ ''}
+        ${d.payLink ? `${button(String(d.payLink), 'View and pay this invoice')}
+        <p style="font-size:13px;color:#475569">Anyone with the link can view this invoice, so please don't forward it.</p>` : ''}
         <p>${esc(d.signoff)}<br/>${esc(d.garageName)}</p>
         ${d.footerLine ? `<p style="font-size:12px;color:#64748b">${esc(d.footerLine)}</p>` : ''}`),
     }),

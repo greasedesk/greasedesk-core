@@ -1679,6 +1679,7 @@ model Invoice {
   lines          InvoiceLine[]
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
   payments       Payment[]
+  magic_links    CustomerMagicLink[]
 
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
@@ -2673,7 +2674,8 @@ model MessageThread {
 // FIRST use and `use_count` every use — consumption is recorded, not burned.
 enum MagicLinkPurpose {
   quote_view // view + approve/decline a quote for one job card
-  portal_view // customer portal view of one job card (progress, photos, invoice)
+  portal_view // customer portal view of one job card — NO ROUTE YET, deliberately dark
+  invoice_pay // view ONE frozen invoice and (later) pay it — see CustomerMagicLink.invoice_id
 }
 
 model CustomerMagicLink {
@@ -2692,6 +2694,16 @@ model CustomerMagicLink {
   // reason word, get the neutral sentence rather than a guessed one.
   revoked_reason String? // 'superseded' | 'invoiced' | 'declined' | 'cancelled' (see lib/magic-link)
 
+  /**
+   * THE INVOICE this link opens, for `invoice_pay`. NULL for every other purpose.
+   *
+   * WHY NOT RESOLVE THROUGH THE CARD. An invoice FREEZES at issue; the job card keeps moving —
+   * it can be unlocked, corrected, re-issued, and it can carry more than one invoice over its
+   * life. A pay link resolved card-first would drift off the document it was minted for and
+   * eventually name the wrong money. The link is bound to the artefact, not to the job.
+   */
+  invoice_id String?
+
   recipient    String // who it was sent to, for the audit answer "who could see this?"
   consumed_at  DateTime? // FIRST use
   last_used_at DateTime?
@@ -2700,10 +2712,12 @@ model CustomerMagicLink {
   created_at      DateTime @default(now())
   created_by_user String? // the staff User who caused it to be issued (null = system)
 
-  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  group    Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard   @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  invoice  Invoice?  @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
   @@index([group_id, job_card_id])
+  @@index([invoice_id])
   @@index([expires_at])
 }
 

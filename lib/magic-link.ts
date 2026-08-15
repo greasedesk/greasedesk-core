@@ -8,13 +8,42 @@
  * a mail server that logs URLs — all confer access. This is a deliberate trade: customers will not
  * create accounts to look at a quote. The trade is made survivable by keeping the grant NARROW and
  * SHORT, never wide and permanent:
- *   • bound to ONE job card AND ONE purpose (a quote link cannot open the portal, or another card)
- *   • 14-day expiry, and an expired link EXPLAINS itself rather than 404ing (a 404 reads as "broken")
+ *   • bound to ONE job card AND ONE purpose (a quote link cannot open the portal, or another card),
+ *     and for invoice_pay to ONE frozen invoice as well
+ *   • short-lived, and an expired link EXPLAINS itself rather than 404ing (a 404 reads as "broken").
+ *     14 days for a quote; an invoice's window is derived from its due date — see invoicePayExpiry
  *   • revocable (revoked_at) when a card is cancelled or it went to the wrong address
  *   • every use recorded (consumed_at = first, use_count/last_used_at = all)
  *   • rate-limited on verification, so the token space cannot be walked
- * A magic link must NEVER authorise a money movement or a destructive action. Read, and the one
- * bounded decision the purpose names (approve/decline a quote).
+ *
+ * ── THE RULE (amended 2026-08-15) ───────────────────────────────────────────────────────────────
+ * A magic link must NEVER authorise a movement that REMOVES VALUE from the customer or the garage,
+ * and never a destructive action. A payment TOWARD a frozen, named invoice is permitted.
+ *
+ * The rule used to read "never a money movement", full stop. That was written when the only money
+ * on a link was hypothetical, and taken literally it forbids the one thing a customer most wants to
+ * do with an invoice. It is amended rather than quietly worked around, because the reasoning is
+ * what makes the amendment safe and the next person needs to be able to check it.
+ *
+ * THE ASYMMETRY. The whole security model here is that the holder of the link may not be the
+ * customer. That is what makes a REMOVAL dangerous: a stranger cancelling a debt, changing a bank
+ * detail, refunding to their own card, or deleting a job is a stranger taking something. Paying
+ * runs the other way. Money moves toward the garage, against a document whose amount and payee
+ * were frozen before the link existed and which the link cannot alter. A stranger who pays
+ * someone else's invoice has harmed nobody and cannot get the money back through this surface.
+ * The direction of travel, not the presence of money, is what the rule turns on.
+ *
+ * WHAT IS ACTUALLY EXPOSED, stated so it is not discovered later:
+ *   • CARD TESTING. A pay endpoint is a card-testing target. The charge lands on the GARAGE's own
+ *     Stripe account, where Stripe Radar is the real defence and the garage's own rules apply; we
+ *     rate-limit at our endpoint so we are not the cheap way in. Not eliminated — owned, and owned
+ *     by the party Stripe already holds responsible.
+ *   • INVOICE CONTENTS. A leaked pay link shows what was billed. That is not a new exposure:
+ *     portal_view exists to show a customer their job card and its invoice, by design, on the same
+ *     credential. invoice_pay widens WHO might see one document, never WHAT the class of link can
+ *     reveal.
+ * Everything else — refunds, voids, bank details, amending the document — stays firmly on the
+ * garage's authenticated side, where removals belong.
  *
  * TOKEN DISCIPLINE: the RAW token travels only in the URL, only its SHA-256 hash is stored. A DB
  * leak yields nothing usable.
@@ -46,7 +75,43 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 export const MAGIC_LINK_DAYS = 14;
 
-export type MagicPurpose = 'quote_view' | 'portal_view';
+/**
+ * ── HOW LONG A PAY LINK LIVES ───────────────────────────────────────────────────────────────────
+ * 14 days is right for a quote — an offer that should be answered while it is still the price. It
+ * is wrong for an invoice on terms: a 30-day account invoice would have a dead link five days
+ * before the money was even due, and a garage chasing at day 25 would find the link they sent had
+ * expired mid-chase.
+ *
+ * The rule: 30 days past the DUE DATE, floored at the usual 14 from now.
+ *   • due_date set (account customers) → due + 30, so the chase window outlives the debt
+ *   • due_date NULL → issue + 30. This is the COMMON path, not the edge: due_date is only frozen
+ *     at mint for account customers, so an ordinary invoice has none and NULL there is honest —
+ *     "no agreed terms", not "missing".
+ *   • the floor matters because both bases can be in the PAST. Re-sending a three-month-old
+ *     invoice must not mint a link that is already dead; max() with now + 14 makes every freshly
+ *     minted link usable for at least a fortnight, whatever it is for.
+ */
+export const INVOICE_PAY_GRACE_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function invoicePayExpiry(
+  args: { dueDate: Date | null; issuedAt: Date },
+  now: Date = new Date(),
+): Date {
+  const base = args.dueDate ?? args.issuedAt;
+  const graced = base.getTime() + INVOICE_PAY_GRACE_DAYS * DAY_MS;
+  const floor = now.getTime() + MAGIC_LINK_DAYS * DAY_MS;
+  return new Date(Math.max(graced, floor));
+}
+
+/**
+ * `portal_view` IS DELIBERATELY DARK. It is a valid stored purpose with no route: /c/[token]
+ * refuses it in words rather than half-rendering a destination nobody has built. Wiring the
+ * dispatcher is not the same as wiring every branch, and a switch arm that renders a blank page is
+ * worse than one that says "not available".
+ */
+export type MagicPurpose = 'quote_view' | 'portal_view' | 'invoice_pay';
 
 /** Verification rate limits — the token space is 2^256, but a limiter also blunts a leaked-link
  *  replay storm and keeps the log honest. Per-IP is the real axis (a token is a secret already). */
@@ -83,13 +148,23 @@ export async function createMagicLink(args: {
   recipient: string;
   createdByUserId?: string | null;
   baseUrl?: string;
+  /** REQUIRED for invoice_pay — the frozen invoice this link opens. Ignored for other purposes. */
+  invoiceId?: string | null;
+  /** Overrides the default lifetime. invoice_pay callers pass invoicePayExpiry(). */
+  expiresAt?: Date;
 }): Promise<CreatedMagicLink> {
+  // A pay link with no invoice would resolve to a card and render the wrong money. Refuse at the
+  // mint rather than let the resolver discover it later with a customer already looking at it.
+  if (args.purpose === 'invoice_pay' && !args.invoiceId) {
+    throw new Error('MAGIC:invoice_pay_requires_invoice');
+  }
   const raw = newMagicToken();
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = args.expiresAt ?? new Date(Date.now() + MAGIC_LINK_DAYS * DAY_MS);
   const row = await prisma.customerMagicLink.create({
     data: {
       group_id: args.groupId,
       job_card_id: args.jobCardId,
+      invoice_id: args.purpose === 'invoice_pay' ? args.invoiceId : null,
       purpose: args.purpose,
       token_hash: hashToken(raw),
       expires_at: expiresAt,
@@ -107,7 +182,7 @@ export function magicLinkUrl(rawToken: string, baseUrl?: string): string {
 }
 
 export type MagicResolution =
-  | { ok: true; link: { id: string; groupId: string; jobCardId: string; purpose: MagicPurpose; recipient: string; expiresAt: Date } }
+  | { ok: true; link: { id: string; groupId: string; jobCardId: string; invoiceId: string | null; purpose: MagicPurpose; recipient: string; expiresAt: Date } }
   // `revokedReason` rides along on the revoked branch only — the caller needs WHY to pick the
   // sentence, and undefined/null both mean "not recorded" and get the neutral one.
   | { ok: false; reason: 'not_found' | 'expired' | 'revoked' | 'wrong_purpose' | 'rate_limited'; revokedReason?: RevokeReason };
@@ -129,7 +204,7 @@ export async function resolveMagicLink(
 
   const row = await prisma.customerMagicLink.findUnique({
     where: { token_hash: hashToken(rawToken) },
-    select: { id: true, group_id: true, job_card_id: true, purpose: true, recipient: true, expires_at: true, revoked_at: true, revoked_reason: true },
+    select: { id: true, group_id: true, job_card_id: true, invoice_id: true, purpose: true, recipient: true, expires_at: true, revoked_at: true, revoked_reason: true },
   });
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revoked_at) return { ok: false, reason: 'revoked', revokedReason: (row.revoked_reason ?? null) as RevokeReason };
@@ -150,7 +225,7 @@ export async function resolveMagicLink(
   return {
     ok: true,
     link: {
-      id: row.id, groupId: row.group_id, jobCardId: row.job_card_id,
+      id: row.id, groupId: row.group_id, jobCardId: row.job_card_id, invoiceId: row.invoice_id ?? null,
       purpose: row.purpose as MagicPurpose, recipient: row.recipient, expiresAt: row.expires_at,
     },
   };

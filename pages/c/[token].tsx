@@ -4,12 +4,24 @@
  * security model in lib/magic-link). Resolution happens SERVER-SIDE in getServerSideProps, so an
  * invalid link never renders card data and the token never becomes client state.
  *
- * The quote renders through the SHARED document shape (lib/quote-doc) and the SHARED line/totals
- * component (components/DocumentLines) that the invoice view also uses — the quote and the invoice
- * are one document rendered twice, not two that happen to agree.
+ * ── ONE ROUTE, DISPATCHED ON PURPOSE ────────────────────────────────────────────────────────────
+ * This used to resolve with `purpose: 'quote_view'` hardcoded — a quote route wearing a generic
+ * name. It now resolves the token first and branches on what the link is FOR:
+ *   quote_view   → the quote, with accept/decline
+ *   invoice_pay  → one frozen invoice (paying it is a later slice; this renders the document)
+ *   portal_view  → DELIBERATELY DARK. A valid stored purpose with no destination built. It is
+ *                  refused in words rather than half-rendered: wiring the dispatcher is not the
+ *                  same as wiring every arm, and a branch that renders a blank page is worse than
+ *                  one that says "not available".
  *
- * Read-only APART FROM accept/decline. Per the magic-link rule this page authorises no money
- * movement and no destructive action — accepting writes one decision onto one frozen version.
+ * BOTH documents render through the SHARED shapes — lib/quote-doc and lib/invoice-doc — and the
+ * SHARED line/totals component (components/DocumentLines) that the ADMIN invoice view also uses. A
+ * fourth renderer is how four surfaces start disagreeing about VAT, so there isn't one: this is a
+ * third consumer of the existing two.
+ *
+ * Read-only APART FROM accept/decline. Per the amended magic-link rule (2026-08-15) a link may
+ * carry a payment TOWARD a frozen invoice but never a movement that removes value; nothing on this
+ * page removes anything.
  *
  * Expired / revoked / unknown links EXPLAIN THEMSELVES rather than 404ing — a 404 reads as "the
  * garage's system is broken"; the truth is "your link aged out, ask for a new one".
@@ -21,13 +33,18 @@ import { prisma } from '@/lib/db';
 import { resolveMagicLink, MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
+import { buildInvoiceDoc, type InvoiceDoc } from '@/lib/invoice-doc';
 import DocumentLines from '@/components/DocumentLines';
+import CustomerInvoice, { type SerializedInvoiceDoc } from '@/components/customer/CustomerInvoice';
 import { useState } from 'react';
 
-type Denied = 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose' | 'no_quote';
+type Denied =
+  | 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose' | 'no_quote'
+  | 'no_invoice' | 'not_available';
 
 type Props =
-  | { state: 'ok'; doc: SerializedDoc; token: string }
+  | { state: 'quote'; doc: SerializedDoc; token: string }
+  | { state: 'invoice'; doc: SerializedInvoiceDoc }
   | { state: 'denied'; reason: Denied; revokedReason?: string | null; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
@@ -61,6 +78,16 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
   no_quote: {
     title: 'This quote isn’t ready yet',
     body: 'The garage hasn’t finished preparing this quote. Please give them a call — they’ll be able to tell you where things are.',
+  },
+  no_invoice: {
+    title: 'We couldn’t open that invoice',
+    body: 'The link is valid but the invoice it points to isn’t available. Please contact the garage and ask them to resend it.',
+  },
+  // portal_view. Says what is true — the link works, the destination does not exist yet — and
+  // names a next step that does. Never a blank page pretending to be a feature.
+  not_available: {
+    title: 'This link isn’t available yet',
+    body: 'This kind of link isn’t something we can open for you yet. Please contact the garage — they can send you your quote or invoice directly.',
   },
 };
 
@@ -97,7 +124,8 @@ const REVOKED_COPY: Record<string, { title: string; body: string }> = {
 const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
 const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
 
-export default function CustomerQuotePage(props: Props) {
+export default function CustomerLinkPage(props: Props) {
+  if (props.state === 'invoice') return <CustomerInvoice doc={props.doc} />;
   if (props.state === 'denied') {
     // A recorded reason overrides the generic revoked copy; anything unrecognised falls back to it,
     // so a reason word added later can never render a blank page before its copy is written.
@@ -303,7 +331,11 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
 
 export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   const token = String(ctx.params?.token ?? '');
-  const res = await resolveMagicLink(token, { purpose: 'quote_view', ip: clientIp(ctx.req.headers as any) });
+  // NO PURPOSE FILTER. The token decides what it opens; passing one here is what made this a quote
+  // route with a generic name. `wrong_purpose` therefore cannot come back from this call any more —
+  // its copy is retained because other callers (quote-respond) still resolve with a filter, and an
+  // unreachable branch is cheaper than a missing one.
+  const res = await resolveMagicLink(token, { ip: clientIp(ctx.req.headers as any) });
 
   if (!res.ok) {
     // Even a refusal should offer the phone where we can identify the garage cheaply — but a
@@ -313,6 +345,44 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
     return { props: { state: 'denied', reason: res.reason, revokedReason: res.revokedReason ?? null, garagePhone: null } };
   }
 
+  // ── INVOICE ────────────────────────────────────────────────────────────────────────────────
+  if (res.link.purpose === 'invoice_pay') {
+    // The link names its invoice; it is never resolved through the card. See the schema comment on
+    // CustomerMagicLink.invoice_id — a card can carry several invoices over its life and keeps
+    // moving after each one freezes.
+    if (!res.link.invoiceId) {
+      return { props: { state: 'denied', reason: 'no_invoice', garagePhone: null } };
+    }
+    const invDoc = await buildInvoiceDoc(res.link.invoiceId, res.link.groupId);
+    if (!invDoc) {
+      const site = await prisma.jobCard.findUnique({ where: { id: res.link.jobCardId }, select: { site: { select: { phone: true } } } });
+      return { props: { state: 'denied', reason: 'no_invoice', garagePhone: site?.site?.phone ?? null } };
+    }
+    return {
+      props: {
+        state: 'invoice',
+        doc: {
+          ...invDoc,
+          issuedAt: invDoc.issuedAt.toISOString(),
+          paidAt: invDoc.paidAt ? invDoc.paidAt.toISOString() : null,
+          voidedAt: invDoc.voidedAt ? invDoc.voidedAt.toISOString() : null,
+          datePaid: invDoc.datePaid ? new Date(invDoc.datePaid).toISOString() : null,
+          // Not rendered by the customer view, and Next refuses to serialise a Date or undefined.
+          confirmDueAt: null, receiptSentAt: null,
+        } as any,
+      },
+    };
+  }
+
+  // ── PORTAL: DELIBERATELY DARK ──────────────────────────────────────────────────────────────
+  // A valid purpose with no destination. Refused in words. The day the portal is built this arm
+  // becomes a render; until then it must not pretend to be one.
+  if (res.link.purpose === 'portal_view') {
+    const site = await prisma.jobCard.findUnique({ where: { id: res.link.jobCardId }, select: { site: { select: { phone: true } } } });
+    return { props: { state: 'denied', reason: 'not_available', garagePhone: site?.site?.phone ?? null } };
+  }
+
+  // ── QUOTE ──────────────────────────────────────────────────────────────────────────────────
   // The version this link was minted for; if it has been superseded the link is already revoked,
   // so reaching here means it is still the live offer.
   const version = await prisma.quoteVersion.findFirst({
@@ -329,7 +399,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
 
   return {
     props: {
-      state: 'ok',
+      state: 'quote',
       token,
       doc: { ...doc, sentAt: doc.sentAt.toISOString(), expiresAt: doc.expiresAt.toISOString() },
     },

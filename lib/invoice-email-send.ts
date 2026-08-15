@@ -17,6 +17,7 @@ import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
 import { writeAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
+import { mintInvoicePayLink } from '@/lib/invoice-pay-link';
 
 export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'SUPPRESSED' | 'ERROR'; message: string };
 
@@ -53,6 +54,11 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
   const subject = t('email.subject', { number: doc.number, garage: group.group_name });
 
   try {
+    // MINTED BEFORE THE PDF RENDERS, deliberately. Nothing on the PDF uses it yet, but the QR code
+    // and the SMS are the next slice and all three must carry the SAME url from ONE mint — so the
+    // call belongs above the render, not beside the email body. Returns null on a receipt, a void,
+    // an unlocked invoice or a zero-total document; see lib/invoice-pay-link for why each.
+    const payLink = await mintInvoicePayLink({ doc, groupId, recipient: to, createdByUserId: actorUserId });
     const pdf = await renderInvoicePdf(doc);
     // THROUGH THE CHOKEPOINT (2026-07-31). This used to call sendEmail directly, which is why the
     // invoice path wrote an AuditLog row but no NotificationLog row — the one send the "what have we
@@ -73,6 +79,9 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
         signoff: t('email.signoff'),
         garageName: group.group_name,
         footerLine: group.invoice_email_footer ? t('email.footer') : null,
+        // Absent on a receipt, so the template renders no button at all rather than a dead one.
+        payLink: payLink?.url ?? null,
+        payLinkExpiresAt: payLink ? payLink.expiresAt.toISOString() : null,
       },
       // BCC the garage's copy address (Invoicing tab; falls back to billing_email) — skipped when it
       // IS the recipient. From stays GreaseDesk-owned; only display name + Reply-To are tenant-set.
@@ -88,7 +97,12 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
     if (sent.suppressed) return { ok: false, code: 'SUPPRESSED', message: 'This customer has opted out of email — the invoice was not sent. Print or hand over the PDF instead.' };
     if (!sent.ok) return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await writeAudit(tx, { groupId, userId: actorUserId, jobCardId: doc.jobCardId, action: 'invoice.sent', diff: { number: doc.number, to } });
+      await writeAudit(tx, {
+        groupId, userId: actorUserId, jobCardId: doc.jobCardId, action: 'invoice.sent',
+        // Whether a payable link went out is part of what was sent, and the question "could this
+        // customer have paid from the email?" has to be answerable later without guessing.
+        diff: { number: doc.number, to, payLink: !!payLink },
+      });
       if (doc.status === 'paid') {
         await tx.invoice.update({ where: { id: invoiceId }, data: { receipt_sent_at: new Date() } });
       }
