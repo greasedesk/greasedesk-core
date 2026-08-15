@@ -16,6 +16,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
+import { recordTopUpFromSession } from '@/lib/sms-topup';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
 import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
@@ -87,6 +88,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     switch (event.type) {
       case 'checkout.session.completed': {
         const s = event.data.object as Stripe.Checkout.Session;
+        // ── A ONE-OFF PURCHASE IS NOT A SUBSCRIPTION EVENT ─────────────────────────────────────
+        // Branch FIRST. Everything below this line was written for the subscription flow and writes
+        // stripe_customer_id / stripe_subscription_id onto GroupBilling; an SMS top-up reaching it
+        // would rewrite a tenant's billing link as a side effect of buying a hundred texts.
+        if (s.mode === 'payment') {
+          const t = await recordTopUpFromSession(s);
+          console.info('[webhook] sms top-up', s.id, t ? `granted ${t.granted}` : 'not granted (duplicate, unpaid, or not a top-up)');
+          break;
+        }
         const groupId = s.client_reference_id || null;
         const customerId = typeof s.customer === 'string' ? s.customer : s.customer?.id;
         const subId = typeof s.subscription === 'string' ? s.subscription : s.subscription?.id;

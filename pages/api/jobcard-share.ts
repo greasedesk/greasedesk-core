@@ -1,6 +1,6 @@
 /**
  * File: pages/api/jobcard-share.ts
- * POST { jobCardId, purpose?, email? } → mint a customer magic link and email it.
+ * POST { jobCardId, purpose?, email?, channel? } → mint a customer magic link and send it.
  * The ONE place staff hand a customer a link: it goes through BOTH chokepoints — lib/magic-link to
  * mint the credential, lib/notify to send and RECORD it. Never mint a link without recording who it
  * went to; the audit answer "who could see this card?" is CustomerMagicLink + NotificationLog.
@@ -16,7 +16,8 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { canWrite } from '@/lib/billing';
 import { createMagicLink, type MagicPurpose } from '@/lib/magic-link';
-import { sendNotification } from '@/lib/notify';
+import { sendNotification, type NotifyChannel } from '@/lib/notify';
+import { reachabilityForJobCard } from '@/lib/message-threads';
 
 const PURPOSES: MagicPurpose[] = ['quote_view', 'portal_view'];
 
@@ -32,6 +33,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { jobCardId, purpose: rawPurpose, email: rawEmail } = (req.body ?? {}) as Record<string, string>;
   if (!jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
   const purpose = (PURPOSES.includes(rawPurpose as MagicPurpose) ? rawPurpose : 'quote_view') as MagicPurpose;
+  // Email unless SMS is asked for — the same default and the same shape as the messaging centre's
+  // compose box, so there is one way to say "by text" across the product.
+  const channel: NotifyChannel = (req.body ?? {}).channel === 'sms' ? 'sms' : 'email';
+  if (rawEmail && channel === 'sms') {
+    return res.status(400).json({ message: 'An email address can’t be used for a text message.' });
+  }
 
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: user.group_id },
@@ -39,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       id: true, site_id: true, group_id: true,
       vehicle: { select: { registration: true } },
       customer: { select: { email: true } },
-      group: { select: { group_name: true, trading_name: true, billing: { select: { subscription_status: true, status: true } } } },
+      group: { select: { group_name: true, trading_name: true, phone: true, billing: { select: { subscription_status: true, status: true } } } },
     },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
@@ -50,8 +57,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(402).json({ message: 'Your subscription is inactive — sharing is a write and is paused.' });
   }
 
-  const recipient = (rawEmail || card.customer?.email || '').trim();
-  if (!recipient) return res.status(400).json({ message: 'No customer email on this job card — add one or pass an address.' });
+  // ── THE RECIPIENT IS CHANNEL-SHAPED, AND RESOLVED THROUGH THE OWNERSHIP EDGE ────────────────
+  // An explicit address still wins — staff sending to "the other half" is a real thing. Otherwise
+  // reachabilityForJobCard answers it: it follows the ownership edge rather than the card's own
+  // customer link (car-first re-root), and its refusal is already a sentence naming the customer
+  // and the tab to fix it on, which beats "no customer email on this job card".
+  const reach = rawEmail
+    ? { ok: true as const, address: rawEmail.trim(), customerName: '' }
+    : await reachabilityForJobCard(prisma, card.id, channel);
+  if (!reach || !reach.ok) {
+    return res.status(400).json({ message: reach?.reason ?? 'There is nobody to send this to — the vehicle has no current owner.' });
+  }
+  const recipient = reach.address;
 
   const garageName = card.group.trading_name || card.group.group_name || 'Your garage';
   const link = await createMagicLink({
@@ -65,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sent = await sendNotification({
     recipient,
     template: purpose === 'quote_view' ? 'quote_ready' : 'job_card_link',
-    channel: 'email',
+    channel,
     groupId: card.group_id,
     subject: { type: 'job_card', id: card.id },
     data: {
@@ -73,6 +90,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       registration: card.vehicle?.registration ?? null,
       link: link.url,
       expiryDays: 14,
+      // The one-way sender means a customer who replies gets nothing back, so every SMS carries the
+      // garage's own number. Costs septets and is worth them — see lib/notification-templates.
+      garagePhone: card.group.phone ?? null,
     },
   });
 
