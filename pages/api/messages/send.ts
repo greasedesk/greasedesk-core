@@ -62,9 +62,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!thread && req.method === 'GET') {
     // No conversation yet is not an error — return the empty one plus whether it can be written to.
+    // CHANNEL IS HONOURED HERE TOO. It was hardcoded to 'email', so switching the compose box to
+    // Text on a card with no thread yet asked "can we email them?" and answered about the wrong
+    // channel — closing the box on a customer with a mobile and no email address.
+    const ch = (String(req.query.channel ?? 'email') as NotifyChannelName);
     return res.status(200).json({
       messages: [],
-      reachability: card ? await reachabilityForJobCard(prisma, card.id, 'email') : null,
+      reachability: card ? await reachabilityForJobCard(prisma, card.id, ch) : null,
       smsAllowance: await smsAllowance(prisma, user.group_id as string),
     });
   }

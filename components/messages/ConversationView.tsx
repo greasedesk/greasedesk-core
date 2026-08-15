@@ -44,6 +44,12 @@ export type Reachability =
   | { ok: true; address: string; customerName: string; channel: string }
   | { ok: false; reason: string; customerName: string; channel: string };
 
+/** The shape lib/sms-allowance returns, with the reset date as the string it crosses JSON as. */
+export type SmsAllowance = {
+  included: number; usedThisMonth: number; includedRemaining: number;
+  topUpRemaining: number; remaining: number; purchased: number; resetsAt: string;
+};
+
 /** Message-type labels. A template key is an internal name and is never shown raw. */
 const TEMPLATE_LABEL: Record<string, string> = {
   quote_ready: 'Quote sent',
@@ -99,7 +105,7 @@ const fmt = (iso: string, locale = 'en-GB') => {
 
 export default function ConversationView({
   messages, locale = 'en-GB', heading = 'Messages', dense = false,
-  threadId, jobCardId, reachability, canSend = false, onSent,
+  threadId, jobCardId, reachability, canSend = false, onSent, smsAllowance: initialAllowance,
 }: {
   messages: ConversationMessage[];
   locale?: string;
@@ -115,10 +121,49 @@ export default function ConversationView({
   canSend?: boolean;
   /** Called with the thread AS THE SERVER RETURNED IT, so the parent re-renders from the log. */
   onSent?: (messages: ConversationMessage[]) => void;
+  /** Server-resolved on load. Refreshed by this component when the channel changes or a text sends. */
+  smsAllowance?: SmsAllowance | null;
 }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+  const [channel, setChannel] = useState<'email' | 'sms'>('email');
+  // Reachability is CHANNEL-SHAPED — a customer with a mobile and no email is reachable by one and
+  // not the other — so switching re-asks the server rather than reusing the answer to a different
+  // question. The prop is the initial (email) answer; this holds whatever the current channel's is.
+  const [reach, setReach] = useState<Reachability | null | undefined>(reachability);
+  const [allowance, setAllowance] = useState<SmsAllowance | null>(initialAllowance ?? null);
+  const [switching, setSwitching] = useState(false);
+  const [toppingUp, setToppingUp] = useState(false);
+
+  React.useEffect(() => { setReach(reachability); }, [reachability]);
+
+  async function pickChannel(next: 'email' | 'sms') {
+    if (next === channel) return;
+    setChannel(next); setNote(null); setSwitching(true);
+    try {
+      const q = new URLSearchParams({ channel: next, ...(threadId ? { threadId } : { jobCardId: jobCardId as string }) });
+      const r = await fetch(`/api/messages/send?${q}`, { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (d?.reachability !== undefined) setReach(d.reachability);
+      if (d?.smsAllowance) setAllowance(d.smsAllowance);
+    } catch {
+      // Leave the previous answer in place and say nothing: a failed lookup must not silently
+      // present the OTHER channel's reachability as though it were this one's.
+      setNote({ text: 'Could not check whether this customer can be texted.', ok: false });
+    } finally { setSwitching(false); }
+  }
+
+  async function topUp() {
+    setToppingUp(true);
+    try {
+      const r = await fetch('/api/sms-topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ packs: 1 }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d?.url) { window.location.href = d.url; return; }
+      setNote({ text: d?.message || 'Could not start the top-up.', ok: false });
+    } catch { setNote({ text: 'Could not start the top-up.', ok: false }); }
+    finally { setToppingUp(false); }
+  }
 
   async function send() {
     if ((!threadId && !jobCardId) || !text.trim()) return;
@@ -127,9 +172,12 @@ export default function ConversationView({
       const r = await fetch('/api/messages/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // CHANNEL IS A FIELD. No selector yet — there is nothing to select while SMS is unconfigured.
-        body: JSON.stringify(threadId ? { threadId, body: text, channel: 'email' } : { jobCardId, body: text, channel: 'email' }),
+        body: JSON.stringify(threadId ? { threadId, body: text, channel } : { jobCardId, body: text, channel }),
       });
       const d = await r.json().catch(() => ({}));
+      // The allowance comes back on success AND on the allowance refusal, so the count on screen is
+      // never one send behind what the server thinks.
+      if (d?.smsAllowance) setAllowance(d.smsAllowance);
       // The server returns the thread on refusal too, so the refusal is VISIBLE in the list rather
       // than only in a toast that disappears.
       if (Array.isArray(d?.messages)) onSent?.(d.messages);
@@ -144,7 +192,9 @@ export default function ConversationView({
   }
 
   const target = threadId || jobCardId || null;
-  const closed = !target || !canSend || !reachability || reachability.ok !== true;
+  const closed = !target || !canSend || !reach || reach.ok !== true;
+  // Spent is not the same as unconfigured: one is bought back, the other is not the garage's doing.
+  const spent = channel === 'sms' && !!allowance && allowance.remaining <= 0;
 
   return (
     <section data-testid="conversation" className={dense ? '' : 'mt-6'}>
@@ -208,10 +258,58 @@ export default function ConversationView({
           failing afterwards wastes them and teaches staff not to trust the box. */}
       {canSend && target && (
         <div className="mt-4" data-testid="compose">
+          {/* ── HOW IT GOES ──────────────────────────────────────────────────────────────────
+              Two buttons rather than a dropdown: there are two channels and the choice changes
+              what the box says about reachability, so it should be visible rather than folded
+              away. Switching re-asks the server — a customer with a mobile and no email is
+              reachable by one and not the other. */}
+          <div className="flex items-center gap-2 mb-2" data-testid="compose-channel">
+            {(['email', 'sms'] as const).map((c) => (
+              <button
+                key={c} type="button" onClick={() => pickChannel(c)} disabled={busy || switching}
+                data-testid={`channel-${c}`} aria-pressed={channel === c}
+                className={`text-xs font-semibold rounded-lg px-3 py-1.5 border transition-colors disabled:opacity-50 ${
+                  channel === c ? 'bg-accent text-white border-accent' : 'bg-surface text-muted border-line hover:text-ink'
+                }`}
+              >
+                {c === 'email' ? 'Email' : 'Text'}
+              </button>
+            ))}
+            {channel === 'sms' && allowance && (
+              // THE REMAINING COUNT, not a price. The £75 includes a hundred a month and top-ups
+              // come in hundreds, so what a garage can act on is the balance.
+              <span className="text-xs text-muted ml-1" data-testid="sms-allowance">
+                {allowance.remaining} text{allowance.remaining === 1 ? '' : 's'} left
+                {allowance.topUpRemaining > 0 && allowance.includedRemaining === 0 ? ' (from your top-up)' : ''}
+              </span>
+            )}
+            {channel === 'sms' && spent && (
+              <button
+                type="button" onClick={topUp} disabled={toppingUp} data-testid="sms-topup"
+                className="text-xs font-semibold rounded-lg px-3 py-1.5 bg-accent text-white disabled:opacity-50 ml-auto"
+              >
+                {toppingUp ? 'Opening…' : 'Top up 100'}
+              </button>
+            )}
+          </div>
+
+          {/* Spent is its OWN state, not a closed box. The customer is perfectly reachable; it is
+              we who cannot send, and the remedy is a purchase rather than a data fix. Email stays
+              available beside it, which is usually the faster answer. */}
+          {spent && !closed && (
+            <div className="mb-2 text-sm rounded-lg bg-warn-soft border-l-4 border-warn p-3" data-testid="compose-allowance-spent">
+              <p className="text-ink">
+                Your texts are used up for this month{allowance ? ` — ${allowance.usedThisMonth} sent` : ''}.
+                They reset on {allowance ? new Date(allowance.resetsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : 'the 1st'}.
+              </p>
+              <p className="text-muted mt-1">Top up to keep texting, or switch to email — it costs nothing and reaches the same customer.</p>
+            </div>
+          )}
+
           {closed ? (
             <div className="text-sm text-muted border border-dashed border-line rounded-xl p-4" data-testid="compose-closed">
-              {reachability && reachability.ok === false
-                ? reachability.reason
+              {reach && reach.ok === false
+                ? reach.reason
                 : 'This conversation cannot be written to.'}
             </div>
           ) : (
@@ -220,18 +318,18 @@ export default function ConversationView({
               <textarea
                 id="compose-body" data-testid="compose-body" rows={3} value={text} disabled={busy}
                 onChange={(e) => setText(e.target.value)} maxLength={2000}
-                placeholder={`Write to ${reachability.customerName}…`}
+                placeholder={`Write to ${reach!.customerName}…`}
                 className="w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent"
               />
               <div className="flex items-center gap-3 mt-1.5">
                 <button
-                  type="button" onClick={send} disabled={busy || !text.trim()} data-testid="compose-send"
+                  type="button" onClick={send} disabled={busy || switching || spent || !text.trim()} data-testid="compose-send"
                   className="rounded-lg px-4 py-2 text-sm font-semibold text-white bg-accent disabled:opacity-50"
                 >
-                  {busy ? 'Sending…' : 'Send'}
+                  {busy ? 'Sending…' : switching ? 'Checking…' : channel === 'sms' ? 'Send text' : 'Send'}
                 </button>
                 <span className="text-xs text-muted">
-                  Goes to {reachability.address} by {reachability.channel}. Replies come back to the garage.
+                  Goes to {(reach as { address: string }).address} by {channel === 'sms' ? 'text' : 'email'}. Replies come back to the garage.
                 </span>
                 {note && <span className={`text-xs ml-auto ${note.ok ? 'text-ok' : 'text-warn'}`} data-testid="compose-note">{note.text}</span>}
               </div>
