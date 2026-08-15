@@ -30,7 +30,7 @@ import React from 'react';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
-import { resolveMagicLink, MAGIC_LINK_DAYS } from '@/lib/magic-link';
+import { resolveMagicLink, MAGIC_LINK_DAYS, type MagicPurpose } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
 import { buildInvoiceDoc, type InvoiceDoc } from '@/lib/invoice-doc';
@@ -47,10 +47,21 @@ type Denied =
 type Props =
   | { state: 'quote'; doc: SerializedDoc; token: string }
   | { state: 'invoice'; doc: SerializedInvoiceDoc; token: string; canPay: boolean; returningFromPayment: boolean }
-  | { state: 'denied'; reason: Denied; revokedReason?: string | null; garagePhone: string | null };
+  | { state: 'denied'; reason: Denied; revokedReason?: string | null; purpose?: MagicPurpose | null; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
 
+/**
+ * ── THE COPY FOLLOWS THE PURPOSE, NOT THE ROUTE ─────────────────────────────────────────────────
+ * Every sentence here said "quote", which was right when this was a quote route and became wrong
+ * the day it started serving invoices: a dead invoice_pay link told the customer "We couldn't find
+ * that quote". They are looking at a bill.
+ *
+ * The purpose is known WHENEVER THE ROW WAS FOUND — expired, revoked, wrong_purpose all carry it
+ * from resolveMagicLink. It is NOT known for `not_found` or `rate_limited`, where there is no row,
+ * so those two must be purpose-NEUTRAL rather than guessing: "that link" is true of everything,
+ * and guessing "invoice" at a customer holding a quote is the same defect facing the other way.
+ */
 const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
   expired: {
     title: 'This quote has expired',
@@ -65,12 +76,13 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
     title: 'This quote is no longer available',
     body: 'This link has been closed by the garage. Please contact them — they can tell you where things stand, and send a new quote if you need one.',
   },
+  // PURPOSE-NEUTRAL, deliberately: no row was found, so we do not know what it was for.
   not_found: {
-    title: "We couldn't find that quote",
-    body: 'The address may have been copied incompletely — these links are long and email clients sometimes break them across lines. Try opening it again from the original message, or ask the garage to resend it.',
+    title: "We couldn't find that link",
+    body: 'The address may have been copied incompletely — these links are long, and email clients and PDF viewers sometimes break them across lines or run them into the text that follows. Try opening it again from the original message, or ask the garage to resend it.',
   },
   wrong_purpose: {
-    title: "This link doesn't open a quote",
+    title: "This link doesn't open what you expected",
     body: 'Please use the link exactly as the garage sent it, or ask them to resend it.',
   },
   rate_limited: {
@@ -100,6 +112,25 @@ const DENIED_COPY: Record<Denied, { title: string; body: string }> = {
  * Each of these has to be true STANDING ALONE, name no next step that doesn't exist, and never
  * blame the customer for a state the garage created.
  */
+/**
+ * Per-purpose overrides for the reasons where the noun actually matters. Anything not listed falls
+ * back to DENIED_COPY, so adding a purpose can never render a blank page before its copy is written.
+ */
+const BY_PURPOSE: Partial<Record<Denied, Partial<Record<MagicPurpose, { title: string; body: string }>>>> = {
+  expired: {
+    invoice_pay: {
+      title: 'This payment link has expired',
+      body: 'Your invoice is safe — only the link has aged out. Please contact the garage: they can send you a fresh one, or take payment another way.',
+    },
+  },
+  revoked: {
+    invoice_pay: {
+      title: 'This payment link is no longer active',
+      body: 'The garage has closed this link. Please contact them — they can tell you where things stand and send a new one if there is still something to pay.',
+    },
+  },
+};
+
 const REVOKED_COPY: Record<string, { title: string; body: string }> = {
   superseded: {
     title: 'This quote has been updated',
@@ -140,7 +171,9 @@ export default function CustomerLinkPage(props: Props) {
   if (props.state === 'denied') {
     // A recorded reason overrides the generic revoked copy; anything unrecognised falls back to it,
     // so a reason word added later can never render a blank page before its copy is written.
+    // Most specific first: a recorded revoke reason, then the purpose, then the neutral fallback.
     const copy = (props.reason === 'revoked' && props.revokedReason && REVOKED_COPY[props.revokedReason])
+      || (props.purpose && BY_PURPOSE[props.reason]?.[props.purpose])
       || DENIED_COPY[props.reason];
     return (
       <>
@@ -353,7 +386,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
     // not-found token identifies nothing, so the number is simply absent there.
     // `revokedReason` decides WHICH revoked sentence renders. Serialised as null, never undefined —
     // Next refuses to serialise undefined through getServerSideProps.
-    return { props: { state: 'denied', reason: res.reason, revokedReason: res.revokedReason ?? null, garagePhone: null } };
+    return { props: { state: 'denied', reason: res.reason, revokedReason: res.revokedReason ?? null, purpose: res.purpose ?? null, garagePhone: null } };
   }
 
   // ── INVOICE ────────────────────────────────────────────────────────────────────────────────

@@ -185,7 +185,13 @@ export type MagicResolution =
   | { ok: true; link: { id: string; groupId: string; jobCardId: string; invoiceId: string | null; purpose: MagicPurpose; recipient: string; expiresAt: Date } }
   // `revokedReason` rides along on the revoked branch only — the caller needs WHY to pick the
   // sentence, and undefined/null both mean "not recorded" and get the neutral one.
-  | { ok: false; reason: 'not_found' | 'expired' | 'revoked' | 'wrong_purpose' | 'rate_limited'; revokedReason?: RevokeReason };
+  /**
+   * `purpose` rides along WHENEVER THE ROW WAS FOUND — expired, revoked, wrong_purpose. It is the
+   * only way a caller can say "this INVOICE link has expired" rather than falling back to quote
+   * wording, which /c/[token] did for every dead link after it became a dispatcher. Absent for
+   * `not_found` and `rate_limited`, where there is genuinely no row and no honest guess.
+   */
+  | { ok: false; reason: 'not_found' | 'expired' | 'revoked' | 'wrong_purpose' | 'rate_limited'; revokedReason?: RevokeReason; purpose?: MagicPurpose };
 
 /**
  * Resolve a raw token. Distinguishes EXPIRED from NOT-FOUND deliberately: the customer holding a
@@ -207,9 +213,9 @@ export async function resolveMagicLink(
     select: { id: true, group_id: true, job_card_id: true, invoice_id: true, purpose: true, recipient: true, expires_at: true, revoked_at: true, revoked_reason: true },
   });
   if (!row) return { ok: false, reason: 'not_found' };
-  if (row.revoked_at) return { ok: false, reason: 'revoked', revokedReason: (row.revoked_reason ?? null) as RevokeReason };
-  if (row.expires_at.getTime() <= Date.now()) return { ok: false, reason: 'expired' };
-  if (opts.purpose && row.purpose !== opts.purpose) return { ok: false, reason: 'wrong_purpose' };
+  if (row.revoked_at) return { ok: false, reason: 'revoked', revokedReason: (row.revoked_reason ?? null) as RevokeReason, purpose: row.purpose as MagicPurpose };
+  if (row.expires_at.getTime() <= Date.now()) return { ok: false, reason: 'expired', purpose: row.purpose as MagicPurpose };
+  if (opts.purpose && row.purpose !== opts.purpose) return { ok: false, reason: 'wrong_purpose', purpose: row.purpose as MagicPurpose };
 
   if (opts.recordUse !== false) {
     const now = new Date();

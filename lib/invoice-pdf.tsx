@@ -6,7 +6,7 @@
  * browser, serverless-friendly. Strings via tServer (same locale JSON as the client). Server-only.
  */
 import React from 'react';
-import { Document, Page, Text, View, StyleSheet, Image, renderToBuffer } from '@react-pdf/renderer';
+import { Document, Page, Text, View, StyleSheet, Image, Link, renderToBuffer } from '@react-pdf/renderer';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
@@ -43,8 +43,8 @@ const S = StyleSheet.create({
   payBlock: { marginTop: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb', flexDirection: 'row', alignItems: 'center' },
   payQr: { width: 68, height: 68, marginRight: 14 },
   payHead: { fontSize: 10, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
-  payUrl: { fontSize: 8, color: '#2563eb', marginBottom: 4 },
-  payMarks: { fontSize: 8, color: '#6b7280' },
+  payMarks: { fontSize: 8, color: '#6b7280', marginBottom: 4 },
+  payUrl: { fontSize: 8, color: '#2563eb' },
   // VOID: a diagonal stamp across the page, and a stated reason under the header. Deliberately
   // loud — this document is RETAINED and remains producible (VATREC5010), so the copy itself has
   // to carry the fact that it was retired. Rendering is never refused.
@@ -216,27 +216,45 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
           </View>
         </View>
 
-        {/* THE BLOCK, for someone holding a printed copy. A URL they must retype is a URL they will
-            not use, so the QR carries the same link the email button does — one mint, three
-            surfaces. Marks come from the garage's real capabilities, never a fixed set. */}
-        {pay ? (
-          <View style={S.payBlock}>
-            {pay.qrPng ? <Image style={S.payQr} src={{ data: pay.qrPng, format: 'png' }} /> : null}
-            <View style={{ flex: 1 }}>
-              <Text style={S.payHead}>{t('payOnline')}</Text>
-              <Text style={S.payUrl}>{pay.url}</Text>
-              {pay.marks ? <Text style={S.payMarks}>{pay.marks}</Text> : null}
-            </View>
-          </View>
-        ) : null}
-
         {doc.footerText ? (
           // Payment terms / footer block (Invoicing tab) — multi-line, verbatim.
           <Text style={[S.muted, { marginTop: 18, fontSize: 8, lineHeight: 1.5 }]}>{doc.footerText}</Text>
         ) : null}
 
         {!reg && !warranty ? <Text style={[S.muted, { marginTop: 12 }]}>{t('notRegistered', { label: doc.taxLabel })}</Text> : null}
+
+        {/* ── THE RUNNING FOOTER IS DECLARED BEFORE THE PAY BLOCK, ON PURPOSE ──────────────────
+            It is absolutely positioned, so its place in this file changes nothing visually — but
+            it DOES change the order of text runs in the content stream, and that is the whole
+            fix below. Do not move it back under the pay block. */}
         <Text style={S.footer} fixed>{doc.company.name} — {t('title')} {doc.number}</Text>
+
+        {/* THE PAY BLOCK, LAST. For someone holding a printed copy: a URL they must retype is a
+            URL they will not use, so the QR carries the same link the email button does.
+            Marks come from the garage's real capabilities, never a fixed set.
+
+            ── WHY THE URL IS THE LAST TEXT ON THE PAGE ──────────────────────────────────────
+            react-pdf emits sibling <Text> blocks as ADJACENT runs with no end-of-line marker and
+            strips every whitespace-only or edge-whitespace run, so nothing can be inserted between
+            them. Selecting the URL therefore copied straight on into whatever followed it: the
+            first real QR test yielded ".../c/9HdTuMm5S0U4f4p-Visa", which 404s, while the page
+            LOOKED perfect. Five separator strategies were measured — trailing space, leading space,
+            a space-only Text, an embedded newline, reordering within the block — and every one was
+            stripped. The only thing that works is having nothing follow the URL at all, which is
+            why the marks are printed ABOVE it and the running footer is declared above too.
+
+            <Link> on top of that: clicking uses the annotation URI and bypasses the text layer
+            entirely, so a digital reader never depends on selection being clean. */}
+        {pay ? (
+          <View style={S.payBlock}>
+            {pay.qrPng ? <Image style={S.payQr} src={{ data: pay.qrPng, format: 'png' }} /> : null}
+            <View style={{ flex: 1 }}>
+              <Text style={S.payHead}>{t('payOnline')}</Text>
+              {pay.marks ? <Text style={S.payMarks}>{pay.marks}</Text> : null}
+              <Link src={pay.url} style={S.payUrl}>{pay.url}</Link>
+            </View>
+          </View>
+        ) : null}
       </Page>
     </Document>
   );
