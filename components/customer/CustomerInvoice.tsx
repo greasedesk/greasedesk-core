@@ -28,6 +28,7 @@
  */
 import React from 'react';
 import Head from 'next/head';
+import dynamic from 'next/dynamic';
 import DocumentLines from '@/components/DocumentLines';
 import { formatMoney } from '@/lib/format-money';
 import { amountReceivedPennies, balanceOwedPennies } from '@/lib/invoice';
@@ -40,6 +41,9 @@ export type SerializedInvoiceDoc = Omit<InvoiceDoc, 'issuedAt' | 'paidAt' | 'voi
   voidedAt: string | null;
   datePaid: string | null;
 };
+
+// Stripe's SDK touches `window`; it must never run during SSR.
+const PayPanel = dynamic(() => import('@/components/customer/PayPanel'), { ssr: false });
 
 const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
 const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
@@ -64,7 +68,9 @@ const Banner = ({ tone, title, children, testId }: {
   </div>
 );
 
-export default function CustomerInvoice({ doc: d }: { doc: SerializedInvoiceDoc }) {
+export default function CustomerInvoice({ doc: d, token, canPay, returningFromPayment }: {
+  doc: SerializedInvoiceDoc; token: string; canPay: boolean; returningFromPayment: boolean;
+}) {
   const money = (p: number) => formatMoney(p, { currency: d.currency, locale: d.locale });
   const date = (iso: string) => new Date(iso).toLocaleDateString(d.locale, { day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -174,6 +180,19 @@ export default function CustomerInvoice({ doc: d }: { doc: SerializedInvoiceDoc 
               />
             )}
 
+            {/* ── BACK FROM 3-D SECURE ────────────────────────────────────────────────────────
+                The client state is gone after that redirect, so the same sentence has to survive a
+                round trip. Shown only while the invoice is still open: once the webhook lands, the
+                document says paid and this would be stale reassurance about a finished thing. */}
+            {returningFromPayment && d.status === 'issued' && !d.underCorrection && (
+              <Banner tone="ok" title="Payment received" testId="pay-returned">
+                <p>
+                  Thank you — your payment is going through. The garage will send a receipt once it’s
+                  confirmed. If this invoice still shows an amount below, it just hasn’t caught up yet.
+                </p>
+              </Banner>
+            )}
+
             {!d.underCorrection && d.status !== 'void' && (
               <PaymentState
                 status={d.status}
@@ -184,6 +203,13 @@ export default function CustomerInvoice({ doc: d }: { doc: SerializedInvoiceDoc 
                 money={money}
                 date={date}
               />
+            )}
+
+            {/* THE BUTTON. Rendered only when the server says the endpoint would accept — the same
+                rule both sides read (lib/invoice-payment-intent::canOfferCardPayment), so a button
+                that appears is a button that works. */}
+            {canPay && balance > 0 && (
+              <PayPanel token={token} locale={d.locale} currency={d.currency} amountPennies={balance} />
             )}
 
             {d.footerText && (

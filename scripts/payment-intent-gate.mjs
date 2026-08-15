@@ -34,7 +34,15 @@ const post = async (body) => {
 };
 
 const minted = [];
-const limiterKeys = new Set();
+/**
+ * The limiter keys this run burns are scoped by TIME, not guessed by name. They were hardcoded to
+ * `pay:ip:127.0.0.1`, which is right for a local server and wrong for every remote one: against
+ * greasedesk.com the key is this machine's egress IP, which the gate cannot know — so the hammer
+ * loop burned ten tokens it could not release and the next four runs failed on 429s that looked
+ * like endpoint defects. Deleting `pay:` rows created since the run started is exact regardless of
+ * where the server is, and releasing a limiter token is not a destructive act.
+ */
+const startedAt = new Date();
 try {
   // ── 1. WHICH DOCUMENTS ARE REFUSED ─────────────────────────────────────────────────────────
   console.log('\n— refusals —');
@@ -82,9 +90,6 @@ try {
       orderBy: { issued_at: 'desc' },
     });
 
-    limiterKeys.add('pay:ip:127.0.0.1');
-    limiterKeys.add('pay:ip:::1');
-
     check('GET is refused', (await fetch(`${B}/api/pay/intent`)).status === 405);
 
     const noToken = await post({});
@@ -107,7 +112,6 @@ try {
       expiresAt: invoicePayExpiry({ dueDate: inv.due_date, issuedAt: inv.issued_at }),
     });
     minted.push(pay.id);
-    limiterKeys.add(`pay:link:${pay.id}`);
 
     const real = await post({ token: pay.rawToken });
     // With no Stripe key and no publishable key locally this reaches PAY:not_configured. That is the
@@ -139,10 +143,11 @@ try {
     const d = await prisma.customerMagicLink.deleteMany({ where: { id: { in: minted } } });
     check('teardown removed the links this run minted', d.count === minted.length, `${d.count} of ${minted.length}`);
   }
-  if (limiterKeys.size) {
-    const d = await prisma.authRateLimit.deleteMany({ where: { key: { in: [...limiterKeys] } } });
-    check('teardown cleared this run’s limiter budget', true, `${d.count} token(s) released — the gate stays re-runnable`);
-  }
+  const released = await prisma.authRateLimit.deleteMany({
+    where: { key: { startsWith: 'pay:' }, created_at: { gte: startedAt } },
+  });
+  check('teardown cleared this run’s limiter budget', true,
+    `${released.count} token(s) released — scoped by time, so it works against a remote server too`);
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);

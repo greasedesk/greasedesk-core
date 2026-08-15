@@ -34,6 +34,8 @@ import { resolveMagicLink, MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
 import { buildInvoiceDoc, type InvoiceDoc } from '@/lib/invoice-doc';
+import { canOfferCardPayment } from '@/lib/invoice-payment-intent';
+import { balanceOwedPennies } from '@/lib/invoice';
 import DocumentLines from '@/components/DocumentLines';
 import CustomerInvoice, { type SerializedInvoiceDoc } from '@/components/customer/CustomerInvoice';
 import { useState } from 'react';
@@ -44,7 +46,7 @@ type Denied =
 
 type Props =
   | { state: 'quote'; doc: SerializedDoc; token: string }
-  | { state: 'invoice'; doc: SerializedInvoiceDoc }
+  | { state: 'invoice'; doc: SerializedInvoiceDoc; token: string; canPay: boolean; returningFromPayment: boolean }
   | { state: 'denied'; reason: Denied; revokedReason?: string | null; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
@@ -125,7 +127,16 @@ const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
 const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
 
 export default function CustomerLinkPage(props: Props) {
-  if (props.state === 'invoice') return <CustomerInvoice doc={props.doc} />;
+  if (props.state === 'invoice') {
+    return (
+      <CustomerInvoice
+        doc={props.doc}
+        token={props.token}
+        canPay={props.canPay}
+        returningFromPayment={props.returningFromPayment}
+      />
+    );
+  }
   if (props.state === 'denied') {
     // A recorded reason overrides the generic revoked copy; anything unrecognised falls back to it,
     // so a reason word added later can never render a blank page before its copy is written.
@@ -358,9 +369,20 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
       const site = await prisma.jobCard.findUnique({ where: { id: res.link.jobCardId }, select: { site: { select: { phone: true } } } });
       return { props: { state: 'denied', reason: 'no_invoice', garagePhone: site?.site?.phone ?? null } };
     }
+    // Whether to OFFER payment is the endpoint's rule, asked here so the page cannot advertise
+    // something the endpoint would refuse.
+    const totalPennies = invDoc.vatRegistered ? invDoc.totals.grossPennies : invDoc.totals.netPennies;
+    const canPay = await canOfferCardPayment({
+      groupId: res.link.groupId,
+      doc: invDoc,
+      balancePennies: balanceOwedPennies({ amount_paid_pennies: invDoc.amountPaidPennies }, totalPennies),
+    });
     return {
       props: {
         state: 'invoice',
+        token,
+        canPay,
+        returningFromPayment: String(ctx.query.pay ?? '') === 'processing',
         doc: {
           ...invDoc,
           issuedAt: invDoc.issuedAt.toISOString(),

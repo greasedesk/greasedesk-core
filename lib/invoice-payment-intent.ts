@@ -77,6 +77,26 @@ export function refusePayment(doc: InvoiceDoc, balancePennies: number): PayRefus
 }
 
 /**
+ * CAN THIS INVOICE BE PAID BY CARD RIGHT NOW? Answered without creating anything, so the page can
+ * decide whether to render a Pay button.
+ *
+ * Shares refusePayment with the endpoint deliberately. The alternative — the page guessing and the
+ * endpoint deciding — produces a button that appears and then immediately refuses, which reads as
+ * a broken product rather than as an unavailable option. One rule, two readers, and the page never
+ * offers what the endpoint would turn down.
+ */
+export async function canOfferCardPayment(args: {
+  groupId: string;
+  doc: InvoiceDoc;
+  balancePennies: number;
+}): Promise<boolean> {
+  if (!getStripe() || !stripePublishableKey()) return false;
+  if (refusePayment(args.doc, args.balancePennies)) return false;
+  const row = await readConnection(args.groupId, 'stripe');
+  return providerState(row).status === 'ready';
+}
+
+/**
  * Set up the payment. Throws `PAY:<code>` for conditions the caller turns into a sentence; the
  * Stripe classifier (lib/stripe-errors) handles anything Stripe itself refuses.
  */
