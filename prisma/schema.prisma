@@ -378,6 +378,7 @@ model Group {
   payments           Payment[]
   refunds            Refund[]
   providerConnections ProviderConnection[]
+  applicationFeeRates ApplicationFeeRate[]
 }
 
 /**
@@ -395,6 +396,72 @@ model Group {
  * dropped: a destructive migration buys nothing here, and the columns are the only record of what
  * the pre-migration state was if the backfill ever needs auditing.
  */
+/**
+ * WHAT GREASEDESK TAKES ON A CARD PAYMENT A GARAGE COLLECTS THROUGH US.
+ *
+ * Effective-dated, on the CommissionRate model: rates are never edited, only superseded by a new
+ * forward row, and Payment.fee_rate_id is a FROZEN link so what was charged stays explicable years
+ * later. Amending a rate that has already priced a transaction would silently rewrite history.
+ *
+ * ── BASIS POINTS, NOT A PERCENT AND NOT A FLOAT ─────────────────────────────────────────────────
+ * 25 = 0.25%. An integer over 10000, the same arithmetic lib/commission::splitAmount already uses.
+ * A float rate on money is how a rounding argument starts.
+ *
+ * ── group_id NULL IS THE PLATFORM DEFAULT, AND THAT IS WHY THE UNIQUE IS PARTIAL ────────────────
+ * A row with a group_id is that tenant's own negotiated rate; NULL is the default everyone else
+ * gets. Postgres treats NULLs as DISTINCT in a unique index, so the obvious
+ * @@unique([group_id, country_code, currency, effective_from]) would happily allow TWO platform
+ * defaults on the same boundary date and leave the resolver silently picking one. The timeline
+ * invariant needs TWO PARTIAL unique indexes, which Prisma cannot express — they are created in
+ * raw SQL in the migration and must be preserved by hand if this model is ever rewritten:
+ *   UNIQUE (country_code, currency, effective_from)           WHERE group_id IS NULL
+ *   UNIQUE (group_id, country_code, currency, effective_from) WHERE group_id IS NOT NULL
+ * (The same NULL-distinctness is what makes ProviderConnection's (provider, external_id) safe —
+ * there, many nulls SHOULD coexist. Here exactly one row must win. Same rule, opposite need.)
+ *
+ * ── THE VAT QUESTION IS OPEN (2026-08-15) ───────────────────────────────────────────────────────
+ * This fee is a supply of services by a UK company to a UK business, so on the face of it it is
+ * VATable at 20%. Whether the basis points are VAT-INCLUSIVE or exclusive is with the accountant.
+ * If inclusive, 25bp gross nets us 20.8bp and the number likely becomes 30. Nothing in the schema
+ * changes either way — a rate change is a new forward row, which is the whole point of the shape —
+ * but do not read 25 as a settled commercial figure until that answer lands. A second consequence
+ * is unbuilt: a garage reclaiming input VAT needs a periodic VAT invoice from us for fees paid.
+ */
+model ApplicationFeeRate {
+  id String @id @default(uuid())
+  /**
+   * NULL = the platform default. Set = this tenant's own rate, which beats the default REGARDLESS
+   * OF DATES — a negotiated rate is not overridden by us changing the default later.
+   */
+  group_id     String?
+  country_code String // ISO-2, the tenant's tax_country_code
+  currency     String // ISO-4217, the collected payment's currency
+
+  /** 25 = 0.25%. Integer; fee = floor(amount × bp / 10000). */
+  basis_points Int
+  /**
+   * Present and NULL by design, both of them. A floor is regressive exactly where it hurts (50p on
+   * a £36 payment is 1.4%) and gives a garage a reason to steer small jobs to cash, which loses the
+   * whole transaction rather than the difference; a cap is not a conversation below roughly a £10k
+   * job. Neither is wanted today. They exist because fee_rate_id is frozen, so adding a column
+   * afterwards is a migration over money already charged — the same reasoning that put
+   * revenue_stream on CommissionRate ahead of need.
+   */
+  min_fee_pennies Int?
+  cap_fee_pennies Int?
+
+  effective_from DateTime
+  created_by     String? // operator id (audit)
+  created_at     DateTime @default(now())
+
+  group Group? @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  // Serves the resolver's lookup. The UNIQUENESS is enforced by the two partial indexes above,
+  // created in raw SQL — this plain index is for reads only and guarantees nothing.
+  @@index([country_code, currency, effective_from])
+  @@index([group_id])
+}
+
 model ProviderConnection {
   id       String @id @default(uuid())
   group_id String
