@@ -19,7 +19,9 @@
  *                     renders a real invoice number over an empty table and a £0.00 total.
  *   AMENDED         — the number survives a correction, so the customer can be holding two copies
  *                     that differ. The page says which one this is.
- *   PAID / PART-PAID— derived from the ledger, and NULL means unknown rather than nothing.
+ *   PAID / PART-PAID— derived from the ledger through lib/payments::balanceOwedPennies, the same
+ *                     derivation the payment path uses, so the figure a customer is shown and the
+ *                     figure they would be charged cannot drift.
  *
  * NO PAYMENT HERE YET. Taking the money is the next slice; this renders the document and the state.
  * There is deliberately no "Pay now" button that does nothing.
@@ -28,6 +30,7 @@ import React from 'react';
 import Head from 'next/head';
 import DocumentLines from '@/components/DocumentLines';
 import { formatMoney } from '@/lib/format-money';
+import { amountReceivedPennies, balanceOwedPennies } from '@/lib/invoice';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 
 /** Dates cross getServerSideProps as strings; the shape is otherwise the shared document. */
@@ -66,10 +69,11 @@ export default function CustomerInvoice({ doc: d }: { doc: SerializedInvoiceDoc 
   const date = (iso: string) => new Date(iso).toLocaleDateString(d.locale, { day: 'numeric', month: 'long', year: 'numeric' });
 
   const totalPennies = d.vatRegistered ? d.totals.grossPennies : d.totals.netPennies;
-  // The balance is the ledger's, and its NULL is load-bearing: the back catalogue has no Payment
-  // rows, so "how much is left" is genuinely unknown there. Unknown is not zero and not "unpaid".
-  const paid = d.amountPaidPennies;
-  const balance = paid == null ? null : totalPennies - paid;
+  // ONE derivation, shared with the payment path — see lib/payments. A NULL cache reads as zero
+  // received, which is only true because the backfill wrote a row for every invoice the garage had
+  // marked paid; the invariant gate holds that line.
+  const paid = amountReceivedPennies({ amount_paid_pennies: d.amountPaidPennies });
+  const balance = balanceOwedPennies({ amount_paid_pennies: d.amountPaidPennies }, totalPennies);
 
   return (
     <>
@@ -197,21 +201,23 @@ export default function CustomerInvoice({ doc: d }: { doc: SerializedInvoiceDoc 
 }
 
 /**
- * What is owed, said honestly in every case — including the one where we do not know the amount.
+ * What is owed.
  *
  * ── STATUS IS EVIDENCE WHERE THE LEDGER IS SILENT ───────────────────────────────────────────────
- * `paid == null` is the whole back catalogue: invoices settled before the Payment table existed.
- * But an invoice marked `paid` or `settled` IS known to be paid — the amount is what's missing, not
- * the fact. Checking the ledger first would have told a customer holding a receipted invoice to
- * "contact the garage about anything owing", which is worse than useless. ZZ's invoice 0029 is
- * exactly this shape and is how it was caught.
+ * The FACT of payment comes from `status`, the AMOUNT from the ledger, and neither stands in for
+ * the other. An invoice marked `paid` or `settled` is known to be paid even if the ledger has no
+ * figure for it; checking the ledger first told a customer holding a receipted invoice to "contact
+ * the garage about anything owing", which is worse than useless. ZZ's 0029 is that shape.
  *
- * So: the FACT comes from status, the AMOUNT from the ledger, and neither stands in for the other.
- * Printing "£0.00 received" over a cash-settled invoice states a falsehood with confidence;
- * printing "Amount due: £940" invites a customer to pay a bill they cleared in March.
+ * ── THE UNKNOWN BRANCH IS GONE (2026-08-15) ─────────────────────────────────────────────────────
+ * There used to be a third case: no ledger figure at all, rendered as "contact the garage". That
+ * was right while the back catalogue had no rows — and became WRONG the moment the backfill
+ * finished, because it then fired on every ordinary unpaid invoice, which is precisely what a pay
+ * link is for. A NULL cache now reads as zero received; see lib/payments::amountReceivedPennies for
+ * why that is safe and what holds it up.
  */
 function PaymentState({ status, paid, balance, totalPennies, datePaid, money, date }: {
-  status: string; paid: number | null; balance: number | null; totalPennies: number; datePaid: string | null;
+  status: string; paid: number; balance: number; totalPennies: number; datePaid: string | null;
   money: (p: number) => string; date: (iso: string) => string;
 }) {
   // Settled by the document's own status, whatever the ledger does or doesn't know.
@@ -233,16 +239,7 @@ function PaymentState({ status, paid, balance, totalPennies, datePaid, money, da
       </div>
     );
   }
-  if (paid == null) {
-    return (
-      <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-balance-unknown">
-        <p className="text-sm text-muted">
-          For anything owing on this invoice, or to pay it, please contact the garage.
-        </p>
-      </div>
-    );
-  }
-  if (balance != null && balance <= 0) {
+  if (balance <= 0) {
     return (
       <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-paid">
         <p className="text-sm font-semibold text-ok">
@@ -266,7 +263,7 @@ function PaymentState({ status, paid, balance, totalPennies, datePaid, money, da
         </p>
       )}
       <p className="text-base font-bold text-ink mt-1">
-        Amount due: <span data-testid="invoice-amount-due">{money(balance ?? totalPennies)}</span>
+        Amount due: <span data-testid="invoice-amount-due">{money(balance)}</span>
       </p>
     </div>
   );

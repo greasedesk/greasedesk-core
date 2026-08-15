@@ -16,6 +16,8 @@ import { prisma } from '../lib/db.ts';
 import { MAGIC_LINK_DAYS, INVOICE_PAY_GRACE_DAYS, invoicePayExpiry, createMagicLink, resolveMagicLink, magicLinkUrl } from '../lib/magic-link.ts';
 import { offersPayLink } from '../lib/invoice-pay-link.ts';
 import { canEditInvoice, isUnderCorrection } from '../lib/invoice.ts';
+import { expectedCachePennies } from '../lib/payments.ts';
+import { amountReceivedPennies, balanceOwedPennies } from '../lib/invoice.ts';
 
 const GATE_REF = 'GB-GD2141';
 const DAY = 24 * 60 * 60 * 1000;
@@ -102,6 +104,32 @@ try {
     const unlocked = { status: 'issued', hasFrozenLines: false };
     return statusOnly(unlocked) === true && isUnderCorrection(unlocked) === true;
   })(), 'both say "issued" — only this predicate says the document is blank');
+
+  // ── 3b. WHAT IS OWED ───────────────────────────────────────────────────────────────────────
+  // The backfill changed what an absent ledger figure MEANS, and the customer view was left
+  // reading the old meaning: it told every unpaid invoice's customer to ring the garage instead of
+  // showing them the amount. These assert the new reading and the thing that makes it safe.
+  console.log('\n— what is owed —');
+  check('no ledger figure now reads as nothing received', amountReceivedPennies({ amount_paid_pennies: null }) === 0,
+    'before the backfill this was "unknown" and had to stay unknown');
+  check('an unpaid invoice owes its whole total', balanceOwedPennies({ amount_paid_pennies: null }, 94000) === 94000,
+    'the case a pay link exists for — it rendered "contact the garage" for a few hours');
+  check('a part payment is subtracted', balanceOwedPennies({ amount_paid_pennies: 20000 }, 94000) === 74000);
+  check('a settled invoice owes nothing', balanceOwedPennies({ amount_paid_pennies: 94000 }, 94000) === 0);
+  check('an overpayment is reported as credit, not clamped to zero',
+    balanceOwedPennies({ amount_paid_pennies: 100000 }, 94000) === -6000,
+    'clamping would hide an overpayment the garage needs to know about');
+  check('zero received and unknown are the same ANSWER but not the same fact', (() => {
+    // expectedCachePennies still distinguishes them at the LEDGER; only the product reading merged.
+    return expectedCachePennies([], []) === null
+      && expectedCachePennies([{ status: 'processing', amount_pennies: 500 }], []) === 0
+      && amountReceivedPennies({ amount_paid_pennies: null }) === amountReceivedPennies({ amount_paid_pennies: 0 });
+  })(), 'the ledger keeps the distinction; the balance no longer needs it');
+  check('the derivation is discriminating', (() => {
+    const old = (inv, total) => (inv.amount_paid_pennies == null ? null : total - inv.amount_paid_pennies);
+    return old({ amount_paid_pennies: null }, 94000) === null      // the shipped bug: no figure
+      && balanceOwedPennies({ amount_paid_pennies: null }, 94000) === 94000;
+  })(), 'the old reading returned null here, which is what rendered the wrong sentence');
 
   // ── 4. THE MINT REFUSES A PAY LINK WITH NO INVOICE ─────────────────────────────────────────
   console.log('\n— minting —');

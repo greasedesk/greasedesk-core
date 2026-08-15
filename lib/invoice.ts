@@ -130,3 +130,41 @@ export function invoiceTotals(lines: InvoiceLineLike[]): InvoiceTotals {
     netPennies: agg.netPennies, vatPennies: agg.taxPennies, grossPennies: agg.grossPennies,
   };
 }
+
+/**
+ * WHAT HAS ACTUALLY BEEN RECEIVED, as a number the product can subtract.
+ *
+ * ── WHY NULL BECOMES ZERO HERE, AND ONLY SINCE 2026-08-15 ───────────────────────────────────────
+ * expectedCachePennies above still returns NULL for "no rows", and that is still the right thing
+ * for the LEDGER to say. What changed is what the absence of rows MEANS. Before the backfill it
+ * meant "possibly settled in cash years ago, we cannot know", and collapsing that to zero would
+ * have shown a customer a demand for money they had already paid — which is exactly what the
+ * customer view did for the few hours between the backfill finishing and this function existing.
+ * The backfill wrote a row for every invoice the garage had marked paid, so that case is gone: no
+ * rows now means nothing has been received, and the balance is the whole total.
+ *
+ * THIS IS SAFE ONLY BECAUSE THE INVARIANT HOLDS. scripts/payment-invariant-gate asserts —
+ * unconditionally, now the ALLOW_PRE_BACKFILL hatch is removed — that no invoice carries a paid
+ * figure without a ledger row behind it. If that check ever goes red, this function starts lying.
+ * They are a pair: do not weaken the gate and leave this in place.
+ *
+ * The remaining edge is an old invoice the garage was paid for in cash and never marked paid. That
+ * is not uncertainty on our side: the garage's own record says unpaid, and reporting what the
+ * document says is correct behaviour rather than a guess.
+ *
+ * NOTE this answers "how much", not "was there a payment". lib/invoice-void's `wasPaid` asks the
+ * second question and reads a NULL cache as evidence rather than as a quantity. Both are right;
+ * they are not interchangeable.
+ */
+export const amountReceivedPennies = (inv: { amount_paid_pennies?: number | null }): number =>
+  inv.amount_paid_pennies ?? 0;
+
+/**
+ * THE balance still owing — one derivation, shared by the customer view and (next slice) the
+ * PaymentIntent. A negative result means the invoice is in credit; callers must handle that rather
+ * than clamp it, because clamping hides an overpayment the garage needs to know about.
+ */
+export const balanceOwedPennies = (
+  inv: { amount_paid_pennies?: number | null },
+  totalPennies: number,
+): number => totalPennies - amountReceivedPennies(inv);

@@ -10,11 +10,14 @@
  * has one answer computed one way.
  *
  * ── THE CACHE IS DERIVED, AND ITS NULL MEANS SOMETHING ──────────────────────────────────────────
- *   NULL  no payment row exists at all — unknown. Every invoice paid before this table did.
- *   0     rows exist but nothing has cleared yet (a bank transfer inside its window). We know that
- *         nothing has arrived, which is a different statement from not knowing.
+ *   NULL  no payment row exists at all.
+ *   0     rows exist but nothing has cleared yet (a bank transfer inside its window).
  *   n     Σ succeeded payments − Σ refunds.
- * Collapsing 0 and NULL would erase the distinction the whole honest-null discipline rests on.
+ * The LEDGER keeps NULL and 0 apart and always will — they are different facts about the rows.
+ * What the PRODUCT does with NULL changed on 2026-08-15: it used to mean "possibly paid in cash
+ * before this table existed, we cannot know", and the backfill removed that case, so a balance now
+ * reads NULL as nothing received. That reading lives in lib/invoice::amountReceivedPennies, with
+ * the reasoning and the invariant that holds it up. Do not fold it back in here.
  *
  * ── PENDING MONEY IS NOT MONEY ──────────────────────────────────────────────────────────────────
  * A windowed or manual method records a Payment at `processing`, not `succeeded`: the garage has
@@ -72,6 +75,12 @@ export function expectedCachePennies(
 }
 
 /**
+ * NOTE: `amountReceivedPennies` / `balanceOwedPennies` live in lib/invoice, NOT here. They are read
+ * by the CUSTOMER page, and this module imports node:crypto — which webpack refuses to bundle for
+ * the browser. The rule belongs with the other money helpers; this file owns the writes.
+ */
+
+/**
  * Write a payment and reconcile the invoice. Returns the row, or null if `sourceRef` already existed.
  *
  * ── `reconstructed` IS DERIVED FROM THE KEY, NEVER PASSED ───────────────────────────────────────
@@ -122,8 +131,8 @@ export async function reconcileInvoice(tx: Tx, invoiceId: string): Promise<numbe
     (tx as any).payment.findMany({ where: { invoice_id: invoiceId }, select: { status: true, amount_pennies: true } }),
     (tx as any).refund.findMany({ where: { payment: { invoice_id: invoiceId } }, select: { amount_pennies: true } }),
   ]);
-  // No rows at all → leave it UNKNOWN. This is what keeps every historic invoice honest until the
-  // backfill runs: absence of a ledger is not evidence that nothing was paid.
+  // No rows at all → leave the column alone. The ledger declines to state a figure it has no rows
+  // for; deciding what that ABSENCE means for a balance is the reader's job, not the writer's.
   const net = expectedCachePennies(payments, refunds);
   if (net === null) return null;
 
