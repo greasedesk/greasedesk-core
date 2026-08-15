@@ -18,7 +18,10 @@ import { freezeQuoteVersion } from '../lib/quote-version.ts';
 import { acceptQuote } from '../lib/quote-acceptance.ts';
 import { issueInvoiceForCard } from '../lib/invoice-issue.ts';
 import { recordPayment } from '../lib/payments.ts';
-import { fulfilCardPayment, closeCardPayment, CARD_METHOD_LABEL } from '../lib/card-payment-fulfil.ts';
+import { fulfilCardPayment, closeCardPayment, recordCardRefunds, CARD_METHOD_LABEL } from '../lib/card-payment-fulfil.ts';
+import { refusePayment } from '../lib/invoice-payment-intent.ts';
+import { applyCardTransition } from '../lib/jobcard-transition.ts';
+import { findTransition } from '../lib/jobcard-status.ts';
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const STAMP = `ZZ-FULFIL-${Date.now()}`;
@@ -43,6 +46,10 @@ async function invoiceFixture(label, unitPrice) {
   });
   let invId;
   await prisma.$transaction(async (tx) => { invId = await issueInvoiceForCard(tx, card.id, ZZ); }, { timeout: 30000 });
+  // The real flow moves the card to `invoiced` as it mints (pages/api/jobcard-status). Without this
+  // the fixture leaves it at `accepted`, and `accepted → paid` is not a legal transition — which is
+  // the guard working, not a bug, but it tests the wrong thing.
+  await prisma.jobCard.update({ where: { id: card.id }, data: { status: 'invoiced' } });
   const inv = await prisma.invoice.findUnique({ where: { id: invId }, select: { id: true, site_id: true, invoice_number: true, lines: { select: { line_total: true, line_vat: true } } } });
   const total = inv.lines.reduce((a, l) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
   fixtures.push({ cardId: card.id, custId: cu.id, vehId: ve.id, identityId: idt.id, invoiceId: invId });
@@ -158,6 +165,67 @@ try {
   const b = await prisma.payment.findUnique({ where: { source_ref: piB }, select: { status: true } });
   check('settling one leaves the other in flight', a.status === 'succeeded' && b.status === 'processing',
     'settleProcessing would have credited money that never arrived');
+  // ── 6b. MONEY GIVEN BACK ───────────────────────────────────────────────────────────────────
+  console.log('\n— a refund —');
+  // A synthetic Stripe charge. recordCardRefunds reads only these fields, and building one here
+  // beats needing a live charge to prove the ledger behaviour.
+  const chargeId = `ch_${STAMP}`;
+  await prisma.payment.updateMany({ where: { source_ref: piFull }, data: { charge_id: chargeId } });
+  const refundId = `re_${STAMP}`;
+  const synthetic = {
+    id: chargeId, amount: full.total, amount_refunded: full.total, currency: 'gbp',
+    payment_intent: piFull,
+    refunds: { data: [{ id: refundId, amount: full.total, currency: 'gbp', reason: 'requested_by_customer' }], has_more: false },
+  };
+  const ref1 = await recordCardRefunds({ charge: synthetic, accountId: 'acct_gate' });
+  check('the refund is recorded as its own row', ref1.recorded === 1,
+    'its own row, never a negative payment — "arrived" and "returned" must not sum into one figure');
+  check('the ledger nets it off', (await prisma.invoice.findUnique({ where: { id: full.id }, select: { amount_paid_pennies: true } })).amount_paid_pennies === 0,
+    'Σ succeeded − Σ refunded');
+  const afterRefund = await prisma.invoice.findUnique({ where: { id: full.id }, select: { status: true } });
+  check('the invoice STAYS paid', afterRefund.status === 'paid',
+    'a refund unwinds a transaction; it does not reinstate a debt');
+
+  // THE HOLE A REFUND OPENS. The cache is now 0, so the BALANCE arithmetic says the whole total is
+  // owing — and an old pay link would charge the customer again for money deliberately given back.
+  const refundedDoc = { status: afterRefund.status, underCorrection: false, series: 'chargeable' };
+  check('an old pay link cannot re-charge a refunded invoice',
+    refusePayment(refundedDoc, full.total)?.code === 'nothing_owing',
+    'balance alone says £' + (full.total / 100).toFixed(2) + ' owing; the document says settled, and the document is right');
+  check('and that guard is discriminating', (() => {
+    const balanceOnly = (bal) => (bal <= 0 ? 'nothing_owing' : null);
+    return balanceOnly(full.total) === null && refusePayment(refundedDoc, full.total).code === 'nothing_owing';
+  })());
+
+  check('a redelivered refund writes no second row', (await recordCardRefunds({ charge: synthetic, accountId: 'acct_gate' })).recorded === 0);
+  check('the application fee is honestly unknown when it could not be returned',
+    (await prisma.refund.findFirst({ where: { refund_id: refundId }, select: { application_fee_refunded_pennies: true } })).application_fee_refunded_pennies === null,
+    'NULL, not 0 — zero would claim we deliberately kept it');
+
+  // ── 7. THE CARD MOVES WITH THE INVOICE ─────────────────────────────────────────────────────
+  console.log('\n— the job card —');
+  const paidCard = await prisma.jobCard.findUnique({ where: { id: fixtures[0].cardId }, select: { status: true } });
+  check('a cleared invoice moves the card to paid', paidCard.status === 'paid',
+    'a paid invoice against a card at "invoiced" is an inconsistency the garage sees');
+  check('through the SHARED transition writer, so the table governs it',
+    findTransition('invoiced', 'paid') !== null && findTransition('done', 'paid') === null,
+    'the webhook is not a second, ungoverned way to move a card');
+  check('the move is attributed to nobody at the garage', (await prisma.auditLog.findFirst({
+    where: { entity_id: fixtures[0].cardId, action: 'status.paid' }, select: { user_id: true },
+  }))?.user_id === null, 'the customer paid — a null actor says so');
+  const partCard = await prisma.jobCard.findUnique({ where: { id: fixtures[1].cardId }, select: { status: true } });
+  check('a PART payment leaves the card where it was', partCard.status === 'invoiced',
+    `still ${partCard.status} — the invoice is open, so the card is still outstanding work`);
+  check('an illegal move is refused rather than written', await prisma.$transaction(async (tx) => {
+    const r = await applyCardTransition(tx, { groupId: ZZ, jobCardId: fixtures[1].cardId, from: 'done', to: 'paid', actorUserId: null });
+    return r.ok === false && r.refusal.code === 'illegal_transition';
+  }));
+  check('and moving to the status it already holds writes nothing', await prisma.$transaction(async (tx) => {
+    const before = await tx.auditLog.count({ where: { entity_id: fixtures[0].cardId, action: 'status.paid' } });
+    const r = await applyCardTransition(tx, { groupId: ZZ, jobCardId: fixtures[0].cardId, from: 'paid', to: 'paid', actorUserId: null });
+    const after = await tx.auditLog.count({ where: { entity_id: fixtures[0].cardId, action: 'status.paid' } });
+    return r.ok && r.moved === false && before === after;
+  }), 'a redelivered payment must not read as the card being paid twice');
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {

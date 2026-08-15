@@ -26,9 +26,11 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { getStripe } from '@/lib/stripe';
-import { settlePaymentByRef, closePaymentByRef } from '@/lib/payments';
+import { settlePaymentByRef, closePaymentByRef, reconcileInvoice } from '@/lib/payments';
 import { invoiceTotals, balanceOwedPennies } from '@/lib/invoice';
 import { writeAudit } from '@/lib/audit';
+import { applyCardTransition } from '@/lib/jobcard-transition';
+import type { JobStatus } from '@/lib/jobcard-status';
 
 /** What the garage sees as the method on a document. Not a tenant PaymentMethod row — those are
  *  theirs to define, and inventing one on their behalf would put a row in their settings. */
@@ -100,6 +102,25 @@ export async function fulfilCardPayment(args: {
         groupId: inv.group_id, userId: null, jobCardId: inv.job_card_id, action: 'invoice.paid_confirmed',
         diff: { number: inv.invoice_number, method: CARD_METHOD_LABEL, online: true },
       });
+
+      // ── AND THE CARD MOVES WITH IT ────────────────────────────────────────────────────────
+      // A paid invoice against a card still sitting at `invoiced` is an inconsistency the garage
+      // sees on their own job list. Routed through the SHARED writer so the transition table
+      // governs this move exactly as it governs the counter one — a webhook must not be a second,
+      // ungoverned way to change a card's status. actorUserId is null: nobody at the garage did
+      // this, the customer did, and the trail should say so.
+      const card = await (tx as any).jobCard.findUnique({ where: { id: inv.job_card_id }, select: { status: true } });
+      const moved = await applyCardTransition(tx, {
+        groupId: inv.group_id, jobCardId: inv.job_card_id,
+        from: card.status as JobStatus, to: 'paid', actorUserId: null,
+      });
+      // A REFUSAL IS NOT A FAILURE OF THE PAYMENT. The money arrived and the invoice says so; if the
+      // card is somewhere the table will not move from (cancelled, already done), that is a fact
+      // about the card, not about the payment, and rolling the transaction back would lose real
+      // money over a spine inconsistency.
+      if (!moved.ok) {
+        console.warn('[fulfil] invoice', inv.invoice_number, 'paid but card stayed at', card.status, '—', moved.refusal.message);
+      }
     } else if (!fullyPaid) {
       // Part payment. The ledger records it; the document stays open and says what is left.
       await writeAudit(tx, {
@@ -150,6 +171,102 @@ export async function enrichCardPayment(args: {
     // Deliberately swallowed, loudly. The payment is already recorded and reconciled; this is
     // detail for a margin view that does not exist yet.
     console.error('[fulfil] fee enrichment failed for', args.paymentIntent.id, e?.message);
+  }
+}
+
+/**
+ * MONEY GIVEN BACK. Writes a Refund row per Stripe refund, reconciles, and — the part that matters
+ * commercially — RETURNS OUR APPLICATION FEE.
+ *
+ * ── THE GARAGE CANNOT REFUND OUR FEE, AND WOULD NOT KNOW ────────────────────────────────────────
+ * Stripe is explicit: "An application fee can be refunded only by the application that created the
+ * charge." So when a garage refunds a customer from their own Stripe dashboard — the obvious place
+ * to do it — the money goes back and OUR CUT STAYS TAKEN. They are out of pocket by our fee on
+ * money they have handed back, they cannot fix it themselves, and the only party who can is us.
+ * That is why this runs automatically on the event rather than waiting to be asked.
+ *
+ * ── A REFUND DOES NOT REINSTATE A DEBT ──────────────────────────────────────────────────────────
+ * The invoice status is deliberately NOT moved back. `expectedCachePennies` subtracts refunds, so a
+ * fully refunded invoice's cache drops to zero and its BALANCE arithmetic reads as the whole total
+ * owing again — which is false. The customer does not owe the money back; the transaction was
+ * unwound. The document stays `paid`, the customer view reads status before balance and keeps
+ * saying paid, offersPayLink refuses a non-issued invoice, and refusePayment refuses a paid one.
+ * A garage that genuinely wants to re-bill voids and re-issues, which is an audited act.
+ */
+export async function recordCardRefunds(args: {
+  charge: Stripe.Charge;
+  accountId: string;
+}): Promise<{ recorded: number; feeRefundedPennies: number | null }> {
+  const list = args.charge.refunds?.data ?? [];
+  if (args.charge.refunds?.has_more) {
+    // Stripe pages this at 10. More than ten refunds on one garage invoice is not a real shape, but
+    // silently processing the first ten would be a quiet undercount, so it is said out loud.
+    console.warn('[fulfil] charge', args.charge.id, 'has more refunds than the event carried — reconcile manually');
+  }
+
+  const pay = await prisma.payment.findFirst({
+    where: { OR: [{ charge_id: args.charge.id }, { payment_intent_id: typeof args.charge.payment_intent === 'string' ? args.charge.payment_intent : undefined }] },
+    select: { id: true, group_id: true, invoice_id: true, amount_pennies: true, application_fee_pennies: true, application_fee_id: true },
+  });
+  if (!pay) return { recorded: 0, feeRefundedPennies: null };
+
+  // ── THE MONEY FACT FIRST ──────────────────────────────────────────────────────────────────
+  let recorded = 0;
+  for (const r of list) {
+    try {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await (tx as any).refund.create({
+          data: {
+            group_id: pay.group_id, payment_id: pay.id,
+            amount_pennies: r.amount, currency: (r.currency ?? 'gbp').toUpperCase(),
+            reason: r.reason ?? null, refund_id: r.id, source_ref: r.id,
+          },
+        });
+        await reconcileInvoice(tx, pay.invoice_id);
+      });
+      recorded++;
+    } catch (e: any) {
+      if (e?.code !== 'P2002') throw e; // already recorded — a redelivery, not a problem
+    }
+  }
+
+  // ── THEN OUR FEE, SEPARATELY, BECAUSE IT CAN FAIL ─────────────────────────────────────────
+  const feeRefunded = await refundApplicationFee(pay, args.charge);
+  if (feeRefunded != null) {
+    await prisma.refund.updateMany({
+      where: { payment_id: pay.id, application_fee_refunded_pennies: null },
+      data: { application_fee_refunded_pennies: feeRefunded },
+    });
+  }
+  return { recorded, feeRefundedPennies: feeRefunded };
+}
+
+/**
+ * Give back our cut, in proportion to what was returned to the customer. Platform-level call — no
+ * `stripeAccount` header — because we are the application that took the fee and the only party
+ * Stripe permits to return it.
+ *
+ * Returns NULL when it could not be done, which stays on the Refund row as unknown rather than as
+ * zero. Zero would be a claim that we deliberately kept it.
+ */
+async function refundApplicationFee(
+  pay: { application_fee_id: string | null; application_fee_pennies: number | null; amount_pennies: number },
+  charge: Stripe.Charge,
+): Promise<number | null> {
+  const stripe = getStripe();
+  if (!stripe || !pay.application_fee_id || !pay.application_fee_pennies) return null;
+  // Proportional to the share of the charge returned. A full refund returns the whole fee; floor
+  // again, so rounding never favours us on the way back either.
+  const share = Math.min(charge.amount_refunded / (pay.amount_pennies || charge.amount || 1), 1);
+  const amount = Math.floor(pay.application_fee_pennies * share);
+  if (amount <= 0) return 0;
+  try {
+    const fr = await stripe.applicationFees.createRefund(pay.application_fee_id, { amount });
+    return fr.amount;
+  } catch (e: any) {
+    // Loud. This is the garage being out of pocket by our fee, and nobody would otherwise see it.
+    console.error('[fulfil] APPLICATION FEE NOT RETURNED for', charge.id, '—', e?.message);
+    return null;
   }
 }
 

@@ -20,7 +20,7 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { applyAccount, markDisconnected, groupForAccount } from '@/lib/stripe-connect';
-import { fulfilCardPayment, enrichCardPayment, closeCardPayment } from '@/lib/card-payment-fulfil';
+import { fulfilCardPayment, enrichCardPayment, closeCardPayment, recordCardRefunds } from '@/lib/card-payment-fulfil';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 
 export const config = { api: { bodyParser: false } };
@@ -118,6 +118,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const status = event.type === 'payment_intent.canceled' ? 'canceled' : 'failed';
         const closed = await closeCardPayment(pi.id, status);
         console.info('[connect-webhook]', event.type, pi.id, closed ? `closed as ${status}` : 'no in-flight row of ours');
+        break;
+      }
+      // ── MONEY GIVEN BACK, usually from the garage's OWN dashboard ─────────────────────────
+      // Handled because the garage cannot do the whole job themselves: Stripe permits only the
+      // application that created the charge to return the application fee, so without this their
+      // refund leaves our cut taken on money they have handed back.
+      case 'charge.refunded': {
+        const charge = event.data.object as Stripe.Charge;
+        const r = await recordCardRefunds({ charge, accountId: event.account ?? '' });
+        console.info('[connect-webhook] charge.refunded', charge.id,
+          `${r.recorded} refund row(s)`,
+          r.feeRefundedPennies == null ? 'application fee NOT returned' : `application fee returned: ${r.feeRefundedPennies}p`);
         break;
       }
       case 'payout.paid':

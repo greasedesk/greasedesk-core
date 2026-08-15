@@ -12,6 +12,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
+import { applyCardTransition } from '@/lib/jobcard-transition';
 import { canAccessSite, canManageSite, requireCanWrite } from '@/lib/admin-guard';
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
@@ -143,8 +144,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           actorUserId: user.id as string, attested: null, at: new Date(),
         });
       } else {
-        await tx.jobCard.update({ where: { id: jobCardId }, data: { status: to } });
-        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: `status.${to}`, diff: { from: card.status, to } });
+        // THE SHARED WRITER (lib/jobcard-transition). The table is consulted again here, which is
+        // redundant for this caller — findTransition already ran above — and deliberately so: the
+        // webhook path has no such preamble, and one writer that always checks is worth more than
+        // two writers that each check somewhere else.
+        const moved = await applyCardTransition(tx, {
+          groupId: user.group_id as string, jobCardId,
+          from: card.status as JobStatus, to, actorUserId: user.id as string,
+        });
+        if (!moved.ok) throw new Error(`TRANSITION:${moved.refusal.message}`);
       }
       // CANCELLING KILLS THE CUSTOMER'S LINK. It never used to — the docstring on revoked_at has
       // claimed "card cancelled" since it was written, but no caller ever passed one, which is why

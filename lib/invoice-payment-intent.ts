@@ -61,6 +61,15 @@ export function refusePayment(doc: InvoiceDoc, balancePennies: number): PayRefus
   if (doc.series === 'warranty') {
     return { code: 'warranty', message: 'This is a warranty invoice — there’s nothing to pay.' };
   }
+  // ── A SETTLED DOCUMENT IS SETTLED, WHATEVER THE LEDGER ARITHMETIC SAYS ──────────────────────
+  // Not redundant with the balance test below, and this is the case that makes it necessary: a
+  // REFUND subtracts from the cache, so a paid-then-refunded invoice has a positive balance again.
+  // Reading balance alone, an old pay link would happily charge a customer a second time for money
+  // that was deliberately given back. A refund unwinds a transaction; it does not reinstate a debt.
+  // If a garage genuinely wants to re-bill, they void and re-issue, which is an audited act.
+  if (doc.status === 'paid' || doc.status === 'settled' || doc.status === 'paid_pending') {
+    return { code: 'nothing_owing', message: 'This invoice is already settled — thank you.' };
+  }
   if (balancePennies <= 0) {
     return { code: 'nothing_owing', message: 'This invoice is already paid in full — thank you.' };
   }
