@@ -71,9 +71,21 @@ export function expectedCachePennies(
   return received - returned;
 }
 
-/** Write a payment and reconcile the invoice. Returns the row, or null if `sourceRef` already existed. */
+/**
+ * Write a payment and reconcile the invoice. Returns the row, or null if `sourceRef` already existed.
+ *
+ * ── `reconstructed` IS DERIVED FROM THE KEY, NEVER PASSED ───────────────────────────────────────
+ * A reconstructed row is one the backfill inferred from an invoice marked paid before this table
+ * existed; its key is `backfill:<invoice_id>`. Taking the flag as a separate argument would let the
+ * two disagree — a row keyed `backfill:` claiming to be observed, or the reverse — and the standing
+ * invariant gate asserts they agree in BOTH directions. Deriving it here makes that invariant true
+ * by construction instead of by everyone remembering to pass the right pair.
+ */
+export const RECONSTRUCTED_PREFIX = 'backfill:';
+
 export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
   const source_ref = args.sourceRef ?? `manual:${randomUUID()}`;
+  const reconstructed = source_ref.startsWith(RECONSTRUCTED_PREFIX);
   try {
     const row = await (tx as any).payment.create({
       data: {
@@ -87,6 +99,7 @@ export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
         payment_method_id: args.paymentMethodId ?? null,
         payment_method_snapshot: args.paymentMethodSnapshot ?? null,
         source_ref,
+        reconstructed,
         collected_at: args.collectedAt,
         created_by: args.createdBy ?? null,
       },
