@@ -50,6 +50,13 @@ export function offersPayLink(doc: Pick<InvoiceDoc, 'status' | 'underCorrection'
  * InvoiceDoc, because `due_date` is deliberately NOT printed on the document (ruling) and putting
  * it on the shared doc shape is an invitation to print it.
  */
+/**
+ * WHO A PRINTED LINK WENT TO. `recipient` answers "who could see this?", and for a counter handover
+ * the honest answer is not an email address — it is whoever holds the paper. A customer's email
+ * here would be a false record of a send that never happened.
+ */
+export const PRINTED_RECIPIENT = 'printed';
+
 export async function mintInvoicePayLink(args: {
   doc: InvoiceDoc;
   groupId: string;
