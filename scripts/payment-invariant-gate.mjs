@@ -2,7 +2,7 @@
  * File: scripts/payment-invariant-gate.mjs
  * STANDING GATE. Does the payment ledger still say what the invoices claim?
  *
- * Run it after anything that touches money, and before and after the backfill. READ-ONLY: it
+ * Run it after anything that touches money. READ-ONLY: it
  * creates nothing, so it can be run against production at any time without ceremony.
  *
  * ── WHAT IT IS ACTUALLY GUARDING ────────────────────────────────────────────────────────────────
@@ -77,14 +77,31 @@ try {
   console.log(`\n   ${invoices.length} invoices · ${payments.length} payment rows · ${refunds.length} refunds\n`);
   check('THE INVARIANT: every invoice with a ledger matches it', drift.length === 0, drift.slice(0, 5).join(' | ') || 'no drift');
 
-  // Expected to be non-zero ONLY until the backfill runs. Reported as a count, not a failure, so the
-  // gate is usable on both sides of step 5 — and asserted to be zero once any ledger exists.
-  console.log(`   invoices with a cached amount and NO ledger row: ${cacheNoLedger.length}${cacheNoLedger.length ? '  (pre-backfill — expected)' : ''}`);
-  if (payments.length > 0) {
-    check('once the ledger exists, nothing should carry a figure without one',
-      cacheNoLedger.length === 0 || process.env.ALLOW_PRE_BACKFILL === '1',
-      `${cacheNoLedger.length} such invoices — set ALLOW_PRE_BACKFILL=1 while step 5 is outstanding`);
-  }
+  // UNCONDITIONAL SINCE THE BACKFILL (2026-08-15). This carried an ALLOW_PRE_BACKFILL escape hatch
+  // while the back catalogue had figures and no rows; that state no longer exists and the hatch is
+  // gone with it. A temporary exemption left in place outlives its reason and quietly becomes the
+  // way the rule is normally suppressed — so it is removed on the day it stops being needed, not
+  // kept "just in case". If this ever fires again it is a real defect: something wrote the cache
+  // without going through lib/payments, which is supposed to be impossible.
+  console.log(`   invoices with a cached amount and NO ledger row: ${cacheNoLedger.length}`);
+  check('nothing carries a paid figure without a ledger row to justify it',
+    cacheNoLedger.length === 0,
+    // Identified, not counted. This message is the whole value of the check when it fires, and
+    // joining the invoice OBJECTS would have printed [object Object] at exactly that moment.
+    cacheNoLedger.length
+      ? `${cacheNoLedger.length}: ${cacheNoLedger.slice(0, 5).map((i) => `${i.group.ref}/${i.invoice_number}`).join(', ')}`
+      : 'the cache is derived everywhere');
+
+  // THE CHECK MUST BE ABLE TO FAIL. It is now unconditional AND data-dependent, so a clean database
+  // makes it pass whether or not the detection works — the vacuous-pass shape. The same predicate is
+  // run over a synthetic trio to prove it discriminates: a figure with no rows is caught, a figure
+  // WITH rows is not, and an honest NULL is not mistaken for a claim.
+  check('the detection discriminates', (() => {
+    const detect = (inv, ps) => ps.length === 0 && inv.amount_paid_pennies != null;
+    return detect({ amount_paid_pennies: 5000 }, [])            // a figure with nothing behind it
+      && !detect({ amount_paid_pennies: 5000 }, [S(5000)])      // a figure with a row behind it
+      && !detect({ amount_paid_pennies: null }, []);            // unknown is not a claim
+  })(), 'a figure with no rows is caught; NULL is not mistaken for one');
 
   // ── ROW-LEVEL SANITY ─────────────────────────────────────────────────────────────────────────
   check('no payment has a negative or zero amount', !payments.some((p) => p.amount_pennies <= 0),
