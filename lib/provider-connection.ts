@@ -25,6 +25,7 @@ export type ConnectionRow = {
   payouts_enabled: boolean;
   disabled_reason: string | null;
   requirements_due: unknown;
+  capabilities: unknown;
   connected_at: Date | null;
   disconnected_at: Date | null;
 };
@@ -66,7 +67,7 @@ export function providerState(row: ConnectionRow | null | undefined): ProviderSt
 
 const SELECT = {
   provider: true, external_id: true, livemode: true, charges_enabled: true, payouts_enabled: true,
-  disabled_reason: true, requirements_due: true, connected_at: true, disconnected_at: true,
+  disabled_reason: true, requirements_due: true, capabilities: true, connected_at: true, disconnected_at: true,
 } as const;
 
 export async function readConnection(groupId: string, provider: ProviderKey): Promise<ConnectionRow | null> {

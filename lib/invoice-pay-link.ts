@@ -12,9 +12,13 @@
  * decision is a predicate here rather than a condition at each call site, because there are four
  * call sites and there will be more.
  */
+import QRCode from 'qrcode';
 import { prisma } from '@/lib/db';
 import { createMagicLink, invoicePayExpiry, type CreatedMagicLink } from '@/lib/magic-link';
+import { readConnection } from '@/lib/provider-connection';
+import { paymentMarks, marksSentence } from '@/lib/payment-marks';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
+import type { PayOnline } from '@/lib/invoice-pdf';
 
 /**
  * Should this document carry a way to pay?
@@ -69,4 +73,34 @@ export async function mintInvoicePayLink(args: {
     createdByUserId: args.createdByUserId ?? null,
     expiresAt: invoicePayExpiry({ dueDate: inv.due_date, issuedAt: inv.issued_at }),
   });
+}
+
+/**
+ * The PDF's view of one minted link: the same URL, a QR of it, and the garage's real payment marks.
+ *
+ * ── THE QR IS THE SAME URL, NOT A SECOND ONE ────────────────────────────────────────────────────
+ * That is the whole reason this takes a link rather than minting one. A printed invoice whose QR
+ * and whose typed URL are different credentials is two things to revoke and one of them will be
+ * missed. A URL a customer must retype from paper is a URL they will not use, which is what the QR
+ * is for — 41 characters is short enough for a low-density code that survives a poor scan.
+ *
+ * Failure is silent and total for the QR only: if generation throws, the block still renders with
+ * the URL and the marks. A missing square is a smaller loss than a document that failed to send.
+ */
+export async function payOnlineFor(args: { groupId: string; url: string }): Promise<PayOnline> {
+  let qrPng: Buffer | null = null;
+  try {
+    qrPng = await QRCode.toBuffer(args.url, {
+      type: 'png',
+      errorCorrectionLevel: 'M',   // survives a fold or a thumbprint; 'H' would only add density
+      margin: 1,
+      width: 220,                  // rendered at 68pt — generous so print stays crisp
+      color: { dark: '#111827ff', light: '#ffffffff' },
+    });
+  } catch (e: any) {
+    console.error('[pay-link] QR generation failed —', e?.message);
+  }
+  const conn = await readConnection(args.groupId, 'stripe');
+  const marks = marksSentence(paymentMarks(conn?.capabilities));
+  return { url: args.url, qrPng, marks: marks || null };
 }

@@ -36,6 +36,15 @@ const S = StyleSheet.create({
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
   grand: { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 4, fontFamily: 'Helvetica-Bold', fontSize: 12 },
   footer: { position: 'absolute', bottom: 32, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
+  // ── PAY ONLINE. Xero's placement: a prompt beside the amount due where the eye already is, and
+  // the QR + marks in a block at the foot for someone holding a printed copy. Two placements, one
+  // URL — see lib/invoice-pay-link for why the mint is single.
+  payInline: { marginTop: 6, fontSize: 9, fontFamily: 'Helvetica-Bold', color: '#2563eb', textAlign: 'right' },
+  payBlock: { marginTop: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb', flexDirection: 'row', alignItems: 'center' },
+  payQr: { width: 68, height: 68, marginRight: 14 },
+  payHead: { fontSize: 10, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  payUrl: { fontSize: 8, color: '#2563eb', marginBottom: 4 },
+  payMarks: { fontSize: 8, color: '#6b7280' },
   // VOID: a diagonal stamp across the page, and a stated reason under the header. Deliberately
   // loud — this document is RETAINED and remains producible (VATREC5010), so the copy itself has
   // to carry the fact that it was retired. Rendering is never refused.
@@ -44,7 +53,16 @@ const S = StyleSheet.create({
   voidNote: { marginTop: 8, padding: 8, borderWidth: 1, borderColor: '#dc2626', color: '#dc2626', fontSize: 9 },
 });
 
-function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
+/**
+ * The pay-online grain, resolved by the CALLER and handed in. Deliberately not derived here: the
+ * link must be MINTED ONCE and shared by the email, this PDF and the SMS (lib/invoice-pay-link), so
+ * a renderer that minted its own would hand the customer a second credential for the same invoice.
+ * Absent = the document carries no payment prompt at all, which is the right answer for a receipt,
+ * a void, an unlocked invoice and a £0 document.
+ */
+export type PayOnline = { url: string; qrPng: Buffer | null; marks: string | null };
+
+function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; pay: PayOnline | null }) {
   const t = (key: string, vars?: Record<string, string | number>) => tServer(doc.locale, 'invoice', key, vars);
   const fmt = (p: number) => formatMoney(p, { currency: doc.currency, locale: doc.locale });
   const reg = doc.vatRegistered;
@@ -191,8 +209,26 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
                 <View style={[S.totalRow, S.grand]}><Text>{t('amountDue')}</Text><Text>{fmt(0)}</Text></View>
               </>
             ) : null}
+            {/* Beside the figure, where the eye already is. Only when there is something to pay:
+                offersPayLink has already refused receipts, voids and unlocked documents, so the
+                presence of a link IS the permission to say this. */}
+            {pay ? <Text style={S.payInline}>{t('payOnline')}</Text> : null}
           </View>
         </View>
+
+        {/* THE BLOCK, for someone holding a printed copy. A URL they must retype is a URL they will
+            not use, so the QR carries the same link the email button does — one mint, three
+            surfaces. Marks come from the garage's real capabilities, never a fixed set. */}
+        {pay ? (
+          <View style={S.payBlock}>
+            {pay.qrPng ? <Image style={S.payQr} src={{ data: pay.qrPng, format: 'png' }} /> : null}
+            <View style={{ flex: 1 }}>
+              <Text style={S.payHead}>{t('payOnline')}</Text>
+              <Text style={S.payUrl}>{pay.url}</Text>
+              {pay.marks ? <Text style={S.payMarks}>{pay.marks}</Text> : null}
+            </View>
+          </View>
+        ) : null}
 
         {doc.footerText ? (
           // Payment terms / footer block (Invoicing tab) — multi-line, verbatim.
@@ -206,7 +242,7 @@ function InvoicePdf({ doc, logo }: { doc: InvoiceDoc; logo: Buffer | null }) {
   );
 }
 
-export async function renderInvoicePdf(doc: InvoiceDoc): Promise<Buffer> {
+export async function renderInvoicePdf(doc: InvoiceDoc, pay: PayOnline | null = null): Promise<Buffer> {
   let logo: Buffer | null = null;
   if (doc.logoUrl) {
     try {
@@ -214,5 +250,5 @@ export async function renderInvoicePdf(doc: InvoiceDoc): Promise<Buffer> {
       if (r.ok) logo = Buffer.from(await r.arrayBuffer());
     } catch { /* logo is decoration — never fail the document for it */ }
   }
-  return await renderToBuffer(<InvoicePdf doc={doc} logo={logo} />);
+  return await renderToBuffer(<InvoicePdf doc={doc} logo={logo} pay={pay} />);
 }

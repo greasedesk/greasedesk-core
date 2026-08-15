@@ -496,6 +496,16 @@ model ProviderConnection {
   disabled_reason String?
   /** What the provider says is outstanding, so the product can name it rather than leave them guessing. */
   requirements_due Json?
+  /**
+   * WHAT THIS ACCOUNT CAN ACTUALLY TAKE — Stripe's `capabilities` map, verbatim
+   * ({ card_payments: 'active', link_payments: 'inactive', … }). Mirrored so the invoice can show
+   * payment marks the garage really has rather than a fixed set we hope is true: a document
+   * promising Klarna to a customer whose garage cannot take it is worse than promising nothing.
+   * Only 'active' counts — 'pending' is a capability Stripe has not granted yet.
+   * NULL = never synced. Written by the one writer (lib/stripe-connect::applyAccount), which
+   * already receives the whole Account object, so this costs no extra call.
+   */
+  capabilities     Json?
 
   /** When the connection came into existence — NOT when it became able to trade. */
   connected_at    DateTime?

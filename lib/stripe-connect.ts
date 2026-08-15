@@ -165,6 +165,9 @@ export async function applyAccount(groupId: string, acct: Stripe.Account, livemo
     payouts_enabled: !!acct.payouts_enabled,
     disabled_reason: acct.requirements?.disabled_reason ?? null,
     requirements_due: due as any,
+    // Verbatim. The invoice derives payment marks from this (lib/payment-marks) rather than from a
+    // fixed list, so a customer is never promised a method their garage cannot take.
+    capabilities: (acct.capabilities ?? null) as any,
   });
   return providerState(row);
 }

@@ -145,9 +145,18 @@ try {
     const left = await prisma.applicationFeeRate.count({ where: { country_code: CC } });
     check('teardown removed every fixture rate', del.count === made.length && left === 0, `${del.count} of ${made.length}, ${left} left`);
   }
-  const real = await prisma.applicationFeeRate.count();
-  check('no REAL rate has been seeded by this run', real === 0,
-    'GB/GBP is set deliberately once the VAT treatment is settled');
+  // NOT "no real rate exists" — GB/GBP was seeded deliberately on 2026-08-15 and this gate must not
+  // go red for that. What must hold is that THIS RUN created nothing real: its fixtures live in the
+  // ZZ/ZZZ namespace, so any row outside it predates the run.
+  const real = await prisma.applicationFeeRate.count({ where: { country_code: { not: CC } } });
+  const fixturesLeft = await prisma.applicationFeeRate.count({ where: { country_code: CC } });
+  check('this run created no real rate and left no fixture', fixturesLeft === 0,
+    `${real} real rate row(s) untouched, ${fixturesLeft} fixture(s) left`);
+  // The live default is a fact worth printing on every run: a silently deleted rate stops all
+  // card payments, and this is the cheapest place to notice.
+  const gb = await prisma.applicationFeeRate.findFirst({ where: { group_id: null, country_code: 'GB', currency: 'GBP' }, select: { basis_points: true, effective_from: true } });
+  check('the GB/GBP platform default is present and 25bp', gb?.basis_points === 25,
+    gb ? `25bp from ${gb.effective_from.toISOString().slice(0, 10)}` : 'MISSING — card payments would refuse');
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);

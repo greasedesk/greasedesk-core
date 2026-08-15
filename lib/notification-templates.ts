@@ -7,6 +7,8 @@
  * Each template renders per channel. A template with no `sms` renderer simply cannot be sent by SMS —
  * sendNotification records that as `skipped` rather than inventing a body.
  */
+import { smsText, isOneSegment } from '@/lib/sms-text';
+
 export type TemplateData = Record<string, string | number | null | undefined>;
 
 export type RenderedEmail = { subject: string; html: string };
@@ -157,6 +159,43 @@ export const NOTIFICATION_TEMPLATES = {
         <p>You've been invited to join the team at ${esc(d.garageName)}.</p>
         ${button(String(d.link ?? ''), 'Accept invitation')}`),
     }),
+  },
+
+  /**
+   * THE INVOICE PAYMENT LINK, BY TEXT. SMS-ONLY on purpose: the email is invoice_document, which
+   * carries the PDF, and a second email template for the same event would be two places to change
+   * one sentence.
+   *
+   * ── WRITTEN AGAINST THE SEGMENT BUDGET, NOT BY EYE ─────────────────────────────────────────────
+   * 160 septets. The link is 41 of them and replyRoute another 30 with a UK number, which leaves
+   * about 89 for everything else — so every word here was costed, and the gate asserts one segment
+   * against EVERY REAL TENANT NAME plus a deliberately hostile one. The file's own history is the
+   * reason: these templates were once written "to about 160 characters by eye", which held only
+   * until something was added to them.
+   *
+   * The registration is included but optional. It is what lets a customer tell which of two cars
+   * this is about, and it costs twelve septets — worth it, and dropped rather than truncated when
+   * absent. The invoice number is NOT dropped: it is the thing they quote when they ring up.
+   */
+  invoice_pay_link: {
+    label: 'Invoice payment link',
+    sms: (d) => {
+      const build = (withReg: boolean) =>
+        `${d.garageName ?? 'Your garage'}: invoice ${d.number}${withReg && d.registration ? ` for ${d.registration}` : ''}, ${d.total} to pay. ${d.link}${replyRoute(d)}`;
+      // ── IT GUARANTEES ONE SEGMENT RATHER THAN HOPING FOR ONE ───────────────────────────────
+      // Measured, not estimated, and measured through smsText because that is what notify sends —
+      // a curly apostrophe in a garage name would otherwise drop the whole message to UCS-2 and
+      // triple it. Every real tenant fits comfortably WITH the registration (132–146 of 160), but
+      // the headroom on the longest is 14 septets: one rename, or a tenant whose invoice prefix is
+      // longer than TMBS's, and it silently costs two.
+      //
+      // The registration is the ONE droppable part — it helps a customer tell which car this is
+      // about, and nothing breaks without it. The garage name, the invoice number (what they quote
+      // when they ring), the amount, the link and the reply route all stay. Dropping a whole field
+      // beats truncating one mid-word, which is how "…Speciali" ends up in somebody's pocket.
+      const full = build(true);
+      return { text: isOneSegment(smsText(full)) ? full : build(false) };
+    },
   },
 
   // The invoice/receipt document email. The BODY LINES arrive already localised because the invoice

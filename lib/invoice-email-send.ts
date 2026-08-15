@@ -17,7 +17,7 @@ import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
 import { writeAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
-import { mintInvoicePayLink } from '@/lib/invoice-pay-link';
+import { mintInvoicePayLink, payOnlineFor } from '@/lib/invoice-pay-link';
 
 export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'SUPPRESSED' | 'ERROR'; message: string };
 
@@ -59,7 +59,11 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
     // call belongs above the render, not beside the email body. Returns null on a receipt, a void,
     // an unlocked invoice or a zero-total document; see lib/invoice-pay-link for why each.
     const payLink = await mintInvoicePayLink({ doc, groupId, recipient: to, createdByUserId: actorUserId });
-    const pdf = await renderInvoicePdf(doc);
+    // ONE MINT, THREE SURFACES. The PDF gets the same URL as the email button, plus a QR of it and
+    // the garage's real payment marks. Null when there is nothing to pay, and the document then
+    // carries no payment prompt at all.
+    const pay = payLink ? await payOnlineFor({ groupId, url: payLink.url }) : null;
+    const pdf = await renderInvoicePdf(doc, pay);
     // THROUGH THE CHOKEPOINT (2026-07-31). This used to call sendEmail directly, which is why the
     // invoice path wrote an AuditLog row but no NotificationLog row — the one send the "what have we
     // sent this customer?" question could never answer. Both records now exist; they answer
