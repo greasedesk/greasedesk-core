@@ -155,6 +155,54 @@ export async function settleProcessing(tx: Tx, invoiceId: string, at: Date = new
 }
 
 /**
+ * Settle ONE payment, by its own key. Deliberately not settleProcessing, which flips every
+ * `processing` row on an invoice: a card payment must settle ITSELF and nothing else. An invoice
+ * can legitimately carry a second in-flight intent (the balance changed, so a new one was minted),
+ * and settling the wrong one would credit money that never arrived.
+ *
+ * CLAIM-FIRST, the same idempotency lib/confirm-paid uses: the updateMany is conditioned on the row
+ * still being `processing`, so a redelivered webhook claims nothing and reports `settled: false`
+ * while still returning the invoice id. The caller can then tell "already done" from "not ours".
+ */
+export async function settlePaymentByRef(
+  tx: Tx,
+  sourceRef: string,
+  at: Date = new Date(),
+): Promise<{ found: boolean; settled: boolean; invoiceId: string | null; amountPennies: number | null }> {
+  const row = await (tx as any).payment.findUnique({
+    where: { source_ref: sourceRef },
+    select: { id: true, invoice_id: true, amount_pennies: true, status: true },
+  });
+  if (!row) return { found: false, settled: false, invoiceId: null, amountPennies: null };
+
+  const claimed = await (tx as any).payment.updateMany({
+    where: { id: row.id, status: 'processing' },
+    data: { status: 'succeeded', collected_at: at },
+  });
+  // Reconcile regardless: a redelivery that claims nothing must still leave the cache correct, and
+  // recomputing from the rows is cheap and idempotent.
+  await reconcileInvoice(tx, row.invoice_id);
+  return { found: true, settled: claimed.count === 1, invoiceId: row.invoice_id, amountPennies: row.amount_pennies };
+}
+
+/**
+ * The attempt did not become money. `failed` or `canceled` — both are terminal and neither counts,
+ * but they are different facts: a declined card is not an abandoned checkout. Claim-first for the
+ * same reason as above.
+ */
+export async function closePaymentByRef(
+  tx: Tx,
+  sourceRef: string,
+  status: 'failed' | 'canceled',
+): Promise<{ found: boolean; closed: boolean; invoiceId: string | null }> {
+  const row = await (tx as any).payment.findUnique({ where: { source_ref: sourceRef }, select: { id: true, invoice_id: true } });
+  if (!row) return { found: false, closed: false, invoiceId: null };
+  const claimed = await (tx as any).payment.updateMany({ where: { id: row.id, status: 'processing' }, data: { status } });
+  await reconcileInvoice(tx, row.invoice_id);
+  return { found: true, closed: claimed.count === 1, invoiceId: row.invoice_id };
+}
+
+/**
  * The payment was recorded in error and the garage silently reverted it. The row is CANCELLED, not
  * deleted: someone did record a payment, the audit trail says so, and a ledger that quietly loses
  * its mistakes is worse at explaining itself than one that keeps them. Cancelled rows never count.

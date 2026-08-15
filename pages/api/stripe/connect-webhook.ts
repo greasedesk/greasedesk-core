@@ -20,6 +20,8 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { applyAccount, markDisconnected, groupForAccount } from '@/lib/stripe-connect';
+import { fulfilCardPayment, enrichCardPayment, closeCardPayment } from '@/lib/card-payment-fulfil';
+import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 
 export const config = { api: { bodyParser: false } };
 
@@ -81,6 +83,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // The `account` field on the event is the connected account that revoked us; the object is
         // the application. Nothing to sync — the account is no longer ours to read.
         if (event.account) await markDisconnected(event.account);
+        break;
+      }
+      // ── FULFILMENT. The only event that turns a card intent into money. ────────────────────
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const r = await fulfilCardPayment({ paymentIntentId: pi.id });
+        if (r.outcome === 'not_ours') {
+          // The garage's account is theirs: a Terminal sale, a dashboard payment, another product
+          // entirely. We have no row and must not invent an invoice for it. Recorded, not an error.
+          console.info('[connect-webhook] payment_intent.succeeded for an intent we did not create —', pi.id, 'account', event.account ?? '—');
+          break;
+        }
+        if (r.outcome === 'already_done') { console.info('[connect-webhook] redelivered fulfilment, no-op —', pi.id); break; }
+
+        // ── AFTER THE MONEY IS COMMITTED, AND ONLY THEN ──────────────────────────────────────
+        // Both of these can fail without costing us the payment, which is why they are out here
+        // rather than inside the transaction (financial-write-first).
+        if (event.account) await enrichCardPayment({ paymentIntent: pi, accountId: event.account });
+        if (r.fullyPaid) {
+          // THE receipt, through the one send path. offersPayLink refuses a `paid` invoice, so this
+          // carries no "pay now" button — a receipt that asks for money again is how a garage gets
+          // a phone call.
+          const sent = await sendInvoiceEmail(r.invoiceId, r.groupId, null);
+          if (!sent.ok) console.error('[connect-webhook] receipt send failed for', r.invoiceId, sent.code);
+        }
+        break;
+      }
+      case 'payment_intent.payment_failed':
+      case 'payment_intent.canceled': {
+        // Terminal, and different facts: a declined card is not an abandoned checkout. Closing the
+        // row keeps a dead `processing` attempt from sitting on the invoice forever.
+        const pi = event.data.object as Stripe.PaymentIntent;
+        const status = event.type === 'payment_intent.canceled' ? 'canceled' : 'failed';
+        const closed = await closeCardPayment(pi.id, status);
+        console.info('[connect-webhook]', event.type, pi.id, closed ? `closed as ${status}` : 'no in-flight row of ours');
         break;
       }
       case 'payout.paid':

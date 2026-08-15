@@ -34,6 +34,9 @@ export type AuditAction =
   | 'invoice.paid'            // attested paid → paid_pending (clearance window starts)
   | 'invoice.paid_unmarked'   // silent revert during the window (manager/admin) — nothing was sent
   | 'invoice.paid_confirmed'  // clearance window elapsed → confirmed by the cron (system actor)
+  // A card payment that did NOT clear the balance. A distinct fact, not a lesser `invoice.paid`:
+  // the document stays open, no receipt goes out, and the trail must not imply otherwise.
+  | 'invoice.part_paid'
   | 'invoice.unlocked'      // ADMIN-only escape hatch: frozen (issued/paid/settled) → unlocked for corrections
   | 'invoice.reissued'      // ADMIN re-freeze after an unlock: corrected lines snapshot + re-lock (warranty → settled)
   | 'invoice.voided'        // ADMIN retires a document issued in error; number + frozen lines RETAINED (VATREC5010)
