@@ -14,11 +14,26 @@
  * 12p and not 13p. That is worth a fraction of a penny per transaction and it is a sentence we can
  * say out loud.
  *
- * ── VAT IS OPEN, AND IT MOVES THE NUMBER ────────────────────────────────────────────────────────
- * Whether the basis points are VAT-inclusive is with the accountant (2026-08-15). If inclusive,
- * 25bp gross nets 20.8bp and the rate likely becomes 30. NOTHING in this file changes either way —
- * a rate change is a new forward row — but do not treat 25 as settled, and do not add a VAT
- * calculation here on a guess. See the ApplicationFeeRate model comment.
+ * ── VAT, SETTLED 2026-08-15 ─────────────────────────────────────────────────────────────────────
+ * The fee is a SEPARATE TAXABLE SUPPLY by GreaseDesk to the garage, standard-rated at 20% once we
+ * are registered. It is EXCLUSIVE: 0.25% plus VAT where applicable. So 25 basis points is the
+ * right number and does NOT become 30.
+ *
+ * THIS DEPARTS FROM THE SUBSCRIPTION ON PURPOSE. The £75 is quoted INCLUDING VAT (see lib/stripe
+ * and Terms §5) and this is exclusive. The reasoning is different, not inconsistent: a round number
+ * matters when a garage owner is choosing software and comparing prices, and does not matter at all
+ * when a fee is a line on a statement they reconcile monthly. Both were chosen; neither is drift.
+ *
+ * WHAT OUR TURNOVER IS. The fee, and only the fee. A customer's payment to a garage is never our
+ * turnover — it belongs to the garage, lands in the garage's own Stripe account, and passes through
+ * no account of ours. That is precisely what makes taking a percentage viable: 0.25% of £74,399 is
+ * £186 of turnover, not £74,399. The Standard-account choice (lib/stripe-connect) is what keeps
+ * that true in fact, and the Terms payments clause is what keeps it true on paper.
+ *
+ * NOT BUILT: once we are registered, a garage reclaiming input VAT needs a VAT invoice from us for
+ * the fees they have paid — a monthly consolidated invoice on its own sequential series, carrying
+ * our VAT number and their details, net and VAT split, reconciling against Stripe's deductions.
+ * Banked, and not needed until registration.
  */
 import type { PrismaClient, Prisma } from '@prisma/client';
 

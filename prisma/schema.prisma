@@ -419,13 +419,14 @@ model Group {
  * (The same NULL-distinctness is what makes ProviderConnection's (provider, external_id) safe —
  * there, many nulls SHOULD coexist. Here exactly one row must win. Same rule, opposite need.)
  *
- * ── THE VAT QUESTION IS OPEN (2026-08-15) ───────────────────────────────────────────────────────
- * This fee is a supply of services by a UK company to a UK business, so on the face of it it is
- * VATable at 20%. Whether the basis points are VAT-INCLUSIVE or exclusive is with the accountant.
- * If inclusive, 25bp gross nets us 20.8bp and the number likely becomes 30. Nothing in the schema
- * changes either way — a rate change is a new forward row, which is the whole point of the shape —
- * but do not read 25 as a settled commercial figure until that answer lands. A second consequence
- * is unbuilt: a garage reclaiming input VAT needs a periodic VAT invoice from us for fees paid.
+ * ── VAT, SETTLED 2026-08-15 ─────────────────────────────────────────────────────────────────────
+ * The fee is a SEPARATE TAXABLE SUPPLY by GreaseDesk to the garage, standard-rated at 20% once we
+ * are registered, and EXCLUSIVE: basis_points is 0.25% PLUS VAT where applicable. 25 is therefore
+ * the settled figure and does not become 30.
+ *
+ * Deliberately unlike the £75 subscription, which is quoted INCLUDING VAT. A round number matters
+ * when a garage owner is choosing software; it does not when a fee is a line on a statement. Both
+ * are intentional — see lib/application-fee for the full reasoning and the turnover position.
  */
 model ApplicationFeeRate {
   id String @id @default(uuid())

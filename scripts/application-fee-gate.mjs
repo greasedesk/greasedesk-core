@@ -56,6 +56,15 @@ try {
   check('a cap applies when set', applicationFeePennies(223600, { ...R, cap_fee_pennies: 300 }) === 300);
   check('floor and cap are both NULL in the shipped rate', R.min_fee_pennies === null && R.cap_fee_pennies === null,
     'present so a later change is not a migration over frozen money');
+  // ── THE FEE IS EX-VAT (ruling 2026-08-15) ────────────────────────────────────────────────
+  // 0.25% PLUS VAT where applicable, unlike the £75 subscription which is VAT-inclusive. Asserted
+  // because "exclusive" is a behavioural claim: the moment anyone adds a VAT calculation here, the
+  // garage is charged 30bp while every statement and the Terms still say 25.
+  check('the fee is the ex-VAT figure — nothing is added on top', applicationFeePennies(40000, R) === 100,
+    '£400 → £1.00 exactly; £1.20 would mean VAT had been folded in');
+  check('and 25bp is the settled number, not 30', R.basis_points === 25,
+    'it would have become 30 only if the fee were VAT-INCLUSIVE, which it is not');
+
   // Rounding direction is a decision, so it is asserted as one rather than left to Math.
   check('the rounding direction is discriminating', (() => {
     const rounded = Math.round((5000 * 25) / 10000);   // 13
