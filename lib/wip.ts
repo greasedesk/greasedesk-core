@@ -7,7 +7,6 @@
  * lib/invoice-list-filters.ts::listWhere, which keeps the debtors tile and the invoices list aligned.)
  */
 import type { Prisma } from '@prisma/client';
-import { poundsToPennies } from '@/lib/quote-totals';
 
 export const WIP_STATUSES = ['accepted', 'in_progress'] as const;
 export const WIP_AGE_DAYS = 14; // a card open longer than this is the actual problem — surfaced, not hidden
@@ -20,12 +19,47 @@ export function wipCardsWhere(siteIds: string[]): Prisma.JobCardWhereInput {
   return { site_id: { in: siteIds }, status: { in: WIP_STATUSES as unknown as any[] }, invoice: { is: null } };
 }
 
-/** Ex-VAT value of a WIP card = its working-draft bill (labour + parts, in pounds), persisted straight
- *  from computeQuoteTotals on every save — so it IS the quote chokepoint's output, never recomputed.
- *  A COMEBACK bills at £0 (zero-revenue policy): it counts as open work but adds nothing. Pennies. */
-export function wipCardValuePennies(card: { is_comeback: boolean; labour_bill_numeric: unknown; parts_bill_numeric: unknown }): number {
+/**
+ * THE LINE VALUES, DERIVED. One grouped query over JobCardItem for the given cards; pennies.
+ *
+ * ── WHY THIS DERIVES INSTEAD OF READING A CACHED FIGURE ─────────────────────────────────────────
+ * It used to read JobCard.labour_bill_numeric + parts_bill_numeric, persisted by
+ * pages/api/jobcard-quote on every save. That is a denormalisation with EXACTLY ONE WRITER, and a
+ * denormalised figure diverges the moment anything creates the underlying rows by another route.
+ * Fixtures are the most common other route, and it had already happened: four ZZ cards each
+ * carrying a £980 line while their stored numerics read 0/0 — £3,920 of open work missing from the
+ * tile. The same shape appeared four separate times in one day (Payment.site_id,
+ * NotificationLog.group_id, the JobCard cost numerics, and this).
+ *
+ * IF YOU ARE HERE TO OPTIMISE A DASHBOARD QUERY: do not reintroduce the cache. It will agree with
+ * the lines on the day you test it. That is the property that makes it dangerous, not safe. The
+ * measurement that settled it: cache read 32ms, derived 93ms — and tiles run under Promise.all
+ * beside P&L computes that take longer, so the second round trip is absorbed entirely.
+ *
+ * Rounded PER LINE and then summed, matching computeQuoteTotals' arithmetic rather than summing
+ * pounds and rounding once — a figure that must agree with a quote must round the way the quote does.
+ */
+export async function wipLineValuesPennies(
+  db: { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<Array<{ job_card_id: string; pennies: bigint | number }>> },
+  cardIds: string[],
+): Promise<Map<string, number>> {
+  if (!cardIds.length) return new Map();
+  const rows = await db.$queryRawUnsafe(
+    `SELECT job_card_id, COALESCE(SUM(ROUND(qty * unit_price * 100)), 0)::bigint AS pennies
+       FROM "JobCardItem"
+      WHERE job_card_id = ANY($1::text[])
+      GROUP BY job_card_id`,
+    cardIds,
+  );
+  return new Map(rows.map((r) => [r.job_card_id, Number(r.pennies)]));
+}
+
+/** Ex-VAT value of a WIP card, from its LINES (see wipLineValuesPennies for why not the cache).
+ *  A COMEBACK bills at £0 (zero-revenue policy): it counts as open work but adds nothing. Pennies.
+ *  A card absent from the map has no lines — genuinely £0, not unknown. */
+export function wipCardValuePennies(card: { id: string; is_comeback: boolean }, lineValues: Map<string, number>): number {
   if (card.is_comeback) return 0;
-  return poundsToPennies(Number(card.labour_bill_numeric ?? 0)) + poundsToPennies(Number(card.parts_bill_numeric ?? 0));
+  return lineValues.get(card.id) ?? 0;
 }
 
 /** Whole days a card has been open (created → now), floored at 0. */

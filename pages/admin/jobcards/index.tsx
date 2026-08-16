@@ -32,7 +32,7 @@ import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { formatMoney } from '@/lib/format-money';
-import { wipCardsWhere, wipCardValuePennies, daysOpen, WIP_AGE_DAYS } from '@/lib/wip';
+import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, daysOpen, WIP_AGE_DAYS } from '@/lib/wip';
 
 type Stages = {
   details: boolean;
@@ -318,6 +318,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   }
 
   const now = new Date();
+  // WIP values come from the LINES via the shared chokepoint — the same call the tile makes, so the
+  // two cannot drift. Only in wipMode: the plain list shows no value column and must not pay for it.
+  const lineValues = wipMode ? await wipLineValuesPennies(prisma as any, rows.map((r: any) => r.id)) : new Map<string, number>();
   let wipTotal = 0;
   const cards: JobCardRow[] = rows.map((r: any) => {
     const base: JobCardRow = {
@@ -337,7 +340,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     };
     if (wipMode) {
       // Value + count from THE shared chokepoint — identical to the tile's arithmetic by construction.
-      const v = wipCardValuePennies(r);
+      const v = wipCardValuePennies(r, lineValues);
       wipTotal += v;
       base.valuePennies = v;
       base.daysOpen = daysOpen(r.created_at, now);

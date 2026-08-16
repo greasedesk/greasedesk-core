@@ -16,7 +16,7 @@ import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncoste
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
 import { clipToData } from '@/lib/tenant-data-start';
 import { getManpower } from '@/lib/manpower';
-import { wipCardsWhere, wipCardValuePennies, WIP_AGE_DAYS } from '@/lib/wip';
+import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
@@ -208,12 +208,15 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   wip: async ({ siteIds, now }) => {
     const cards = (await prisma.jobCard.findMany({
       where: wipCardsWhere(siteIds),
-      select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true, created_at: true },
+      select: { id: true, is_comeback: true, created_at: true },
     })) as any[];
+    // A second round trip, deliberately: the value comes from the LINES, not a cached column. See
+    // lib/wip::wipLineValuesPennies. Tiles run under Promise.all beside slower P&L computes.
+    const lineValues = await wipLineValuesPennies(prisma as any, cards.map((c) => c.id));
     const cutoff = new Date(now.getTime() - WIP_AGE_DAYS * 86_400_000);
     let exVatPennies = 0, agedCount = 0;
     for (const c of cards) {
-      exVatPennies += wipCardValuePennies(c);
+      exVatPennies += wipCardValuePennies(c, lineValues);
       if (c.created_at < cutoff) agedCount += 1;
     }
     return { count: cards.length, exVatPennies, agedCount, ageDays: WIP_AGE_DAYS };
