@@ -67,7 +67,8 @@ type PageProps = {
   footerText: string | null;
   datePaid: string | null;       // yyyy-mm-dd (document fact, manager-editable)
   dateIssued: string;            // yyyy-mm-dd (document fact, manager-editable; effective value)
-  receiptNotSent: boolean;       // confirmed but the receipt never went — visible, resendable
+  /** A receipt send was ATTEMPTED AND FAILED. Not 'no receipt yet' — see the loader. */
+  receiptFailed: boolean;
   issuedAt: string;
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
@@ -547,8 +548,8 @@ export default function InvoicePage(props: PageProps) {
           </div>
         )}
 
-        {props.status === 'paid' && props.receiptNotSent && (
-          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
+        {props.receiptFailed && (
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3" data-testid="receipt-failed">{t('pending.receiptNotSent')}</div>
         )}
         {/* A voided invoice's dates are historical fact — the endpoint refuses the edit, so the
             editor would only ever produce a 409. */}
@@ -803,7 +804,21 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       footerText: doc.footerText,
       datePaid: doc.datePaid ? doc.datePaid.toISOString().slice(0, 10) : null,
       dateIssued: doc.issuedAt.toISOString().slice(0, 10), // effective document date (date_issued ?? issued_at)
-      receiptNotSent: doc.status === 'paid' && !doc.receiptSentAt,
+      // ── EVIDENCE OF FAILURE, NOT ABSENCE OF SUCCESS ──────────────────────────────────────
+      // This was `paid && !receipt_sent_at`, which conflated three different situations and fired
+      // on 933 of the paid invoices — a receipt genuinely failing, a receipt not yet sent, and a
+      // receipt that was never due at all (a counter-marked-paid job, a historical import). Only
+      // the first deserves an alarm; the other two deserve silence, and telling 933 invoices their
+      // receipt "could not be sent" taught everyone to ignore the one where it had.
+      //
+      // So the condition is inverted: alarm only where a send was ATTEMPTED AND FAILED, which
+      // NotificationLog records as a fact. Absence now means absence.
+      //
+      // It also clears the window this would otherwise misreport: between fulfilment settling the
+      // invoice and the receipt stamp landing there is no failed row, so nothing is claimed.
+      receiptFailed: doc.status === 'paid' && (await prisma.notificationLog.count({
+        where: { subject_type: 'invoice', subject_id: doc.invoiceId, template: 'invoice_document', status: 'failed' },
+      })) > 0,
       voidedAt: doc.voidedAt ? doc.voidedAt.toLocaleDateString(doc.locale) : null,
       voidReason: doc.voidReason ?? null,
       voidCorrections: doc.voidCorrections,

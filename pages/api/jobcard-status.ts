@@ -22,7 +22,9 @@ import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 import { writeAudit } from '@/lib/audit';
-import { recordPayment } from '@/lib/payments';
+// recordManualPayment, NOT recordPayment: there is no sourceRef parameter, so these calls cannot
+// collide and are safe inside a transaction that continues afterwards. See lib/payments.
+import { recordManualPayment } from '@/lib/payments';
 import { tServer } from '@/lib/server-i18n';
 import { refuseIfVoid } from '@/lib/invoice-void';
 
@@ -223,7 +225,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (method.behaviour === 'instant') {
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             // INSTANT clearance = the money is already in the drawer. Succeeded at once.
-            await recordPayment(tx, {
+            await recordManualPayment(tx, {
               groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
               amountPennies: amountPaidPennies, status: 'succeeded',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
@@ -236,7 +238,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             // MANUAL clearance: recorded, not yet cleared. `processing` keeps it out of the cache
             // until somebody confirms the money actually arrived.
-            await recordPayment(tx, {
+            await recordManualPayment(tx, {
               groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
@@ -252,7 +254,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
             // WINDOWED clearance: same reasoning as manual. The window exists precisely because the
             // money might not arrive, so it cannot count until it has.
-            await recordPayment(tx, {
+            await recordManualPayment(tx, {
               groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,

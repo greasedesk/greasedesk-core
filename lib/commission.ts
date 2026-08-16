@@ -29,6 +29,24 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+/**
+ * A client that can START a transaction — which is to say, one that IS NOT ALREADY IN ONE.
+ *
+ * ── A TYPE, NOT A COMMENT ───────────────────────────────────────────────────────────────────────
+ * Prisma.TransactionClient is PrismaClient minus $transaction and friends, so requiring $transaction
+ * is a structural way of saying "not inside a transaction". That matters here because of a defect
+ * found on 2026-08-16 in lib/invoice-payment-intent: a CAUGHT P2002 still poisons its transaction.
+ * Postgres aborts the whole block on any failed statement, so every command after the catch dies
+ * with 25P02 — and code that looks idempotent is not.
+ *
+ * accruePayment LOOPS over parties calling insertIdempotent, which swallows P2002. Today it is safe
+ * only because every caller happens to pass the root client, so each insert is its own transaction.
+ * Wrap it in one and a tenant with TWO attributed parties breaks on the first redelivery: party one
+ * P2002s, party two dies 25P02, the whole clawback rethrows. That is a comment away from happening,
+ * and a comment is a request. This is the rule.
+ */
+type RootClient = Db & { $transaction: unknown };
+
 export type Tier = 'first_12m' | 'thereafter';
 export const TIER_BOUNDARY_MONTHS = 12; // elapsed < 12 → first_12m (the twelve intro payments)
 
@@ -254,13 +272,13 @@ export async function computeCommission(
 }
 
 // ── MATERIALISE (writes): the Stripe paid/refund webhook path. Idempotent via the unique index. ───
-async function insertIdempotent(db: Db, data: any): Promise<'written' | 'noop'> {
+async function insertIdempotent(db: RootClient, data: any): Promise<'written' | 'noop'> {
   try { await (db as any).commissionEntry.create({ data }); return 'written'; }
   catch (e: any) { if (e?.code === 'P2002') return 'noop'; throw e; } // re-delivered webhook = no-op
 }
 
 /** Accrue a collected payment (Stripe invoice.paid). One entry per attributed party; idempotent on the payment ref. */
-export async function accruePayment(db: Db, groupId: string, p: Payment): Promise<{ written: number; noop: number }> {
+export async function accruePayment(db: RootClient, groupId: string, p: Payment): Promise<{ written: number; noop: number }> {
   const tenant = await loadTenant(db, groupId);
   let written = 0, noop = 0;
   for (const l of await linesForPayment(db, tenant, p)) {
@@ -282,7 +300,7 @@ export async function accruePayment(db: Db, groupId: string, p: Payment): Promis
  * is already `paid` (cash left in a payout), this pending negative is a DEBT recovered from the next
  * run; if still `pending`, the two net to zero and no cash ever moves. Idempotent on the refund ref.
  */
-export async function clawbackRefund(db: Db, groupId: string, r: Refund, orig: Payment): Promise<{ written: number; noop: number }> {
+export async function clawbackRefund(db: RootClient, groupId: string, r: Refund, orig: Payment): Promise<{ written: number; noop: number }> {
   const tenant = await loadTenant(db, groupId);
   const fraction = Math.min(1, r.amount_pennies / orig.amount_pennies);
   let written = 0, noop = 0;

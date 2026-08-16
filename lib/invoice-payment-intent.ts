@@ -215,9 +215,21 @@ export async function createInvoicePaymentIntent(args: {
   // cannot pass it to the Stripe classifier, and logged with the intent id so the money is
   // findable by hand. Retrying is the correct recovery: the idempotency key replays the same
   // intent and the binding is attempted again.
+  // ── A CAUGHT P2002 STILL POISONS ITS TRANSACTION ────────────────────────────────────────────
+  // This block used to run recordPayment and the fee-grain update inside ONE transaction.
+  // recordPayment catches P2002 and returns null — "a redelivered create is a no-op, not an error"
+  // — which is true in Prisma's terms and false in Postgres's: once a statement fails inside a
+  // transaction, EVERY subsequent command errors with 25P02 (in_failed_sql_transaction). So the
+  // updateMany on the next line died, the block threw, and a customer double-tapping Pay got
+  // "The payment couldn't be started just now" on an intent that was perfectly fine. Confirmed
+  // empirically against the live database, not reasoned about.
+  //
+  // The fix is the shape recordCardRefunds already uses: let the DUPLICATE roll its own
+  // transaction back, and catch it OUTSIDE. The fee grain then goes on afterwards, in its own
+  // statement, whichever way the bind went.
+  let firstBind = true;
   try {
-    // `processing` because nothing has cleared: only the webhook may say otherwise. A redelivered
-    // create is a P2002 no-op inside recordPayment.
+    // `processing` because nothing has cleared: only the webhook may say otherwise.
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await recordPayment(tx, {
         groupId: args.groupId,
@@ -231,18 +243,35 @@ export async function createInvoicePaymentIntent(args: {
         sourceRef: pi.id,
         provider: 'stripe',
       });
-      // Fee grain is frozen onto the row the moment it exists, so what was charged stays explicable
-      // even if the rate table moves on. recordPayment does not carry these — they are Stripe-only.
-      await (tx as any).payment.updateMany({
-        where: { source_ref: pi.id },
-        data: { payment_intent_id: pi.id, application_fee_pennies: feePennies, fee_rate_id: rateId },
-      });
     });
   } catch (e: any) {
-    console.error('[pay] BINDING FAILED after intent', pi.id, 'invoice', args.invoiceId,
-      '— a payment may proceed with no Payment row:', String(e?.stack ?? e?.message ?? e));
-    throw new Error('PAY:binding_failed');
+    if (e?.code !== 'P2002') {
+      // Anything else from here is OURS, and it is the dangerous kind: the customer can still be
+      // charged against an intent we failed to record, and the webhook resolves by source_ref — so
+      // a missing row means a real payment with nothing to attach it to. Tagged so the endpoint
+      // cannot pass it to the Stripe classifier, and logged with the intent id so the money is
+      // findable by hand. Retrying is the correct recovery.
+      console.error('[pay] BINDING FAILED after intent', pi.id, 'invoice', args.invoiceId,
+        '— a payment may proceed with no Payment row:', String(e?.stack ?? e?.message ?? e));
+      throw new Error('PAY:binding_failed');
+    }
+    // THE ORDINARY DOUBLE-TAP. The row is already there from the first press; nothing is wrong.
+    firstBind = false;
   }
+
+  // Fee grain is frozen onto the row the moment it exists, so what was charged stays explicable
+  // even if the rate table moves on. recordPayment does not carry these — they are Stripe-only.
+  // Outside the transaction and idempotent, so it is correct on the first bind and on a replay.
+  try {
+    await prisma.payment.updateMany({
+      where: { source_ref: pi.id },
+      data: { payment_intent_id: pi.id, application_fee_pennies: feePennies, fee_rate_id: rateId },
+    });
+  } catch (e: any) {
+    // The payment is recorded; the fee grain is explicability, not money. Loud, not fatal.
+    console.error('[pay] fee grain not written for', pi.id, '—', e?.message);
+  }
+  if (!firstBind) console.info('[pay] intent', pi.id, 'was already bound — a repeat press, not an error');
 
   return {
     ok: true,

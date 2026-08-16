@@ -81,7 +81,34 @@ export function expectedCachePennies(
  */
 
 /**
+ * ── WHY THERE ARE TWO ENTRY POINTS ──────────────────────────────────────────────────────────────
+ * A CAUGHT P2002 STILL POISONS ITS TRANSACTION. Postgres aborts the whole block on any failed
+ * statement, so once the unique index rejects a duplicate, every subsequent command in that
+ * transaction dies with 25P02 — including the reconcileInvoice on the line below. Code that reads
+ * as idempotent is not. (Found 2026-08-16: a customer double-tapping Pay got "the payment couldn't
+ * be started" on a perfectly good intent.)
+ *
+ * Whether that can happen at all depends entirely on whether a CALLER-SUPPLIED key is in play:
+ *
+ *   recordManualPayment  — no sourceRef parameter EXISTS. The key is always `manual:<uuid>`, so a
+ *                          collision is impossible and the call is safe anywhere, including deep
+ *                          inside a transaction with more work after it (pages/api/jobcard-status).
+ *   recordPayment        — takes a sourceRef, so it CAN collide. The caller must let P2002 propagate
+ *                          and catch it OUTSIDE the transaction (see lib/card-payment-fulfil).
+ *
+ * The jobcard-status calls were safe only because nobody had passed a sourceRef — correct by
+ * accident, which is a description of a future defect. Splitting the function makes the unsafe call
+ * unwritable there rather than merely discouraged: there is no argument to pass.
+ */
+
+/**
  * Write a payment and reconcile the invoice. Returns the row, or null if `sourceRef` already existed.
+ *
+ * ── THE NULL RETURN IS A TRAP INSIDE A TRANSACTION ──────────────────────────────────────────────
+ * It swallows P2002 so a redelivered webhook is a no-op — but the transaction is already aborted by
+ * then, so anything the caller does afterwards fails, AND reconcileInvoice never ran. Safe only when
+ * this is the LAST statement in its transaction and the caller treats a null as "roll back and move
+ * on". Prefer catching P2002 outside the transaction entirely.
  *
  * ── `reconstructed` IS DERIVED FROM THE KEY, NEVER PASSED ───────────────────────────────────────
  * A reconstructed row is one the backfill inferred from an invoice marked paid before this table
@@ -91,6 +118,15 @@ export function expectedCachePennies(
  * by construction instead of by everyone remembering to pass the right pair.
  */
 export const RECONSTRUCTED_PREFIX = 'backfill:';
+
+/**
+ * A payment taken at the counter: cash, card machine, bank transfer. No external key exists for it,
+ * so none can be supplied, so it CANNOT collide — which is what makes it safe to call inside a
+ * transaction that continues afterwards.
+ */
+export async function recordManualPayment(tx: Tx, args: Omit<RecordPaymentArgs, 'sourceRef'>) {
+  return recordPayment(tx, args);
+}
 
 export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
   const source_ref = args.sourceRef ?? `manual:${randomUUID()}`;
