@@ -173,6 +173,64 @@ export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
  * Recompute Invoice.amount_paid_pennies from the ledger. THE only writer of that column from now on.
  * Called inside the same transaction as whatever moved the money, so the cache cannot lag its rows.
  */
+/**
+ * Record a refund the GARAGE made — cash from the till, a bank transfer, the card machine.
+ *
+ * ── WHY THIS ONE WRITES AND THE CARD ONE DOES NOT ───────────────────────────────────────────────
+ * A Stripe refund reaches us from three directions (our button, the garage's own dashboard, the
+ * API) and the webhook is the single writer for all three; a button that also wrote would be a
+ * fourth origin producing rows the others cannot. A till has ONE direction. There is no external
+ * system to ask and no event to wait for — the person at the counter is the only witness there is,
+ * so the endpoint records what they say happened. Same row, same reconcile, same transaction as
+ * the webhook: what differs is the origin, not the treatment.
+ *
+ * `payment_id` is required by the model and that is the structural limit that makes this not a back
+ * door: YOU CANNOT REFUND MONEY THE LEDGER NEVER SAW. There is no path here to invent an outflow.
+ *
+ * `source_ref` is `manual:<uuid>` — the same namespace shape the backfill used, so the ledger can
+ * always say where a row came from without a second column to hold the answer.
+ */
+export async function recordManualRefund(tx: Tx, args: {
+  groupId: string;
+  paymentId: string;
+  invoiceId: string;
+  amountPennies: number;
+  currency: string;
+  /** MANDATORY. A refund with no stated reason is a hole in the till nobody can explain later. */
+  reason: string;
+  /** MANDATORY. How it went back — snapshotted, so renaming a method never rewrites history. */
+  paymentMethodId: string;
+  paymentMethodSnapshot: string;
+  /** WHEN THE MONEY MOVED. Defaults to today at the surface, but the garage may back-date it: a
+   *  refund handed over on Friday and recorded on Tuesday moved on FRIDAY, and that is the
+   *  VAT-relevant date. Never `now` silently. */
+  collectedAt: Date;
+  /** The person who recorded it. The audit row carries this too; see the two-facts rule. */
+  createdBy: string;
+}) {
+  const row = await (tx as any).refund.create({
+    data: {
+      group_id: args.groupId,
+      payment_id: args.paymentId,
+      amount_pennies: args.amountPennies,
+      currency: args.currency,
+      reason: args.reason,
+      // NULL, not 0: there is no application fee on a payment we never processed, and 0 would
+      // claim we kept a fee that never existed. Honest-null, in the one place it belongs here.
+      application_fee_refunded_pennies: null,
+      refund_id: null,
+      source_ref: `manual:${randomUUID()}`,
+      payment_method_id: args.paymentMethodId,
+      payment_method_snapshot: args.paymentMethodSnapshot,
+      collected_at: args.collectedAt,
+      created_by: args.createdBy,
+    },
+    select: { id: true },
+  });
+  await reconcileInvoice(tx, args.invoiceId);
+  return row;
+}
+
 export async function reconcileInvoice(tx: Tx, invoiceId: string): Promise<number | null> {
   const [payments, refunds] = await Promise.all([
     (tx as any).payment.findMany({ where: { invoice_id: invoiceId }, select: { status: true, amount_pennies: true } }),

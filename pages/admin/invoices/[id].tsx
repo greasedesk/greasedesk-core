@@ -31,6 +31,7 @@ import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
 import { quoteRefund, refundConfirmationLines } from '@/lib/refund-quote';
 import { refundLines } from '@/lib/invoice-refund-state';
+import { RefundPanel } from '@/components/refund/RefundPanel';
 
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
@@ -495,63 +496,36 @@ export default function InvoicePage(props: PageProps) {
             server-side (props.refundable), never guessed here. PARTIAL FROM THE START: a customer
             disputing one line of four is the ordinary workshop case, and full-only would send the
             garage back to the Stripe dashboard for exactly the scenario we most want on this path. */}
-        {props.canManage && props.refundable && props.status !== 'void' && (
-          <div className="rounded-xl border border-line bg-surface p-4 mb-3" data-testid="refund-panel">
-            {refundStage === null && (
-              <button onClick={() => { setRefundStage('form'); setRefundInput((remainingRefundable / 100).toFixed(2)); }}
-                disabled={busy !== null} data-testid="refund-open"
-                className="text-sm rounded-lg px-4 py-2 border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
-                Refund…
-              </button>
-            )}
-
-            {refundStage === 'form' && (
-              <div data-testid="refund-form">
-                <p className="text-sm font-semibold text-ink">Refund this payment</p>
-                <p className="text-xs text-muted mt-1">
-                  {fmt(remainingRefundable)} of {fmt(props.refundable.amountPennies)} is still refundable
-                  {props.refundable.alreadyRefundedPennies > 0 && <> — {fmt(props.refundable.alreadyRefundedPennies)} has already gone back</>}.
-                </p>
-                <label className="block text-xs text-muted mt-3 mb-1">Amount to refund</label>
-                <input type="number" step="0.01" min="0.01" max={(remainingRefundable / 100).toFixed(2)}
-                  value={refundInput} onChange={(e) => setRefundInput(e.target.value)} data-testid="refund-amount"
-                  className="w-40 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
-                {quote && !quote.ok && <p className="mt-2 text-sm text-danger" data-testid="refund-invalid">{quote.refusal.message}</p>}
-                <div className="flex gap-2 mt-3">
-                  <button disabled={!quote?.ok || busy !== null} onClick={() => setRefundStage('confirm')} data-testid="refund-review"
-                    className="text-sm font-semibold rounded-lg px-4 py-2 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
-                    Review
-                  </button>
-                  <button onClick={() => { setRefundStage(null); setRefundInput(''); }} className="text-sm text-muted px-3 py-2">Cancel</button>
-                </div>
-              </div>
-            )}
-
-            {refundStage === 'confirm' && quote?.ok && (
-              <div data-testid="refund-confirm">
-                <p className="text-sm font-semibold text-ink">
-                  {quote.quote.isFull ? 'Refund in full?' : 'Refund part of this payment?'}
-                </p>
-                {/* THE COST, IN THE GARAGE'S TERMS. Sentences from lib/refund-quote so the gate can
-                    assert the words a garage owner actually reads. Stripe's fee not coming back is
-                    the fact this whole panel exists to state before the button, not after. */}
-                <ul className="mt-2 space-y-1" data-testid="refund-cost-lines">
-                  {refundConfirmationLines(quote.quote).map((line, i) => (
-                    <li key={i} className="text-sm text-ink">• {line}</li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-[11px] text-muted">
-                  We send this to Stripe; the invoice updates when Stripe confirms it, usually within a few seconds.
-                </p>
-                <div className="flex gap-2 mt-3">
-                  <button disabled={busy !== null} onClick={sendRefund} data-testid="refund-send"
-                    className="text-sm font-semibold rounded-lg px-4 py-2 bg-danger text-white hover:opacity-90 disabled:opacity-50">
-                    {busy === 'refund' ? 'Sending…' : `Refund ${fmt(quote.quote.refundPennies)}`}
-                  </button>
-                  <button onClick={() => setRefundStage('form')} className="text-sm text-muted px-3 py-2">Back</button>
-                </div>
-              </div>
-            )}
+        {/* ── REFUND ──────────────────────────────────────────────────────────────────────────
+            THE SAME COMPONENT the job card's Refund tab renders. Extracted rather than left inline
+            when the tab was built: the sentences that say Stripe's fee is not coming back are the
+            most carefully worded thing on the money path, and a second copy would be a second set
+            of words to keep in step — the failure the shared refundLines copy exists to prevent,
+            one screen earlier. Eligibility is still decided server-side (props.refundable). */}
+        {props.refundable && props.status !== 'void' && (
+          <div className="mb-3">
+            <RefundPanel
+              payments={[{
+                paymentId: props.refundable.paymentId,
+                origin: 'card',
+                receivedPennies: props.refundable.amountPennies,
+                alreadyRefundedPennies: props.refundable.alreadyRefundedPennies,
+                remainingPennies: Math.max(0, props.refundable.amountPennies - props.refundable.alreadyRefundedPennies),
+                currency: props.currency,
+                collectedAt: new Date(),
+                methodLabel: null,
+                refusal: null,
+                applicationFeePennies: props.refundable.applicationFeePennies,
+                stripeFeePennies: props.refundable.stripeFeePennies,
+                applicationFeeAlreadyReturnedPennies: props.refundable.applicationFeeReturnedPennies,
+              }]}
+              methods={[]}
+              canManage={props.canManage}
+              invoiceRefusal={null}
+              money={fmt}
+              today={new Date().toISOString().slice(0, 10)}
+              onDone={() => setTimeout(() => router.replace(router.asPath), 1500)}
+            />
           </div>
         )}
 

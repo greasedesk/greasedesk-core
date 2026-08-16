@@ -30,7 +30,9 @@ try {
 
   // ── 1. THE PURE RULE ───────────────────────────────────────────────────────────────────────
   console.log('\n— the rule —');
-  const R = (amount, at) => ({ amount_pennies: amount, created_at: D(at) });
+  // collected_at, not created_at: refundState reads WHEN THE MONEY MOVED. Both agreed while the
+// Stripe webhook was the only writer; the manual refund path made them differ.
+const R = (amount, at) => ({ amount_pennies: amount, collected_at: D(at) });
   check('no refunds is none', refundState({ receivedPennies: 5000, refunds: [] }).kind === 'none');
   check('the whole amount back is FULL', refundState({ receivedPennies: 5000, refunds: [R(5000, '2026-08-16')] }).kind === 'full');
   check('part of it is PARTIAL', refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16')] }).kind === 'partial');

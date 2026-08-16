@@ -21,6 +21,7 @@ import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
+import { RefundPanel } from '@/components/refund/RefundPanel';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState, computeTabs } from '@/lib/jobcard-tabs';
@@ -212,6 +213,7 @@ export default function JobCardWorkspace(p: Props) {
   }
 
   async function selectTab(k: TabKey) {
+    if (k === 'refund') void loadRefundable();
     if (k === 'messages') await openMessages();
     // Leaving the Quote step: PERSIST the estimate first, so a financial edit is never lost when
     // moving to another step. (Bug: the quote lived in EstimateBuilder's transient local state, which
@@ -362,6 +364,26 @@ export default function JobCardWorkspace(p: Props) {
 
   // Email-invoice from the Invoice tab — SAME endpoint as the view page (one send path, no fork).
   // State hoisted here (never inside a pane — remount rule). Success refreshes the audit foot.
+  // ── REFUND TAB ────────────────────────────────────────────────────────────────────────────
+  // Loaded on demand from /api/payments/refundable: what can be refunded is decided SERVER-SIDE
+  // and never worked out here. State hoisted to the workspace like every other pane's — a
+  // same-URL refresh does not remount, so state inside a pane would survive in the wrong way.
+  const [refundData, setRefundData] = useState<any | null>(null);
+  const [refundErr, setRefundErr] = useState<string | null>(null);
+  const [refundLoading, setRefundLoading] = useState(false);
+  async function loadRefundable() {
+    setRefundLoading(true); setRefundErr(null);
+    try {
+      const r = await fetch(`/api/payments/refundable?jobCardId=${encodeURIComponent(p.jobCardId)}`, { cache: 'no-store' });
+      if (!r.ok) { setRefundData(null); setRefundErr('We couldn’t load this job’s payments just now. Try again in a moment.'); return; }
+      setRefundData(await r.json());
+    } catch {
+      // SAY SO. The first version set data to null and rendered an empty pane, which reads exactly
+      // like "there is nothing to refund" — a failure disguised as an answer.
+      setRefundData(null); setRefundErr('We couldn’t load this job’s payments just now. Try again in a moment.');
+    } finally { setRefundLoading(false); }
+  }
+
   const [emailMsg, setEmailMsg] = useState<{ text: string; ok: boolean } | null>(null);
   async function emailInvoice() {
     if (!eff.invoice) return;
@@ -846,6 +868,24 @@ export default function JobCardWorkspace(p: Props) {
       )}
 
       {active === 'invoice' && invoicePane}
+
+      {active === 'refund' && (
+        <div className="space-y-3" data-testid="refund-pane">
+          {refundLoading && !refundData && !refundErr && <p className="text-sm text-muted">Loading…</p>}
+          {refundErr && <p className="text-sm text-danger" data-testid="refund-load-error">{refundErr}</p>}
+          {refundData && (
+            <RefundPanel
+              payments={(refundData.payments ?? []).map((x: any) => ({ ...x, collectedAt: new Date(x.collectedAt) }))}
+              methods={refundData.methods ?? []}
+              canManage={!!refundData.canManage && !cancelled}
+              invoiceRefusal={refundData.invoiceRefusal ?? null}
+              money={(pennies: number) => formatMoney(pennies, { currency: p.currency, locale: p.locale })}
+              today={refundData.today}
+              onDone={() => { void loadRefundable(); refreshCard(); }}
+            />
+          )}
+        </div>
+      )}
 
       <JobCardAudit events={eff.events} />
     </>

@@ -23,7 +23,7 @@
 import type { JobStatus, StageKey } from './jobcard-status';
 import { QUOTE_DONE_STATUSES, INVOICE_DONE_STATUSES } from './jobcard-status';
 
-export const TAB_KEYS = ['details', 'messages', 'quote', 'intake', 'injob', 'completion', 'invoice'] as const;
+export const TAB_KEYS = ['details', 'messages', 'quote', 'intake', 'injob', 'completion', 'invoice', 'refund'] as const;
 
 /**
  * NOT PART OF THE GATED SPINE. Messages is a place to look, not a step to finish: always reachable,
@@ -34,7 +34,7 @@ export const TAB_KEYS = ['details', 'messages', 'quote', 'intake', 'injob', 'com
  * whichever one they read first, and every other entry in TAB_KEYS is a stage. The gate asserts
  * this set never gains a `complete: true`.
  */
-export const NON_STAGE_TABS: readonly TabKey[] = ['messages'];
+export const NON_STAGE_TABS: readonly TabKey[] = ['messages', 'refund'];
 export type TabKey = typeof TAB_KEYS[number];
 
 export type TabState = { reachable: boolean; complete: boolean; skipped?: boolean };
@@ -82,6 +82,15 @@ export function computeTabs(s: CardGateState): Record<TabKey, TabState> {
     injob: { reachable: intakeComplete, complete: injobComplete, skipped: skippedOf('injob') },
     completion: { reachable: injobComplete, complete: completionComplete, skipped: skippedOf('complete') },
     invoice: { reachable: completionComplete, complete: invoiceComplete },
+    // ALWAYS REACHABLE, NEVER COMPLETABLE — like Messages, and for a related reason: a refund is
+    // not a step in getting the job out of the door, it is something that may or may not ever
+    // happen afterwards. "Complete" is meaningless for it.
+    //
+    // ALWAYS VISIBLE, rather than appearing only when something is refundable. A garage looking for
+    // the refund control and not finding it concludes the product cannot do refunds; a tab that
+    // opens and says "no money has been taken on this job yet" costs one click and answers the
+    // question. The panel carries the honest empty state — see components/refund/RefundPanel.
+    refund: { reachable: true, complete: false },
   };
 
   // Cancelled: everything viewable (read-only). Reachability opened so history isn't stranded; the

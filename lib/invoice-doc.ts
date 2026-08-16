@@ -114,7 +114,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       // THE LEDGER, for the refund state. Only what refundState needs: gross received (Σ succeeded
       // payments, BEFORE refunds — the cached amount_paid_pennies is already net, so comparing
       // refunds against it would call every full refund a partial one) and the refund rows.
-      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
+      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, collected_at: true } } } },
       job_card: { select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } } },
     },
   })) as any;

@@ -32,7 +32,16 @@ export type RefundState =
   | { kind: 'partial'; refundedPennies: number; at: Date | null; receivedPennies: number }
   | { kind: 'full'; refundedPennies: number; at: Date | null; receivedPennies: number };
 
-export type RefundRowLike = { amount_pennies: number; created_at: Date | string };
+/**
+ * `collected_at` — WHEN THE MONEY MOVED, not when the row was written.
+ *
+ * This read `created_at` until 2026-08-16, and it was invisible for as long as the Stripe webhook
+ * was the only writer: it records a refund seconds after Stripe moves the money, so the two agreed
+ * to the second. The manual path made them differ immediately — a refund handed over on 7 July and
+ * typed in today displayed TODAY'S date to the customer, which is the exact confusion collected_at
+ * was added to the model to prevent. The column existed; the reader had not caught up.
+ */
+export type RefundRowLike = { amount_pennies: number; collected_at: Date | string };
 
 /**
  * `receivedPennies` is the GROSS ever received — Σ succeeded payments, before refunds are taken
@@ -50,7 +59,7 @@ export function refundState(args: {
   // The LATEST refund is the date the customer cares about — "when did I get my money back" means
   // the last of it, not the first instalment of it.
   const at = rows
-    .map((r) => new Date(r.created_at))
+    .map((r) => new Date(r.collected_at))
     .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
 
   // `>=` not `===`: an over-refund (a goodwill top-up processed as a refund) is still fully

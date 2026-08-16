@@ -6,6 +6,7 @@
  * with a reason tooltip. Purely presentational; the parent owns active-tab state (kept in the URL).
  */
 import React from 'react';
+import { NON_STAGE_TABS } from '@/lib/jobcard-tabs';
 import type { TabKey } from '@/lib/jobcard-tabs';
 
 export type TabView = { key: TabKey; label: string; reachable: boolean; complete: boolean; skipped?: boolean;
@@ -46,7 +47,12 @@ export default function JobCardTabs({ tabs, active, onSelect, lockedReason }: Pr
               className={`snap-start shrink-0 flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${tone} ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
             >
               <span className={`flex items-center justify-center w-5 h-5 rounded-full text-xs ${isActive ? 'bg-white/20' : t.skipped ? 'bg-warn text-white' : t.complete ? 'bg-ok text-white' : 'bg-surface-muted text-muted'}`}>
-                {t.skipped ? '»' : t.complete ? '✓' : locked ? '🔒' : i + 1}
+                {/* A STEP NUMBER ONLY WHERE THERE IS A STEP. Messages and Refund are places to
+                    look, not stages to finish — numbering them says "you are at step 8 of the job",
+                    which is not true of a conversation or a refund. Read from NON_STAGE_TABS so the
+                    next non-stage tab inherits it rather than picking up a number nobody meant.
+                    (Messages wore a "2" for months; it read as an unread count and was its index.) */}
+                {t.skipped ? '»' : t.complete ? '✓' : locked ? '🔒' : NON_STAGE_TABS.includes(t.key) ? '·' : i + 1}
               </span>
               <span className="whitespace-nowrap">{t.label}</span>
               {/* THE COUNT, on the tab. Distinct from the step number on the left: that circle says

@@ -86,7 +86,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         // builder that is deliberately three waves. buildInvoiceDoc is NOT called here: it pulls a
         // dozen relations to answer a question these rows already answer, and query depth is the
         // latency currency on this page.
-        payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
+        payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, collected_at: true } } } },
       },
     }) as Promise<{ id: string; invoice_number: string | null; status: string; series: string; lines: any[]; payments: any[] } | null>,
     prisma.auditLog.findMany({

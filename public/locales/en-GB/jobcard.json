@@ -176,6 +176,7 @@
     "injob": "In-Job Photos",
     "completion": "Completion Photos",
     "invoice": "Invoice",
+    "refund": "Refund",
     "locked": "Complete the previous step to unlock this one.",
     "detailsMinData": "Add the customer and registration first."
   },

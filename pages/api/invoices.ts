@@ -70,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // The ledger, for the refund chip. Same query, more columns — the list already pulls lines
       // per row, so this adds no round-trip. refundState is the SAME function the invoice page and
       // the customer's link call; only the source of the rows differs.
-      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
+      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, collected_at: true } } } },
       job_card: { select: { vehicle_id: true, customer: { select: { email: true } } } },
       site: { select: { currency_code: true, locale: true } },
     },

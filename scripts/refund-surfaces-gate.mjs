@@ -38,7 +38,7 @@ try {
 
   // ── 1. ONE FORMATTER, SO THE DATE CANNOT DIVERGE ───────────────────────────────────────────
   console.log('\n— the shared copy —');
-  const s = refundState({ receivedPennies: 5000, refunds: [{ amount_pennies: 5000, created_at: new Date('2026-08-16T23:40:00Z') }] });
+  const s = refundState({ receivedPennies: 5000, refunds: [{ amount_pennies: 5000, collected_at: new Date('2026-08-16T23:40:00Z') }] });
   const a = refundLines(s, { money: (p) => `£${(p / 100).toFixed(2)}`, locale: 'en-GB' });
   const b = refundLines(s, { money: (p) => `£${(p / 100).toFixed(2)}`, locale: 'en-GB' });
   check('the same state yields the same sentences', a.headline === b.headline && a.detail === b.detail);
