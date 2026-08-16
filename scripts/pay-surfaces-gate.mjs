@@ -83,12 +83,16 @@ try {
   check('the curly apostrophe stays GSM-7', smsCost(render({ garageName: 'Dave’s Motors', number: '1', total: '£1', garagePhone: '0330' })).encoding === 'GSM-7',
     'smsText folds it at the one render point — untouched it would triple the message');
   check('the essentials survive when the registration is dropped', (() => {
-    const t = render({ garageName: 'A'.repeat(40), number: '100003209', registration: 'AB12CDE', total: '£12,485.43', garagePhone: '03309990020' });
+    // 42, not 40. The reply-route suffix got three septets cheaper on 2026-08-16 ("To reply, call"
+    // replacing "No replies - call"), which moved the threshold: at 40 the message now FITS with the
+    // registration, so the drop never fired and this check failed for the right reason. Picked from
+    // the measured boundary — 40 fits at 160, 42 drops — rather than nudged until it passed.
+    const t = render({ garageName: 'A'.repeat(42), number: '100003209', registration: 'AB12CDE', total: '£12,485.43', garagePhone: '03309990020' });
     return t.includes('100003209') && t.includes('£12,485.43') && t.includes(LINK) && t.includes('03309990020') && !t.includes('AB12CDE');
   })(), 'the number they quote, the amount, the link and the reply route all stay');
   check('the budget check is discriminating', (() => {
     // Without the drop, the 33-character case is two segments — the behaviour being guarded.
-    const naive = `O'Brien's Motor & Tyre Centre Ltd: invoice INV-2026-100003209 for AB12CDE, £12,485.43 to pay. ${LINK} No replies - call 03309990020`;
+    const naive = `O'Brien's Motor & Tyre Centre Ltd: invoice INV-2026-100003209 for AB12CDE, £12,485.43 to pay. ${LINK} To reply, call 03309990020`;
     return !isOneSegment(smsText(naive));
   })(), 'a fixed template would have cost two segments on that name');
 

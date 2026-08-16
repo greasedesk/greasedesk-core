@@ -57,8 +57,47 @@ const shell = (bodyHtml: string): string => `
  * Costs 26 septets plus the number. Measured against the one-segment budget in the template tests:
  * a quote SMS with a 30-character garage name and a 41-character link still lands at 155 of 160.
  */
-const replyRoute = (d: TemplateData): string =>
-  d.garagePhone ? ` No replies - call ${d.garagePhone}` : '';
+/**
+ * ── THE SEPARATOR IS COMPUTED, NOT ASSUMED ──────────────────────────────────────────────────────
+ * This used to be a bare leading space, which ran the suffix into the body: a garage typing "Your
+ * car is ready for collection" got "…for collection No replies - call 0330…" as one sentence.
+ *
+ * Three endings, three answers, and the third is the one a naive ". " would break:
+ *   ends in . ! ?   → a space. The sentence is already closed; a second full stop is wrong.
+ *   ends in a URL   → a space. A period placed straight after a link is captured by the link
+ *                     detector in several clients, and the customer gets a 404 on a pay link. This
+ *                     is the case that makes "just add a full stop" wrong, and it is FIVE of the
+ *                     six templates.
+ *   anything else   → ". " — the free-text case, which is the one a garage writes by hand.
+ */
+const suffixSeparator = (body: string): string => {
+  const t = body.trimEnd();
+  if (!t) return '';
+  if (/[.!?]$/.test(t)) return ' ';
+  const lastToken = t.split(/\s+/).pop() ?? '';
+  if (/^(https?:\/\/|www\.)/i.test(lastToken)) return ' ';
+  return '. ';
+};
+
+/**
+ * "To reply, call …" — an INSTRUCTION, not a description of our architecture.
+ *
+ * It was "No replies - call …", which tells the customer what our sender configuration is and
+ * leaves them to work out the consequence. Measured, the new wording is also two septets CHEAPER
+ * (28 vs 30 with a UK number), which matters because the budget is one segment and
+ * `quote_revised` already exceeds it with a long garage name.
+ *
+ * Considered and rejected: "Please don't reply - call …" is clearer still, but lands the invoice
+ * SMS at exactly 160 septets — one character of garage name from doubling the cost of every
+ * invoice text. Clarity that sits on a cliff edge is not clarity.
+ *
+ * OMITTED, not faked, when no number is on file — an empty "call " is worse than nothing.
+ */
+const replyRoute = (d: TemplateData, body: string): string =>
+  d.garagePhone ? `${suffixSeparator(body)}To reply, call ${d.garagePhone}` : '';
+
+/** Attach the reply route to a finished body, with the right separator for how that body ends. */
+const withReplyRoute = (d: TemplateData, body: string): string => `${body}${replyRoute(d, body)}`;
 
 const button = (href: string, label: string): string =>
   `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#2563eb;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:600">${esc(label)}</a></p>`;
@@ -85,7 +124,7 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it, so please don't forward it.</p>`),
     }),
     sms: (d) => ({
-      text: `${d.garageName ?? 'Your garage'}: the price for ${d.registration ?? 'your vehicle'} has changed${d.total ? ` to ${d.total}` : ''}. Please approve: ${d.link}${replyRoute(d)}`,
+      text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: the price for ${d.registration ?? 'your vehicle'} has changed${d.total ? ` to ${d.total}` : ''}. Please approve: ${d.link}`),
     }),
   },
 
@@ -100,7 +139,7 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view the quote, so please don't forward it.</p>`),
     }),
     sms: (d) => ({
-      text: `${d.garageName ?? 'Your garage'}: your quote${d.registration ? ` for ${d.registration}` : ''} is ready${d.total ? ` (${d.total})` : ''}. View: ${d.link}${replyRoute(d)}`,
+      text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: your quote${d.registration ? ` for ${d.registration}` : ''} is ready${d.total ? ` (${d.total})` : ''}. View: ${d.link}`),
     }),
   },
 
@@ -114,7 +153,7 @@ export const NOTIFICATION_TEMPLATES = {
         ${button(String(d.link ?? ''), 'View progress')}
         <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it.</p>`),
     }),
-    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: track your vehicle${d.registration ? ` ${d.registration}` : ''} here: ${d.link}${replyRoute(d)}` }),
+    sms: (d) => ({ text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: track your vehicle${d.registration ? ` ${d.registration}` : ''} here: ${d.link}`) }),
   },
 
   // ── Garage-facing: the customer answered ────────────────────────────────────────────────────────
@@ -181,7 +220,7 @@ export const NOTIFICATION_TEMPLATES = {
     label: 'Invoice payment link',
     sms: (d) => {
       const build = (withReg: boolean) =>
-        `${d.garageName ?? 'Your garage'}: invoice ${d.number}${withReg && d.registration ? ` for ${d.registration}` : ''}, ${d.total} to pay. ${d.link}${replyRoute(d)}`;
+        withReplyRoute(d, `${d.garageName ?? 'Your garage'}: invoice ${d.number}${withReg && d.registration ? ` for ${d.registration}` : ''}, ${d.total} to pay. ${d.link}`);
       // ── IT GUARANTEES ONE SEGMENT RATHER THAN HOPING FOR ONE ───────────────────────────────
       // Measured, not estimated, and measured through smsText because that is what notify sends —
       // a curly apostrophe in a garage name would otherwise drop the whole message to UCS-2 and
@@ -308,7 +347,7 @@ export const NOTIFICATION_TEMPLATES = {
     // Declared so `channel` is a real field rather than decoration: an SMS free-text send renders
     // here and is then recorded as skipped by the unconfigured SMS adapter — refused for the right
     // reason (no provider), not silently unsupported.
-    sms: (d) => ({ text: `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}${replyRoute(d)}` }),
+    sms: (d) => ({ text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}`) }),
   },
 
   // A COPY of an inbound customer reply, forwarded to the garage's own mailbox so that switching
