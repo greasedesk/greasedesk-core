@@ -1,0 +1,33 @@
+-- Drop NotificationLog(direction, thread_id). Deliberate, on evidence — not a diff side effect.
+--
+-- ── THE EVIDENCE ────────────────────────────────────────────────────────────────────────────────
+-- pg_stat_user_indexes, stats never reset since the database was created:
+--
+--     NotificationLog_direction_thread_id_idx        scans =   0     16 kB
+--     NotificationLog_thread_id_created_at_idx       scans = 224     40 kB
+--     NotificationLog_provider_message_id_idx        scans = 153     16 kB
+--     NotificationLog_group_id_created_at_idx        scans = 152     40 kB
+--     NotificationLog_pkey                           scans = 1061    40 kB
+--
+-- Zero. Not "low" — never used, once, in its entire life.
+--
+-- ── WHY IT WAS NEVER GOING TO BE USED ───────────────────────────────────────────────────────────
+-- `direction` holds two values (out=170, in=6 today). As a LEADING column it eliminates almost
+-- nothing, so the planner prefers (thread_id, created_at), which is selective from its first
+-- column. The query it was built for — a thread's messages filtered by direction — was superseded
+-- anyway: the unread count now reads MessageThread.last_message_direction, and the one live query
+-- filtering on direction (lib/inbound-body-sweep) does not touch thread_id at all.
+--
+-- ── CHECKED AGAINST THE WORK THAT IS COMING ─────────────────────────────────────────────────────
+-- The per-garage SMS slice will add inbound queries filtered by direction and recipient, so this
+-- was checked rather than assumed. It is NOT the index that work wants:
+--   • resolving an inbound text goes phone → customer → thread, and Customer already carries
+--     @@index([group_id, phone_e164]), which is exactly that lookup;
+--   • the To-number → tenant lookup will be a unique on the new TenantPhoneNumber model, and
+--     arrives with it;
+--   • if that slice does end up reading NotificationLog by recipient, the useful index is
+--     (group_id, recipient, created_at) — recipient is selective (55 distinct of 176 rows).
+--     Leading on `direction` helps none of these.
+-- That index is NOT created here. Adding an index for a query that does not exist yet is how you
+-- collect more of exactly this: 16 kB of write cost serving nothing, for a year, unnoticed.
+DROP INDEX "NotificationLog_direction_thread_id_idx";

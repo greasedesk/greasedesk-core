@@ -2776,12 +2776,11 @@ model NotificationLog {
   @@index([provider_message_id])
   @@index([subject_type, subject_id])
   @@index([thread_id, created_at])
-  // DECLARED SO IT CAN BE DELIBERATELY REMOVED. This index has existed in the database since
-  // 20260731220000_inbound_email created it in hand-written SQL, but the schema was never told —
-  // so `migrate diff` proposed DROPPING it as a side effect of any unrelated change. An index
-  // disappearing because a diff swept it up is how you find out about it from a slow query six
-  // months later. Declared here first; the removal is the next commit, on evidence.
-  @@index([direction, thread_id])
+  // NO (direction, thread_id) INDEX. It existed from 20260731220000_inbound_email until
+  // 20260816094000_drop_dead_notification_index removed it on evidence: zero scans, ever.
+  // `direction` holds two values, so it is a useless leading column; thread-scoped reads are served
+  // by (thread_id, created_at) above. If inbound work ever needs to filter a thread by direction,
+  // the index to add is (group_id, recipient, created_at) — NOT this one. See the migration.
 }
 
 // ── MESSAGE THREADS ───────────────────────────────────────────────────────────────────────────────
