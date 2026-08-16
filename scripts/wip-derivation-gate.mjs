@@ -80,15 +80,21 @@ try {
   // 3 × £12.34 = £37.02, rounded per line.
   check('the WIP total rises by exactly the line', after - before === 3702, `${P(before)} → ${P(after)}`);
 
-  // Discriminating: the OLD basis would not have moved at all — the stored column is untouched by
-  // this write. Proven directly rather than asserted, using the column that still exists.
-  const stored = await prisma.jobCard.findUnique({
-    where: { id: target.id }, select: { labour_bill_numeric: true, parts_bill_numeric: true },
-  });
-  const oldBasis = Math.round((Number(stored.labour_bill_numeric ?? 0) + Number(stored.parts_bill_numeric ?? 0)) * 100);
-  const derived = (await wipLineValuesPennies(prisma, [target.id])).get(target.id) ?? 0;
-  check('the check is discriminating — the CACHED column did NOT move', derived - oldBasis === 3702,
-    `cache ${P(oldBasis)} vs lines ${P(derived)} — this gap is the defect, reproduced on demand`);
+  // This used to contrast the move against the STALE CACHED COLUMN, which was the sharpest
+  // available discriminator while the column existed. It does not exist any more (dropped in
+  // 20260817200000), so the statement is now stronger and simpler: THERE IS NO CACHE TO DISAGREE.
+  // Same evolution as revenue-period-gate's null-site fixture — the rule outlives the fixture.
+  const cols = await prisma.$queryRawUnsafe(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'JobCard' AND column_name IN ('labour_bill_numeric','parts_bill_numeric')`);
+  check('no persisted bill column exists on JobCard at all', cols.length === 0,
+    cols.length ? `still present: ${cols.map((c) => c.column_name).join(', ')}` : 'the lines are the only source there is');
+  // Discriminating: information_schema is genuinely being consulted, not returning empty for free.
+  const sanity = await prisma.$queryRawUnsafe(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'JobCard' AND column_name = 'is_comeback'`);
+  check('the check is discriminating — the query does find columns that DO exist', sanity.length === 1,
+    'otherwise "no such column" would pass against a typo in the table name');
 
   // ── 3. THE COMEBACK RULE SURVIVED THE CHANGE ───────────────────────────────────────────────
   console.log('\n— the rules that were already there —');
@@ -110,11 +116,27 @@ try {
   // The four fixture cards are still there. Under the old basis they contributed nothing.
   console.log('\n— the gap that started this —');
   const zzTotal = await total();
-  const zzCached = (await prisma.jobCard.findMany({ where: wipCardsWhere(sites), select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true } }))
-    .filter((c) => !c.is_comeback)
-    .reduce((a, c) => a + Math.round((Number(c.labour_bill_numeric ?? 0) + Number(c.parts_bill_numeric ?? 0)) * 100), 0);
-  check('ZZ WIP now includes the work the cache could not see', zzTotal > zzCached,
-    `derived ${P(zzTotal)} vs cached ${P(zzCached)} — a difference of ${P(zzTotal - zzCached)}`);
+  // An INDEPENDENT sum — plain SQL, not the library under test — must equal what the library
+  // produces. The first version of this check hardcoded "4 × £980 = £3,920" from an earlier
+  // reading; there are in fact 5 such lines totalling £4,320, so the assertion was describing a
+  // fixture I had mis-remembered rather than the behaviour. Derive the target from the data.
+  const indep = await prisma.$queryRawUnsafe(`
+    SELECT COALESCE(SUM(ROUND(i.qty * i.unit_price * 100)), 0)::bigint AS pennies
+      FROM "JobCard" c JOIN "JobCardItem" i ON i.job_card_id = c.id
+     WHERE c.site_id = ANY($1::text[]) AND c.status IN ('accepted','in_progress')
+       AND c.is_comeback = false
+       AND NOT EXISTS (SELECT 1 FROM "Invoice" v WHERE v.job_card_id = c.id)`, sites);
+  const independent = Number(indep[0].pennies);
+  check('the library agrees with an independent sum of the same lines', zzTotal === independent,
+    `lib ${P(zzTotal)} vs plain SQL ${P(independent)}`);
+  // And the previously-invisible work is genuinely inside it, whatever its exact size.
+  const clutch = await prisma.jobCardItem.aggregate({
+    where: { description: 'Clutch replacement', job_card: { is: { site_id: { in: sites }, status: { in: WIP_STATUSES }, invoice: { is: null } } } },
+    _sum: { unit_price: true }, _count: true,
+  });
+  const clutchP = Math.round(Number(clutch._sum.unit_price ?? 0) * 100);
+  check('the work the cache valued at nothing is inside that total', clutchP > 0 && zzTotal >= clutchP,
+    `${clutch._count} lines worth ${P(clutchP)}, inside ${P(zzTotal)} — the cache read these cards as £0`);
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {

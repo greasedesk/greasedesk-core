@@ -19,7 +19,7 @@ const { utilisationLight, defaultThresholds } = await import('../lib/utilisation
 const { getSetupSignals } = await import('../lib/setup-signals.ts');
 const { uncostedParts } = await import('../lib/charged-labour.ts');
 const { computeQuotesMetrics } = await import('../lib/quotes-metrics.ts');
-const { wipCardsWhere, wipCardValuePennies } = await import('../lib/wip.ts');
+const { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies } = await import('../lib/wip.ts');
 const { purgeTenant } = await import('../lib/tenant-purge.ts');
 
 const KEEP = process.argv.includes('--keep');
@@ -210,9 +210,12 @@ try {
   // ── WIP: a real figure against the open cards ────────────────────────────────────────────────
   const wipCards = await prisma.jobCard.findMany({
     where: wipCardsWhere([res.siteId]),
-    select: { is_comeback: true, labour_bill_numeric: true, parts_bill_numeric: true },
+    select: { id: true, is_comeback: true },
   });
-  const wipPennies = wipCards.reduce((s2, c) => s2 + wipCardValuePennies(c), 0);
+  // Values come from the LINES now — see lib/wip::wipLineValuesPennies. This call site read the
+  // persisted columns and passed one argument; it would have thrown the moment those columns went.
+  const wipLines = await wipLineValuesPennies(prisma, wipCards.map((c) => c.id));
+  const wipPennies = wipCards.reduce((s2, c) => s2 + wipCardValuePennies(c, wipLines), 0);
   console.log(`\n  WIP: ${wipCards.length} open cards worth ${money(wipPennies)}`);
   check('there are open cards', wipCards.length > 0, `${wipCards.length}`);
   check('WIP carries a real value, not £0', wipPennies > 0, money(wipPennies));

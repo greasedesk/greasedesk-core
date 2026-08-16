@@ -72,7 +72,7 @@ const unannotated = unannotatedNullables(schema);
 // 280, not the 286 first quoted: that number came from a throwaway probe with a looser
 // relation-exclusion rule. The parser above is the authority, and the ceiling pins what it
 // actually counts — a ceiling with six of slack silently permits the next six.
-const UNANNOTATED_CEILING = 278;
+const UNANNOTATED_CEILING = 276;
 
 console.log(`\n— nullable columns with no explanation: ${unannotated.length} (ceiling ${UNANNOTATED_CEILING}) —`);
 const over = unannotated.length - UNANNOTATED_CEILING;

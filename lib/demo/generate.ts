@@ -732,7 +732,7 @@ export async function generateDemoTenant(opts: {
       })),
     });
     // ── THE WIP TILE READS THE PERSISTED TOTALS, NOT THE LINES ────────────────────────────────
-    // lib/wip values an open card from labour_bill_numeric + parts_bill_numeric, which the product
+    // lib/wip values an open card from its LINES (lib/wip::wipLineValuesPennies), which the product
     // writes from computeQuoteTotals on every save. The generator wrote the lines and never those
     // columns, so 13 open cards carrying real estimates showed as £0.00 of work in progress.
     // Computed through the SAME chokepoint rather than summed here — the whole point of those
@@ -756,8 +756,6 @@ export async function generateDemoTenant(opts: {
       where: { id: cardId },
       data: {
         vat_rate: new Prisma.Decimal(totals.vat_rate),
-        labour_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.labour_pennies)),
-        parts_bill_numeric: new Prisma.Decimal(penniesToPounds(totals.parts_pennies)),
       },
     });
     return totals;

@@ -1540,8 +1540,6 @@ model JobCard {
   mechanic_assigned_id   String?
   odometer_in            Int?
   odometer_out           Int?
-  labour_bill_numeric    Decimal?      @default(0) @db.Decimal(12, 2)
-  parts_bill_numeric     Decimal?      @default(0) @db.Decimal(12, 2)
   vat_rate               Decimal       @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?
   archived_at            DateTime?
