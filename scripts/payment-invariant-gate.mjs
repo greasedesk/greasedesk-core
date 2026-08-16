@@ -19,8 +19,9 @@
  * blast radius.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { expectedCachePennies } from '../lib/payments.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { expectedCachePennies } = await import('../lib/payments.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

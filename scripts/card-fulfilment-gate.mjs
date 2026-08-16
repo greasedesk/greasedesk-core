@@ -13,16 +13,17 @@
  * a true record of something that happened.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
 import { Prisma } from '@prisma/client';
-import { freezeQuoteVersion } from '../lib/quote-version.ts';
-import { acceptQuote } from '../lib/quote-acceptance.ts';
-import { issueInvoiceForCard } from '../lib/invoice-issue.ts';
-import { recordPayment, reconcileInvoice } from '../lib/payments.ts';
-import { fulfilCardPayment, closeCardPayment, CARD_METHOD_LABEL } from '../lib/card-payment-fulfil.ts';
-import { refusePayment } from '../lib/invoice-payment-intent.ts';
-import { applyCardTransition } from '../lib/jobcard-transition.ts';
-import { findTransition } from '../lib/jobcard-status.ts';
+const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
+const { acceptQuote } = await import('../lib/quote-acceptance.ts');
+const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
+const { recordPayment, reconcileInvoice } = await import('../lib/payments.ts');
+const { fulfilCardPayment, closeCardPayment, CARD_METHOD_LABEL } = await import('../lib/card-payment-fulfil.ts');
+const { refusePayment } = await import('../lib/invoice-payment-intent.ts');
+const { applyCardTransition } = await import('../lib/jobcard-transition.ts');
+const { findTransition } = await import('../lib/jobcard-status.ts');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const STAMP = `ZZ-FULFIL-${Date.now()}`;

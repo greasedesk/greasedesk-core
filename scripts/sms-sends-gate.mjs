@@ -12,10 +12,11 @@
  * ZZ, and every row this run writes is removed. It refuses to start if a previous run left anything.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';
-import { smsAllowance, SMS_TOPUP_PACK } from '../lib/sms-allowance.ts';
-import { startTopUpCheckout, recordTopUpFromSession, MAX_PACKS_PER_PURCHASE, smsTopUpPriceId } from '../lib/sms-topup.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
+const { smsAllowance, SMS_TOPUP_PACK } = await import('../lib/sms-allowance.ts');
+const { startTopUpCheckout, recordTopUpFromSession, MAX_PACKS_PER_PURCHASE, smsTopUpPriceId } = await import('../lib/sms-topup.ts');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const out = [];

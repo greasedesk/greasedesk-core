@@ -14,12 +14,13 @@
  * rendered document is read back with pdfjs in the separate served check.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { paymentMarks, marksSentence } from '../lib/payment-marks.ts';
-import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';
-import { smsText, smsCost, isOneSegment } from '../lib/sms-text.ts';
-import { payOnlineFor, offersPayLink } from '../lib/invoice-pay-link.ts';
-import { buildInvoiceDoc } from '../lib/invoice-doc.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { paymentMarks, marksSentence } = await import('../lib/payment-marks.ts');
+const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
+const { smsText, smsCost, isOneSegment } = await import('../lib/sms-text.ts');
+const { payOnlineFor, offersPayLink } = await import('../lib/invoice-pay-link.ts');
+const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const LINK = 'https://greasedesk.com/c/0123456789abcdef';

@@ -26,11 +26,12 @@
  *      runs, and that set changes without the script knowing.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';
 import { createServer } from 'node:http';
 import bcrypt from 'bcryptjs';
-import { prisma } from '../lib/db.ts';
-import handler from '../pages/api/cron/demo-lifecycle.ts';
-import { demoLifecycle, isPurgeable } from '../lib/demo-lifecycle.ts';
+const { prisma } = await import('../lib/db.ts');
+const handler = (await import('../pages/api/cron/demo-lifecycle.ts')).default;
+const { demoLifecycle, isPurgeable } = await import('../lib/demo-lifecycle.ts');
 
 const stamp = process.env.GATE_STAMP ?? 'x';
 const SECRET = process.env.CRON_SECRET || 'gate-secret';

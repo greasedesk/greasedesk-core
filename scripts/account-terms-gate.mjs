@@ -7,9 +7,10 @@
  * and asserts up front that it owns nothing else.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { dueDateFor, normaliseTermsDays, isAccountCustomer, overdueWhere, daysOverdue, MAX_TERMS_DAYS } from '../lib/account-terms.ts';
-import { listWhere, LIST_STATUS_KEYS, isListStatusKey } from '../lib/invoice-list-filters.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { dueDateFor, normaliseTermsDays, isAccountCustomer, overdueWhere, daysOverdue, MAX_TERMS_DAYS } = await import('../lib/account-terms.ts');
+const { listWhere, LIST_STATUS_KEYS, isListStatusKey } = await import('../lib/invoice-list-filters.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

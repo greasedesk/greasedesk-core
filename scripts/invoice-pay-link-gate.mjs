@@ -13,12 +13,13 @@
  * no invoice number is spent — and deletes only the link rows it wrote, matched on their own ids.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { MAGIC_LINK_DAYS, INVOICE_PAY_GRACE_DAYS, invoicePayExpiry, createMagicLink, resolveMagicLink, magicLinkUrl } from '../lib/magic-link.ts';
-import { offersPayLink } from '../lib/invoice-pay-link.ts';
-import { canEditInvoice, isUnderCorrection } from '../lib/invoice.ts';
-import { expectedCachePennies } from '../lib/payments.ts';
-import { amountReceivedPennies, balanceOwedPennies } from '../lib/invoice.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { MAGIC_LINK_DAYS, INVOICE_PAY_GRACE_DAYS, invoicePayExpiry, createMagicLink, resolveMagicLink, magicLinkUrl } = await import('../lib/magic-link.ts');
+const { offersPayLink } = await import('../lib/invoice-pay-link.ts');
+const { canEditInvoice, isUnderCorrection } = await import('../lib/invoice.ts');
+const { expectedCachePennies } = await import('../lib/payments.ts');
+const { amountReceivedPennies, balanceOwedPennies } = await import('../lib/invoice.ts');
 
 const GATE_REF = 'GB-GD2141';
 const DAY = 24 * 60 * 60 * 1000;

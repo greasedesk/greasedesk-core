@@ -16,10 +16,11 @@
  * own reaper, not an audit log; deleting rows this run created is not the AuditLog rule.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { refusePayment } from '../lib/invoice-payment-intent.ts';
-import { createMagicLink, invoicePayExpiry } from '../lib/magic-link.ts';
-import { PAY_LIMITS } from '../pages/api/pay/intent.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { refusePayment } = await import('../lib/invoice-payment-intent.ts');
+const { createMagicLink, invoicePayExpiry } = await import('../lib/magic-link.ts');
+const { PAY_LIMITS } = await import('../pages/api/pay/intent.ts');
 
 const GATE_REF = 'GB-GD2141';
 const B = process.env.GATE_BASE ?? 'http://localhost:3111';

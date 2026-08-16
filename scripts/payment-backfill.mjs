@@ -33,9 +33,10 @@
  *
  * DEMO TENANTS ARE REFUSED OUTRIGHT. Nothing in one is real, and the reference demo is frozen.
  */
-import { prisma } from '../lib/db.ts';
-import { invoiceTotals, effectivePaidDate } from '../lib/invoice.ts';
-import { recordPayment } from '../lib/payments.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { invoiceTotals, effectivePaidDate } = await import('../lib/invoice.ts');
+const { recordPayment } = await import('../lib/payments.ts');
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 const APPLY = process.argv.includes('--apply');

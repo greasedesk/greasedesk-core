@@ -3,12 +3,13 @@
  * The twelve-month comparison: right numbers, and four states that cannot be confused.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
 import { withRetry } from './_gate-retry.mjs';
-import { computeTiles } from '../lib/dashboard-tiles.ts';
-import { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, monthsOfRange, PERIOD_PRESETS, MONTH_PRESETS } from '../lib/dashboard-periods.ts';
-import { getGroupUtilisation } from '../lib/capacity.ts';
-import { getTenantDataStart } from '../lib/tenant-data-start.ts';
+const { computeTiles } = await import('../lib/dashboard-tiles.ts');
+const { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, monthsOfRange, PERIOD_PRESETS, MONTH_PRESETS } = await import('../lib/dashboard-periods.ts');
+const { getGroupUtilisation } = await import('../lib/capacity.ts');
+const { getTenantDataStart } = await import('../lib/tenant-data-start.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

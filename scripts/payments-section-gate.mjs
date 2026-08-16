@@ -21,12 +21,13 @@
  * connection. If either is occupied it refuses and writes nothing. Enforced here, not remembered.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';
 import Stripe from 'stripe';
-import { prisma } from '../lib/db.ts';
-import { providerState } from '../lib/provider-connection.ts';
-import { paymentsAccessFor, sessionComponentsFor } from '../lib/stripe-account-session.ts';
-import { PROVIDERS } from '../lib/payment-providers.ts';
-import { classifyStripeError, stripeErrorFields } from '../lib/stripe-errors.ts';
+const { prisma } = await import('../lib/db.ts');
+const { providerState } = await import('../lib/provider-connection.ts');
+const { paymentsAccessFor, sessionComponentsFor } = await import('../lib/stripe-account-session.ts');
+const { PROVIDERS } = await import('../lib/payment-providers.ts');
+const { classifyStripeError, stripeErrorFields } = await import('../lib/stripe-errors.ts');
 
 const GATE_REF = 'GB-GD2141'; // ZZ Gate Garage. Resolved by its unique ref, never by name.
 const PANELS_RENDERED = new Set(['payments', 'payouts', 'account']); // what StripeEmbeddedPanel switches on

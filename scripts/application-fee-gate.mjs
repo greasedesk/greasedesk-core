@@ -14,8 +14,9 @@
  * It refuses to start if a previous run left anything behind.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { applicationFeePennies, resolveFeeRate } from '../lib/application-fee.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { applicationFeePennies, resolveFeeRate } = await import('../lib/application-fee.ts');
 
 const GATE_REF = 'GB-GD2141';   // ZZ Gate Garage
 /**

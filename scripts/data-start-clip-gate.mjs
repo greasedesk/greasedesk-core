@@ -10,9 +10,10 @@
  * The pure half runs with no database (standing rule 1). The DB half reads only.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { clipToData, precedesData, getTenantDataStart } from '../lib/tenant-data-start.ts';
-import { getGroupUtilisation } from '../lib/capacity.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { clipToData, precedesData, getTenantDataStart } = await import('../lib/tenant-data-start.ts');
+const { getGroupUtilisation } = await import('../lib/capacity.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

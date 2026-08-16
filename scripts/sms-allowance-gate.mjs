@@ -8,9 +8,10 @@
  * "simplified" into summing monthly grants, which would let unused months accumulate for ever.
  */
 import './_gate-preflight.mjs';
-import { prisma } from '../lib/db.ts';
-import { computeAllowance, smsAllowance, monthKey, monthStart, monthEnd, SMS_INCLUDED_PER_MONTH, SMS_TOPUP_PACK } from '../lib/sms-allowance.ts';
-import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';
+import './_ts.mjs';
+const { prisma } = await import('../lib/db.ts');
+const { computeAllowance, smsAllowance, monthKey, monthStart, monthEnd, SMS_INCLUDED_PER_MONTH, SMS_TOPUP_PACK } = await import('../lib/sms-allowance.ts');
+const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const NOW = new Date('2026-08-15T12:00:00Z');

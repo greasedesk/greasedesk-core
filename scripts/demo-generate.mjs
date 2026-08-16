@@ -9,17 +9,18 @@
  *
  *   node --experimental-strip-types --import ./scripts/_ts.mjs scripts/demo-generate.mjs [--keep]
  */
+import './_ts.mjs';
 import bcrypt from 'bcryptjs';
-import { prisma } from '../lib/db.ts';
-import { generateDemoTenant, DEMO_SPEC } from '../lib/demo/generate.ts';
-import { getGroupUtilisation } from '../lib/capacity.ts';
-import { fetchLedgerInvoices, labourGrossMargin, chargedLabourCentihours } from '../lib/charged-labour.ts';
-import { utilisationLight, defaultThresholds } from '../lib/utilisation-light.ts';
-import { getSetupSignals } from '../lib/setup-signals.ts';
-import { uncostedParts } from '../lib/charged-labour.ts';
-import { computeQuotesMetrics } from '../lib/quotes-metrics.ts';
-import { wipCardsWhere, wipCardValuePennies } from '../lib/wip.ts';
-import { purgeTenant } from '../lib/tenant-purge.ts';
+const { prisma } = await import('../lib/db.ts');
+const { generateDemoTenant, DEMO_SPEC } = await import('../lib/demo/generate.ts');
+const { getGroupUtilisation } = await import('../lib/capacity.ts');
+const { fetchLedgerInvoices, labourGrossMargin, chargedLabourCentihours } = await import('../lib/charged-labour.ts');
+const { utilisationLight, defaultThresholds } = await import('../lib/utilisation-light.ts');
+const { getSetupSignals } = await import('../lib/setup-signals.ts');
+const { uncostedParts } = await import('../lib/charged-labour.ts');
+const { computeQuotesMetrics } = await import('../lib/quotes-metrics.ts');
+const { wipCardsWhere, wipCardValuePennies } = await import('../lib/wip.ts');
+const { purgeTenant } = await import('../lib/tenant-purge.ts');
 
 const KEEP = process.argv.includes('--keep');
 const SEED = process.env.DEMO_SEED ?? 'slice4-first';
