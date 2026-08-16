@@ -234,7 +234,15 @@ model Group {
 
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
-  ref String @unique @default(dbgenerated("('GB-GD' || nextval('group_ref_seq'::regclass))"))
+  /**
+   * WRITTEN THE WAY POSTGRES STORES IT, not the way it is nicest to type. Postgres normalises the
+   * literal in a DEFAULT expression and adds the cast, so `'GB-GD'` comes back as `'GB-GD'::text`.
+   * Prisma compares these as strings, so the tidier spelling made `migrate diff` propose re-setting
+   * the default to the value it already had — for ever, because applying it would normalise straight
+   * back. A permanent phantom in the diff is worse than an ugly string: it is the noise a real drift
+   * hides inside. Verified against the database, not guessed.
+   */
+  ref String @unique @default(dbgenerated("('GB-GD'::text || nextval('group_ref_seq'::regclass))"))
 
   // ── STRIPE CONNECT: THE GARAGE'S OWN PAYMENTS ACCOUNT ─────────────────────────────────────────
   // ⚠ VESTIGIAL AS OF THE PROVIDER-CONNECTION MIGRATION. Every column below was backfilled into
