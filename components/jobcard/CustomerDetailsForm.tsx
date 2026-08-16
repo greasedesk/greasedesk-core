@@ -26,7 +26,13 @@ type Vehicle = {
 };
 type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
   // Country-shaped vehicle identity (ruling 2026-07-29); defaults keep every existing caller working.
-  vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName };
+  vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName;
+  /**
+   * The stage transition for this tab, rendered beside Save. Passed in rather than built here: the
+   * button reads the card's stage state and calls the workspace's own setStage, and moving that
+   * logic into this form would give the workspace a second way to change a card's spine.
+   */
+  stageAction?: React.ReactNode };
 
 const inputCls = 'w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelCls = 'block text-xs uppercase text-muted mb-1';
@@ -44,7 +50,7 @@ function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boole
   return o.smsOptOut == null && o.emailOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
 }
 
-export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none' }: Props) {
+export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
@@ -267,8 +273,17 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
         </div>
       </div>
       {msg && <div className={`mt-3 rounded-lg p-2 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
-      <div className="flex justify-end mt-4">
-        <button disabled={busy} onClick={() => submit(false)} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+      {/* ── TWO ACTIONS, ONE ROW, DELIBERATELY UNALIKE ─────────────────────────────────────────
+          The stage transition used to live at the very bottom of the tab, below Messages, Flags and
+          Garage notes — a long scroll from the fields it is a judgement about. It belongs here.
+          But side by side they must not look the same: Save is routine and pressed constantly,
+          Mark complete moves the card's spine and is audited. Save keeps the filled accent and the
+          RIGHTMOST position (the default place a thumb lands, last in the stack on mobile); the
+          stage action is outlined, in the completion colour, and sits to its left. */}
+      <div className="flex flex-col sm:flex-row sm:justify-end sm:items-center gap-2 mt-4">
+        {stageAction}
+        <button disabled={busy} onClick={() => submit(false)} data-testid="details-save"
+          className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
           {busy ? t('detailsEdit.saving') : t('detailsEdit.save')}
         </button>
       </div>

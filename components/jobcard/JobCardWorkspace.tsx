@@ -414,7 +414,13 @@ export default function JobCardWorkspace(p: Props) {
                 disabled={!p.canOperate || cancelled || busy !== null || (!done && detailsBlocked)}
                 title={!done && detailsBlocked ? t('tab.detailsMinData') : undefined}
                 onClick={() => setStage(stage, !done)}
-                className={`w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50 ${done ? 'bg-ok-soft text-ok border border-line' : 'bg-accent hover:bg-accent-hover text-white'}`}
+                // OUTLINED, NOT FILLED. It used to wear the same filled accent as Save, which was
+                // survivable while it sat alone at the bottom of a pane and is not now that the two
+                // are side by side on the Details tab. Outlined in the completion colour reads as a
+                // stage transition rather than a save, and keeps one visual language across all
+                // four stages instead of a special case for one of them.
+                className={`w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50 ${done ? 'bg-ok-soft text-ok border border-line' : 'bg-surface text-ok border border-ok hover:bg-ok-soft'}`}
+                data-testid={`stage-complete-${stage}`}
               >
                 {done ? t('stageComplete.doneToggle', { label }) : t('stageComplete.mark', { label })}
               </button>
@@ -451,6 +457,7 @@ export default function JobCardWorkspace(p: Props) {
           canEdit={p.canOperate && !cancelled}
           locale={p.locale}
           onSaved={refreshCard}
+          stageAction={<StageComplete stage="details" label={t('tab.details')} />}
         />
 
         {/* THE CONVERSATION — on the customer record, read-only in this slice. */}
@@ -478,8 +485,6 @@ export default function JobCardWorkspace(p: Props) {
         </div>
 
         <JobCardNotes jobCardId={p.jobCardId} canEdit={p.canOperate && !cancelled} initialNotes={p.garageNotes} />
-
-        <div className="flex justify-end"><StageComplete stage="details" label={t('tab.details')} /></div>
       </div>
   );
 
