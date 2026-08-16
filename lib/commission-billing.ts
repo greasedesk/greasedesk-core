@@ -18,7 +18,7 @@
  */
 import type Stripe from 'stripe';
 import type { PrismaClient } from '@prisma/client';
-import { accruePayment, clawbackRefund } from '@/lib/commission';
+import { accruePayment, clawbackRefund, isCommissionError } from '@/lib/commission';
 import { resolveAttribution } from '@/lib/attribution';
 
 type Db = PrismaClient;
@@ -71,13 +71,55 @@ export async function accrueFromInvoicePaid(db: Db, invoice: Stripe.Invoice): Pr
   const payment = { ref: invoiceId, collected_at: collectedAt, amount_pennies: amountPaid, currency };
   try {
     const r = await accruePayment(db as any, groupId, payment); // trial gate inside → during trial = {written:0}
+    // A LATER SUCCESS CLOSES AN EARLIER REFUSAL. The rate got added, the shares got fixed, and the
+    // webhook was replayed — the board should stop asking about it rather than keep a scar.
+    await resolveRefusals(db, groupId, invoiceId);
     return { status: 'accrued', groupId, written: r.written, noop: r.noop };
   } catch (e: any) {
-    // A genuine config error (e.g. shares ≠ 10000). Log loudly, acknowledge the webhook (don't wedge
-    // Stripe into infinite retry over a data-config issue); the missing entry is visible + fixable.
-    console.error('[commission-billing] accrual refused for', groupId, e?.message);
+    // A genuine config error (e.g. shares ≠ 10000, or no rate for the tier this tenant just moved
+    // into). Acknowledge the webhook — wedging Stripe into infinite retry over OUR config error
+    // helps nobody — but the refusal is money a rep is owed and did not get, so it is RECORDED and
+    // not merely logged. The log line stays: it is what someone greps at two in the morning.
+    console.error('[commission-billing] accrual refused for', groupId, e?.code ?? '—', e?.message);
+    await recordRefusal(db, groupId, invoiceId, e);
     return { status: 'skipped', reason: `engine refused: ${e?.message}` };
   }
+}
+
+/**
+ * Keep the refusal. Idempotent on (group, payment, code): a re-delivered webhook records once, and
+ * a DIFFERENT failure on the same payment is a separate row because it is a separate thing to fix.
+ *
+ * NEVER throws. This runs inside a webhook handler that has already decided to acknowledge, and a
+ * failure to write the record must not turn a handled refusal into a 500 and an infinite retry.
+ */
+async function recordRefusal(db: Db, groupId: string, sourceRef: string, e: any): Promise<void> {
+  try {
+    // The CODE is the API (lib/commission COMMISSION_ERROR.*); the prose rides along for humans.
+    // An untyped throw is not one of ours — record it as such rather than pretending we know.
+    const code = isCommissionError(e) ? String(e.code) : 'COMMISSION_UNKNOWN';
+    await (db as any).commissionRefusal.upsert({
+      where: { group_id_source_ref_code: { group_id: groupId, source_ref: sourceRef, code } },
+      update: {}, // first sighting wins; a replay is not a new event
+      create: {
+        group_id: groupId, source_ref: sourceRef, code,
+        message: String(e?.message ?? 'unknown').slice(0, 1000),
+        detail: (e?.detail ?? null) as any,
+      },
+    });
+  } catch (writeErr: any) {
+    console.error('[commission-billing] could NOT record the refusal for', groupId, sourceRef, '—', writeErr?.message);
+  }
+}
+
+/** Close any open refusal for this payment. Same never-throw rule as the writer. */
+async function resolveRefusals(db: Db, groupId: string, sourceRef: string): Promise<void> {
+  try {
+    await (db as any).commissionRefusal.updateMany({
+      where: { group_id: groupId, source_ref: sourceRef, resolved_at: null },
+      data: { resolved_at: new Date() },
+    });
+  } catch { /* a stale open row is a nuisance; a thrown webhook is an outage */ }
 }
 
 /**

@@ -54,6 +54,8 @@ type Detail = {
     phoneStepApplies: boolean;
     counts: { sites: number; users: number; jobCards: number; invoices: number };
   };
+  /** Accruals the commission engine refused for this tenant, still open. Money a rep is owed. */
+  refusals: Array<{ id: string; sourceRef: string; code: string; message: string; occurredAt: string }>;
 };
 type PageProps = { role: OperatorRoleName; operatorEmail: string; d: Detail };
 
@@ -220,6 +222,29 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             )}
           </Section>
 
+          {/* ── COMMISSION NOT ACCRUED ──────────────────────────────────────────────────────
+              Shown ONLY when there is something to show: a permanently empty "no problems" panel
+              on every tenant is furniture, and this is the page an operator opens when they are
+              already looking for something. The dashboard tile is the thing that says "go look". */}
+          {d.refusals.length > 0 && (
+            <div className="rounded-xl p-4 mb-4" style={{ background: '#2A1D06', border: '1px solid #7A5A16' }} data-testid="er-tenant-refusals">
+              <h2 className="text-sm font-semibold text-amber-200 mb-1">Commission not accrued ({d.refusals.length})</h2>
+              <p className="text-xs text-amber-200/70 mb-2">
+                The engine refused to accrue commission on these payments rather than invent a figure.
+                A rep is owed and unpaid until the cause is fixed and the payment re-processed.
+              </p>
+              <ul className="space-y-2">
+                {d.refusals.map((r) => (
+                  <li key={r.id} className="text-xs text-amber-100/90" data-testid={`er-refusal-${r.code}`}>
+                    <span className="font-mono text-amber-200">{r.code}</span>
+                    <span className="text-amber-200/60"> · {new Date(r.occurredAt).toLocaleString('en-GB', { timeZone: 'UTC' })} · payment {r.sourceRef}</span>
+                    <div className="text-amber-100/70">{r.message}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <Section title="Account">
             <Field label="Created">{new Date(a.created).toLocaleDateString('en-GB')}</Field>
             <Field label="Tenant status">{a.tenantStatus}</Field>
@@ -294,6 +319,14 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     },
   })) as any;
   if (!g) return { notFound: true };
+
+  // OPEN refusals for this tenant, newest first. Scoped by the group we have already proven the
+  // operator may see, so this adds no new access surface.
+  const refusalRows = await (prisma as any).commissionRefusal.findMany({
+    where: { group_id: g.id, resolved_at: null },
+    orderBy: { occurred_at: 'desc' },
+    select: { id: true, source_ref: true, code: true, message: true, occurred_at: true },
+  });
 
   // AUDIT THE READ (per-load) — before returning props, from the operator principal. FAIL CLOSED: this
   // is NOT wrapped in a catch. If the access record cannot be written, the view must not render — an
@@ -392,6 +425,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
           lastActivity: lastAct._max.created_at ? (lastAct._max.created_at as Date).toISOString() : null,
           counts: { sites: g.sites.length, users: staffUserCount, jobCards: jobCardCount, invoices: invoiceCount },
         },
+        refusals: refusalRows.map((r: any) => ({
+          id: r.id, sourceRef: r.source_ref, code: r.code, message: r.message,
+          occurredAt: (r.occurred_at as Date).toISOString(),
+        })),
       },
     },
   };

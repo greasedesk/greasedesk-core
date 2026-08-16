@@ -380,6 +380,7 @@ model Group {
   providerConnections ProviderConnection[]
   applicationFeeRates ApplicationFeeRate[]
   smsTopUps           SmsTopUp[]
+  commissionRefusals  CommissionRefusal[]
 }
 
 /**
@@ -701,6 +702,41 @@ model TenantAttribution {
 // The MATERIALISED ledger — written by the accrual/clawback path on Stripe paid/refund events. Every
 // row freezes rate_id + share_bp + tier + currency, so a recompute cross-checks and never moves.
 // Idempotency: source_ref = the payment ref (accrual) or refund ref (clawback); unique per party+kind.
+/**
+ * A COMMISSION ACCRUAL THAT DID NOT HAPPEN, AND WHY.
+ *
+ * The engine refuses rather than inventing a figure — no rate, shares that do not sum to 10000, a
+ * tenant it cannot load. lib/commission-billing catches that refusal deliberately, because wedging
+ * Stripe into infinite retry over OUR config error helps nobody. Until now the entire trace was a
+ * console.error: a rep quietly earned nothing and the only witness was a log line in Vercel.
+ *
+ * This is that witness, kept. It is the ABSENCE of money, recorded — deliberately NOT a
+ * CommissionEntry, because an entry is a sum and every reader of the ledger adds them up; a
+ * zero-value "refused" entry would be an accrual of nothing rather than a refusal to accrue.
+ *
+ * OPERATOR-ONLY, and that is why it is not an AuditLog row: AuditLog is the TENANT's trail and a
+ * garage can read theirs. What we pay a rep for their signup is not the garage's business.
+ *
+ * `resolved_at` is set when a later accrual for the same payment succeeds — so the board shows what
+ * is still outstanding rather than a growing pile of history. Nothing is ever deleted.
+ */
+model CommissionRefusal {
+  id          String    @id @default(uuid())
+  group_id    String
+  source_ref  String // the payment ref the accrual was for
+  code        String // lib/commission COMMISSION_ERROR.* — the typed code, never the prose
+  message     String // the prose, for a human reading this at two in the morning
+  detail      Json? // structured grain from CommissionError.detail (country, currency, tier, …)
+  occurred_at DateTime  @default(now())
+  resolved_at DateTime? // a later accrual for the same payment succeeded
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, source_ref, code]) // a re-delivered webhook records once, not once per retry
+  @@index([resolved_at])
+  @@index([group_id])
+}
+
 model CommissionEntry {
   id             String   @id @default(uuid())
   group_id       String

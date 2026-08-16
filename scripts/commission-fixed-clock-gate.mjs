@@ -105,8 +105,30 @@ try {
     await E.accruePayment(prisma, g, pay('pe', '2025-03-01', 'EUR')); const e = (await entriesFor(g, { source_ref: 'pe' }))[0];
     chk('C8 EUR tenant uses EUR rate 3000, currency EUR', e.amount_pennies === 3000 && e.currency === 'EUR');
     const gm = await mkTenant('Z8b', '2025-02-01'); await mkAttr(gm, 'rep', 'P1', 10000, '2025-02-01', null);
-    let threw = false; try { await E.accruePayment(prisma, gm, pay('pm', '2025-03-01', 'EUR')); } catch (e) { threw = /no rate for/.test(e.message); }
-    chk('C8 missing rate → THROWS, no silent fallback/zero', threw && (await entriesFor(gm)).length === 0); }
+    // ASSERTED ON THE CODE, NOT THE PROSE. This used to match /no rate for/. On 2026-08-13 the
+    // message gained one clarifying word — "no SUBSCRIPTION rate for" — and the regex stopped
+    // matching, so the gate reported a silent fallback the engine never had and stayed red for
+    // three days. A message is for humans; the code is the contract.
+    let caught = null; try { await E.accruePayment(prisma, gm, pay('pm', '2025-03-01', 'EUR')); } catch (e) { caught = e; }
+    chk('C8 missing rate → THROWS COMMISSION_NO_RATE, no silent fallback/zero',
+      E.isCommissionError(caught, E.COMMISSION_ERROR.NO_RATE) && (await entriesFor(gm)).length === 0,
+      caught ? `code=${caught.code}` : 'nothing thrown');
+    chk('C8 the refusal carries structured grain, not just a sentence',
+      caught?.detail?.country === 'Z8b' && caught?.detail?.currency === 'EUR' && caught?.detail?.tier === 'first_12m',
+      JSON.stringify(caught?.detail ?? null));
+    chk('C8 isCommissionError is duck-typed, so a recompiled copy still matches',
+      E.isCommissionError({ code: 'COMMISSION_NO_RATE' }) === true && E.isCommissionError(new Error('x')) === false,
+      'the gate imports a temp-compiled build — instanceof would be a different class object');
+
+    // ── TIER GAPS: the landmine the missing-rate refusal detonates ──────────────────────────
+    chk('C8 tierGaps flags a pair with first_12m and no thereafter',
+      JSON.stringify(E.tierGaps([{ country_code: 'GB', currency: 'GBP', tier: 'first_12m' }])) ===
+      JSON.stringify([{ country: 'GB', currency: 'GBP', has: ['first_12m'], missing: ['thereafter'] }]));
+    chk('C8 tierGaps is silent when both tiers exist',
+      E.tierGaps([{ country_code: 'GB', currency: 'GBP', tier: 'first_12m' }, { country_code: 'GB', currency: 'GBP', tier: 'thereafter' }]).length === 0);
+    chk('C8 tierGaps ignores a country with NEITHER tier',
+      E.tierGaps([]).length === 0 && E.tierGaps([{ country_code: 'IE', currency: 'EUR', tier: 'thereafter' }])[0].missing[0] === 'first_12m',
+      'no rows at all = a country we do not operate in; one tier = a country half configured'); }
 
   { const c = 'Z9', g = await mkTenant(c, '2025-02-01'); const RR1 = await mkRate(c, 'ZP', 'first_12m', '2020-01-01', 3500); await mkRate(c, 'ZP', 'thereafter', '2020-01-01', 1500); const RR3 = await mkRate(c, 'ZP', 'first_12m', '2025-08-01', 4000); const RR4 = await mkRate(c, 'ZP', 'thereafter', '2026-01-01', 1800); await mkAttr(g, 'rep', 'P1', 10000, '2025-02-01', null);
     const cs = [['pA', '2025-05-01', 'first_12m', 3500, RR1.id], ['pB', '2025-10-01', 'first_12m', 4000, RR3.id], ['pC', '2026-02-01', 'thereafter', 1800, RR4.id], ['pD', '2026-03-01', 'thereafter', 1800, RR4.id]];

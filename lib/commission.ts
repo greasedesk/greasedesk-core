@@ -82,10 +82,91 @@ export function splitAmount(total: number, shares: Array<{ id: string; bp: numbe
   return new Map(parts.map((p) => [p.id, p.base]));
 }
 
+// ── REFUSALS ARE TYPED. A MESSAGE IS FOR HUMANS ──────────────────────────────────────────────────
+/**
+ * Every refusal this engine makes carries a CODE. The prose stays — a log line a person reads at
+ * two in the morning is worth more than a symbol — but nothing may branch on it.
+ *
+ * WHY: scripts/commission-fixed-clock-gate asserted `/no rate for/` on the message. On 2026-08-13
+ * the message gained one clarifying word — "no SUBSCRIPTION rate for", to distinguish the platform
+ * subscription from a future transaction-revenue stream — and the regex stopped matching. The guard
+ * kept working perfectly; the gate went red and stayed red for three days, saying the engine had a
+ * silent fallback it never had. A gate that cries wolf over wording is worse than no gate, because
+ * the next real failure arrives in a colour everyone has learnt to ignore.
+ *
+ * DUCK-TYPED, not instanceof: the gate compiles this file to a temp directory and imports THAT copy,
+ * so its `CommissionError` is a different class object from the app's. Same lesson as isStripeError.
+ */
+export const COMMISSION_ERROR = {
+  NO_RATE: 'COMMISSION_NO_RATE',
+  NO_ATTRIBUTION: 'COMMISSION_NO_ATTRIBUTION',
+  BAD_SHARES: 'COMMISSION_BAD_SHARES',
+  TENANT_NOT_FOUND: 'COMMISSION_TENANT_NOT_FOUND',
+} as const;
+export type CommissionErrorCode = typeof COMMISSION_ERROR[keyof typeof COMMISSION_ERROR];
+
+export class CommissionError extends Error {
+  readonly code: CommissionErrorCode;
+  /** Structured grain for whoever records this — never parsed back out of the message. */
+  readonly detail: Record<string, unknown>;
+  constructor(code: CommissionErrorCode, message: string, detail: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'CommissionError';
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+/** Is this one of ours, and optionally which? The only supported way to branch on a refusal. */
+export function isCommissionError(e: unknown, code?: CommissionErrorCode): boolean {
+  const c = (e as { code?: unknown })?.code;
+  if (typeof c !== 'string' || !c.startsWith('COMMISSION_')) return false;
+  return code ? c === code : true;
+}
+
+/** Both tiers a tenant passes through. Every country/currency needs a rate for each, eventually. */
+export const TIERS: Tier[] = ['first_12m', 'thereafter'];
+
+/**
+ * A COUNTRY/CURRENCY WITH ONE TIER AND NOT THE OTHER — a landmine with a twelve-month fuse.
+ *
+ * tierForTenure returns `thereafter` at the twelve-month mark, so a pair carrying only `first_12m`
+ * works perfectly until a tenant's first anniversary and then refuses every accrual, paying that
+ * tenant's rep nothing. Production is in exactly that state today: GB/GBP has first_12m at £35 and
+ * no thereafter. Nothing is at risk yet — there are no active attributions — which is precisely why
+ * it would go unnoticed until someone asks where their money went.
+ *
+ * NOT auto-seeded, deliberately: a commission rate is an owner-made act (see the Rates screen's
+ * append-only-forward rule) and a figure that appeared in a migration is a figure nobody chose.
+ * Being TOLD is the fix; inventing one is not.
+ *
+ * Pure, so the Engine Room and the gate assert the same rule rather than two copies of it.
+ */
+export function tierGaps(rates: Array<{ country_code: string; currency: string; tier: string }>): Array<{
+  country: string; currency: string; has: Tier[]; missing: Tier[];
+}> {
+  const byPair = new Map<string, Set<string>>();
+  for (const r of rates) {
+    const k = `${r.country_code}/${r.currency}`;
+    (byPair.get(k) ?? byPair.set(k, new Set()).get(k)!).add(r.tier);
+  }
+  const gaps: Array<{ country: string; currency: string; has: Tier[]; missing: Tier[] }> = [];
+  for (const [k, tiers] of byPair) {
+    const missing = TIERS.filter((t) => !tiers.has(t));
+    // A pair with NEITHER tier cannot appear here — it has no rows and so no key. Only a partially
+    // configured pair is a gap; an entirely unconfigured country is a country we do not operate in.
+    if (missing.length && missing.length < TIERS.length) {
+      const [country, currency] = k.split('/');
+      gaps.push({ country, currency, has: TIERS.filter((t) => tiers.has(t)), missing });
+    }
+  }
+  return gaps.sort((a, b) => `${a.country}${a.currency}`.localeCompare(`${b.country}${b.currency}`));
+}
+
 // ── DB reads ─────────────────────────────────────────────────────────────────────────────────────
 async function loadTenant(db: Db, groupId: string): Promise<Tenant> {
   const g = await (db as any).group.findUnique({ where: { id: groupId }, select: { id: true, trial_ends_at: true, tax_country_code: true } });
-  if (!g) throw new Error(`COMMISSION: tenant ${groupId} not found`);
+  if (!g) throw new CommissionError(COMMISSION_ERROR.TENANT_NOT_FOUND, `COMMISSION: tenant ${groupId} not found`, { groupId });
   return { groupId: g.id, activation: g.trial_ends_at ?? null, country: g.tax_country_code };
 }
 
@@ -104,7 +185,13 @@ async function resolveRate(db: Db, country: string, currency: string, tier: Tier
     where: { revenue_stream: SUBSCRIPTION, country_code: country, currency, tier, effective_from: { lte: collectedAt } },
     orderBy: { effective_from: 'desc' },
   });
-  if (!r) throw new Error(`COMMISSION: no ${SUBSCRIPTION} rate for ${country}/${currency}/${tier} at ${collectedAt.toISOString()} — refusing to invent one`);
+  if (!r) {
+    throw new CommissionError(
+      COMMISSION_ERROR.NO_RATE,
+      `COMMISSION: no ${SUBSCRIPTION} rate for ${country}/${currency}/${tier} at ${collectedAt.toISOString()} — refusing to invent one`,
+      { country, currency, tier, stream: SUBSCRIPTION, at: collectedAt.toISOString() },
+    );
+  }
   return r as { id: string; amount_pennies: number };
 }
 
@@ -115,8 +202,15 @@ async function attributionsAt(db: Db, groupId: string, at: Date) {
     orderBy: { created_at: 'asc' },
   });
   const sum = rows.reduce((a: number, r: any) => a + r.share_bp, 0);
-  if (rows.length === 0) throw new Error(`COMMISSION: ${groupId} has no active attribution at ${at.toISOString()}`);
-  if (sum !== 10000) throw new Error(`COMMISSION: active shares for ${groupId} at ${at.toISOString()} sum to ${sum}, not 10000 — config error, refusing to under/over-pay`);
+  if (rows.length === 0) {
+    throw new CommissionError(COMMISSION_ERROR.NO_ATTRIBUTION,
+      `COMMISSION: ${groupId} has no active attribution at ${at.toISOString()}`, { groupId, at: at.toISOString() });
+  }
+  if (sum !== 10000) {
+    throw new CommissionError(COMMISSION_ERROR.BAD_SHARES,
+      `COMMISSION: active shares for ${groupId} at ${at.toISOString()} sum to ${sum}, not 10000 — config error, refusing to under/over-pay`,
+      { groupId, at: at.toISOString(), sumBp: sum });
+  }
   return rows as Array<{ id: string; party_type: string; party_id: string; share_bp: number }>;
 }
 
