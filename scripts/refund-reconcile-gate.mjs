@@ -93,7 +93,7 @@ try {
 
   const addRefund = async (id, amount) => {
     await prisma.$transaction(async (tx) => {
-      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id } });
+      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id, collected_at: new Date() } });
       await reconcileInvoice(tx, inv.id);
     });
     madeRefunds.push(id);
@@ -114,7 +114,7 @@ try {
   const writeOnce = async (id, amount) => {
     try {
       await prisma.$transaction(async (tx) => {
-        await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id } });
+        await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id, collected_at: new Date() } });
         await reconcileInvoice(tx, inv.id);
       });
       return 'written';

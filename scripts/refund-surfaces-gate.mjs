@@ -71,7 +71,7 @@ try {
 
   const addRefund = async (id, amount) => {
     await prisma.$transaction(async (tx) => {
-      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id } });
+      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id, collected_at: new Date() } });
       await reconcileInvoice(tx, invId);
     });
     madeRefunds.push(id);

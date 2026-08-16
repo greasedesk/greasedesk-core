@@ -234,6 +234,12 @@ export async function recordCardRefunds(args: {
             group_id: pay.group_id, payment_id: pay.id,
             amount_pennies: r.amount, currency: r.currency,
             reason: r.reason, refund_id: r.id, source_ref: r.id,
+            // STRIPE'S OWN TIMESTAMP, not when this webhook landed. They are usually seconds apart
+            // and were indistinguishable while this was the only path — but a re-sent event, a
+            // retried delivery or a manual repair can arrive hours or days later, and the money
+            // moved when Stripe says it moved. (Today's £50 was recorded 90 minutes after the fact
+            // for exactly that reason.)
+            collected_at: r.created,
           },
         });
         await reconcileInvoice(tx, pay.invoice_id);

@@ -3,6 +3,26 @@
  * READ-ONLY. The June-2026 TMBS ledger golden — the reference figure every money-touching slice
  * asserts before and after.
  *
+ * ── WHAT THIS GOLDEN DOES NOT PROTECT ───────────────────────────────────────────────────────────
+ * IT WILL NOT CATCH A REFUND MIS-DATED INTO A CLOSED PERIOD. The hash is DOCUMENT-shaped —
+ * sequence, number, series, status, date_issued, date_paid, the snapshots and the frozen lines. A
+ * refund is LEDGER-shaped: it writes a Refund row and moves Invoice.amount_paid_pennies, and
+ * NEITHER is hashed here. A refund deliberately leaves status at `paid` and never touches
+ * date_paid, so there is no hashed field it can reach.
+ *
+ * That is correct — this golden exists to prove the DOCUMENTS have not moved, and they have not.
+ * But it means a £500 refund back-dated into June 2026 would change what June earned and this
+ * would still print f150133f. Anyone treating a green golden as "the June figures are untouched"
+ * is reading more into it than it says.
+ *
+ * Verified rather than assumed (2026-08-16): TMBS has 46 June-2026 invoices and zero refunds
+ * against any of them; one Refund row exists in the entire database. So refunds becoming
+ * first-class is safe for this hash BY CONSTRUCTION, not by luck — and stays safe.
+ *
+ * A closed-period guard would be its own thing, and whether one is wanted is an accountant
+ * question rather than an engineering one. It is on the list going to them alongside the
+ * credit-note question and the fee VAT treatment.
+ *
  * ── WHY THIS IS AN EXPLICIT COLUMN LIST ─────────────────────────────────────────────────────────
  * The previous version did `include: { lines: true }` and hashed EVERY column. That made the hash a
  * function of the TABLE SHAPE as well as the data, so adding four unrelated nullable columns

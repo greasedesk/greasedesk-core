@@ -76,7 +76,7 @@ try {
 
   const addRefund = async (id, amount) => {
     await prisma.$transaction(async (tx) => {
-      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id } });
+      await tx.refund.create({ data: { group_id: ZZ, payment_id: payId, amount_pennies: amount, currency: 'GBP', refund_id: id, source_ref: id, collected_at: new Date() } });
       await reconcileInvoice(tx, invId);
     });
     madeRefunds.push(id);
@@ -152,7 +152,7 @@ try {
     check('before any refund the page says paid', await seen('invoice-paid') === 1);
 
     await prisma.$transaction(async (tx) => {
-      await tx.refund.create({ data: { group_id: ZZ, payment_id: pay2Id, amount_pennies: Math.floor(gross2 / 4), currency: 'GBP', refund_id: `${MARK}p1`, source_ref: `${MARK}p1` } });
+      await tx.refund.create({ data: { group_id: ZZ, payment_id: pay2Id, amount_pennies: Math.floor(gross2 / 4), currency: 'GBP', refund_id: `${MARK}p1`, source_ref: `${MARK}p1`, collected_at: new Date() } });
       await reconcileInvoice(tx, openId);
     });
     madeRefunds.push(`${MARK}p1`);
@@ -162,7 +162,7 @@ try {
       (await page.locator('[data-testid="invoice-part-refunded"]').innerText()).trim().split('\n')[0]);
 
     await prisma.$transaction(async (tx) => {
-      await tx.refund.create({ data: { group_id: ZZ, payment_id: pay2Id, amount_pennies: gross2 - Math.floor(gross2 / 4), currency: 'GBP', refund_id: `${MARK}p2`, source_ref: `${MARK}p2` } });
+      await tx.refund.create({ data: { group_id: ZZ, payment_id: pay2Id, amount_pennies: gross2 - Math.floor(gross2 / 4), currency: 'GBP', refund_id: `${MARK}p2`, source_ref: `${MARK}p2`, collected_at: new Date() } });
       await reconcileInvoice(tx, openId);
     });
     madeRefunds.push(`${MARK}p2`);

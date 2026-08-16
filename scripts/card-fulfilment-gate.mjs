@@ -183,7 +183,7 @@ try {
   const writeRefund = async (id, amount) => {
     try {
       await prisma.$transaction(async (tx) => {
-        await tx.refund.create({ data: { group_id: ZZ, payment_id: payRow.id, amount_pennies: amount, currency: 'GBP', reason: 'requested_by_customer', refund_id: id, source_ref: id } });
+        await tx.refund.create({ data: { group_id: ZZ, payment_id: payRow.id, amount_pennies: amount, currency: 'GBP', reason: 'requested_by_customer', refund_id: id, source_ref: id, collected_at: new Date() } });
         await reconcileInvoice(tx, full.id);
       });
       return 1;
