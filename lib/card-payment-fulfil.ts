@@ -280,50 +280,103 @@ async function settleApplicationFeeRefund(
     return null;
   }
 
-  // Proportional to the share of the charge returned. A full refund returns the whole fee; floor
-  // again, so rounding never favours us on the way back either.
+  // ── TWO QUESTIONS, NOT ONE ────────────────────────────────────────────────────────────────
+  //   (a) does money need to move?          — conditional
+  //   (b) is our record of it accurate?     — never conditional
+  //
+  // These used to be answered together, and (b) rode on (a): when the delta came out at zero the
+  // function returned before it stamped anything. So a fee returned OUT OF BAND — the garage owner
+  // clicking refund on the fee in Stripe's own dashboard — left the column NULL for ever, because
+  // the only code that could have written it had correctly decided there was nothing to move. And a
+  // second partial refund could never backfill the first partial's missing stamp for the same
+  // reason. NULL means unknown; that value was merely un-witnessed, which is not the same thing.
+  //
+  // STRIPE IS THE AUTHORITY ON WHAT HAS BEEN RETURNED, not our own rows. Reading fee.amount_refunded
+  // rather than summing what we happen to have recorded is what lets an out-of-band reversal be
+  // discovered instead of inferred away.
   const share = Math.min((charge.amount_refunded ?? 0) / (pay.amount_pennies || charge.amount || 1), 1);
   const target = Math.floor(pay.application_fee_pennies * share);
 
-  // ── INCREMENTAL, SO PARTIALS ADD UP AND REDELIVERIES DO NOT ──────────────────────────────
-  // applicationFees.createRefund is not idempotent on its own: calling it twice returns the fee
-  // twice. The guard is what we have ALREADY recorded returning — so two partial refunds each move
-  // the fee by their own share, and a redelivered event moves it by nothing.
-  const already = await prisma.refund.aggregate({
-    where: { payment_id: pay.id }, _sum: { application_fee_refunded_pennies: true },
-  });
-  const returnedSoFar = already._sum.application_fee_refunded_pennies ?? 0;
-  const delta = target - returnedSoFar;
-  if (delta <= 0) return returnedSoFar;
-
-  let movedNow = 0;
+  let returnedAtStripe: number | null = null;
   try {
-    const fr = await stripe.applicationFees.createRefund(
-      feeId,
-      { amount: delta },
-      // Belt to the arithmetic's braces: the same charge at the same refunded total never moves
-      // the fee twice even if two events arrive at once.
-      { idempotencyKey: `fee-refund:${charge.id}:${charge.amount_refunded ?? 0}` },
-    );
-    movedNow = fr.amount ?? 0;
+    const fee = await stripe.applicationFees.retrieve(feeId);
+    returnedAtStripe = fee.amount_refunded ?? 0;
   } catch (e: any) {
-    // Loud. This is the garage being out of pocket by our fee, and nobody would otherwise see it.
-    console.error('[fulfil] APPLICATION FEE NOT RETURNED for', charge.id, '—', e?.message);
-    return null;
+    // Fall back to our own sum. Worse — it cannot see an out-of-band reversal — but it keeps the
+    // money decision safe: we will never refund MORE than the target because the target caps it.
+    console.error('[fulfil] could not read application fee', feeId, '—', e?.message);
+  }
+  const recordedSum = (await prisma.refund.aggregate({
+    where: { payment_id: pay.id }, _sum: { application_fee_refunded_pennies: true },
+  }))._sum.application_fee_refunded_pennies ?? 0;
+  let actuallyReturned = returnedAtStripe ?? recordedSum;
+
+  // ── (a) MOVE MONEY, ONLY IF THERE IS A GAP ────────────────────────────────────────────────
+  // createRefund is not idempotent on its own, so the guard is what Stripe says is already back.
+  const delta = target - actuallyReturned;
+  if (delta > 0) {
+    try {
+      const fr = await stripe.applicationFees.createRefund(
+        feeId,
+        { amount: delta },
+        // Belt to the arithmetic's braces: the same charge at the same refunded total never moves
+        // the fee twice even if two events arrive at once.
+        { idempotencyKey: `fee-refund:${charge.id}:${charge.amount_refunded ?? 0}` },
+      );
+      actuallyReturned += fr.amount ?? 0;
+    } catch (e: any) {
+      // Loud. This is the garage being out of pocket by our fee, and nobody would otherwise see it.
+      console.error('[fulfil] APPLICATION FEE NOT RETURNED for', charge.id, '—', e?.message);
+      // NOT a return: the record below is still worth correcting to whatever IS back, and stopping
+      // here is what produced the stale NULLs in the first place.
+    }
   }
 
-  // ── STAMPED ON A ROW THAT EXISTS ──────────────────────────────────────────────────────────
-  // The old code ran updateMany over rows matching `application_fee_refunded_pennies: null` — which
-  // wrote nothing at all when no Refund row had been created, i.e. exactly when the list was empty.
-  // Attribute what moved to the NEWEST refund, which is the one that caused it.
-  const newest = refunds.slice().sort((a, b) => b.created.getTime() - a.created.getTime())[0];
-  if (newest) {
+  // ── (b) MAKE THE RECORD MATCH, WHETHER OR NOT ANYTHING MOVED ──────────────────────────────
+  // Distributed across the refund rows in proportion to their amounts so every row carries a
+  // defensible figure and the SUM equals what Stripe actually returned. The remainder goes to the
+  // newest row, so pennies are never lost to flooring.
+  await stampFeeRefunds(pay.id, refunds, actuallyReturned);
+  return actuallyReturned;
+}
+
+/**
+ * HOW A RETURNED FEE IS ATTRIBUTED ACROSS REFUND ROWS. Pure, and EXPORTED so the gate asserts this
+ * rule rather than a copy of it — a gate that reimplements the arithmetic it is checking proves the
+ * two implementations agree, which is not the question.
+ *
+ * Proportional to each refund's own amount: a customer who got 30% back had 30% of our fee returned
+ * with it. The newest row absorbs the flooring remainder, so Σ always equals `total` exactly and
+ * pennies are never lost. Idempotent — same inputs, same values, so re-running corrects rather than
+ * accumulates.
+ */
+export function splitFeeRefund(
+  refunds: Array<{ id: string; amount: number; created: Date }>,
+  total: number,
+): Array<{ id: string; value: number }> {
+  if (!refunds.length) return [];
+  const gross = refunds.reduce((a, r) => a + r.amount, 0);
+  if (gross <= 0) return [];
+  const ordered = refunds.slice().sort((a, b) => a.created.getTime() - b.created.getTime());
+  let assigned = 0;
+  return ordered.map((r, i) => {
+    const v = i === ordered.length - 1 ? total - assigned : Math.floor((total * r.amount) / gross);
+    assigned += v;
+    return { id: r.id, value: Math.max(0, v) };
+  });
+}
+
+/**
+ * Write the fee-refund attribution across a payment's refund rows so that Σ equals `total`.
+ */
+async function stampFeeRefunds(paymentId: string, refunds: RefundLite[], total: number): Promise<void> {
+  const shares = splitFeeRefund(refunds, total);
+  for (const s of shares) {
     await prisma.refund.updateMany({
-      where: { payment_id: pay.id, refund_id: newest.id },
-      data: { application_fee_refunded_pennies: movedNow },
+      where: { payment_id: paymentId, refund_id: s.id },
+      data: { application_fee_refunded_pennies: s.value },
     });
   }
-  return returnedSoFar + movedNow;
 }
 
 /** A card attempt that ended without money. Terminal, and it frees the invoice of a pending row. */

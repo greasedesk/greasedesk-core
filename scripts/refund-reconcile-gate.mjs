@@ -145,6 +145,32 @@ try {
   check('a redelivery moves NOTHING', delta(12, 5000, 5000, 12) === 0,
     'createRefund is not idempotent on its own — the guard is what we already recorded returning');
   check('over-refunding cannot exceed the fee', target(12, 9999999, 5000) === 12);
+
+  // ── 6. THE RECORD CATCHES UP EVEN WHEN NO MONEY MOVES ──────────────────────────────────────
+  // The case that exposed it: the 12p on invoice 100003210 was returned by hand in Stripe's
+  // dashboard, so the delta was zero and the function returned BEFORE stamping — leaving the row
+  // NULL for ever. Money moving is conditional; recording what we know is not.
+  console.log('\n— the record, when nothing needed moving —');
+  // THE REAL RULE, imported — not a copy. A gate that reimplements the arithmetic it is checking
+  // proves the two implementations agree, which is not the question being asked.
+  const { splitFeeRefund } = await import('../lib/card-payment-fulfil.ts');
+  const stamp = (rows, total) =>
+    splitFeeRefund(rows.map((r, i) => ({ id: `re_${i}`, amount: r.amount, created: new Date(i * 1000) })), total)
+      .map((s) => s.value);
+  check('an out-of-band reversal is still recorded', JSON.stringify(stamp([{ amount: 5000 }], 12)) === '[12]',
+    'delta 0 because Stripe already returned it — the row must still say 12, not null');
+  check('two partials each carry their proportional share', JSON.stringify(stamp([{ amount: 1500 }, { amount: 3500 }], 25)) === '[7,18]',
+    '25p over 30/70 → 7 and 18; the first partial is backfilled even though only the second moved money');
+  check('the parts always sum to the whole', (() => {
+    const s = stamp([{ amount: 3333 }, { amount: 3333 }, { amount: 3334 }], 10);
+    return s.reduce((a, b) => a + b, 0) === 10;
+  })(), 'the newest row absorbs the flooring remainder, so pennies are never lost');
+  check('nothing returned stamps zero, not null', JSON.stringify(stamp([{ amount: 5000 }], 0)) === '[0]',
+    '0 means "we know none came back"; null would mean "we have no idea"');
+  check('the check is discriminating — the OLD early return left it null', (() => {
+    const oldWay = (target, already) => (target - already <= 0 ? null : 'stamped');
+    return oldWay(12, 12) === null && stamp([{ amount: 5000 }], 12)[0] === 12;
+  })(), 'old: returns null on a zero delta. new: records 12 regardless.');
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
