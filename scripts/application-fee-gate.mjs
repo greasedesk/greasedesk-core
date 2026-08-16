@@ -13,6 +13,7 @@
  * the gate tenant. Nothing real is touched, and every row this run writes is deleted by id.
  * It refuses to start if a previous run left anything behind.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { applicationFeePennies, resolveFeeRate } from '../lib/application-fee.ts';
 

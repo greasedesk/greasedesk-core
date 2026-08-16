@@ -13,6 +13,7 @@
  * proves the INPUT the renderer is handed — which is where the one-mint promise lives — and the
  * rendered document is read back with pdfjs in the separate served check.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { paymentMarks, marksSentence } from '../lib/payment-marks.ts';
 import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';

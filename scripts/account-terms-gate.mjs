@@ -6,6 +6,7 @@
  * assertions, not of any write). The DB half then uses ONE throwaway customer on the gate tenant,
  * and asserts up front that it owns nothing else.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { dueDateFor, normaliseTermsDays, isAccountCustomer, overdueWhere, daysOverdue, MAX_TERMS_DAYS } from '../lib/account-terms.ts';
 import { listWhere, LIST_STATUS_KEYS, isListStatusKey } from '../lib/invoice-list-filters.ts';

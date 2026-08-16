@@ -2,6 +2,7 @@
  * File: scripts/rolling-12-gate.mjs
  * The twelve-month comparison: right numbers, and four states that cannot be confused.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { withRetry } from './_gate-retry.mjs';
 import { computeTiles } from '../lib/dashboard-tiles.ts';

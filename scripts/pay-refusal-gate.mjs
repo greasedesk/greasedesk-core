@@ -23,6 +23,7 @@
  * if ZZ already has one, because clobbering a real connection is not a thing a gate may do. The
  * magic link it mints is a real credential for a ZZ invoice and is revoked on the way out.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { isStripeError, classifyStripeError } = await import('../lib/stripe-errors.ts');

@@ -16,6 +16,7 @@
  * one — correctly), then paid and refunded, which is the real sequence. Everything is removed and
  * the invoice cache is CAPTURED AND RESTORED, never recomputed.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundLines, refundState } = await import('../lib/invoice-refund-state.ts');

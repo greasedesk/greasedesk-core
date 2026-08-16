@@ -10,6 +10,7 @@
  * Prints, per group: created_at, whether it is exempt, and each admin's recorded/verified state,
  * then the verdict the live rule would reach.
  */
+import './_gate-preflight.mjs';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 

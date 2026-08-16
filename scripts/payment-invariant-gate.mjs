@@ -18,6 +18,7 @@
  * deliberately-broken variant below shows the assertions discriminate, with no database and no
  * blast radius.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { expectedCachePennies } from '../lib/payments.ts';
 

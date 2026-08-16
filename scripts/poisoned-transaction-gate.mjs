@@ -23,6 +23,7 @@
  * The scanner runs against a synthetic file containing the ORIGINAL code before it runs against the
  * tree. A detector that has never detected anything is not a detector.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 import { readFileSync, readdirSync, statSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';

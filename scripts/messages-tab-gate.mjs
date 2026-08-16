@@ -13,6 +13,7 @@
  * browser restored a tab. The messages centre already solved this with its `userPicked` guard; the
  * job card uses selectTab, which only runs from the tab strip's onSelect. Same convention.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { TAB_KEYS, NON_STAGE_TABS, TAB_STAGE, computeTabs } = await import('../lib/jobcard-tabs.ts');

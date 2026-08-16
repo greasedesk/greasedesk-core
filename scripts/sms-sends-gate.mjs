@@ -11,6 +11,7 @@
  * ── THE FIXTURES ARE THE GATE TENANT'S OWN ──────────────────────────────────────────────────────
  * ZZ, and every row this run writes is removed. It refuses to start if a previous run left anything.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';
 import { smsAllowance, SMS_TOPUP_PACK } from '../lib/sms-allowance.ts';

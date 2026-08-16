@@ -23,6 +23,7 @@
  * ZZ already has a connection. The served build runs a DELIBERATELY INVALID Stripe key so the
  * preconditions pass and the button renders without any real charge being possible.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');

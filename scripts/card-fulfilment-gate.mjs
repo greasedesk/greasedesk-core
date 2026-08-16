@@ -12,6 +12,7 @@
  * real. Both torn down. AuditLog rows are LEFT — append-only, and a row about a deleted fixture is
  * a true record of something that happened.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { Prisma } from '@prisma/client';
 import { freezeQuoteVersion } from '../lib/quote-version.ts';

@@ -20,6 +20,7 @@
  * ZZ only. A throwaway invoice-less Payment is not possible (Payment requires an invoice), so this
  * uses a ZZ invoice and removes every row it writes. Refuses to start on leftovers.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { reconcileInvoice } = await import('../lib/payments.ts');

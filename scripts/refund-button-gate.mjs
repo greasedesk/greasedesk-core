@@ -10,6 +10,7 @@
  * across a refusal — and, where a real Stripe call cannot be made from here, by reading the source
  * for writes rather than claiming a proof this environment cannot give.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { quoteRefund, refundConfirmationLines } = await import('../lib/refund-quote.ts');

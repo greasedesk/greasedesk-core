@@ -7,6 +7,7 @@
  * own hundred first, and only the overflow touches purchased packs — is the part most likely to be
  * "simplified" into summing monthly grants, which would let unused months accumulate for ever.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { computeAllowance, smsAllowance, monthKey, monthStart, monthEnd, SMS_INCLUDED_PER_MONTH, SMS_TOPUP_PACK } from '../lib/sms-allowance.ts';
 import { NOTIFICATION_TEMPLATES } from '../lib/notification-templates.ts';

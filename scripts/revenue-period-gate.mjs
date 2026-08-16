@@ -23,6 +23,7 @@
  * ── FIXTURES ────────────────────────────────────────────────────────────────────────────────────
  * ZZ only. Every row is removed and the invoice cache is captured and restored, never recomputed.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { receivedInPeriod, reconcileInvoice } = await import('../lib/payments.ts');

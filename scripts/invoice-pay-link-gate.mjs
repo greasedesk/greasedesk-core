@@ -12,6 +12,7 @@
  * It mints a link against an EXISTING ZZ invoice — read-only as far as the ledger is concerned, so
  * no invoice number is spent — and deletes only the link rows it wrote, matched on their own ids.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { MAGIC_LINK_DAYS, INVOICE_PAY_GRACE_DAYS, invoicePayExpiry, createMagicLink, resolveMagicLink, magicLinkUrl } from '../lib/magic-link.ts';
 import { offersPayLink } from '../lib/invoice-pay-link.ts';

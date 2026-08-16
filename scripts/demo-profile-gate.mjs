@@ -24,6 +24,7 @@
  *
  * Run after every extraction. It is READ-ONLY against the tenant and writes nothing.
  */
+import './_gate-preflight.mjs';
 import { PrismaClient } from '@prisma/client';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';

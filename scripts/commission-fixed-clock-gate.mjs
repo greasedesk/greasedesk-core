@@ -7,6 +7,7 @@
  * (synthetic country codes) it deletes on the way out. No wall-clock, no Stripe.
  *   Run:  node --env-file=.env scripts/commission-fixed-clock-gate.mjs
  */
+import './_gate-preflight.mjs';
 import { execSync } from 'child_process';
 import { rmSync } from 'fs';
 import path from 'path';

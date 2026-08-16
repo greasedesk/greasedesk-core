@@ -6,6 +6,7 @@
  * The defect: invoice 100003210 told a customer "Paid in full — thank you" for three hours after
  * the £50 had gone back. Nothing on the page was wrong except the only thing the reader cared about.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundState, hasRefund } = await import('../lib/invoice-refund-state.ts');

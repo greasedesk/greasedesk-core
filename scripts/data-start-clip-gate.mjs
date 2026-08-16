@@ -9,6 +9,7 @@
  *
  * The pure half runs with no database (standing rule 1). The DB half reads only.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { clipToData, precedesData, getTenantDataStart } from '../lib/tenant-data-start.ts';
 import { getGroupUtilisation } from '../lib/capacity.ts';

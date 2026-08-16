@@ -25,6 +25,7 @@
  *      operator's memory: a sweep's blast radius is whatever its predicate matches at the moment it
  *      runs, and that set changes without the script knowing.
  */
+import './_gate-preflight.mjs';
 import { createServer } from 'node:http';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/db.ts';

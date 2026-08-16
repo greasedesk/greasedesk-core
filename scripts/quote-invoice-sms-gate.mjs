@@ -19,6 +19,7 @@
  * from NotificationLog — so filler rows are written with a recognisable provider_message_id and
  * removed in the finally. It refuses to start if a previous run left any behind.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { smsAllowance } = await import('../lib/sms-allowance.ts');

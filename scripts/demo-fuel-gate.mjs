@@ -15,6 +15,7 @@
  *
  * Exercises the pure functions directly — no database, no six-minute generation.
  */
+import './_gate-preflight.mjs';
 import { pickVehicle, rng } from '../lib/demo/generate.ts';
 import { VEHICLE_MIX, FUEL_MIX, DISTRIBUTIONS } from '../lib/demo/profile.ts';
 

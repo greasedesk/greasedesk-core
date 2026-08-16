@@ -17,6 +17,7 @@
  * A synthetic country code and a throwaway tenant, both removed in the finally. It refuses to start
  * if anything from a previous run survives. Nothing touches ZZ or TMBS.
  */
+import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { accrueFromInvoicePaid } = await import('../lib/commission-billing.ts');

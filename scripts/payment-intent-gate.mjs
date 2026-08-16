@@ -15,6 +15,7 @@
  * it writes are deleted by exact key in teardown. AuthRateLimit is a time-based limiter with its
  * own reaper, not an audit log; deleting rows this run created is not the AuditLog rule.
  */
+import './_gate-preflight.mjs';
 import { prisma } from '../lib/db.ts';
 import { refusePayment } from '../lib/invoice-payment-intent.ts';
 import { createMagicLink, invoicePayExpiry } from '../lib/magic-link.ts';

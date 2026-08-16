@@ -20,6 +20,7 @@
  * legacy Stripe state — so "restore to empty" is a restore and not a deletion of somebody's real
  * connection. If either is occupied it refuses and writes nothing. Enforced here, not remembered.
  */
+import './_gate-preflight.mjs';
 import Stripe from 'stripe';
 import { prisma } from '../lib/db.ts';
 import { providerState } from '../lib/provider-connection.ts';
