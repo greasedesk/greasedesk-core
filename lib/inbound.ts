@@ -157,6 +157,9 @@ export async function processInbound(db: PrismaClient, payload: InboundPayload):
   const row = await db.notificationLog.create({
     data: {
       group_id: res.groupId,
+      // The ONLY producer of `unresolved`: the message was meant for some tenant and we could not
+      // work out which. Honest-null, stated — not the same fact as a platform send.
+      scope: res.groupId ? 'tenant' : 'unresolved',
       channel: 'email',
       template: 'inbound_email',
       provider: 'resend',

@@ -2714,6 +2714,24 @@ enum NotificationChannel {
   sms
 }
 
+/**
+ * WHOSE MESSAGE IS THIS? Stated, never inferred from an absent group_id.
+ *
+ * `group_id IS NULL` used to mean four things at once: a deliberate platform send, an unresolved
+ * inbound, a fixture, or A CALLER FORGOT. Nothing told them apart, and three tenant-scoped guards
+ * inside sendNotification fail OPEN without a tenant — the demo block, the opt-out check and the
+ * SMS allowance — so a forgotten tenant could contact someone who had asked not to be contacted.
+ *
+ * THREE values, not two: "unresolved" is genuinely different from "platform" — the message was
+ * meant for some tenant and we could not work out which. That is the one place honest-null still
+ * applies, and it is why this is not a boolean.
+ */
+enum NotificationScope {
+  tenant // a garage's message. group_id IS NOT NULL — enforced by a CHECK constraint.
+  platform // from GreaseDesk itself (lib/notify::PLATFORM_SEND). group_id IS NULL, deliberately.
+  unresolved // INBOUND only: meant for a tenant, sender not matched. group_id IS NULL, honestly.
+}
+
 enum NotificationStatus {
   queued // handed to the provider, no answer yet
   sent // provider accepted it
@@ -2727,6 +2745,10 @@ enum NotificationStatus {
 
 model NotificationLog {
   id       String              @id @default(uuid())
+  /// WHOSE MESSAGE. No default — a default would let the next caller omit it and be believed.
+  /// A CHECK constraint pairs this with group_id: tenant ⇒ NOT NULL, platform/unresolved ⇒ NULL,
+  /// so a forgotten tenant can no longer masquerade as a deliberate platform send.
+  scope    NotificationScope
   // ── group_id NULL IS A RECORD, NOT AN ORPHAN ────────────────────────────────────────────────
   // Two legitimate causes, and BOTH are rows to keep:
   //   • a platform-level send (operator invite, reseller enquiry) — never belonged to a tenant;

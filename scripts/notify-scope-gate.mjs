@@ -33,6 +33,8 @@ const { sendNotification, PLATFORM_SEND, NotifyScopeError } = await import('../l
 const { readFileSync } = await import('node:fs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
+/** Recipient marker for the raw-SQL pairing fixtures, so teardown can find them by property. */
+const MARK = 'notifscope_gate_';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
@@ -77,11 +79,55 @@ try {
   });
   check('it does not throw', !!r && typeof r.ok === 'boolean', JSON.stringify(r?.skipCode ?? r?.status));
   const row = r.notificationId
-    ? await prisma.notificationLog.findUnique({ where: { id: r.notificationId }, select: { id: true, group_id: true } })
+    ? await prisma.notificationLog.findUnique({ where: { id: r.notificationId }, select: { id: true, group_id: true, scope: true } })
     : null;
+  const row2 = row;
   if (row) madeRows.push(row.id);
   check('and the row records NO tenant', !!row && row.group_id === null,
     'null here is now DECLARED, never inferred — the only way to produce one is to say PLATFORM_SEND');
+
+  // ── 3b. THE ROW SAYS WHOSE IT IS, AND THE DATABASE ENFORCES THE PAIRING ────────────────────
+  console.log('\n— scope is stated, and the pairing is a CONSTRAINT —');
+  check('a platform send records scope=platform', row2?.scope === 'platform', String(row2?.scope));
+
+  // The CHECK is what stops a forgotten tenant masquerading as a platform send. Proven against
+  // Postgres, not asserted: both halves of the pairing must be refused.
+  // The detail REPORTS the error rather than asserting a reason for it. The first version printed
+  // "refused by the CHECK" whenever anything threw — and what actually threw was a missing column,
+  // so the message named a cause it had not established. Same shape as every vacuous assertion
+  // today, in the explanatory text rather than the predicate.
+  const refuse = async (label, sql) => {
+    let err = null;
+    try { await prisma.$executeRawUnsafe(sql); } catch (e) { err = String(e?.message ?? e); }
+    const byCheck = err !== null && /NotificationLog_scope_group_pairing|violates check constraint/i.test(err);
+    check(label, byCheck,
+      err === null ? 'THE INSERT SUCCEEDED — the pairing is not enforced'
+        : byCheck ? 'refused by the pairing CHECK'
+          : `refused, but NOT by the CHECK: ${err.split('\n').filter((l) => l.trim()).pop()?.trim().slice(0, 120)}`);
+  };
+  // Only the columns without defaults. NotificationLog has no updated_at — naming one made every
+  // insert fail at 42703 and the refusals pass for the wrong reason.
+  const ins = (scope, grp) => `INSERT INTO "NotificationLog"
+      (id, group_id, scope, channel, template, provider, status, recipient)
+      VALUES (gen_random_uuid(), ${grp}, '${scope}', 'sms', 'invoice_pay_link', 'none', 'skipped', '${MARK}chk')`;
+  await refuse("scope=tenant with NO tenant is refused", ins('tenant', 'NULL'));
+  await refuse("scope=platform WITH a tenant is refused", ins('platform', `'${ZZ}'`));
+  await refuse("scope=unresolved WITH a tenant is refused", ins('unresolved', `'${ZZ}'`));
+  check('and none of the three wrote a row', (await prisma.notificationLog.count({ where: { recipient: `${MARK}chk` } })) === 0);
+
+  // Discriminating: the LEGAL pairings must still insert, or the constraint is just "refuse
+  // everything" and the three checks above would pass for the wrong reason.
+  let legalOk = true;
+  try {
+    await prisma.$executeRawUnsafe(ins('tenant', `'${ZZ}'`));
+    await prisma.$executeRawUnsafe(ins('platform', 'NULL'));
+    await prisma.$executeRawUnsafe(ins('unresolved', 'NULL'));
+  } catch { legalOk = false; }
+  // NOT pushed to madeRows: the recipient sweep in the finally owns these. Two owners for one row
+  // made the id-delete report "3 of 6" — the sweep had already taken them.
+  const legalRows = await prisma.notificationLog.findMany({ where: { recipient: `${MARK}chk` }, select: { id: true } });
+  check('the check is discriminating — all THREE legal pairings insert', legalOk && legalRows.length === 3,
+    `${legalRows.length} of 3 — otherwise the refusals above prove only that the table is hostile`);
 
   // ── 4. REGRESSION: THE CONSENT GUARD STILL READS THE TENANT ────────────────────────────────
   // The point of the refactor is that this must be unchanged. If resolving the scope had broken
@@ -102,6 +148,11 @@ try {
     'asserted separately so a bad fixture key cannot masquerade as a passing discriminator below');
   check('an opted-out ZZ customer is SUPPRESSED', refused.suppressed === true && refused.skipCode === 'opted_out',
     `${refused.status}/${refused.skipCode ?? '—'}`);
+  const supRow = refused.notificationId
+    ? await prisma.notificationLog.findUnique({ where: { id: refused.notificationId }, select: { scope: true, group_id: true } })
+    : null;
+  check('a tenant send records scope=tenant with its tenant', supRow?.scope === 'tenant' && supRow?.group_id === ZZ,
+    `${supRow?.scope}/${supRow?.group_id ? 'has tenant' : 'NO TENANT'}`);
 
   // Discriminating: without the opt-out, the same send is NOT suppressed — so the check above is
   // reading the flag, not simply failing for some other reason further down the path.
@@ -125,6 +176,14 @@ try {
   } catch (e) { leaked = e instanceof NotifyScopeError ? null : `wrong error: ${e?.name}`; }
   check('a tenant-less send to that same recipient cannot bypass the opt-out', leaked === null,
     leaked ?? 'refused at the scope, before isSuppressed is ever consulted');
+  // `unresolved` is inbound-only. An OUTBOUND send always knows whose it is.
+  // Assert the TYPE, not the absence of a string. `'unresolved'` legitimately appears in record()'s
+  // parameter union — the crude scan flagged that and was measuring the wrong thing. What matters
+  // is that sendNotification's own resolved scope cannot be it.
+  check("sendNotification's resolved scope EXCLUDES 'unresolved'",
+    /const scope: 'tenant' \| 'platform' =/.test(readFileSync('lib/notify.ts', 'utf8')),
+    "it means 'meant for a tenant, could not tell which' — an outbound send always knows whose it is");
+  check('and lib/inbound is the one place that can', /scope: res\.groupId \? 'tenant' : 'unresolved'/.test(readFileSync('lib/inbound.ts', 'utf8')));
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
@@ -133,6 +192,8 @@ try {
     const now = (await prisma.customer.findUnique({ where: { id: custId }, select: { sms_opt_out: true } })).sms_opt_out;
     check('teardown restored the opt-out flag exactly', now === custRestore, `${JSON.stringify(custRestore)} → ${JSON.stringify(now)}`);
   }
+  const sweptRaw = await prisma.notificationLog.deleteMany({ where: { recipient: `${MARK}chk` } });
+  if (sweptRaw.count) check('teardown swept the raw pairing fixtures', sweptRaw.count === 3, `${sweptRaw.count} of 3`);
   if (madeRows.length) {
     const d = await prisma.notificationLog.deleteMany({ where: { id: { in: madeRows } } });
     check('teardown removed the fixture notification rows', d.count === madeRows.length, `${d.count} of ${madeRows.length}`);

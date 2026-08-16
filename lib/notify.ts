@@ -236,7 +236,10 @@ async function isSuppressed(groupId: string | null | undefined, channel: NotifyC
 
 /** Record-only helper (also used to log sends made by legacy transports during migration). */
 async function record(args: {
-  groupId?: string | null; channel: NotifyChannel; template: string; provider: string;
+  groupId?: string | null;
+  /** Stated by the caller. The DB pairs it with group_id via a CHECK, so a mismatch is refused. */
+  scope: 'tenant' | 'platform' | 'unresolved';
+  channel: NotifyChannel; template: string; provider: string;
   status: 'queued' | 'sent' | 'failed' | 'skipped'; recipient: string; subject?: string | null;
   error?: string | null; subjectRef?: { type: string; id: string } | null; sentAt?: Date | null;
   body?: string | null; sentByUserId?: string | null; threadId?: string | null;
@@ -247,6 +250,7 @@ async function record(args: {
     const row = await prisma.notificationLog.create({
       data: {
         group_id: args.groupId ?? null,
+        scope: args.scope,
         channel: args.channel,
         template: args.template,
         provider: args.provider,
@@ -290,11 +294,17 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (args.groupId !== PLATFORM_SEND && !args.groupId) throw new NotifyScopeError(String(args.template));
   /** null ONLY for a declared platform send. Every tenant-scoped guard below reads this. */
   const groupId: string | null = args.groupId === PLATFORM_SEND ? null : args.groupId;
+  /**
+   * The same fact, said rather than inferred, and written to the row. `unresolved` is deliberately
+   * NOT reachable here: it belongs to inbound mail that could not be matched to a tenant, and an
+   * OUTBOUND send always knows whose it is — a tenant's or ours.
+   */
+  const scope: 'tenant' | 'platform' = groupId === null ? 'platform' : 'tenant';
 
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
   const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; email?: Function; sms?: Function } | undefined;
-  const common = { groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
+  const common = { groupId, scope, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
     // the one place the template is resolved, so no caller decides whether its own message is free.
