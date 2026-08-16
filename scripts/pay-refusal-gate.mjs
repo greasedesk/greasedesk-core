@@ -38,6 +38,11 @@ const B = process.env.GATE_BASE ?? 'http://localhost:3112';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
+// The pay limiter is shared and time-windowed (10/hour on `pay:ip:`). This gate spends from it,
+// and leaving the budget behind makes the NEXT pay gate 429 in a way that reads as an endpoint
+// defect rather than as our own litter. Released in the finally, scoped to this run.
+const startedAt = new Date();
+
 let connId = null;
 let linkId = null;
 let browser = null;
@@ -108,20 +113,12 @@ try {
   check('the Pay button is offered', await seen('pay-start') === 1,
     'the predicate said yes, so the page renders it — that part was always right');
 
-  // ── A FOURTH DEFECT, FOUND BY THIS GATE AND NOT FIXED HERE ─────────────────────────────────
-  // /c/[token] is not an app route, so _app renders the cookie banner over it: `fixed inset-x-0
-  // bottom-0 z-50`, full width, at the bottom — which is exactly where the Pay button sits on an
-  // invoice. Playwright would not dispatch the click for the same reason a thumb would miss it.
-  // Recorded rather than worked around silently, then dismissed as a first-time customer must.
-  const banner = page.locator('[role="dialog"][aria-label="Cookie choices"]');
-  const bannerShown = await banner.count() > 0;
-  check('NOTE: the cookie banner covers the Pay button on a first visit', bannerShown,
-    bannerShown ? 'REAL DEFECT — reported, deliberately not fixed in this slice' : 'not shown in this run');
-  if (bannerShown) {
-    await page.getByRole('button', { name: /accept/i }).first().click();
-    await banner.waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
-  }
-
+  // THE WORKAROUND IS GONE. This used to accept cookies before it could click, because the consent
+  // bar covered the Pay button — 216px on desktop, 268px on a phone. That was a gate bending around
+  // a real defect. The bar is now a strip whose height the page reserves, so the click needs no
+  // dismissal and no force; scripts/consent-reach-gate owns that assertion at both viewports.
+  check('the consent bar is up and not in the way', (await page.locator('[data-testid="consent-banner"]').count()) === 1,
+    'still shown — this is the first visit for a fresh context');
   await page.click('[data-testid="pay-start"]');
   await page.waitForSelector('[data-testid="pay-error"]', { timeout: 30000 });
   const msg = (await page.locator('[data-testid="pay-error"]').textContent())?.trim();
@@ -171,6 +168,10 @@ try {
   check('ZZ has no connection row again', left === 0, `${left}`);
   const pays = await prisma.payment.count({ where: { group_id: ZZ, provider: 'stripe' } });
   check('and no payment was created anywhere on ZZ', pays === 0, `${pays} — the invalid key never got past Stripe`);
+  const released = await prisma.authRateLimit.deleteMany({
+    where: { key: { startsWith: 'pay:' }, created_at: { gte: startedAt } },
+  });
+  check('teardown cleared this run’s limiter budget', true, `${released.count} token(s) released`);
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);

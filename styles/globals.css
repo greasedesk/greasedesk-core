@@ -62,6 +62,19 @@ body {
   @apply bg-content text-ink;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+  /* ── ROOM FOR THE CONSENT BAR ────────────────────────────────────────────────────────────────
+     The bar is a fixed overlay at the bottom of the viewport, so without this it sits ON TOP of
+     whatever is at the bottom of the page. On the customer invoice page that is the Pay button:
+     a customer following a pay link could not press it until they had dealt with cookies, and on
+     a phone the expanded categories panel covered 89% of the screen. The same overlap sat over the
+     submit buttons on register, contact and the password pages.
+
+     The height is PUBLISHED BY THE BAR ITSELF (components/consent/ConsentBanner measures its own
+     resting strip) rather than hardcoded here, because it is not a constant: it depends on the
+     viewport, the region's copy length and the browser's text size. A hardcoded guess is how this
+     comes back — right on the developer's laptop, wrong on a phone in Welsh.
+     0 when there is no bar, so every app route and every decided visitor is unaffected. */
+  padding-bottom: var(--consent-height, 0px);
 }
 
 /* Diary blocks: the reg label reads horizontally, but flips to VERTICAL (bottom-to-top) when the
