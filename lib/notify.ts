@@ -24,14 +24,60 @@ import { demoSendDecision } from '@/lib/demo-tenant';
 
 export type NotifyChannel = 'email' | 'sms';
 
+/**
+ * A DECLARED platform-level send — a message from GreaseDesk itself, not from a garage.
+ *
+ * `groupId` used to be optional, so an absent tenant meant four different things at once: a
+ * deliberate platform send, an unresolved inbound, a fixture, or A CALLER FORGOT. Nothing told them
+ * apart, and it was not merely a labelling problem. Three tenant-scoped guards read the tenant's
+ * truthiness and fail OPEN without one:
+ *
+ *   demoSendDecision  (lib/demo-tenant)  — a demo tenant's invented customers stop being blocked.
+ *                                          That is not hypothetical: a demo's phone_verify reached
+ *                                          Twilio and came back 21211, which is why that check sits
+ *                                          at the top of this function.
+ *   isSuppressed      (below)            — no opt-out list is consulted, so SOMEONE WHO ASKED NOT
+ *                                          TO BE CONTACTED IS CONTACTED. A consent failure.
+ *   smsAllowance      (below)            — the allowance is not checked.
+ *
+ * Each of those three is CORRECT for a real platform send (no tenant customer-list to consult, not
+ * the garage's allowance to spend, no tenant to be a demo) and wrong for a forgotten one. The
+ * guards were never the problem; inferring the platform case from absence was. So the platform case
+ * is now SAID, and a forgotten tenant is a different thing that can be refused.
+ *
+ * Symbol.for, not a bare Symbol: Next can evaluate a module twice, and two private symbols would
+ * not compare equal across the copies.
+ */
+export const PLATFORM_SEND = Symbol.for('greasedesk.notify.platform-send');
+
+/** A send that declared no tenant scope. A programming error, never a runtime condition. */
+export class NotifyScopeError extends Error {
+  code = 'notify_no_scope' as const;
+  constructor(template: string) {
+    super(
+      `sendNotification('${template}') was called without a tenant scope. Pass the tenant's groupId, ` +
+      `or PLATFORM_SEND if this is genuinely a message from GreaseDesk itself. It must be stated: ` +
+      `an absent tenant silently disables the demo block, the opt-out check and the SMS allowance.`,
+    );
+    this.name = 'NotifyScopeError';
+  }
+}
+
 export type SendNotificationArgs = {
   /** Email address or E.164 phone, per channel. */
   recipient: string;
   template: TemplateKey;
   channel?: NotifyChannel; // default 'email'
   data?: TemplateData;
-  /** Tenant scope — null/undefined for platform-level sends (operator invite, reseller enquiry). */
-  groupId?: string | null;
+  /**
+   * Tenant scope. REQUIRED — pass PLATFORM_SEND to declare a message from GreaseDesk itself.
+   *
+   * The type is only half the guard. Nearly every caller sources this from `session.user as any`,
+   * so `groupId: user.group_id as string` type-checks even when the runtime value is undefined —
+   * the same `any` that let a forgotten `select` store a null site on every counter payment. So a
+   * falsy value is ALSO refused at runtime, in sendNotification, before anything is sent.
+   */
+  groupId: string | typeof PLATFORM_SEND;
   /** What the message is ABOUT, for support lookups. Loose by design — never a hard FK. */
   subject?: { type: string; id: string } | null;
   /** Email-only transport extras (tenant reply-to, garage BCC, invoice PDF). */
@@ -235,10 +281,20 @@ async function record(args: {
 }
 
 export async function sendNotification(args: SendNotificationArgs): Promise<SendNotificationResult> {
+  // ── THE TENANT SCOPE, RESOLVED ONCE AND DECLARED, NEVER INFERRED ─────────────────────────────
+  // Refused rather than recorded: recording it would write the very null this exists to prevent,
+  // and it would do so on a row nobody can attribute. Thrown rather than returned as ok:false,
+  // because a missing scope is a bug in the caller and must not be swallowed by a `.ok` check.
+  // Unreachable from today's code — all eleven callers pass a real group id — which is exactly why
+  // it is safe to add now and worth having before the twelfth.
+  if (args.groupId !== PLATFORM_SEND && !args.groupId) throw new NotifyScopeError(String(args.template));
+  /** null ONLY for a declared platform send. Every tenant-scoped guard below reads this. */
+  const groupId: string | null = args.groupId === PLATFORM_SEND ? null : args.groupId;
+
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
   const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; email?: Function; sms?: Function } | undefined;
-  const common = { groupId: args.groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
+  const common = { groupId, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
     // the one place the template is resolved, so no caller decides whether its own message is free.
@@ -261,7 +317,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   //
   // The row is still WRITTEN. A demo where sending appears to do nothing is a broken demo; one that
   // says "not sent — demo tenant" is an honest one, and the Messages thread still shows it.
-  const demo = await demoSendDecision(args.groupId, args.recipient);
+  const demo = await demoSendDecision(groupId, args.recipient);
   if (demo.block) {
     const id = await record({ ...common, status: 'skipped', error: demo.reason });
     return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason, skipCode: 'demo_tenant' };
@@ -273,7 +329,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   // A SECURITY template bypasses it entirely — see NotificationTemplate.security. The
   // NotificationLog row is still written by the normal path below, so a bypassed send is as
   // recorded as any other; bypassing the preference must never mean bypassing the record.
-  if (!tpl.security && await isSuppressed(args.groupId, channel, args.recipient)) {
+  if (!tpl.security && await isSuppressed(groupId, channel, args.recipient)) {
     const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
     return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true, skipCode: 'opted_out' };
   }
@@ -290,8 +346,8 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   // verification code is our account security, not the garage's customer messaging. Locking an
   // owner out of their own account because they had sent a hundred quotes this month would be
   // indefensible, and those sends are not counted either — see lib/sms-allowance.
-  if (channel === 'sms' && !tpl.security && args.groupId) {
-    const allowance = await smsAllowance(prisma, args.groupId);
+  if (channel === 'sms' && !tpl.security && groupId) {
+    const allowance = await smsAllowance(prisma, groupId);
     if (allowance.remaining <= 0) {
       const reason = `SMS allowance spent — ${allowance.usedThisMonth} sent this month, resets ${allowance.resetsAt.toISOString().slice(0, 10)}`;
       const id = await record({ ...common, status: 'skipped', error: reason });
