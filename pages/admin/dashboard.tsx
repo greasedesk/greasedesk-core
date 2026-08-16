@@ -65,12 +65,24 @@ const TILE_RENDERERS: TileRenderer[] = [
     key: 'revenue',
     render: (d, f) => (
       <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
-        <Figure className="text-3xl font-bold text-ink tabular-nums">{f.money(d.grossPennies)}</Figure>
+        <Figure className="text-3xl font-bold text-ink tabular-nums" data-testid="revenue-figure">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.revenueSub', { count: d.count })}</p>
+        {/* ON THE FACE OF THE TILE, not a footnote elsewhere explaining a discrepancy. Only when
+            there IS one — a permanent "£0.00 refunded" is furniture. It is THIS period's refunds,
+            so the two figures can be read together without arithmetic. A month that gave back more
+            than it took shows a NEGATIVE above this line: true, and explicable by the line itself. */}
+        {d.refundedPennies > 0 && (
+          <p className="text-xs text-muted mt-0.5" data-testid="revenue-refunded">
+            {f.money(d.refundedPennies)} refunded
+          </p>
+        )}
         {d.perSite?.length > 0 && (
           <div className="mt-2 space-y-0.5">
             {d.perSite.map((s: any) => (
-              <div key={s.site} className="flex justify-between text-xs"><span className="text-muted">{s.site}</span><span className="text-ink tabular-nums">{f.money(s.grossPennies)}</span></div>
+              <div key={s.site} className="flex justify-between text-xs">
+                <span className="text-muted">{s.site}{s.refundedPennies > 0 && <span className="ml-1 text-muted">· {f.money(s.refundedPennies)} refunded</span>}</span>
+                <span className="text-ink tabular-nums">{f.money(s.grossPennies)}</span>
+              </div>
             ))}
           </div>
         )}

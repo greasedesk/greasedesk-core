@@ -28,6 +28,8 @@ import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 type Tx = Prisma.TransactionClient;
+/** Reads may come from the client or a transaction; writes above take Tx explicitly. */
+type Db = Prisma.TransactionClient | { payment: unknown; refund: unknown };
 
 /** Only these count towards the cache. Kept as one list so no caller invents a second opinion. */
 export const COUNTED_STATUSES = ['succeeded'] as const;
@@ -262,4 +264,67 @@ export async function cancelProcessing(tx: Tx, invoiceId: string): Promise<numbe
   });
   await reconcileInvoice(tx, invoiceId);
   return r.count;
+}
+
+/**
+ * WHAT ARRIVED, AND WHAT WENT BACK, IN A PERIOD — the revenue basis.
+ *
+ * ── WHY THIS IS NOT Σ amount_paid_pennies OVER INVOICES ─────────────────────────────────────────
+ * The dashboard used to bucket INVOICES by their paid date and sum the cache. But the cache is a
+ * point-in-time net of every refund ever, so a June invoice refunded in AUGUST silently reduced
+ * JUNE — an ordinary, correctly-dated refund mutating a closed period. Revenue is a RECORD (owner's
+ * ruling 2026-08-16): the money came in in June and left in August, and each month says so.
+ *
+ * So both sides are bucketed on their OWN `collected_at`: when the money actually moved.
+ *
+ * ── SCOPED THROUGH THE INVOICE, NEVER THROUGH Payment.site_id ───────────────────────────────────
+ * Invoice.site_id is `String`. Payment.site_id is `String?` — a convenience copy that is ALREADY
+ * WRONG once in 190 rows: a real £2,485.43 counter payment carries null while its invoice has a
+ * site perfectly well. Scoping on the payment's column silently dropped 27% of one August. The
+ * invoice is the authority; the copy is a trap for whoever scopes on it next.
+ *
+ * Refunds have no site column at all, which is the same reason: they scope through payment→invoice.
+ */
+export async function receivedInPeriod(
+  db: Db,
+  args: { groupId: string; siteIds: string[]; from: Date; to: Date },
+): Promise<{ receivedPennies: number; refundedPennies: number; netPennies: number; perSite: Array<{ siteId: string; receivedPennies: number; refundedPennies: number; netPennies: number }> }> {
+  const invoiceScope = {
+    group_id: args.groupId,
+    site_id: { in: args.siteIds },   // Invoice.site_id — non-nullable, the authority
+    series: 'chargeable' as const,
+  };
+
+  const [payments, refunds] = await Promise.all([
+    (db as any).payment.findMany({
+      where: {
+        status: { in: COUNTED_STATUSES as unknown as string[] },
+        collected_at: { gte: args.from, lt: args.to },
+        invoice: invoiceScope,
+      },
+      select: { amount_pennies: true, invoice: { select: { site_id: true } } },
+    }) as Promise<Array<{ amount_pennies: number; invoice: { site_id: string } }>>,
+    (db as any).refund.findMany({
+      where: {
+        collected_at: { gte: args.from, lt: args.to },
+        payment: { invoice: invoiceScope },
+      },
+      select: { amount_pennies: true, payment: { select: { invoice: { select: { site_id: true } } } } },
+    }) as Promise<Array<{ amount_pennies: number; payment: { invoice: { site_id: string } } }>>,
+  ]);
+
+  const per = new Map<string, { siteId: string; receivedPennies: number; refundedPennies: number; netPennies: number }>();
+  const bump = (siteId: string) => {
+    const cur = per.get(siteId) ?? { siteId, receivedPennies: 0, refundedPennies: 0, netPennies: 0 };
+    per.set(siteId, cur);
+    return cur;
+  };
+  let receivedPennies = 0, refundedPennies = 0;
+  for (const p of payments) { receivedPennies += p.amount_pennies; bump(p.invoice.site_id).receivedPennies += p.amount_pennies; }
+  for (const r of refunds) { refundedPennies += r.amount_pennies; bump(r.payment.invoice.site_id).refundedPennies += r.amount_pennies; }
+  for (const v of per.values()) v.netPennies = v.receivedPennies - v.refundedPennies;
+
+  // NOT clamped at zero. A month that gave back more than it took in is a real month, and a
+  // clamped zero would be a lie about it — the tile shows the negative and names the refunds.
+  return { receivedPennies, refundedPennies, netPennies: receivedPennies - refundedPennies, perSite: [...per.values()] };
 }

@@ -11,6 +11,7 @@ import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
+import { receivedInPeriod } from '@/lib/payments';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
 import { clipToData } from '@/lib/tenant-data-start';
@@ -90,22 +91,29 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     };
   },
 
+  // ── REVENUE IS A RECORD: WHAT ARRIVED LESS WHAT WENT BACK, IN THIS PERIOD ──────────────────
+  // This used to bucket INVOICES by their paid date and sum amount_paid_pennies — a point-in-time
+  // net of every refund ever. So a June invoice refunded in AUGUST silently reduced JUNE: a closed
+  // month mutating from an ordinary, correctly-dated refund. Owner's ruling 2026-08-16: the money
+  // came in in June and left in August, and each month says so. One rule in lib/payments.
   revenue: async ({ groupId, siteIds, from, to }) => {
+    const r = await receivedInPeriod(prisma, { groupId, siteIds, from, to });
+    // Count stays INVOICE-shaped — "how many jobs did we get paid for" is not "how many payment
+    // rows landed", and a part payment must not read as two jobs.
     const rows = (await prisma.invoice.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', series: 'chargeable' },
-      select: PAID_SELECT,
+      select: { date_paid: true, paid_at: true },
     })) as any[];
-    const inPeriod = rows.filter((r) => { const d = effectivePaidDate(r); return d && d >= from && d < to; });
-    const bySite = new Map<string, { site: string; grossPennies: number }>();
-    let total = 0;
-    for (const r of inPeriod) {
-      const g = grossOfPaid(r);
-      total += g;
-      const cur = bySite.get(r.site_id) ?? { site: r.site?.site_name ?? '—', grossPennies: 0 };
-      cur.grossPennies += g;
-      bySite.set(r.site_id, cur);
-    }
-    return { grossPennies: total, count: inPeriod.length, perSite: bySite.size > 1 ? Array.from(bySite.values()) : [] };
+    const count = rows.filter((x) => { const d = effectivePaidDate(x); return d && d >= from && d < to; }).length;
+    const names = new Map((await prisma.site.findMany({ where: { id: { in: siteIds } }, select: { id: true, site_name: true } })).map((s: any) => [s.id, s.site_name]));
+    return {
+      grossPennies: r.netPennies,
+      refundedPennies: r.refundedPennies,   // named ON THE TILE, never a footnote
+      count,
+      perSite: r.perSite.length > 1
+        ? r.perSite.map((s) => ({ site: names.get(s.siteId) ?? '—', grossPennies: s.netPennies, refundedPennies: s.refundedPennies }))
+        : [],
+    };
   },
 
   // Issued vs paid in the period — count + value each way.
@@ -120,9 +128,13 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
       select: PAID_SELECT,
     })) as any[];
     const paidInPeriod = paidRows.filter((r) => { const d = effectivePaidDate(r); return d && d >= from && d < to; });
+    // THE PAID SIDE IS THE SAME QUESTION AS THE REVENUE TILE and must give the same answer, or the
+    // dashboard contradicts itself on one screen. Same chokepoint. `issuedPennies` stays
+    // line-based: what was BILLED is a document fact and a refund does not unbill it.
+    const received = await receivedInPeriod(prisma, { groupId, siteIds, from, to });
     return {
       issuedCount: issued.length, issuedPennies,
-      paidCount: paidInPeriod.length, paidPennies: paidInPeriod.reduce((a, r) => a + grossOfPaid(r), 0),
+      paidCount: paidInPeriod.length, paidPennies: received.netPennies,
     };
   },
 
