@@ -51,6 +51,15 @@ export type AuditAction =
   | 'invoice.date_paid_backfilled' // one-off: paid-date set to the work-done date (approved correction)
   | 'card.hours_backfilled'   // one-off: labour_hours populated onto existing lines from current service definitions
   | 'invoice.sent'          // emailed to the customer (PDF attached)
+  // ── REFUNDS: TWO FACTS, TWO RECORDS ──────────────────────────────────────────────────────────
+  // `refund.requested` is a PERSON at the garage asking, and carries their user_id. The money
+  // actually moving is the webhook's to record, on the Refund row, with no user_id — because
+  // Stripe's dashboard and a chargeback produce that same movement with nobody of ours involved.
+  // Collapsing them would make "who refunded this?" unanswerable for two of the three origins.
+  | 'refund.requested'
+  // The application fee returned by a route other than settleApplicationFeeRefund — a human in the
+  // Stripe dashboard. Recorded so the value on the row is right AND its provenance is explicit.
+  | 'invoice.fee_refund_recorded'
   | 'quote.cost_entered' // a parts cost typed on the quote line (ruling 2026-07-20): { line, from, to, via, meaning }
   | 'quote.sent'         // a frozen QuoteVersion went to the customer: { version, lines, emailed, sentTo }
   | 'quote.superseded'   // the estimate was MATERIALLY edited while a quote was out — old version + link killed: { superseded }

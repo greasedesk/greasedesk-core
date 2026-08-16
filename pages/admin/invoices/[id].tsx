@@ -18,6 +18,7 @@ import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { buildInvoiceDoc } from '@/lib/invoice-doc';
+import { prisma } from '@/lib/db';
 // SERVER-SIDE ONLY — reaches node:crypto through lib/magic-link. Next tree-shakes it out of the
 // client bundle because it is used solely inside getServerSideProps; do not read it in the component.
 import { offersPayLink } from '@/lib/invoice-pay-link';
@@ -28,6 +29,7 @@ import { canVoid, VOID_CATEGORIES, MIN_REASON_LENGTH, validateVoidReason } from 
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
+import { quoteRefund, refundConfirmationLines } from '@/lib/refund-quote';
 
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
@@ -44,6 +46,12 @@ type PageProps = {
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
   /** Is there anything to pay? Server-computed via lib/invoice-pay-link::offersPayLink. */
   offersPayLink: boolean;
+  /** The settled card payment a refund would act on, if there is one. */
+  refundable: {
+    paymentId: string; amountPennies: number; alreadyRefundedPennies: number;
+    applicationFeePennies: number | null; stripeFeePennies: number | null;
+    applicationFeeReturnedPennies: number;
+  } | null;
   /** The customer holds a copy. Only decides whether to show the GENERIC warning — the server's
    *  own, figure-bearing confirmation is what actually gates an amendment. */
   wasSent: boolean;
@@ -101,6 +109,44 @@ export default function InvoicePage(props: PageProps) {
       const data = await res.json().catch(() => ({}));
       setMsg(res.ok ? { text: t('emailSent'), ok: true } : { text: data?.message || t('emailError'), ok: false });
     } catch { setMsg({ text: t('emailError'), ok: false }); }
+    setBusy(null);
+  }
+
+  // ── REFUND ───────────────────────────────────────────────────────────────────────────────
+  // Two stages on purpose. The first collects an amount; the second states what it COSTS before
+  // anything is sent, because the surprise in a card refund is not the amount going back — it is
+  // Stripe's processing fee, which does not. A garage owner should meet that here rather than on a
+  // statement three days later.
+  const [refundStage, setRefundStage] = useState<null | 'form' | 'confirm'>(null);
+  const [refundInput, setRefundInput] = useState('');
+  const r = props.refundable;
+  const remainingRefundable = r ? r.amountPennies - r.alreadyRefundedPennies : 0;
+  const refundPennies = Math.round(parseFloat(refundInput || '0') * 100);
+  const quote = r && refundPennies > 0
+    ? quoteRefund({
+        amountPennies: r.amountPennies, refundPennies, alreadyRefundedPennies: r.alreadyRefundedPennies,
+        applicationFeePennies: r.applicationFeePennies, stripeFeePennies: r.stripeFeePennies,
+        applicationFeeAlreadyReturnedPennies: r.applicationFeeReturnedPennies,
+      })
+    : null;
+
+  async function sendRefund() {
+    if (!r || !quote?.ok) return;
+    setBusy('refund'); setMsg(null);
+    try {
+      const res = await fetch('/api/payments/refund', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId: r.paymentId, amountPennies: quote.quote.refundPennies }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setMsg({ text: data?.message || (res.ok ? 'Refund sent.' : 'The refund couldn’t be sent.'), ok: res.ok });
+      if (res.ok) {
+        setRefundStage(null); setRefundInput('');
+        // The webhook writes the ledger, not us — so re-read after a moment rather than claiming
+        // the refund is done. If it has not landed yet the page simply shows the same thing again.
+        setTimeout(() => router.replace(router.asPath), 2500);
+      }
+    } catch { setMsg({ text: 'The refund couldn’t be sent.', ok: false }); }
     setBusy(null);
   }
 
@@ -436,6 +482,71 @@ export default function InvoicePage(props: PageProps) {
             )}
           </div>
         )}
+        {/* ── REFUND ──────────────────────────────────────────────────────────────────────────
+            Offered only where there is a settled card payment with something left on it — decided
+            server-side (props.refundable), never guessed here. PARTIAL FROM THE START: a customer
+            disputing one line of four is the ordinary workshop case, and full-only would send the
+            garage back to the Stripe dashboard for exactly the scenario we most want on this path. */}
+        {props.canManage && props.refundable && props.status !== 'void' && (
+          <div className="rounded-xl border border-line bg-surface p-4 mb-3" data-testid="refund-panel">
+            {refundStage === null && (
+              <button onClick={() => { setRefundStage('form'); setRefundInput((remainingRefundable / 100).toFixed(2)); }}
+                disabled={busy !== null} data-testid="refund-open"
+                className="text-sm rounded-lg px-4 py-2 border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
+                Refund…
+              </button>
+            )}
+
+            {refundStage === 'form' && (
+              <div data-testid="refund-form">
+                <p className="text-sm font-semibold text-ink">Refund this payment</p>
+                <p className="text-xs text-muted mt-1">
+                  {fmt(remainingRefundable)} of {fmt(props.refundable.amountPennies)} is still refundable
+                  {props.refundable.alreadyRefundedPennies > 0 && <> — {fmt(props.refundable.alreadyRefundedPennies)} has already gone back</>}.
+                </p>
+                <label className="block text-xs text-muted mt-3 mb-1">Amount to refund</label>
+                <input type="number" step="0.01" min="0.01" max={(remainingRefundable / 100).toFixed(2)}
+                  value={refundInput} onChange={(e) => setRefundInput(e.target.value)} data-testid="refund-amount"
+                  className="w-40 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
+                {quote && !quote.ok && <p className="mt-2 text-sm text-danger" data-testid="refund-invalid">{quote.refusal.message}</p>}
+                <div className="flex gap-2 mt-3">
+                  <button disabled={!quote?.ok || busy !== null} onClick={() => setRefundStage('confirm')} data-testid="refund-review"
+                    className="text-sm font-semibold rounded-lg px-4 py-2 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+                    Review
+                  </button>
+                  <button onClick={() => { setRefundStage(null); setRefundInput(''); }} className="text-sm text-muted px-3 py-2">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {refundStage === 'confirm' && quote?.ok && (
+              <div data-testid="refund-confirm">
+                <p className="text-sm font-semibold text-ink">
+                  {quote.quote.isFull ? 'Refund in full?' : 'Refund part of this payment?'}
+                </p>
+                {/* THE COST, IN THE GARAGE'S TERMS. Sentences from lib/refund-quote so the gate can
+                    assert the words a garage owner actually reads. Stripe's fee not coming back is
+                    the fact this whole panel exists to state before the button, not after. */}
+                <ul className="mt-2 space-y-1" data-testid="refund-cost-lines">
+                  {refundConfirmationLines(quote.quote).map((line, i) => (
+                    <li key={i} className="text-sm text-ink">• {line}</li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] text-muted">
+                  We send this to Stripe; the invoice updates when Stripe confirms it, usually within a few seconds.
+                </p>
+                <div className="flex gap-2 mt-3">
+                  <button disabled={busy !== null} onClick={sendRefund} data-testid="refund-send"
+                    className="text-sm font-semibold rounded-lg px-4 py-2 bg-danger text-white hover:opacity-90 disabled:opacity-50">
+                    {busy === 'refund' ? 'Sending…' : `Refund ${fmt(quote.quote.refundPennies)}`}
+                  </button>
+                  <button onClick={() => setRefundStage('form')} className="text-sm text-muted px-3 py-2">Back</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {props.status === 'paid' && props.receiptNotSent && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('pending.receiptNotSent')}</div>
         )}
@@ -660,6 +771,27 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       // component because lib/invoice-pay-link reaches lib/magic-link and therefore node:crypto —
       // the mistake that once shipped a blank customer page.
       offersPayLink: offersPayLink(doc),
+      // THE PAYMENT A REFUND WOULD ACT ON. Only a settled Stripe one: a manual cash payment is not
+      // ours to reverse, and a `processing` intent has not cleared. Absent means no button — the
+      // same discipline as offersPayLink, decided server-side rather than guessed in the page.
+      refundable: await (async () => {
+        const p = (await prisma.payment.findFirst({
+          where: { invoice_id: doc.invoiceId, provider: 'stripe', status: 'succeeded' },
+          orderBy: { collected_at: 'desc' },
+          select: {
+            id: true, amount_pennies: true, application_fee_pennies: true, stripe_fee_pennies: true,
+            refunds: { select: { amount_pennies: true, application_fee_refunded_pennies: true } },
+          },
+        })) as any;
+        if (!p) return null;
+        const alreadyRefundedPennies = p.refunds.reduce((a: number, r: any) => a + (r.amount_pennies ?? 0), 0);
+        if (alreadyRefundedPennies >= p.amount_pennies) return null; // nothing left to give back
+        return {
+          paymentId: p.id, amountPennies: p.amount_pennies, alreadyRefundedPennies,
+          applicationFeePennies: p.application_fee_pennies, stripeFeePennies: p.stripe_fee_pennies,
+          applicationFeeReturnedPennies: p.refunds.reduce((a: number, r: any) => a + (r.application_fee_refunded_pennies ?? 0), 0),
+        };
+      })(),
       wasSent: !!doc.receiptSentAt,
       amendedAt: (doc as any).amendedAt ?? null,
       amendedFromPennies: (doc as any).amendedFromPennies ?? null,
