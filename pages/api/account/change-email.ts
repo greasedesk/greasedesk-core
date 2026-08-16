@@ -40,6 +40,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!EMAIL_RE.test(email) || email.length > 200) return res.status(400).json({ message: 'Enter a valid email address.' });
 
   const me = await prisma.user.findUnique({ where: { id: sUser.id }, select: { email: true, passwordHash: true, group_id: true } });
+  // group_id is `string | null` on the model (see the schema note: it stays nullable so the
+  // groupless-session guard can be tested). The session guard above already refused a caller
+  // without one, so a null here means the ROW disagrees with the token — refuse rather than write
+  // an audit row attributed to no tenant.
+  if (me && !me.group_id) return res.status(401).json({ message: 'Not authenticated.' });
   if (!me || !me.passwordHash || me.passwordHash === 'INVITE_PENDING') return res.status(400).json({ message: 'Current password is incorrect.' });
   if (!(await bcrypt.compare(currentPassword, me.passwordHash))) return res.status(400).json({ message: 'Current password is incorrect.' });
   if (email === me.email) return res.status(200).json({ ok: true, message: 'That is already your email.', email });
@@ -63,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await disableTwoFactor({ type: 'tenant', id: sUser.id as string }, tx);
       // Audit the credential change — the gap this slice closes. from/to recorded on the user entity.
       await writeUserAudit(tx, {
-        groupId: me.group_id, actorUserId: sUser.id, targetUserId: sUser.id,
+        groupId: me.group_id as string, actorUserId: sUser.id, targetUserId: sUser.id,
         action: 'user.email_changed',
         diff: { from: oldEmail, to: email, credentialsCleared: ['phone', 'two_factor'] },
       });

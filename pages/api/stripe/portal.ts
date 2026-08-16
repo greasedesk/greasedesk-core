@@ -22,6 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
+  if (!vis.groupId) return res.status(401).json({ message: 'Not authenticated.' });
   const billing = await prisma.groupBilling.findUnique({ where: { group_id: vis.groupId }, select: { stripe_customer_id: true } });
   if (!billing?.stripe_customer_id) return res.status(409).json({ message: 'No subscription to manage yet.' });
 

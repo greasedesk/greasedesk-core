@@ -40,7 +40,9 @@ const RETRIES = 6;
 
 // We declare a global variable to hold the Prisma instance.
 // We have to cast 'globalThis' to 'any' to attach our custom property.
-const globalForPrisma = globalThis as any;
+// Typed, not `any`. This one word was the reason a forgotten `select` compiled: `globalThis as any`
+// made the `??` below `any`, and every query in the codebase inherited it.
+const globalForPrisma = globalThis as unknown as { prisma?: ReturnType<typeof baseClient> };
 
 function baseClient() {
   return new PrismaClient({
@@ -73,9 +75,20 @@ function withTransientRetry(client: PrismaClient) {
 // Check if prisma is already attached to the global object.
 // If not, create a new instance and attach it.
 // This is crucial for Next.js hot-reloading.
-export const prisma =
-  globalForPrisma.prisma ??
-  (process.env.DB_RETRY_TRANSIENT === '1' ? withTransientRetry(baseClient()) : baseClient());
+/**
+ * ONE CONCRETE TYPE, not a union of two.
+ *
+ * DB_RETRY_TRANSIENT picks base-or-extended at RUNTIME, and typing that honestly as a union costs
+ * 200 errors across 87 files — `$extends` gives `$transaction` a different callback parameter type,
+ * so every `async (tx: Prisma.TransactionClient) => …` in the codebase stops matching. Collapsing
+ * to the base client's type costs 14 errors in 9 files and changes no runtime behaviour: the
+ * extension only wraps operations in a retry, it adds no methods and removes none.
+ *
+ * The cast is doing real work and is worth the comment. Deleting it does not make the code safer,
+ * it makes 200 errors appear and someone revert the whole thing.
+ */
+export const prisma: ReturnType<typeof baseClient> = (globalForPrisma.prisma
+  ?? (process.env.DB_RETRY_TRANSIENT === '1' ? withTransientRetry(baseClient()) : baseClient())) as ReturnType<typeof baseClient>;
 
 // REMOVED: export default prisma; <--- THIS WAS THE CONFLICTING LINE
 

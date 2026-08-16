@@ -129,11 +129,15 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const gate = await requireAdminPage(ctx);
   if (!gate.ok) return { redirect: gate.redirect };
   const { vis } = gate;
+  // NARROWED, not asserted. vis.groupId is `string | null` because operators and reps have no
+  // tenant; a null reaching a where clause is not a filter, it is a question nobody answered.
+  if (!vis.groupId) return { redirect: { destination: '/admin/login', permanent: false } };
+  const groupId = vis.groupId;
 
   const [group, billing, siteCount] = await Promise.all([
-    prisma.group.findUnique({ where: { id: vis.groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true } }),
-    prisma.groupBilling.findUnique({ where: { group_id: vis.groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
-    prisma.site.count({ where: { group_id: vis.groupId } }),
+    prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true } }),
+    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
+    prisma.site.count({ where: { group_id: groupId } }),
   ]);
 
   return {

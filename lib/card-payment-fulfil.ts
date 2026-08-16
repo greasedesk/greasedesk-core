@@ -53,7 +53,10 @@ export async function fulfilCardPayment(args: {
 }): Promise<FulfilResult> {
   const at = args.at ?? new Date();
 
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  // The callback's return type is ANNOTATED. Without it TypeScript widens `outcome: 'not_ours'` to
+  // `string` and the discriminated union stops discriminating — the callers switch on `outcome`, so
+  // losing the literal types loses the exhaustiveness that makes that switch safe.
+  return prisma.$transaction(async (tx: Prisma.TransactionClient): Promise<FulfilResult> => {
     const settle = await settlePaymentByRef(tx, args.paymentIntentId, at);
     if (!settle.found) return { outcome: 'not_ours', paymentIntentId: args.paymentIntentId };
 

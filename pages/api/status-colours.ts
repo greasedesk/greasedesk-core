@@ -7,6 +7,7 @@
  * rejected, so a fill can never be white-on-white. One palette per tenant (Group.status_colours).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -30,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { colours, reset } = (req.body || {}) as { colours?: Record<string, string>; reset?: boolean };
     if (reset) {
-      await prisma.group.update({ where: { id: user.group_id }, data: { status_colours: null } }); // null → all defaults
+      await prisma.group.update({ where: { id: user.group_id }, data: { status_colours: Prisma.DbNull } }); // DbNull → the COLUMN is null (JsonNull would store the json value `null`)
       return res.status(200).json({ message: 'Colours reset to defaults.', colours: resolveStatusColours(null) });
     }
     // Keep only known bands with an ON-PALETTE hex — off-palette (incl. white) is dropped, never stored.

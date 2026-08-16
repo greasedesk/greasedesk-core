@@ -301,15 +301,19 @@ export const getServerSideProps = withI18n(['users'])(async (ctx) => {
   if (!gate.ok) return { redirect: gate.redirect };
   const { vis } = gate;
   const isAdmin = vis.isAdmin;
+  // NARROWED. This page builds two where clauses from vis.groupId; a null in either is a tenant
+  // filter that does not filter. Same class as the evening's requireTenantApi work.
+  if (!vis.groupId) return { redirect: { destination: '/admin/login', permanent: false } };
+  const groupId = vis.groupId;
 
   type UserDbRow = { id: string; name: string | null; email: string; is_active: boolean; deactivated_at: Date | null; role: Role; is_owner: boolean; primary_site_id: string | null; can_invoice: boolean; site_assignments: { site_id: string }[] };
   const selfId = vis.userId;
   const userWhere = isAdmin
-    ? { group_id: vis.groupId }
-    : { group_id: vis.groupId, role: 'STANDARD' as Role, site_assignments: { some: { site_id: { in: vis.siteIds } } } };
+    ? { group_id: groupId }
+    : { group_id: groupId, role: 'STANDARD' as Role, site_assignments: { some: { site_id: { in: vis.siteIds } } } };
   const siteWhere = isAdmin
-    ? { group_id: vis.groupId }
-    : { group_id: vis.groupId, id: { in: vis.activeSiteIds } }; // assignable = ACTIVE locations only
+    ? { group_id: groupId }
+    : { group_id: groupId, id: { in: vis.activeSiteIds } }; // assignable = ACTIVE locations only
   // 2FA state comes from the subject-keyed table, not a User column — one query for the whole
   // roster rather than N. Enrolment is per-user; visibility of it is a management concern.
   const twoFA = new Set(

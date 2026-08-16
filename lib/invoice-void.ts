@@ -91,7 +91,10 @@ export function canVoid(inv: { status: string; lineCount: number }): { ok: true 
 export const OFF_LEDGER_STATUSES = ['void'] as const;
 
 /** Spread into any invoice query that selects BY DATE without naming a status. */
-export const notVoided = { status: { notIn: [...OFF_LEDGER_STATUSES] as string[] } };
+// NOT `as string[]`. That cast was the single source of five type errors the moment the Prisma
+// client stopped being `any`: Invoice.status is an enum, and a string[] cannot filter it. The
+// spread keeps the readonly tuple assignable without lying about its element type.
+export const notVoided = { status: { notIn: [...OFF_LEDGER_STATUSES] } };
 
 /**
  * One recorded amendment to a void reason: {at, by, from, to} — deliberately the same shape as
