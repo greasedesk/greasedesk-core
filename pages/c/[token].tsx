@@ -418,6 +418,9 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
         returningFromPayment: String(ctx.query.pay ?? '') === 'processing',
         doc: {
           ...invDoc,
+          // The refund state carries a Date; Next refuses to serialise one. Same treatment as every
+          // other date on this doc — ISO across the wire, formatted in the reader's locale.
+          refund: { ...invDoc.refund, at: invDoc.refund.at ? invDoc.refund.at.toISOString() : null },
           issuedAt: invDoc.issuedAt.toISOString(),
           paidAt: invDoc.paidAt ? invDoc.paidAt.toISOString() : null,
           voidedAt: invDoc.voidedAt ? invDoc.voidedAt.toISOString() : null,

@@ -133,6 +133,18 @@ export async function reconcileInvoice(tx: Tx, invoiceId: string): Promise<numbe
   ]);
   // No rows at all → leave the column alone. The ledger declines to state a figure it has no rows
   // for; deciding what that ABSENCE means for a balance is the reader's job, not the writer's.
+  //
+  // ── THIS SILENCE IS CORRECT AND IT WILL CATCH YOU OUT ────────────────────────────────────────
+  // Declining to write is right, but it means calling this function does NOT guarantee the column
+  // now reflects reality — only that it reflects reality IF there were rows to read. A caller that
+  // has just DELETED the last rows and calls this to "put things back" gets the opposite: the
+  // column keeps whatever the previous reconcile wrote.
+  //
+  // That is not hypothetical. A gate teardown on 2026-08-16 removed a fixture payment and its
+  // refunds, reconciled, and left a live ZZ invoice at −500 — a negative balance it had never had,
+  // because the last write before the deletions had been a refund netting below zero. Restoring a
+  // cache means CAPTURING the prior value and writing it back, never recomputing from rows that no
+  // longer exist. payment-invariant-gate is what noticed.
   const net = expectedCachePennies(payments, refunds);
   if (net === null) return null;
 

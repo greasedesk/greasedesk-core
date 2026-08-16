@@ -18,6 +18,8 @@ import { invoiceTotals, effectiveIssueDate, isUnderCorrection } from '@/lib/invo
 // compiling perfectly under Next. The gates are the reason to keep the distinction honest.
 import type { InvoiceTotals } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
+import { refundState, type RefundState } from '@/lib/invoice-refund-state';
+import { COUNTED_STATUSES } from '@/lib/payments';
 import { presignGet } from '@/lib/r2';
 import { readVoidCorrections } from '@/lib/invoice-void';
 
@@ -54,6 +56,8 @@ export type InvoiceDoc = {
    * "£0.00 paid" over an invoice settled in cash last March is stating a falsehood with confidence.
    */
   amountPaidPennies: number | null;
+  /** Whether money went back, and how much. See lib/invoice-refund-state — derived, never stored. */
+  refund: RefundState;
   /** Void grain — printed ON the document. A retained invoice must SAY it was retired and why,
    *  otherwise the retained copy is indistinguishable from a live demand for payment. */
   voidedAt: Date | null;
@@ -107,6 +111,10 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       payment_method_snapshot: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
+      // THE LEDGER, for the refund state. Only what refundState needs: gross received (Σ succeeded
+      // payments, BEFORE refunds — the cached amount_paid_pennies is already net, so comparing
+      // refunds against it would call every full refund a partial one) and the refund rows.
+      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
       job_card: { select: { odometer_in: true, vehicle: { select: { registration: true, vin: true, mileage_at_create: true } } } },
     },
   })) as any;
@@ -151,6 +159,14 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     // Derived through the SHARED predicate (lib/invoice), the same one the unlock guard uses.
     underCorrection: isUnderCorrection({ status: inv.status, hasFrozenLines: inv.lines.length > 0 }),
     amountPaidPennies: inv.amount_paid_pennies ?? null,
+    // MONEY THAT CAME AND WENT. Derived through the one chokepoint so the customer page, the admin
+    // page and the PDF cannot each decide separately whether £50 back on £50 is "refunded".
+    refund: refundState({
+      receivedPennies: (inv as any).payments
+        .filter((p: any) => (COUNTED_STATUSES as readonly string[]).includes(p.status))
+        .reduce((a: number, p: any) => a + (p.amount_pennies ?? 0), 0),
+      refunds: (inv as any).payments.flatMap((p: any) => p.refunds ?? []),
+    }),
     voidedAt: inv.voided_at ?? null,
     voidReason: inv.void_reason ?? null,
     voidReasonOriginal: (() => { const l = readVoidCorrections(inv.void_reason_corrections); return l.length ? l[0].from : null; })(),

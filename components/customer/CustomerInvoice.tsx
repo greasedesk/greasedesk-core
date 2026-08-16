@@ -35,11 +35,13 @@ import { amountReceivedPennies, balanceOwedPennies } from '@/lib/invoice';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 
 /** Dates cross getServerSideProps as strings; the shape is otherwise the shared document. */
-export type SerializedInvoiceDoc = Omit<InvoiceDoc, 'issuedAt' | 'paidAt' | 'voidedAt' | 'confirmDueAt' | 'receiptSentAt' | 'datePaid'> & {
+export type SerializedInvoiceDoc = Omit<InvoiceDoc, 'issuedAt' | 'paidAt' | 'voidedAt' | 'confirmDueAt' | 'receiptSentAt' | 'datePaid' | 'refund'> & {
   issuedAt: string;
   paidAt: string | null;
   voidedAt: string | null;
   datePaid: string | null;
+  /** RefundState with its Date flattened — Next cannot serialise one across the wire. */
+  refund: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; at: string | null };
 };
 
 // Stripe's SDK touches `window`; it must never run during SSR.
@@ -200,6 +202,7 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
                 balance={balance}
                 totalPennies={totalPennies}
                 datePaid={d.datePaid ?? d.paidAt}
+                refund={d.refund}
                 money={money}
                 date={date}
               />
@@ -242,10 +245,51 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
  * link is for. A NULL cache now reads as zero received; see lib/payments::amountReceivedPennies for
  * why that is safe and what holds it up.
  */
-function PaymentState({ status, paid, balance, totalPennies, datePaid, money, date }: {
+function PaymentState({ status, paid, balance, totalPennies, datePaid, refund, money, date }: {
   status: string; paid: number; balance: number; totalPennies: number; datePaid: string | null;
+  refund?: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; at: string | null };
   money: (p: number) => string; date: (iso: string) => string;
 }) {
+  // ── MONEY THAT CAME AND WENT, BEFORE ANYTHING ELSE ─────────────────────────────────────────
+  // Checked FIRST, because every branch below it is about money the customer still has with the
+  // garage, and none of them is true once it has come back. Invoice 100003210 sat here saying
+  // "Paid in full — thank you" for three hours after the £50 had been returned: the document was
+  // paid, the ledger had no refund row, and nothing on the page was wrong except the only thing
+  // the reader cared about.
+  //
+  // NOT a return to "amount due". A refunded invoice is not an unpaid one — the money came and
+  // went, and offering to take it again would be asking somebody who has been made whole to pay
+  // a second time.
+  if (refund && refund.kind === 'full') {
+    return (
+      <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-refunded">
+        <p className="text-sm font-semibold text-ink">
+          Refunded{refund.at ? ` on ${date(refund.at)}` : ''} — {money(refund.refundedPennies)} has been returned.
+        </p>
+        <p className="text-sm text-muted mt-1">
+          It can take a few working days to appear on your statement, depending on your bank.
+          There’s nothing to pay.
+        </p>
+      </div>
+    );
+  }
+  if (refund && refund.kind === 'partial') {
+    return (
+      <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-part-refunded">
+        <p className="text-sm font-semibold text-ink">
+          {money(refund.refundedPennies)} refunded{refund.at ? ` on ${date(refund.at)}` : ''}.
+        </p>
+        <p className="text-sm text-muted mt-1">
+          {/* The arithmetic is stated and nothing is asked for. Whether the remainder is chased is
+              the garage's decision, not something a document should imply. */}
+          You paid {money(paid + refund.refundedPennies)}; {money(refund.refundedPennies)} has been
+          returned, leaving {money(paid)} against this invoice. It can take a few working days to
+          appear on your statement.
+        </p>
+      </div>
+    );
+  }
+
   // Settled by the document's own status, whatever the ledger does or doesn't know.
   if (status === 'paid' || status === 'settled') {
     return (
