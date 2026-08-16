@@ -1,0 +1,21 @@
+-- Overhead.ex_vat_amount_pennies: drop a DEFAULT that was only ever backfill scaffolding.
+--
+-- WHERE IT CAME FROM. 20260701200000_vat_rate_consolidation did the standard dance for adding a
+-- NOT NULL column to a populated table:
+--
+--     ALTER TABLE "Overhead" ADD COLUMN "ex_vat_amount_pennies" INTEGER NOT NULL DEFAULT 0;
+--     UPDATE "Overhead" SET "ex_vat_amount_pennies" = "amount_pennies" - "vat_amount_pennies", …
+--
+-- The default existed so the column could be added at all; the UPDATE on the very next line
+-- replaced every value it produced. It was simply never dropped, and prisma/schema.prisma has
+-- correctly declared no default ever since — so this is the DATABASE catching up with the schema,
+-- not a change of intent.
+--
+-- WHY IT IS WORTH DROPPING rather than declaring. A default of 0 on a COST column means an insert
+-- that forgets the amount records a £0 overhead instead of failing. That does not read as an error
+-- anywhere: it understates cost, and understated cost flatters margin on every screen that derives
+-- from it. The honest failure is a NOT NULL violation at the point of the mistake.
+--
+-- SAFE: 9 Overhead rows exist and NONE sits at 0, so nothing in the data relies on the default, and
+-- no writer omits the column (the schema has required it all along).
+ALTER TABLE "Overhead" ALTER COLUMN "ex_vat_amount_pennies" DROP DEFAULT;
