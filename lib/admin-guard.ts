@@ -66,6 +66,49 @@ export async function requireAdminPage(
   return { ok: true, vis };
 }
 
+/**
+ * THE TENANT SCOPE for API routes. Returns null after answering, like requireAdminApi.
+ *
+ * ── THE POINT IS THE RETURN TYPE, NOT THE CHECK ─────────────────────────────────────────────────
+ * `groupId` here is a non-nullable `string`. Tenant scope can only be OBTAINED from the thing that
+ * validated it — the same property that makes `_ts.mjs` universal: you cannot get on with the work
+ * without it. One place to check is a lesser benefit and would not have been worth a chokepoint.
+ *
+ * Note that requireAdminApi does NOT give you this. It returns `Visibility`, whose `groupId` is
+ * `string | null`, because an operator or rep has no tenant. Callers were left to assert.
+ *
+ * ── WHY IT MATTERS MORE HERE THAN ANYWHERE ELSE ─────────────────────────────────────────────────
+ * ~78 endpoints hand-roll `if (!user?.id || !user?.group_id) return 401`, correctly, in at least
+ * five different spellings (`user`, `sUser`, `sessionUser`, a bare `!groupId`, and a DB-read
+ * self-heal). A sweep for the unguarded read four of those as MISSING and nearly reported a false
+ * alarm — if an automated scan cannot tell guarded from unguarded, neither can a reviewer.
+ *
+ * And the failure is not loud. Prisma THROWS on `group_id: null` against a non-nullable column, but
+ * `group_id: undefined` SILENTLY DROPS THE FILTER and returns every tenant's rows. Operators and
+ * reps carry no `group_id` on the session at all (the JWT sets it only in the tenant branch), so
+ * undefined is reachable, not theoretical. Correct in 78 places is 78 chances for the 79th.
+ *
+ * Reps and operators get 401 by construction: they are not tenant actors and have their own guards.
+ */
+export type TenantScope = {
+  /** NON-NULLABLE. This is the deliverable. */
+  groupId: string;
+  userId: string;
+  vis: Visibility;
+};
+
+export async function requireTenantApi(req: NextApiRequest, res: NextApiResponse): Promise<TenantScope | null> {
+  const session = await getServerSession(req, res, authOptions);
+  const u = session?.user as any;
+  if (!u?.id) { res.status(401).json({ message: 'Not authenticated.' }); return null; }
+  const vis = await getVisibility(u.id as string);
+  // The same 401 as no session, deliberately: to a caller with no tenant, a tenant-scoped endpoint
+  // does not exist. Distinguishing "authenticated but not a tenant actor" would tell an operator
+  // which endpoints are tenant-shaped, and answers a question they should not be asking here.
+  if (!vis.groupId) { res.status(401).json({ message: 'Not authenticated.' }); return null; }
+  return { groupId: vis.groupId, userId: u.id as string, vis };
+}
+
 export async function requireAdminApi(req: NextApiRequest, res: NextApiResponse): Promise<Visibility | null> {
   const session = await getServerSession(req, res, authOptions);
   const u = session?.user as any;

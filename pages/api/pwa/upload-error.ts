@@ -8,28 +8,26 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
-import { canAccessSite } from '@/lib/admin-guard';
+import { canAccessSite, requireTenantApi } from '@/lib/admin-guard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
+  const user = { id: scope.userId, group_id: scope.groupId };
 
   const { jobCardId, photoId, kind, attempts, detail } = (req.body || {}) as any;
   if (!jobCardId || !detail || typeof detail !== 'object') return res.status(400).json({ message: 'jobCardId and detail are required.' });
   const card = await prisma.jobCard.findFirst({ where: { id: jobCardId, group_id: user.group_id }, select: { id: true, site_id: true } });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
-  const vis = await getVisibility(user.id as string);
+  const vis = await getVisibility(scope.userId);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'No access.' });
 
   await prisma.uploadTelemetry.create({
     data: {
-      group_id: user.group_id as string,
+      group_id: scope.groupId,
       job_card_id: jobCardId,
       photo_id: String(photoId || '').slice(0, 64),
       kind: String(kind || '').slice(0, 16),

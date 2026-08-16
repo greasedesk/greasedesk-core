@@ -17,9 +17,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { requireCanWrite } from '@/lib/admin-guard';
+import { requireCanWrite, requireTenantApi } from '@/lib/admin-guard';
 import { getProfile, isSupportedCountry, PICKER_COUNTRIES } from '@/lib/locale-profiles';
 import { isEnabledCountry } from '@/lib/enabled-countries';
 
@@ -30,10 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
-  if (!(await requireCanWrite(user.group_id as string, res))) return;
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
+  if (!(await requireCanWrite(scope.groupId, res))) return;
 
   const country = String((req.body ?? {}).country ?? '').toUpperCase();
   if (!country || !KNOWN.has(country)) return res.status(400).json({ message: 'Pick a country from the list.' });
@@ -52,16 +49,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const supported = isSupportedCountry(country);
 
   // Record the choice either way — an unsupported one is what the coming-soon gate reads.
-  await prisma.group.update({ where: { id: user.group_id as string }, data: { country_code: country } });
+  await prisma.group.update({ where: { id: scope.groupId }, data: { country_code: country } });
 
   // RE-PREFIX the human account ref to the chosen country (GB-GD2153 → US-GD2153, ruling
   // 2026-07-28). The DB default mints every ref with a GB prefix before the country is known.
   // Safe: the ref is DISPLAY + audit-snapshot only — Stripe keys on group_id, links on tokens,
   // invoice numbering on its own per-group series; the numeric suffix (globally unique) is
   // untouched so @unique cannot collide. Idempotent: a re-visit with the same country no-ops.
-  const grpRef = await prisma.group.findUnique({ where: { id: user.group_id as string }, select: { ref: true } });
+  const grpRef = await prisma.group.findUnique({ where: { id: scope.groupId }, select: { ref: true } });
   if (grpRef?.ref && /^[A-Z]{2}-/.test(grpRef.ref) && !grpRef.ref.startsWith(`${country}-`)) {
-    await prisma.group.update({ where: { id: user.group_id as string }, data: { ref: `${country}${grpRef.ref.slice(2)}` } });
+    await prisma.group.update({ where: { id: scope.groupId }, data: { ref: `${country}${grpRef.ref.slice(2)}` } });
   }
 
   if (!supported) {
@@ -71,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Supported → derive the whole tax + trading identity from the ONE profile.
   const p = getProfile(country);
   await prisma.group.update({
-    where: { id: user.group_id as string },
+    where: { id: scope.groupId },
     data: {
       tax_country_code: country,
       tax_model: p.taxModel,
@@ -84,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   // Prime any existing site with the country's currency + default timezone (the site step edits them).
   await prisma.site.updateMany({
-    where: { group_id: user.group_id as string },
+    where: { group_id: scope.groupId },
     data: { currency_code: p.currency, timezone: p.defaultTimezone },
   });
 

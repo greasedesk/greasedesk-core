@@ -8,12 +8,10 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { applyCardTransition } from '@/lib/jobcard-transition';
-import { canAccessSite, canManageSite, requireCanWrite } from '@/lib/admin-guard';
+import { canAccessSite, canManageSite, requireCanWrite, requireTenantApi } from '@/lib/admin-guard';
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus } from '@/lib/jobcard-status';
@@ -33,9 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
+  const user = { id: scope.userId, group_id: scope.groupId };
 
   const { jobCardId, to, paymentMethodId, datePaid } = (req.body || {}) as { jobCardId?: string; to?: JobStatus; paymentMethodId?: string; datePaid?: string };
   if (!jobCardId || !to) return res.status(400).json({ message: 'Missing jobCardId or target status.' });
@@ -58,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const tr = findTransition(card.status as JobStatus, to);
   if (!tr) return res.status(400).json({ message: `Cannot move from ${card.status} to ${to}.` });
 
-  const vis = await getVisibility(user.id as string);
+  const vis = await getVisibility(scope.userId);
   // Authority by transition KIND — with ONE relaxation: raising the invoice (in_progress→invoiced) is
   // also open to a per-user can_invoice grant (canIssueInvoice). Every OTHER commercial transition
   // (quote/accept/decline/cancel/paid/done/reopen) stays manager/admin. The mint itself is unchanged.
@@ -106,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // void is already inert there — but the CARD would still march to `paid`, claiming a payment
     // against a retired document. Refuse the whole transition instead of half-performing it.
     const voidCheck = refuseIfVoid(await prisma.invoice.findFirst({
-      where: { job_card_id: jobCardId, group_id: user.group_id as string }, select: { status: true },
+      where: { job_card_id: jobCardId, group_id: scope.groupId }, select: { status: true },
     }));
     if (voidCheck) return res.status(409).json(voidCheck);
     const hasUnpaidInvoice = (await prisma.invoice.findFirst({
@@ -142,8 +140,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // below is untouched. (This branch has never fired in production: `status.accepted` has 0
         // rows in every group. It is wired anyway, because a route that exists will be taken.)
         await acceptQuote(tx, {
-          groupId: user.group_id as string, jobCardId, via: 'counter',
-          actorUserId: user.id as string, attested: null, at: new Date(),
+          groupId: scope.groupId, jobCardId, via: 'counter',
+          actorUserId: scope.userId, attested: null, at: new Date(),
         });
       } else {
         // THE SHARED WRITER (lib/jobcard-transition). The table is consulted again here, which is
@@ -151,8 +149,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // webhook path has no such preamble, and one writer that always checks is worth more than
         // two writers that each check somewhere else.
         const moved = await applyCardTransition(tx, {
-          groupId: user.group_id as string, jobCardId,
-          from: card.status as JobStatus, to, actorUserId: user.id as string,
+          groupId: scope.groupId, jobCardId,
+          from: card.status as JobStatus, to, actorUserId: scope.userId,
         });
         if (!moved.ok) throw new Error(`TRANSITION:${moved.refusal.message}`);
       }
@@ -175,20 +173,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // add-now convenience in front of this.
           const vinMissing = !(card.vehicle?.vin && String(card.vehicle.vin).trim());
           const mileageMissing = card.odometer_in == null && card.vehicle?.mileage_at_create == null;
-          if (vinMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.vin_skipped' });
-          if (mileageMissing) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.mileage_skipped' });
+          if (vinMissing) await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.vin_skipped' });
+          if (mileageMissing) await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.mileage_skipped' });
           if (card.is_comeback) {
             // FREEZE-AT-ISSUE + SETTLED: mint from the warranty counter, freeze the goodwill
             // shape, land TERMINAL at `settled` — £0, out of AR, never paid (all inside the helper).
             const locale = (await tx.site.findUnique({ where: { id: card.site_id }, select: { locale: true } }))?.locale;
-            await issueWarrantyInvoiceForCard(tx, jobCardId, user.group_id as string, {
+            await issueWarrantyInvoiceForCard(tx, jobCardId, scope.groupId, {
               goodwill: tServer(locale, 'invoice', 'warrantyGoodwill'),
               noCharge: tServer(locale, 'invoice', 'warrantyLine'),
             });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.warranty_minted' });
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.warranty_minted' });
           } else {
-            await issueInvoiceForCard(tx, jobCardId, user.group_id as string); // mints + FREEZES the lines (freeze-at-issue)
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.minted' });
+            await issueInvoiceForCard(tx, jobCardId, scope.groupId); // mints + FREEZES the lines (freeze-at-issue)
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.minted' });
           }
         }
       } else if (to === 'paid') {
@@ -201,7 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const inv = (await tx.invoice.findUnique({
           where: { job_card_id: jobCardId },
           // site_id IS SELECTED. Its absence here is what wrote a null onto every counter payment:
-          // `siteId: inv.site_id ?? null` read an unselected field as undefined and stored null.
+          // `siteId: inv.site_id` read an unselected field as undefined and stored null.
           select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site_id: true, site: { select: { locale: true } } },
         })) as any;
         if (inv && inv.series === 'warranty') throw new Error('WARRANTY_NOT_PAYABLE'); // settles at issue — nothing to pay
@@ -228,27 +226,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             // INSTANT clearance = the money is already in the drawer. Succeeded at once.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
+              groupId: scope.groupId, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'succeeded',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
-              collectedAt: docDate, createdBy: user.id as string,
+              collectedAt: docDate, createdBy: scope.userId,
             });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'instant' } });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid_confirmed', diff: { method: method.name, instant: true } });
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'instant' } });
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.paid_confirmed', diff: { method: method.name, instant: true } });
             instantConfirmedInvoiceId = inv.id; // receipt sends post-tx through the ONE send path
           } else if (method.behaviour === 'manual') {
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid_pending', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             // MANUAL clearance: recorded, not yet cleared. `processing` keeps it out of the cache
             // until somebody confirms the money actually arrived.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
+              groupId: scope.groupId, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
-              collectedAt: docDate, createdBy: user.id as string,
+              collectedAt: docDate, createdBy: scope.userId,
             });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'manual' } });
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'manual' } });
           } else {
-            const grp = (await tx.group.findUnique({ where: { id: user.group_id as string }, select: { paid_confirm_window_hours: true } })) as any;
+            const grp = (await tx.group.findUnique({ where: { id: scope.groupId }, select: { paid_confirm_window_hours: true } })) as any;
             const windowH = Math.min(168, Math.max(1, grp?.paid_confirm_window_hours ?? 24));
             await tx.invoice.update({
               where: { id: inv.id },
@@ -257,12 +255,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // WINDOWED clearance: same reasoning as manual. The window exists precisely because the
             // money might not arrive, so it cannot count until it has.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
+              groupId: scope.groupId, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
-              collectedAt: docDate, createdBy: user.id as string,
+              collectedAt: docDate, createdBy: scope.userId,
             });
-            await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'windowed', pendingHours: windowH } });
+            await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.paid', diff: { date: docDate.toISOString().slice(0, 10), method: method.name, clearance: 'windowed', pendingHours: windowH } });
           }
         }
       }
@@ -282,7 +280,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Instant clearance: the receipt goes out NOW through the ONE send path (garage BCC, audited,
   // receipt_sent_at stamped). A failure leaves the visible "receipt not sent" state — resendable.
   if (instantConfirmedInvoiceId) {
-    try { await sendInvoiceEmail(instantConfirmedInvoiceId, user.group_id as string, user.id as string); }
+    try { await sendInvoiceEmail(instantConfirmedInvoiceId, scope.groupId, scope.userId); }
     catch (e) { console.error('instant receipt send failed:', e); }
   }
   return res.status(200).json({ message: 'Status updated.', status: to });

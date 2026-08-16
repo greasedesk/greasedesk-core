@@ -6,18 +6,16 @@
  * from the client.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { requireTenantApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
 
   const email = String((req.body ?? {}).email ?? '').trim();
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
@@ -25,11 +23,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const grp = (await prisma.group.findUnique({
-    where: { id: user.group_id as string }, select: { country_code: true },
+    where: { id: scope.groupId }, select: { country_code: true },
   })) as { country_code: string | null } | null;
 
   await prisma.countryWaitlist.create({
-    data: { email, country_code: grp?.country_code || 'XX', group_id: user.group_id as string },
+    data: { email, country_code: grp?.country_code || 'XX', group_id: scope.groupId },
   });
 
   return res.status(200).json({ ok: true });

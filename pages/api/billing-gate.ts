@@ -12,19 +12,17 @@
  * It returns no money, no card details and no Stripe ids.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { requireTenantApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { billingGate, gateFromRow, BILLING_GATE_SELECT } from '@/lib/billing';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).end(); }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as any;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
 
   const row = await prisma.groupBilling.findUnique({
-    where: { group_id: user.group_id as string }, select: BILLING_GATE_SELECT,
+    where: { group_id: scope.groupId }, select: BILLING_GATE_SELECT,
   });
   const g = billingGate(gateFromRow(row as any));
   return res.status(200).json({
