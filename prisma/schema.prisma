@@ -1217,7 +1217,16 @@ model User {
   role          UserRole  @default(STANDARD)
 
   // --- FIXED GREASEDESK FIELDS ---
-  // Optional at creation time; enforced in app layer when linking staff.
+  /// NULL = no tenant. NOT REACHABLE by any current writer — registration creates the Group first
+  /// and the User second, in the same transaction, and all four user.create sites pass group_id
+  /// (0 of 13 rows are null). The old comment here said "optional at creation time; enforced in
+  /// app layer" and described a window that does not exist.
+  ///
+  /// Kept nullable for two reasons. PrismaAdapter is wired in [...nextauth]; the only provider is
+  /// Credentials, which does not create users through it — but add an OAuth provider and NextAuth
+  /// will insert tenantless User rows itself. And: the nullable column is what lets us test the
+  /// guard that exists because of it — counter-payment-gate proves requireTenantApi refuses an
+  /// AUTHENTICATED groupless session, and that fixture cannot be built without it.
   group_id        String?
   site_id         String?
   primary_site_id String? // admin-set landing/default site (must be one of the user's assigned sites)
@@ -1532,9 +1541,7 @@ model JobCard {
   odometer_in            Int?
   odometer_out           Int?
   labour_bill_numeric    Decimal?      @default(0) @db.Decimal(12, 2)
-  labour_cost_numeric    Decimal?      @default(0) @db.Decimal(12, 2)
   parts_bill_numeric     Decimal?      @default(0) @db.Decimal(12, 2)
-  parts_cost_numeric     Decimal?      @default(0) @db.Decimal(12, 2)
   vat_rate               Decimal       @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?
   archived_at            DateTime?

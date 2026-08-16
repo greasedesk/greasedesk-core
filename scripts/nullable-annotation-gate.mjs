@@ -19,7 +19,7 @@
  * So the rule sits where the answer is still known: at the moment the column is written.
  *
  * ── THE RATCHET ─────────────────────────────────────────────────────────────────────────────────
- * UNANNOTATED_CEILING pins a DIRECTION. The 280 existing unexplained columns cost nothing and are
+ * UNANNOTATED_CEILING pins a DIRECTION. The existing unexplained columns cost nothing and are
  * not a backlog anybody must clear. A NEW nullable column with no explanation pushes the count up
  * and goes red, naming itself. Annotating one lets the ceiling drop in the same commit. Same shape
  * as INLINE_GUARD_CEILING, and set to the ACTUAL count — a ceiling with slack silently permits the
@@ -72,7 +72,7 @@ const unannotated = unannotatedNullables(schema);
 // 280, not the 286 first quoted: that number came from a throwaway probe with a looser
 // relation-exclusion rule. The parser above is the authority, and the ceiling pins what it
 // actually counts — a ceiling with six of slack silently permits the next six.
-const UNANNOTATED_CEILING = 280;
+const UNANNOTATED_CEILING = 278;
 
 console.log(`\n— nullable columns with no explanation: ${unannotated.length} (ceiling ${UNANNOTATED_CEILING}) —`);
 const over = unannotated.length - UNANNOTATED_CEILING;

@@ -78,9 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // odometers, comeback and sign-off all stay empty — only the estimate travels.
         vat_rate: source.vat_rate,
         labour_bill_numeric: source.labour_bill_numeric,
-        labour_cost_numeric: source.labour_cost_numeric,
         parts_bill_numeric: source.parts_bill_numeric,
-        parts_cost_numeric: source.parts_cost_numeric,
         flag_urgent: source.flag_urgent,
         flag_sales_car: source.flag_sales_car,
         flag_customer_car: source.flag_customer_car,
