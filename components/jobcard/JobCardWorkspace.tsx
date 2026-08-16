@@ -76,6 +76,8 @@ type Props = {
   // Message history for this card's (customer, vehicle) thread — server-resolved.
   conversation?: ConversationMessage[];
   threadId?: string | null;
+  /** Unread on THIS card's thread. The sidebar shows the tenant total; this is the tab badge. */
+  messagesUnread?: number;
   reachability?: Reachability | null;
   vehicle: {
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
@@ -195,7 +197,22 @@ export default function JobCardWorkspace(p: Props) {
   // and the tab-change commit BLOCKS on failure, so the pane stopped swapping.
   const quoteEditable = p.canEditPricing && !cancelled && !p.quoteFrozen;
 
+  // OPENING IS A CLICK, NOT A RENDER. The active tab comes from ?tab= in the URL, so a card can
+  // load straight onto Messages from a link or a back-navigation — rendering it proves nobody read
+  // anything. selectTab only runs from the tab strip's onSelect, which is the job card's equivalent
+  // of the messages centre's `userPicked` guard. Same convention, not a second one.
+  const [unread, setUnread] = useState<number>(p.messagesUnread ?? 0);
+  async function openMessages() {
+    if (unread <= 0 || !p.threadId) return;
+    setUnread(0); // optimistic: the badge should go the moment they look, not a round trip later
+    fetch('/api/messages/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadId: p.threadId }),
+    }).catch(() => { /* the count is a nudge, not a fact worth an error banner */ });
+  }
+
   async function selectTab(k: TabKey) {
+    if (k === 'messages') await openMessages();
     // Leaving the Quote step: PERSIST the estimate first, so a financial edit is never lost when
     // moving to another step. (Bug: the quote lived in EstimateBuilder's transient local state, which
     // unmounted on step change — the entered quotation silently vanished.) Blocking on failure: keep
@@ -382,7 +399,13 @@ export default function JobCardWorkspace(p: Props) {
     finally { setBusy(null); }
   }
 
-  const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped }));
+  const tabViews: TabView[] = TAB_KEYS.map((k) => ({
+    key: k, label: t(`tab.${k}`),
+    reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped,
+    // A COUNT, not a dot: the number exists and is accurate, and the sidebar already shows the
+    // tenant total the same way. A dot would be less information than we hold.
+    badge: k === 'messages' && unread > 0 ? unread : undefined,
+  }));
 
   // ---------- panes ----------
   function StageComplete({ stage, label }: { stage: StageKey; label: string }) {
@@ -446,6 +469,24 @@ export default function JobCardWorkspace(p: Props) {
   // re-initialised from stale page-load props → "DVSA values cleared"). Inline JSX keeps child
   // element types stable across renders; the form's state now survives overlay updates. Props come
   // from eff.* (the reconciled overlay), so a genuine remount re-initialises with the FRESHEST data.
+  // ── MESSAGES: ITS OWN TAB ──────────────────────────────────────────────────────────────────
+  // It used to sit inside Customer Details, above Flags and Garage notes, and was the only reason
+  // that tab was a long scroll. Same component, same props, new home.
+  const messagesPane = (
+    <div className="bg-surface border border-line rounded-xl p-5">
+      <ConversationView
+        messages={convo ?? p.conversation ?? []}
+        locale={p.locale}
+        heading={t('messages.heading')}
+        threadId={p.threadId ?? null}
+        jobCardId={p.jobCardId}
+        reachability={p.reachability ?? null}
+        canSend={p.canOperate && !cancelled}
+        onSent={setConvo}
+      />
+    </div>
+  );
+
   const detailsPane = (
       <div className="space-y-5">
         <CustomerDetailsForm
@@ -459,21 +500,6 @@ export default function JobCardWorkspace(p: Props) {
           onSaved={refreshCard}
           stageAction={<StageComplete stage="details" label={t('tab.details')} />}
         />
-
-        {/* THE CONVERSATION — on the customer record, read-only in this slice. */}
-        <div className="bg-surface border border-line rounded-xl p-5">
-          <ConversationView
-            messages={convo ?? p.conversation ?? []}
-            locale={p.locale}
-            heading={t('messages.heading')}
-            dense
-            threadId={p.threadId ?? null}
-            jobCardId={p.jobCardId}
-            reachability={p.reachability ?? null}
-            canSend={p.canOperate && !cancelled}
-            onSent={setConvo}
-          />
-        </div>
 
         <div className="bg-surface border border-line rounded-xl p-5">
           <h3 className="text-sm font-semibold text-ink mb-3">{t('field.flags')}</h3>
@@ -740,6 +766,7 @@ export default function JobCardWorkspace(p: Props) {
       {err && <div className="bg-danger-soft text-danger rounded-lg p-3 text-sm mb-4">{err}</div>}
 
       {active === 'details' && detailsPane}
+      {active === 'messages' && messagesPane}
 
       {/* The Quote section stays MOUNTED across steps (hidden when inactive) so its in-progress
           estimate state is never destroyed by a step change — the root of the "quote lost on next

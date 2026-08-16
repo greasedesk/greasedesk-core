@@ -368,6 +368,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   return {
     conversation: conversation.messages,
     threadId: conversation.threadId,
+    // Unread on THIS card's thread — the tab badge. The sidebar's number is the tenant total.
+    messagesUnread: conversation.unread,
     reachability,
     registration: row.vehicle?.registration ?? '—',
     createdAt: row.created_at.toISOString(),

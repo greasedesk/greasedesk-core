@@ -16,9 +16,25 @@
  * makes every tab reachable (so the finished/killed card stays fully viewable) but read-only — the
  * page renders a cancelled banner and disables actions.
  */
-import { JobStatus, StageKey, QUOTE_DONE_STATUSES, INVOICE_DONE_STATUSES } from './jobcard-status';
+// TYPES SPLIT FROM VALUES. JobStatus and StageKey are types; imported as values they survive
+// type-stripping as a runtime import of something that does not exist, which broke every gate that
+// tried to import this module. Same lesson as InvoiceTotals earlier — `import type` is not a style
+// preference here, it is what makes the file loadable outside a bundler.
+import type { JobStatus, StageKey } from './jobcard-status';
+import { QUOTE_DONE_STATUSES, INVOICE_DONE_STATUSES } from './jobcard-status';
 
-export const TAB_KEYS = ['details', 'quote', 'intake', 'injob', 'completion', 'invoice'] as const;
+export const TAB_KEYS = ['details', 'messages', 'quote', 'intake', 'injob', 'completion', 'invoice'] as const;
+
+/**
+ * NOT PART OF THE GATED SPINE. Messages is a place to look, not a step to finish: always reachable,
+ * never completable, and it gates nothing after it. Quote's reachability skips straight over it and
+ * still depends on Details.
+ *
+ * Stated as a list rather than left implicit because the next person adding a tab will copy
+ * whichever one they read first, and every other entry in TAB_KEYS is a stage. The gate asserts
+ * this set never gains a `complete: true`.
+ */
+export const NON_STAGE_TABS: readonly TabKey[] = ['messages'];
 export type TabKey = typeof TAB_KEYS[number];
 
 export type TabState = { reachable: boolean; complete: boolean; skipped?: boolean };
@@ -55,6 +71,12 @@ export function computeTabs(s: CardGateState): Record<TabKey, TabState> {
 
   const tabs: Record<TabKey, TabState> = {
     details: { reachable: true, complete: detailsComplete },
+    // ALWAYS REACHABLE, NEVER COMPLETABLE. A customer can write in before anything else has
+    // happened, so locking it behind Details would hide the message that explains the job. And
+    // "complete" is meaningless for a conversation — it is never finished, only quiet.
+    messages: { reachable: true, complete: false },
+    // Quote still gates on DETAILS, not on the tab before it in the list. Reading the order as the
+    // dependency chain is the mistake this comment exists to stop.
     quote: { reachable: detailsComplete, complete: quoteComplete },
     intake: { reachable: quoteComplete, complete: intakeComplete, skipped: skippedOf('intake') },
     injob: { reachable: intakeComplete, complete: injobComplete, skipped: skippedOf('injob') },

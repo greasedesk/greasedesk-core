@@ -2810,9 +2810,16 @@ model MessageThread {
   // Direction of the MOST RECENT message. Derived in touchThread from the log, never authored.
   // 'in' here is what "unresponded" means: the customer spoke last and nobody has answered.
   last_message_direction String?
-  // INBOUND messages not yet read. Structurally 0 today: there is no inbound path anywhere in the
-  // product (no webhook, no parse route), so nothing can increment this. It is NOT a "no unread"
-  // claim dressed up — it is the honest count of a thing that cannot yet happen.
+  /**
+   * INBOUND messages not yet read. REAL — lib/inbound increments it on every resolved inbound
+   * message, markThreadRead clears it, and the admin sidebar polls the tenant total.
+   *
+   * This comment previously said the count was "structurally 0 today: there is no inbound path
+   * anywhere in the product… a thing that cannot yet happen". True when written; the inbound-email
+   * webhook shipped on 2026-07-31 and made it false the same day, and nobody came back. A comment
+   * asserting that something is IMPOSSIBLE has a shelf life, because it is a claim about the whole
+   * codebase made in one file — and unlike an assertion in a gate, nothing re-checks it.
+   */
   unread_count           Int       @default(0)
   // 'open' | 'resolved'. No assignment to individual staff in v1 — a thread belongs to the garage.
   state                  String    @default("open")

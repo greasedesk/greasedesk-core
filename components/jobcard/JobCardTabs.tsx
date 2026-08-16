@@ -8,7 +8,9 @@
 import React from 'react';
 import type { TabKey } from '@/lib/jobcard-tabs';
 
-export type TabView = { key: TabKey; label: string; reachable: boolean; complete: boolean; skipped?: boolean };
+export type TabView = { key: TabKey; label: string; reachable: boolean; complete: boolean; skipped?: boolean;
+  /** A count to surface on the tab itself — today, unread messages. Absent means nothing waiting. */
+  badge?: number };
 
 // Booking is NOT a strip item (ruling 2026-07-07): it's part of the Quote — the standalone Booked
 // chip is gone; the at-a-glance booked marker lives on the Quote tab beside the booking fields.
@@ -47,6 +49,14 @@ export default function JobCardTabs({ tabs, active, onSelect, lockedReason }: Pr
                 {t.skipped ? '»' : t.complete ? '✓' : locked ? '🔒' : i + 1}
               </span>
               <span className="whitespace-nowrap">{t.label}</span>
+              {/* THE COUNT, on the tab. Distinct from the step number on the left: that circle says
+                  where you are in the process, this says something is waiting for you. */}
+              {typeof t.badge === 'number' && t.badge > 0 && (
+                <span data-testid={`tab-badge-${t.key}`}
+                  className="ml-0.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full text-[11px] font-semibold bg-danger text-white">
+                  {t.badge}
+                </span>
+              )}
             </button>
           );
         })}

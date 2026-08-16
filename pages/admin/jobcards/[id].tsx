@@ -35,6 +35,7 @@ type PageProps = {
   // READ-ONLY message history for this card's (customer, vehicle) thread.
   conversation: import('@/components/messages/ConversationView').ConversationMessage[];
   threadId: string | null;
+  messagesUnread: number;
   reachability: import('@/components/messages/ConversationView').Reachability | null;
   registration: string;
   createdAt: string;
@@ -155,6 +156,7 @@ export default function JobCardDetailPage(props: PageProps) {
         owner={props.owner}
         conversation={props.conversation}
         threadId={props.threadId}
+        messagesUnread={props.messagesUnread}
         reachability={props.reachability}
         vehicle={props.vehicle}
         flags={props.flags}

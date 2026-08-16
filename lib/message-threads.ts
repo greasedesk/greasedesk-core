@@ -238,16 +238,17 @@ export async function listThreadMessages(db: Db, threadId: string): Promise<Thre
 }
 
 /** The conversation for a job card: its thread (if any) and every message on it, oldest first. */
-export async function conversationForJobCard(db: Db, jobCardId: string): Promise<{ threadId: string | null; messages: ThreadMessage[] }> {
+export async function conversationForJobCard(db: Db, jobCardId: string): Promise<{ threadId: string | null; messages: ThreadMessage[]; unread: number }> {
   const key = await threadKeyForJobCard(db, jobCardId);
-  if (!key) return { threadId: null, messages: [] };
+  if (!key) return { threadId: null, messages: [], unread: 0 };
   const t = await (db as any).messageThread.findUnique({
     where: { group_id_customer_id_vehicle_id: { group_id: key.groupId, customer_id: key.customerId, vehicle_id: key.vehicleId } },
-    select: { id: true },
+    select: { id: true, unread_count: true },
   });
   // No thread yet is an EMPTY CONVERSATION, not an error — a car nobody has messaged about is normal.
-  if (!t) return { threadId: null, messages: [] };
-  return { threadId: t.id, messages: await listThreadMessages(db, t.id) };
+  if (!t) return { threadId: null, messages: [], unread: 0 };
+  // THIS THREAD's unread, not the tenant total the sidebar shows. Already loaded — the row is here.
+  return { threadId: t.id, messages: await listThreadMessages(db, t.id), unread: (t as any).unread_count ?? 0 };
 }
 
 /**
