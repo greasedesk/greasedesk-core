@@ -19,6 +19,7 @@
 import type Stripe from 'stripe';
 import type { PrismaClient } from '@prisma/client';
 import { accruePayment, clawbackRefund, isCommissionError } from '@/lib/commission';
+import { listChargeRefunds, refundCounts } from '@/lib/stripe-refunds';
 import { resolveAttribution } from '@/lib/attribution';
 
 type Db = PrismaClient;
@@ -139,12 +140,21 @@ export async function clawbackFromChargeRefunded(db: Db, charge: Stripe.Charge):
   if (!groupId) return { status: 'skipped', reason: 'unknown Stripe customer' };
 
   const orig = { ref: invoiceId, collected_at: origCollectedAt, amount_pennies: origAmount, currency };
-  const refunds: any[] = c.refunds?.data ?? [];
+
+  // ── ASKED OF STRIPE, NOT READ OFF THE EVENT ────────────────────────────────────────────────
+  // This was `c.refunds?.data ?? []`, the identical assumption that made the card-refund path write
+  // nothing: `refunds` has not been included on a Charge by default since API 2022-11-15. Here the
+  // consequence was a rep keeping commission on subscription money we had given back — and unlike
+  // its twin this endpoint has been receiving charge.refunded all along, so it has simply never had
+  // a refund to be wrong about. NO accountId: a subscription charge is ours, not a garage's, and
+  // scoping this to a connected account would look in the wrong place and truthfully find nothing.
+  const refunds = (await listChargeRefunds(c.id, {})).filter(refundCounts);
+
   let written = 0, noop = 0;
   for (const rf of refunds) {
     const refundId: string | null = rf.id ?? null;
     const refundAmount: number = rf.amount ?? 0;
-    const refundedAt = unixToDate(rf.created) ?? new Date(origCollectedAt);
+    const refundedAt = rf.created ?? new Date(origCollectedAt);
     if (!refundId || refundAmount <= 0) continue;
     try {
       const r = await clawbackRefund(db as any, groupId, { ref: refundId, payment_ref: invoiceId, amount_pennies: refundAmount, refunded_at: refundedAt }, orig);

@@ -27,6 +27,7 @@ import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { getStripe } from '@/lib/stripe';
 import { settlePaymentByRef, closePaymentByRef, reconcileInvoice } from '@/lib/payments';
+import { listChargeRefunds, refundCounts, StripeReadError, type RefundLite } from '@/lib/stripe-refunds';
 import { invoiceTotals, balanceOwedPennies } from '@/lib/invoice';
 import { writeAudit } from '@/lib/audit';
 import { applyCardTransition } from '@/lib/jobcard-transition';
@@ -194,32 +195,45 @@ export async function enrichCardPayment(args: {
  * A garage that genuinely wants to re-bill voids and re-issues, which is an audited act.
  */
 export async function recordCardRefunds(args: {
-  charge: Stripe.Charge;
+  chargeId: string;
   accountId: string;
-}): Promise<{ recorded: number; feeRefundedPennies: number | null }> {
-  const list = args.charge.refunds?.data ?? [];
-  if (args.charge.refunds?.has_more) {
-    // Stripe pages this at 10. More than ten refunds on one garage invoice is not a real shape, but
-    // silently processing the first ten would be a quiet undercount, so it is said out loud.
-    console.warn('[fulfil] charge', args.charge.id, 'has more refunds than the event carried — reconcile manually');
-  }
+}): Promise<{ recorded: number; alreadyHad: number; feeRefundedPennies: number | null }> {
+  const stripe = getStripe();
+  if (!stripe) throw new StripeReadError(`cannot reconcile refunds for ${args.chargeId}: no Stripe client`);
+
+  // ── ASK STRIPE, DO NOT READ THE EVENT ──────────────────────────────────────────────────────
+  // Both the charge and the refunds are retrieved. The event body told us WHICH charge to look at
+  // and nothing more — that is all a notification is good for. `charge.refunds` was the field that
+  // silently returned nothing for every refund ever processed; see lib/stripe-refunds.
+  const charge = await stripe.charges.retrieve(args.chargeId, {}, { stripeAccount: args.accountId });
+  const refunds = (await listChargeRefunds(args.chargeId, { accountId: args.accountId })).filter(refundCounts);
 
   const pay = await prisma.payment.findFirst({
-    where: { OR: [{ charge_id: args.charge.id }, { payment_intent_id: typeof args.charge.payment_intent === 'string' ? args.charge.payment_intent : undefined }] },
+    where: { OR: [{ charge_id: args.chargeId }, { payment_intent_id: typeof charge.payment_intent === 'string' ? charge.payment_intent : undefined }] },
     select: { id: true, group_id: true, invoice_id: true, amount_pennies: true, application_fee_pennies: true, application_fee_id: true },
   });
-  if (!pay) return { recorded: 0, feeRefundedPennies: null };
+  // Not ours. A Terminal sale or a dashboard charge on the garage's own account — we have no row and
+  // must not invent one. Distinct from "we failed": recorded 0 with nothing attempted.
+  if (!pay) return { recorded: 0, alreadyHad: 0, feeRefundedPennies: null };
+
+  // Backfill the charge id the first time we see it, so the next lookup is direct.
+  if (!(await prisma.payment.count({ where: { id: pay.id, charge_id: args.chargeId } }))) {
+    await prisma.payment.updateMany({ where: { id: pay.id }, data: { charge_id: args.chargeId } });
+  }
 
   // ── THE MONEY FACT FIRST ──────────────────────────────────────────────────────────────────
-  let recorded = 0;
-  for (const r of list) {
+  // Keyed on the Stripe refund id, so `charge.refunded` and `refund.created` describing the SAME
+  // refund write it once. Both triggers reconcile the whole charge rather than carrying a refund
+  // between them — that is what makes the collision a no-op instead of a race.
+  let recorded = 0, alreadyHad = 0;
+  for (const r of refunds) {
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await (tx as any).refund.create({
           data: {
             group_id: pay.group_id, payment_id: pay.id,
-            amount_pennies: r.amount, currency: (r.currency ?? 'gbp').toUpperCase(),
-            reason: r.reason ?? null, refund_id: r.id, source_ref: r.id,
+            amount_pennies: r.amount, currency: r.currency,
+            reason: r.reason, refund_id: r.id, source_ref: r.id,
           },
         });
         await reconcileInvoice(tx, pay.invoice_id);
@@ -227,18 +241,13 @@ export async function recordCardRefunds(args: {
       recorded++;
     } catch (e: any) {
       if (e?.code !== 'P2002') throw e; // already recorded — a redelivery, not a problem
+      alreadyHad++;
     }
   }
 
   // ── THEN OUR FEE, SEPARATELY, BECAUSE IT CAN FAIL ─────────────────────────────────────────
-  const feeRefunded = await refundApplicationFee(pay, args.charge);
-  if (feeRefunded != null) {
-    await prisma.refund.updateMany({
-      where: { payment_id: pay.id, application_fee_refunded_pennies: null },
-      data: { application_fee_refunded_pennies: feeRefunded },
-    });
-  }
-  return { recorded, feeRefundedPennies: feeRefunded };
+  const feeRefunded = await settleApplicationFeeRefund(pay, charge, refunds);
+  return { recorded, alreadyHad, feeRefundedPennies: feeRefunded };
 }
 
 /**
@@ -249,25 +258,72 @@ export async function recordCardRefunds(args: {
  * Returns NULL when it could not be done, which stays on the Refund row as unknown rather than as
  * zero. Zero would be a claim that we deliberately kept it.
  */
-async function refundApplicationFee(
-  pay: { application_fee_id: string | null; application_fee_pennies: number | null; amount_pennies: number },
+async function settleApplicationFeeRefund(
+  pay: { id: string; application_fee_id: string | null; application_fee_pennies: number | null; amount_pennies: number },
   charge: Stripe.Charge,
+  refunds: RefundLite[],
 ): Promise<number | null> {
   const stripe = getStripe();
-  if (!stripe || !pay.application_fee_id || !pay.application_fee_pennies) return null;
+  if (!stripe || !pay.application_fee_pennies) return null;
+
+  // ── THE FEE ID COMES FROM THE CHARGE, NOT FROM OUR COLUMN ────────────────────────────────
+  // It used to require Payment.application_fee_id, which is written by enrichCardPayment AFTER
+  // fulfilment. So a refund on a payment whose enrichment had not run returned early and silently
+  // kept our fee while the garage returned the customer's money in full. On 16 Aug 2026 that path
+  // only worked because the column had been set by hand an hour earlier.
+  // `charge.application_fee` is an ID STRING in the body and on retrieval — one of the fields that
+  // IS dependable. The stored column is the fallback, not the source.
+  const feeId = (typeof charge.application_fee === 'string' ? charge.application_fee : charge.application_fee?.id)
+    ?? pay.application_fee_id;
+  if (!feeId) {
+    console.error('[fulfil] no application fee id for charge', charge.id, '— our fee cannot be returned');
+    return null;
+  }
+
   // Proportional to the share of the charge returned. A full refund returns the whole fee; floor
   // again, so rounding never favours us on the way back either.
-  const share = Math.min(charge.amount_refunded / (pay.amount_pennies || charge.amount || 1), 1);
-  const amount = Math.floor(pay.application_fee_pennies * share);
-  if (amount <= 0) return 0;
+  const share = Math.min((charge.amount_refunded ?? 0) / (pay.amount_pennies || charge.amount || 1), 1);
+  const target = Math.floor(pay.application_fee_pennies * share);
+
+  // ── INCREMENTAL, SO PARTIALS ADD UP AND REDELIVERIES DO NOT ──────────────────────────────
+  // applicationFees.createRefund is not idempotent on its own: calling it twice returns the fee
+  // twice. The guard is what we have ALREADY recorded returning — so two partial refunds each move
+  // the fee by their own share, and a redelivered event moves it by nothing.
+  const already = await prisma.refund.aggregate({
+    where: { payment_id: pay.id }, _sum: { application_fee_refunded_pennies: true },
+  });
+  const returnedSoFar = already._sum.application_fee_refunded_pennies ?? 0;
+  const delta = target - returnedSoFar;
+  if (delta <= 0) return returnedSoFar;
+
+  let movedNow = 0;
   try {
-    const fr = await stripe.applicationFees.createRefund(pay.application_fee_id, { amount });
-    return fr.amount;
+    const fr = await stripe.applicationFees.createRefund(
+      feeId,
+      { amount: delta },
+      // Belt to the arithmetic's braces: the same charge at the same refunded total never moves
+      // the fee twice even if two events arrive at once.
+      { idempotencyKey: `fee-refund:${charge.id}:${charge.amount_refunded ?? 0}` },
+    );
+    movedNow = fr.amount ?? 0;
   } catch (e: any) {
     // Loud. This is the garage being out of pocket by our fee, and nobody would otherwise see it.
     console.error('[fulfil] APPLICATION FEE NOT RETURNED for', charge.id, '—', e?.message);
     return null;
   }
+
+  // ── STAMPED ON A ROW THAT EXISTS ──────────────────────────────────────────────────────────
+  // The old code ran updateMany over rows matching `application_fee_refunded_pennies: null` — which
+  // wrote nothing at all when no Refund row had been created, i.e. exactly when the list was empty.
+  // Attribute what moved to the NEWEST refund, which is the one that caused it.
+  const newest = refunds.slice().sort((a, b) => b.created.getTime() - a.created.getTime())[0];
+  if (newest) {
+    await prisma.refund.updateMany({
+      where: { payment_id: pay.id, refund_id: newest.id },
+      data: { application_fee_refunded_pennies: movedNow },
+    });
+  }
+  return returnedSoFar + movedNow;
 }
 
 /** A card attempt that ended without money. Terminal, and it frees the invoice of a pending row. */

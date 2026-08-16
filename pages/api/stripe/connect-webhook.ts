@@ -21,6 +21,7 @@ import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
 import { applyAccount, markDisconnected, groupForAccount } from '@/lib/stripe-connect';
 import { fulfilCardPayment, enrichCardPayment, closeCardPayment, recordCardRefunds } from '@/lib/card-payment-fulfil';
+import { requireConnectAccount } from '@/lib/connect-webhook-contract';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
 
 export const config = { api: { bodyParser: false } };
@@ -100,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // ── AFTER THE MONEY IS COMMITTED, AND ONLY THEN ──────────────────────────────────────
         // Both of these can fail without costing us the payment, which is why they are out here
         // rather than inside the transaction (financial-write-first).
-        if (event.account) await enrichCardPayment({ paymentIntent: pi, accountId: event.account });
+        await enrichCardPayment({ paymentIntent: pi, accountId: requireConnectAccount(event) });
         if (r.fullyPaid) {
           // THE receipt, through the one send path. offersPayLink refuses a `paid` invoice, so this
           // carries no "pay now" button — a receipt that asks for money again is how a garage gets
@@ -124,11 +125,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Handled because the garage cannot do the whole job themselves: Stripe permits only the
       // application that created the charge to return the application fee, so without this their
       // refund leaves our cut taken on money they have handed back.
-      case 'charge.refunded': {
-        const charge = event.data.object as Stripe.Charge;
-        const r = await recordCardRefunds({ charge, accountId: event.account ?? '' });
-        console.info('[connect-webhook] charge.refunded', charge.id,
-          `${r.recorded} refund row(s)`,
+      // ── TWO TRIGGERS, ONE PATH ───────────────────────────────────────────────────────────
+      // charge.refunded fires on the charge; refund.created fires on each refund, including the
+      // partials that arrive one at a time. Both resolve a CHARGE ID and hand it to the same
+      // reconcile, which asks Stripe for the full refund list and writes what is missing. Because
+      // neither carries a refund between them, the two describing the SAME refund is a no-op rather
+      // than a race — the second finds the row already there.
+      //
+      // A CHARGEBACK IS NOT A REFUND and is deliberately absent: charge.dispute.created is distinct
+      // money movement (funds withdrawn plus a dispute fee, reversible if won) and routing it here
+      // because the shapes rhyme would be a wrong path wearing a right one's clothes. A deliberate
+      // gap, pending its own design.
+      case 'charge.refunded':
+      case 'refund.created': {
+        const accountId = requireConnectAccount(event);
+        const chargeId = event.type === 'charge.refunded'
+          ? (event.data.object as Stripe.Charge).id
+          : (() => {
+              const rf = event.data.object as Stripe.Refund;
+              return typeof rf.charge === 'string' ? rf.charge : rf.charge?.id ?? null;
+            })();
+        if (!chargeId) { console.warn('[connect-webhook]', event.type, 'carries no charge — nothing to reconcile'); break; }
+        const r = await recordCardRefunds({ chargeId, accountId });
+        console.info('[connect-webhook]', event.type, chargeId,
+          `${r.recorded} refund row(s) written, ${r.alreadyHad} already had`,
           r.feeRefundedPennies == null ? 'application fee NOT returned' : `application fee returned: ${r.feeRefundedPennies}p`);
         break;
       }

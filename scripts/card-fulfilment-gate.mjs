@@ -17,8 +17,8 @@ import { Prisma } from '@prisma/client';
 import { freezeQuoteVersion } from '../lib/quote-version.ts';
 import { acceptQuote } from '../lib/quote-acceptance.ts';
 import { issueInvoiceForCard } from '../lib/invoice-issue.ts';
-import { recordPayment } from '../lib/payments.ts';
-import { fulfilCardPayment, closeCardPayment, recordCardRefunds, CARD_METHOD_LABEL } from '../lib/card-payment-fulfil.ts';
+import { recordPayment, reconcileInvoice } from '../lib/payments.ts';
+import { fulfilCardPayment, closeCardPayment, CARD_METHOD_LABEL } from '../lib/card-payment-fulfil.ts';
 import { refusePayment } from '../lib/invoice-payment-intent.ts';
 import { applyCardTransition } from '../lib/jobcard-transition.ts';
 import { findTransition } from '../lib/jobcard-status.ts';
@@ -167,17 +167,29 @@ try {
     'settleProcessing would have credited money that never arrived');
   // ── 6b. MONEY GIVEN BACK ───────────────────────────────────────────────────────────────────
   console.log('\n— a refund —');
-  // A synthetic Stripe charge. recordCardRefunds reads only these fields, and building one here
-  // beats needing a live charge to prove the ledger behaviour.
+  // ── THIS GATE USED TO ENCODE THE BUG ───────────────────────────────────────────────────────
+  // It built a synthetic charge carrying `refunds: { data: [...] }` and fed it to recordCardRefunds,
+  // which read that list and wrote a row. Green, for months — while production wrote NOTHING, because
+  // Stripe has not included `refunds` on a Charge since API 2022-11-15 and the real event body has no
+  // such list. The gate proved the code could read a shape Stripe never sends.
+  // recordCardRefunds now ASKS Stripe (lib/stripe-refunds) and cannot be fed a body, so the ledger
+  // consequences are asserted here against rows written exactly as it writes them, and the
+  // reconciliation itself — full, partial, two partials, the two-trigger collision — belongs to
+  // scripts/refund-reconcile-gate.
   const chargeId = `ch_${STAMP}`;
   await prisma.payment.updateMany({ where: { source_ref: piFull }, data: { charge_id: chargeId } });
   const refundId = `re_${STAMP}`;
-  const synthetic = {
-    id: chargeId, amount: full.total, amount_refunded: full.total, currency: 'gbp',
-    payment_intent: piFull,
-    refunds: { data: [{ id: refundId, amount: full.total, currency: 'gbp', reason: 'requested_by_customer' }], has_more: false },
+  const payRow = await prisma.payment.findUnique({ where: { source_ref: piFull }, select: { id: true } });
+  const writeRefund = async (id, amount) => {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.refund.create({ data: { group_id: ZZ, payment_id: payRow.id, amount_pennies: amount, currency: 'GBP', reason: 'requested_by_customer', refund_id: id, source_ref: id } });
+        await reconcileInvoice(tx, full.id);
+      });
+      return 1;
+    } catch (e) { if (e?.code === 'P2002') return 0; throw e; }
   };
-  const ref1 = await recordCardRefunds({ charge: synthetic, accountId: 'acct_gate' });
+  const ref1 = { recorded: await writeRefund(refundId, full.total) };
   check('the refund is recorded as its own row', ref1.recorded === 1,
     'its own row, never a negative payment — "arrived" and "returned" must not sum into one figure');
   check('the ledger nets it off', (await prisma.invoice.findUnique({ where: { id: full.id }, select: { amount_paid_pennies: true } })).amount_paid_pennies === 0,
@@ -197,7 +209,7 @@ try {
     return balanceOnly(full.total) === null && refusePayment(refundedDoc, full.total).code === 'nothing_owing';
   })());
 
-  check('a redelivered refund writes no second row', (await recordCardRefunds({ charge: synthetic, accountId: 'acct_gate' })).recorded === 0);
+  check('a redelivered refund writes no second row', (await writeRefund(refundId, full.total)) === 0);
   check('the application fee is honestly unknown when it could not be returned',
     (await prisma.refund.findFirst({ where: { refund_id: refundId }, select: { application_fee_refunded_pennies: true } })).application_fee_refunded_pennies === null,
     'NULL, not 0 — zero would claim we deliberately kept it');
