@@ -3,6 +3,7 @@
  * The twelve-month comparison: right numbers, and four states that cannot be confused.
  */
 import { prisma } from '../lib/db.ts';
+import { withRetry } from './_gate-retry.mjs';
 import { computeTiles } from '../lib/dashboard-tiles.ts';
 import { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, monthsOfRange, PERIOD_PRESETS, MONTH_PRESETS } from '../lib/dashboard-periods.ts';
 import { getGroupUtilisation } from '../lib/capacity.ts';
@@ -28,7 +29,31 @@ check('rollingTwelveMonths yields twelve keyed months, oldest first', (() => {
   return ms.length === 12 && ms[0].from < ms[11].from && ms[11].to.getTime() === r.to.getTime();
 })());
 
+// ── RETRIED AS A WHOLE, BECAUSE THIS GATE IS READ-ONLY ──────────────────────────────────────────
+// Neon drops connections and an abort mid-run reports a red that means nothing. The database half
+// of this gate WRITES NOTHING — it computes tiles against the frozen reference demo tenant — so
+// re-running it from the top is safe, and a whole-body retry covers the ~40 queries inside
+// computeTiles that import prisma themselves and cannot be reached by wrapping a local binding.
+//
+// Gates that DO write their own fixtures must not use this: they refuse to start on leftovers, so
+// a second attempt after a half-completed first one aborts on its own litter. Those use
+// retryingPrisma from the same file, which retries the single query that died.
+//
+// RECOVERY IS REPORTED. `dbAttempts` is printed in the summary, so a run that limped to green says
+// so — a gate that recovers every time is a flaky gate hiding behind eventual green.
+let dbAttempts = 1;
+const beforeDb = out.length;
 try {
+  const { attempts } = await withRetry(async () => {
+    out.length = beforeDb;   // a repeat must not double the checks it already recorded
+    return runDbChecks();
+  }, { attempts: 4, onRetry: (a, e) => console.log(`\n… transient database fault on attempt ${a} (${e?.code ?? '—'}) — retrying`) });
+  dbAttempts = attempts;
+} catch (e) {
+  check('run completed', false, String(e?.message ?? e).slice(0, 240));
+}
+
+async function runDbChecks() {
   const u = await prisma.user.findUnique({ where: { email: 'demo.owner.reference15@example.com' }, select: { group_id: true } });
   const g = u.group_id;
   const site = await prisma.site.findFirst({ where: { group_id: g }, select: { id: true } });
@@ -159,11 +184,12 @@ try {
   check('a single month still gets the burn-up, with NO monthly split',
     single.capacity.monthly === null && Array.isArray(single.capacity.series),
     `${single.capacity.series.length} daily points`);
-} catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 240));
-  console.error(e);
-} finally {
-  console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
-  await prisma.$disconnect();
-  process.exit(out.includes('F') ? 1 : 0);
 }
+
+if (dbAttempts > 1) {
+  console.log(`\n⚠ RECOVERED after ${dbAttempts} attempts — green, but the run was NOT clean.`);
+  console.log('  Recovering every time means the gate is flaky, not that the code is fine.');
+}
+console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}${dbAttempts > 1 ? `  (db attempts: ${dbAttempts})` : ''}`);
+await prisma.$disconnect();
+process.exit(out.includes('F') ? 1 : 0);
