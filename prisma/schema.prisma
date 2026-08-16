@@ -1622,7 +1622,12 @@ model JobCard {
 model JobCardPhoto {
   id               String   @id @default(uuid())
   job_card_id      String
-  group_id         String? // TENANT partition (also the R2 key prefix) — garages never see each other's photos
+  /// TENANT partition, and the R2 key prefix — garages never see each other's photos.
+  /// NOT NULL, and this one is a DELETION GUARANTEE, not tidiness. The purge deletes R2 objects by
+  /// the prefix `{group_id}/`; a photo written without a tenant lands at the bucket root and would
+  /// SURVIVE a purge that reported success. lib/r2::photoKey refuses to build such a key; this
+  /// stops the row existing at all. 0 of 63 rows were ever null — the absence was never meaningful.
+  group_id         String
   stage            String? // intake | injob | completion
   slot             String? // angle key (front/rear/…) | 'freeform' | 'damage'
   label            String? // free-text (damage note, e.g. "Scratch — nearside door")

@@ -43,11 +43,58 @@ function client(): S3Client | null {
 
 const bucket = () => process.env.R2_BUCKET_NAME as string;
 
-/** Tenant-partitioned object key. Extension follows the (server-validated) content type: jpg/png/mp4/webm/mov. */
-export function photoKey(groupId: string, jobCardId: string, stage: string, slot: string, photoId: string, ext = 'jpg'): string {
-  const safe = (s: string) => (s || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return `${safe(groupId)}/${safe(jobCardId)}/${safe(stage)}/${safe(slot)}/${photoId}.${safe(ext)}`;
+/** A key that could not be built safely. Never a runtime condition — always a caller bug. */
+export class R2KeyError extends Error {
+  code = 'r2_key_unsafe' as const;
+  constructor(part: string) {
+    super(
+      `photoKey: '${part}' is empty or sanitises to nothing, so the object would land OUTSIDE its ` +
+      `tenant partition. The purge deletes by the prefix \`\${groupId}/\`, so such an object would ` +
+      `survive a tenant purge that reported success. Refusing to build the key.`,
+    );
+    this.name = 'R2KeyError';
+  }
 }
+
+/**
+ * Tenant-partitioned object key. Extension follows the (server-validated) content type.
+ *
+ * ── IT REFUSES; IT DOES NOT DEFAULT ─────────────────────────────────────────────────────────────
+ * `safe()` used to be `(s || '').replace(…)`, so an absent groupId yielded an EMPTY FIRST SEGMENT
+ * and the object landed at the bucket root — outside every tenant partition. `deleteByPrefix` runs
+ * the SuperAdmin purge as `${groupId}/`, so nothing at the root is in scope: **the purge would have
+ * reported success while leaving the data behind.** If a garage exercised an erasure request we
+ * would have told them their data was destroyed and it would not have been.
+ *
+ * A function that silently produces a rootward path when handed nothing is the same shape as
+ * `?? null` — it turns a caller's omission into a plausible wrong answer. So every segment must
+ * survive sanitisation, and an empty one throws.
+ */
+export function photoKey(groupId: string, jobCardId: string, stage: string, slot: string, photoId: string, ext = 'jpg'): string {
+  const safe = (s: string, part: string) => {
+    const cleaned = (s ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (!cleaned) throw new R2KeyError(part);
+    return cleaned;
+  };
+  /**
+   * THE TENANT SEGMENT MUST SURVIVE SANITISATION UNCHANGED — a stricter rule than "not empty",
+   * and the gate found the gap: `'   '` sanitises to `'___'`, which is non-empty and still not the
+   * tenant's partition. The purge sweeps `deleteByPrefix(tenantPrefix(groupId))` using the RAW
+   * value, so ANY substitution in this segment writes the object under a prefix the purge does not
+   * sweep. Empty was never the property that mattered; matching was.
+   */
+  if (safe(groupId, 'groupId') !== String(groupId ?? '')) throw new R2KeyError('groupId');
+  return [
+    safe(groupId, 'groupId'),
+    safe(jobCardId, 'jobCardId'),
+    safe(stage, 'stage'),
+    safe(slot, 'slot'),
+  ].join('/') + `/${safe(photoId, 'photoId')}.${safe(ext, 'ext')}`;
+}
+
+/** The purge's matching rule, exported so a gate can assert it without running a purge. */
+export const tenantPrefix = (groupId: string) => `${groupId}/`;
+export const isInsideTenantPartition = (key: string, groupId: string) => key.startsWith(tenantPrefix(groupId));
 
 /** Presigned PUT for a browser upload (5 min). Returns null if R2 isn't configured. */
 export async function presignPut(key: string, contentType = 'image/jpeg'): Promise<string | null> {

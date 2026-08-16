@@ -62,7 +62,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getStripe } from '@/lib/stripe';
-import { deleteByPrefix } from '@/lib/r2';
+import { deleteByPrefix, tenantPrefix } from '@/lib/r2';
 import { tenantRateLimitKeys } from '@/lib/auth-rate-limit';
 
 /**
@@ -243,7 +243,9 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
   }
 
   // 2. R2 — every object under the tenant prefix.
-  const r2 = await deleteByPrefix(`${groupId}/`);
+  // The SAME rule photoKey builds against — shared, not restated. If these two ever disagreed,
+  // objects would be written outside the range the purge sweeps and survive it silently.
+  const r2 = await deleteByPrefix(tenantPrefix(groupId));
 
   // 3. DB — ordered, past the NoAction FKs, in ONE transaction.
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
