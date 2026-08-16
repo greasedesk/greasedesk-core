@@ -2776,6 +2776,12 @@ model NotificationLog {
   @@index([provider_message_id])
   @@index([subject_type, subject_id])
   @@index([thread_id, created_at])
+  // DECLARED SO IT CAN BE DELIBERATELY REMOVED. This index has existed in the database since
+  // 20260731220000_inbound_email created it in hand-written SQL, but the schema was never told —
+  // so `migrate diff` proposed DROPPING it as a side effect of any unrelated change. An index
+  // disappearing because a diff swept it up is how you find out about it from a slow query six
+  // months later. Declared here first; the removal is the next commit, on evidence.
+  @@index([direction, thread_id])
 }
 
 // ── MESSAGE THREADS ───────────────────────────────────────────────────────────────────────────────
