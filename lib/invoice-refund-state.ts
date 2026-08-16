@@ -62,3 +62,49 @@ export function refundState(args: {
 
 /** Does this document need to say anything about a refund at all? */
 export const hasRefund = (s: RefundState): boolean => s.kind !== 'none';
+
+/**
+ * THE SENTENCES. One set, rendered verbatim by the customer's link, the garage's invoice page, the
+ * job card and the invoice list.
+ *
+ * ── WHY THE COPY IS SHARED, NOT JUST THE STATE ──────────────────────────────────────────────────
+ * When a customer rings up quoting what their link says, the person answering should be reading the
+ * SAME TEXT, not a paraphrase of it. Sharing `RefundState` alone would still let four surfaces word
+ * it four ways — "refunded in full", "£50 returned", "money back" — and the phone call then turns
+ * into establishing whether the two of you are looking at the same thing.
+ *
+ * ── AUDIENCE-NEUTRAL ON PURPOSE ─────────────────────────────────────────────────────────────────
+ * The customer view said "your statement", which is wrong on the garage's screen — it is not their
+ * statement. Rather than fork the wording (and lose the guarantee), the sentence says "a bank
+ * statement", which is true for whoever is reading it. Slightly cooler prose in exchange for two
+ * people being able to read the same line to each other.
+ */
+export function refundLines(
+  s: RefundState,
+  fmt: { money: (pennies: number) => string; locale: string },
+): { headline: string; detail: string } | null {
+  if (s.kind === 'none') return null;
+  // THE DATE IS FORMATTED HERE, not by the caller. The customer page formatted without a timeZone
+  // and the admin page with UTC — a refund at half past eleven at night would then have rendered as
+  // two different days on the two screens, which is precisely the phone call this is meant to
+  // prevent. One formatter, so "the same words" is structural rather than a convention.
+  const when = s.at
+    ? ` on ${s.at.toLocaleDateString(fmt.locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`
+    : '';
+
+  if (s.kind === 'full') {
+    return {
+      headline: `Refunded${when} — ${fmt.money(s.refundedPennies)} has been returned.`,
+      detail: 'Refunds can take a few working days to appear on a bank statement. There’s nothing to pay.',
+    };
+  }
+  // PARTIAL: the arithmetic is stated and nothing is asked for. Whether the remainder is chased is
+  // the garage's decision, not something a document should imply.
+  const stillHeld = Math.max(0, s.receivedPennies - s.refundedPennies);
+  return {
+    headline: `${fmt.money(s.refundedPennies)} refunded${when}.`,
+    detail: `${fmt.money(s.receivedPennies)} was paid; ${fmt.money(s.refundedPennies)} has been returned, `
+      + `leaving ${fmt.money(stillHeld)} against this invoice. `
+      + 'Refunds can take a few working days to appear on a bank statement.',
+  };
+}

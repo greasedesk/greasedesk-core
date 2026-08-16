@@ -13,6 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
+import { refundState } from '@/lib/invoice-refund-state';
 import { invoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { isListStatusKey, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
@@ -66,6 +67,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       voided_at: true, void_reason: true, void_category: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
+      // The ledger, for the refund chip. Same query, more columns — the list already pulls lines
+      // per row, so this adds no round-trip. refundState is the SAME function the invoice page and
+      // the customer's link call; only the source of the rows differs.
+      payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
       job_card: { select: { vehicle_id: true, customer: { select: { email: true } } } },
       site: { select: { currency_code: true, locale: true } },
     },
@@ -94,6 +99,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       paidAt: r.paid_at,
       receiptSent: !!r.receipt_sent_at,
       manualPending: r.status === 'paid_pending' && !r.confirm_due_at,
+      // 'none' | 'partial' | 'full'. The chip reads this, never the status — a refunded invoice is
+      // still `paid` by design, and it must not wear the paid face.
+      refundKind: refundState({
+        receivedPennies: (r.payments ?? []).filter((p: any) => p.status === 'succeeded').reduce((a: number, p: any) => a + (p.amount_pennies ?? 0), 0),
+        refunds: (r.payments ?? []).flatMap((p: any) => p.refunds ?? []),
+      }).kind,
       method: r.payment_method_snapshot ?? null,
       grossPennies,
       currency: r.site?.currency_code ?? 'GBP',

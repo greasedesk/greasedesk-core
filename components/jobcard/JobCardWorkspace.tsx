@@ -29,6 +29,7 @@ import { computeFootprint, Break } from '@/lib/occupancy';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 import type { PriceUnconfirmed } from '@/lib/quotes-list';
 import { formatMoney } from '@/lib/format-money';
+import { refundLines } from '@/lib/invoice-refund-state';
 
 type Resource = { id: string; name: string };
 export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
@@ -99,7 +100,7 @@ type Props = {
   siteId: string;
   stages: Record<StageKey, boolean>;
   skipped: { intake: boolean; injob: boolean; complete: boolean };
-  invoice: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean } | null;
+  invoice: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean; refund?: { kind: 'partial' | 'full'; refundedPennies: number; receivedPennies: number; at: string | null } | null } | null;
   events: AuditEvent[];
 };
 
@@ -135,7 +136,7 @@ export default function JobCardWorkspace(p: Props) {
     stages?: Record<StageKey, boolean>;
     skipped?: { intake: boolean; injob: boolean; complete: boolean };
     isComeback?: boolean;
-    invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean } | null;
+    invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean; refund?: { kind: 'partial' | 'full'; refundedPennies: number; receivedPennies: number; at: string | null } | null } | null;
     events?: AuditEvent[];
     booking?: CardBooking;
     tabsState?: Record<TabKey, TabState>;
@@ -541,7 +542,27 @@ export default function JobCardWorkspace(p: Props) {
             )}
           </div>
         )}
-        {eff.invoice.status === 'paid' && (
+        {/* REFUNDED BEATS PAID on the face of it — driven by refund.kind, never by status, which
+            stays `paid` deliberately. The sentences are the SAME ONES the customer's link shows
+            (lib/invoice-refund-state::refundLines), verbatim rather than paraphrased, so whoever
+            answers the phone is reading the caller's screen back to them. */}
+        {eff.invoice.refund ? (
+          <div className="rounded-lg p-3 text-sm bg-surface-muted border border-line" data-testid="card-refund-state">
+            <span className={`inline-block text-xs font-semibold rounded-full px-2.5 py-1 mb-1 ${eff.invoice.refund.kind === 'full' ? 'bg-surface text-ink border border-line' : 'bg-warn-soft text-warn'}`}>
+              {eff.invoice.refund.kind === 'full' ? 'Refunded' : 'Part refunded'}
+            </span>
+            {(() => {
+              const l = refundLines(
+                { kind: eff.invoice.refund.kind, refundedPennies: eff.invoice.refund.refundedPennies, receivedPennies: eff.invoice.refund.receivedPennies, at: eff.invoice.refund.at ? new Date(eff.invoice.refund.at) : null } as any,
+                { money: (n: number) => formatMoney(n, { currency: p.currency, locale: p.locale }), locale: p.locale },
+              );
+              return l && (<>
+                <p className="font-semibold text-ink" data-testid="refund-headline">{l.headline}</p>
+                <p className="text-muted mt-0.5" data-testid="refund-detail">{l.detail}</p>
+              </>);
+            })()}
+          </div>
+        ) : eff.invoice.status === 'paid' && (
           <span className="self-start text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('invoiceTab.paidChip')}</span>
         )}
         {p.canManage && !cancelled && (

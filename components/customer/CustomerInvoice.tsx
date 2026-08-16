@@ -31,6 +31,7 @@ import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import DocumentLines from '@/components/DocumentLines';
 import { formatMoney } from '@/lib/format-money';
+import { refundLines } from '@/lib/invoice-refund-state';
 import { amountReceivedPennies, balanceOwedPennies } from '@/lib/invoice';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 
@@ -41,7 +42,7 @@ export type SerializedInvoiceDoc = Omit<InvoiceDoc, 'issuedAt' | 'paidAt' | 'voi
   voidedAt: string | null;
   datePaid: string | null;
   /** RefundState with its Date flattened — Next cannot serialise one across the wire. */
-  refund: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; at: string | null };
+  refund: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; receivedPennies?: number; at: string | null };
 };
 
 // Stripe's SDK touches `window`; it must never run during SSR.
@@ -203,6 +204,7 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
                 totalPennies={totalPennies}
                 datePaid={d.datePaid ?? d.paidAt}
                 refund={d.refund}
+                locale={d.locale}
                 money={money}
                 date={date}
               />
@@ -245,9 +247,10 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
  * link is for. A NULL cache now reads as zero received; see lib/payments::amountReceivedPennies for
  * why that is safe and what holds it up.
  */
-function PaymentState({ status, paid, balance, totalPennies, datePaid, refund, money, date }: {
+function PaymentState({ status, paid, balance, totalPennies, datePaid, refund, locale, money, date }: {
   status: string; paid: number; balance: number; totalPennies: number; datePaid: string | null;
-  refund?: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; at: string | null };
+  refund?: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; receivedPennies?: number; at: string | null };
+  locale: string;
   money: (p: number) => string; date: (iso: string) => string;
 }) {
   // ── MONEY THAT CAME AND WENT, BEFORE ANYTHING ELSE ─────────────────────────────────────────
@@ -260,32 +263,21 @@ function PaymentState({ status, paid, balance, totalPennies, datePaid, refund, m
   // NOT a return to "amount due". A refunded invoice is not an unpaid one — the money came and
   // went, and offering to take it again would be asking somebody who has been made whole to pay
   // a second time.
-  if (refund && refund.kind === 'full') {
+  const rLines = refund && refund.kind !== 'none'
+    // The SHARED sentences (lib/invoice-refund-state::refundLines) — the same text the garage sees
+    // on their invoice page, the job card and the list. Not a paraphrase: a customer ringing up
+    // should be able to read their screen aloud and have it match the one at the counter.
+    ? refundLines(
+        { kind: refund.kind, refundedPennies: refund.refundedPennies, receivedPennies: refund.receivedPennies ?? 0, at: refund.at ? new Date(refund.at) : null } as any,
+        { money, locale },
+      )
+    : null;
+
+  if (rLines) {
     return (
-      <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-refunded">
-        <p className="text-sm font-semibold text-ink">
-          Refunded{refund.at ? ` on ${date(refund.at)}` : ''} — {money(refund.refundedPennies)} has been returned.
-        </p>
-        <p className="text-sm text-muted mt-1">
-          It can take a few working days to appear on your statement, depending on your bank.
-          There’s nothing to pay.
-        </p>
-      </div>
-    );
-  }
-  if (refund && refund.kind === 'partial') {
-    return (
-      <div className="mt-6 pt-5 border-t border-line" data-testid="invoice-part-refunded">
-        <p className="text-sm font-semibold text-ink">
-          {money(refund.refundedPennies)} refunded{refund.at ? ` on ${date(refund.at)}` : ''}.
-        </p>
-        <p className="text-sm text-muted mt-1">
-          {/* The arithmetic is stated and nothing is asked for. Whether the remainder is chased is
-              the garage's decision, not something a document should imply. */}
-          You paid {money(paid + refund.refundedPennies)}; {money(refund.refundedPennies)} has been
-          returned, leaving {money(paid)} against this invoice. It can take a few working days to
-          appear on your statement.
-        </p>
+      <div className="mt-6 pt-5 border-t border-line" data-testid={refund!.kind === 'full' ? 'invoice-refunded' : 'invoice-part-refunded'}>
+        <p className="text-sm font-semibold text-ink" data-testid="refund-headline">{rLines.headline}</p>
+        <p className="text-sm text-muted mt-1" data-testid="refund-detail">{rLines.detail}</p>
       </div>
     );
   }

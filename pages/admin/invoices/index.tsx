@@ -27,7 +27,7 @@ import { formatMoney } from '@/lib/format-money';
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
   status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty' | 'historical';
-  issuedAt: string; receiptSent: boolean; manualPending?: boolean; method?: string | null; grossPennies: number; currency: string; locale: string;
+  issuedAt: string; receiptSent: boolean; manualPending?: boolean; refundKind?: 'none' | 'partial' | 'full'; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
   voidedAt?: string | null; voidReason?: string | null;
 };
@@ -62,6 +62,10 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   if (row.status === 'void') return <span className={`${base} bg-danger-soft text-danger`} data-testid="chip-void">{t('chip.void')}</span>;
   // A RECORD, NOT A DOCUMENT. Muted and dashed — visibly not one of the live series.
   if (row.series === 'historical') return <span className={`${base} bg-surface-muted text-muted border border-line border-dashed`} data-testid="chip-historical">{t('chip.historical')}</span>;
+  // REFUNDED BEATS PAID. Checked before status, because status stays `paid` deliberately and the
+  // list is the surface a garage scans — "why does this say paid?" gets asked here first.
+  if (row.refundKind === 'full') return <span className={`${base} bg-surface-muted text-ink border border-line`} data-testid="chip-refunded">Refunded</span>;
+  if (row.refundKind === 'partial') return <span className={`${base} bg-warn-soft text-warn`} data-testid="chip-part-refunded">Part refunded</span>;
   if (row.status === 'paid') return <span className={`${base} bg-ok-soft text-ok`}>{t('chip.paid')}</span>;
   if (row.status === 'paid_pending') return <span className={`${base} bg-warn-soft text-warn`}>{row.manualPending ? t('chip.pendingManual') : t('chip.pending')}</span>;
   if (row.status === 'issued') return <span className={`${base} bg-surface-muted text-ink border border-line`}>{t('chip.unpaid')}</span>;

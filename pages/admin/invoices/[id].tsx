@@ -30,6 +30,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
 import { quoteRefund, refundConfirmationLines } from '@/lib/refund-quote';
+import { refundLines } from '@/lib/invoice-refund-state';
 
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
@@ -69,6 +70,8 @@ type PageProps = {
   dateIssued: string;            // yyyy-mm-dd (document fact, manager-editable; effective value)
   /** A receipt send was ATTEMPTED AND FAILED. Not 'no receipt yet' — see the loader. */
   receiptFailed: boolean;
+  /** Money that came and went. doc.refund, serialised — NOT re-derived here. */
+  refund: { kind: 'none' | 'partial' | 'full'; refundedPennies: number; receivedPennies?: number; at: string | null };
   issuedAt: string;
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
@@ -102,6 +105,10 @@ export default function InvoicePage(props: PageProps) {
   // at net retail and the goodwill line zeroes the total before VAT would arise). Also gates the
   // totals block to the loud AMOUNT DUE £0.00.
   const showVat = reg && props.series !== 'warranty';
+  const refundText = props.refund.kind === 'none' ? null : refundLines(
+    { kind: props.refund.kind, refundedPennies: props.refund.refundedPennies, receivedPennies: props.refund.receivedPennies ?? 0, at: props.refund.at ? new Date(props.refund.at) : null } as any,
+    { money: fmt, locale: props.locale },
+  );
 
   async function emailInvoice() {
     setBusy('email'); setMsg(null);
@@ -548,6 +555,17 @@ export default function InvoicePage(props: PageProps) {
           </div>
         )}
 
+        {/* ── MONEY THAT CAME AND WENT ────────────────────────────────────────────────────────
+            The SAME sentences the customer's link shows, from lib/invoice-refund-state::refundLines.
+            Verbatim, not a paraphrase: when a customer rings quoting their screen, the person
+            answering should be reading the same words back. */}
+        {refundText && (
+          <div className="rounded-lg p-3 text-sm mb-3 bg-surface-muted border border-line" data-testid="admin-refund-state">
+            <p className="font-semibold text-ink" data-testid="refund-headline">{refundText.headline}</p>
+            <p className="text-muted mt-0.5" data-testid="refund-detail">{refundText.detail}</p>
+          </div>
+        )}
+
         {props.receiptFailed && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3" data-testid="receipt-failed">{t('pending.receiptNotSent')}</div>
         )}
@@ -588,11 +606,18 @@ export default function InvoicePage(props: PageProps) {
                     had never heard of wore the ISSUED face — a voided invoice announced itself as
                     live. `issued` is now NAMED; anything unrecognised prints as itself. */}
                 <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                  props.status === 'paid' ? 'bg-ok-soft text-ok'
+                  // REFUNDED BEATS PAID on the face of it. Driven by refund.kind, never by status —
+                  // status stays `paid` deliberately, and adding a `refunded` status to make this
+                  // easier is exactly the second opinion the derived state exists to avoid.
+                  props.refund.kind === 'full' ? 'bg-surface-muted text-ink border border-line'
+                  : props.refund.kind === 'partial' ? 'bg-warn-soft text-warn'
+                  : props.status === 'paid' ? 'bg-ok-soft text-ok'
                   : props.status === 'void' ? 'bg-danger-soft text-danger'
                   : props.status === 'paid_pending' || props.status === 'issued' ? 'bg-warn-soft text-warn'
                   : 'bg-surface-muted text-muted border border-line border-dashed'}`} data-testid="detail-status-badge">
-                  {props.status === 'paid' ? t('paidBadge')
+                  {props.refund.kind === 'full' ? 'Refunded'
+                    : props.refund.kind === 'partial' ? 'Part refunded'
+                    : props.status === 'paid' ? t('paidBadge')
                     : props.status === 'paid_pending' ? t('pendingBadge')
                     : props.status === 'void' ? t('voidBadge')
                     : props.status === 'issued' ? t('issuedBadge')
@@ -772,6 +797,9 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       // component because lib/invoice-pay-link reaches lib/magic-link and therefore node:crypto —
       // the mistake that once shipped a blank customer page.
       offersPayLink: offersPayLink(doc),
+      // Straight off the doc the loader already built. The customer's link reads the same field
+      // through the same function; the garage must not learn about a refund later than they do.
+      refund: { ...doc.refund, at: doc.refund.at ? doc.refund.at.toISOString() : null },
       // THE PAYMENT A REFUND WOULD ACT ON. Only a settled Stripe one: a manual cash payment is not
       // ours to reverse, and a `processing` intent has not cleared. Absent means no button — the
       // same discipline as offersPayLink, decided server-side rather than guessed in the page.

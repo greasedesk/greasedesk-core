@@ -15,6 +15,7 @@ import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
 import { canEditInvoice, invoiceTotals } from '@/lib/invoice';
 import { offersPayLink } from '@/lib/invoice-pay-link';
+import { refundState } from '@/lib/invoice-refund-state';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { conversationForJobCard, reachabilityForJobCard, ensureThreadToken } from '@/lib/message-threads';
@@ -81,8 +82,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       select: {
         id: true, invoice_number: true, status: true, series: true,
         lines: { select: { id: true, vat_rate: true, line_vat: true, line_total: true } },
+        // THE LEDGER, for the refund state. Same query, more columns — no extra round-trip in a
+        // builder that is deliberately three waves. buildInvoiceDoc is NOT called here: it pulls a
+        // dozen relations to answer a question these rows already answer, and query depth is the
+        // latency currency on this page.
+        payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, created_at: true } } } },
       },
-    }) as Promise<{ id: string; invoice_number: string | null; status: string; series: string; lines: any[] } | null>,
+    }) as Promise<{ id: string; invoice_number: string | null; status: string; series: string; lines: any[]; payments: any[] } | null>,
     prisma.auditLog.findMany({
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
@@ -240,6 +246,18 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     totals: invoiceTotals(invoiceRow.lines ?? []),
   });
 
+  // ONE RULE, INVOKED — not a second reading of it. refundState is the same function
+  // buildInvoiceDoc calls for the customer's link; what differs is only where the rows came from.
+  // Re-deriving "is it refunded" from amount_paid_pennies here would be the second reading.
+  const refund = invoiceRow
+    ? refundState({
+        receivedPennies: (invoiceRow.payments ?? [])
+          .filter((p: any) => p.status === 'succeeded')
+          .reduce((a: number, p: any) => a + (p.amount_pennies ?? 0), 0),
+        refunds: (invoiceRow.payments ?? []).flatMap((p: any) => p.refunds ?? []),
+      })
+    : null;
+
   const invoice = invoiceRow
     ? {
         id: invoiceRow.id,
@@ -247,6 +265,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         status: invoiceRow.status as 'issued' | 'paid_pending' | 'paid',
         // ABSENT IS NOT HIDDEN: false means "there is nothing to pay", not "you may not see this".
         offersPayLink: offersPay,
+        refund: refund && refund.kind !== 'none'
+          ? { kind: refund.kind, refundedPennies: refund.refundedPennies, receivedPennies: (refund as any).receivedPennies ?? 0, at: refund.at ? refund.at.toISOString() : null }
+          : null,
       }
     : null;
 
