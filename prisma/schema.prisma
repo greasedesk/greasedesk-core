@@ -202,6 +202,7 @@ model Group {
   // Historical-series prefix. Deliberately distinct so a historical number can never be mistaken
   // for a VAT invoice number at a glance, in the list or on a document.
   invoice_historical_prefix String   @default("H")
+  invoice_credit_note_prefix String  @default("CN")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
   invoice_email_footer      Boolean  @default(true)
   // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
@@ -390,6 +391,7 @@ model Group {
   applicationFeeRates ApplicationFeeRate[]
   smsTopUps           SmsTopUp[]
   commissionRefusals  CommissionRefusal[]
+  credit_notes CreditNote[]
 }
 
 /**
@@ -431,6 +433,27 @@ model Group {
  * Deliberately unlike the £75 subscription, which is quoted INCLUDING VAT. A round number matters
  * when a garage owner is choosing software; it does not when a fee is a line on a statement. Both
  * are intentional — see lib/application-fee for the full reasoning and the turnover position.
+ */
+/**
+ * ── THE VAT CUT-OVER IS AN EFFECTIVE-DATED QUESTION. DECIDE IT WHILE THERE ARE THREE ROWS. ──────
+ * GreaseDesk Ltd is not VAT-registered (garageVatRegistered() reads an unset env var, so false;
+ * Stripe Tax and VAT-ID collection are gated on it and are off). No VAT has ever been charged on an
+ * application fee: every fee to date is exactly floor(amount × 25 / 10000) with nothing added —
+ * 12p, 12p, 6p, of which 12p has been returned. There is no historical VAT to correct.
+ *
+ * On registration the 25bp becomes a VATable supply, and `applicationFeePennies` will need to know
+ * whether a fee was struck BEFORE or AFTER that date. This model already carries the machinery for
+ * exactly that: an append-only-forward timeline with a DB-unique constraint, the same shape
+ * CommissionRate uses. The cut-over should be a rate row with an effective date, NOT a boolean read
+ * at request time — a boolean cannot answer "what was the rule in March".
+ *
+ * Recording it here because the decision is free today and expensive later: three rows can be
+ * reasoned about in one screen, and thirty thousand cannot.
+ *
+ * COMMERCIAL, NOT TECHNICAL: whether registration RAISES the fee 20% for existing tenants or is
+ * absorbed is the owner's call. Terms §6 as published already says the fee is "plus VAT where
+ * applicable" and that "if we become VAT-registered, VAT will be added to the fee" — i.e. the
+ * published position is already PASS IT ON. Changing that is what would need notice, not keeping it.
  */
 model ApplicationFeeRate {
   id           String  @id @default(uuid())
@@ -1868,6 +1891,7 @@ model Invoice {
   @@unique([group_id, external_ref])
   @@index([group_id])
   @@index([site_id])
+  credit_notes CreditNote[]
 }
 
 model InvoiceLine {
@@ -2069,6 +2093,7 @@ model Refund {
   @@index([group_id, created_at])
   // Period questions ask WHEN THE MONEY MOVED, so they index on that — same as Payment.
   @@index([group_id, collected_at])
+  credit_notes CreditNote[]
 }
 
 model PaymentMethod {
@@ -2095,6 +2120,11 @@ model InvoiceSequence {
   // HISTORICAL counter — the third independent series. Recording an invoice raised elsewhere must
   // never advance the chargeable counter; that is the whole reason this column exists.
   historical_last_value Int      @default(0)
+  /// CREDIT NOTE counter — the FOURTH, and independent for the same reason the historical one is:
+  /// a VAT correction is its own document with its own series, and issuing one must never advance
+  /// the chargeable counter. HMRC VATREC13040 requires a credit note to carry its own identifying
+  /// number; sharing the invoice sequence would make the two indistinguishable in the series.
+  credit_note_last_value Int     @default(0)
   updated_at            DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
@@ -3070,4 +3100,101 @@ model CountryWaitlist {
   group Group? @relation(fields: [group_id], references: [id], onDelete: SetNull)
 
   @@index([country_code, created_at])
+}
+
+/**
+ * A CREDIT NOTE: an immutable VAT correction against an immutable invoice.
+ *
+ * ── WHY IT IS NOT A FLAG, A STATUS, OR A FOURTH InvoiceSeries ───────────────────────────────────
+ * The tempting shape is `series: 'credit_note'` on Invoice. It is wrong: every reader of an Invoice
+ * row treats it as something PAYABLE. `refuseIfVoid`, `offersPayLink`, the debtors list,
+ * `receivedInPeriod`, `amendmentRequirement` and the pay-link mint would each need "…unless it is a
+ * credit note", which is eight chances to forget. A credit note is never paid; it is issued.
+ *
+ * ── WHAT IT DOES AND DOES NOT DO ────────────────────────────────────────────────────────────────
+ * It reverses OUTPUT VAT. It does not move money — a Refund does that, and the two are deliberately
+ * separate because they answer different questions on different clocks: the refund lands in the
+ * month the money left (the CASH clock, lib/payments::receivedInPeriod) and the credit note lands
+ * in the VAT period of its own date (the VAT clock). Both are correct. They are allowed to differ,
+ * and the accountant's ruling (2026-08-17) is that they SHOULD be allowed to.
+ *
+ * ── THE DATE IS CONFIRMED, NEVER ADOPTED SILENTLY ───────────────────────────────────────────────
+ * `date_issued` defaults to the refund's date at the surface and is confirmed by a person before
+ * the document exists. An automatically-issued document silently picks a TAX POINT, and the whole
+ * reason the two clocks are allowed to differ is that the choice must be visible.
+ *
+ * ── IT DOES NOT MOVE THE JOB CARD ───────────────────────────────────────────────────────────────
+ * Same rule as a refund: a credit note is a fact about a document, not about the work.
+ */
+model CreditNote {
+  id       String @id @default(uuid())
+  group_id String
+  site_id  String
+  /// The invoice being corrected. REQUIRED — a credit note that names no invoice corrects nothing,
+  /// and this is the structural limit that stops it becoming a way to invent negative output tax.
+  invoice_id String
+
+  /// Its OWN number, from its OWN counter (InvoiceSequence.credit_note_last_value).
+  sequence_value Int
+  credit_note_number String
+
+  /// THE VAT-CLOCK DATE. Confirmed by a person; defaults to the refund date at the surface.
+  date_issued DateTime
+  /// Wall-clock of the write. Distinct from date_issued for the same reason Payment.collected_at is
+  /// distinct from created_at: one is the document's date, the other is when someone pressed a key.
+  issued_at   DateTime @default(now())
+
+  /// Why. Mandatory at the surface — a correction nobody can explain is a correction nobody can audit.
+  reason   String
+  /// Which refund occasioned it, when one did. NULL for a correction with no money movement (a
+  /// figure corrected before anything was paid) — a MEANINGFUL absence, not a forgotten one.
+  refund_id String?
+
+  /// Frozen at issue, exactly as InvoiceLine is. Never recomputed.
+  vat_registered_at_issue    Boolean
+  company_name_snapshot      String
+  /// NULL when the invoice carried none — the tenant was not registered at issue. Copied from the
+  /// invoice, never re-resolved: a credit note must show the same particulars as what it corrects.
+  company_vat_number_snapshot String?
+  /// NULL when the invoice had none. Same copy-not-resolve rule as the VAT number above.
+  company_address_snapshot   String?
+  customer_name_snapshot     String
+  /// NULL when the customer had no address on the invoice. A meaningful absence: plenty of
+  /// counter jobs never collect one, and inventing one on the correction would differ from the
+  /// document being corrected.
+  customer_address_snapshot  String?
+
+  /// NULL when the system issued it rather than a person — the same convention Payment uses.
+  /// The `refund.requested` audit row carries WHO for the person-initiated case.
+  created_by String?
+  created_at DateTime @default(now())
+
+  group   Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  invoice Invoice          @relation(fields: [invoice_id], references: [id], onDelete: Restrict)
+  refund  Refund?          @relation(fields: [refund_id], references: [id], onDelete: SetNull)
+  lines   CreditNoteLine[]
+
+  @@unique([group_id, sequence_value])
+  @@index([group_id, date_issued])
+  @@index([invoice_id])
+}
+
+/// Frozen lines, the same grain as InvoiceLine. POSITIVE amounts: the document's SIGN is carried by
+/// its type, not by negative numbers on the rows — a negative qty on a line is how a reader ends up
+/// double-negating. lib/vat-summary SUBTRACTS these.
+model CreditNoteLine {
+  id             String  @id @default(uuid())
+  credit_note_id String
+  position       Int
+  description    String
+  item_type      ItemType
+  qty            Decimal @db.Decimal(12, 2)
+  unit_price     Decimal @db.Decimal(12, 2)
+  vat_rate       Decimal @db.Decimal(5, 2)
+  line_total     Decimal @db.Decimal(12, 2)
+  line_vat       Decimal @db.Decimal(12, 2)
+
+  credit_note CreditNote @relation(fields: [credit_note_id], references: [id], onDelete: Cascade)
+
+  @@index([credit_note_id])
 }

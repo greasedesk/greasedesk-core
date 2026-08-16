@@ -55,6 +55,23 @@ export async function assignWarrantyNumber(tx: Prisma.TransactionClient, groupId
   return Number(rows[0].warranty_last_value);
 }
 
+/**
+ * The FOURTH counter: credit notes. Independent of all three others for the reason the historical
+ * counter is independent — issuing a VAT correction must never advance the chargeable counter, and
+ * VATREC13040 requires a credit note to carry its own identifying number. Sharing the invoice
+ * sequence would make a correction indistinguishable from a sale in the series.
+ */
+export async function assignCreditNoteNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
+  const rows = await tx.$queryRaw<Array<{ credit_note_last_value: number | bigint }>>`
+    INSERT INTO "InvoiceSequence" ("group_id", "credit_note_last_value")
+    VALUES (${groupId}, 1)
+    ON CONFLICT ("group_id") DO UPDATE
+      SET "credit_note_last_value" = "InvoiceSequence"."credit_note_last_value" + 1, "updated_at" = now()
+    RETURNING "credit_note_last_value";
+  `;
+  return Number(rows[0].credit_note_last_value);
+}
+
 export type InvoiceNumberFormat = {
   prefix: string;
   padWidth: number;
