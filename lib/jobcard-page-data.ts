@@ -13,7 +13,8 @@ import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
-import { canEditInvoice } from '@/lib/invoice';
+import { canEditInvoice, invoiceTotals } from '@/lib/invoice';
+import { offersPayLink } from '@/lib/invoice-pay-link';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { conversationForJobCard, reachabilityForJobCard, ensureThreadToken } from '@/lib/message-threads';
@@ -72,10 +73,16 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const [invoiceRow, auditRows, latestQuote] = await Promise.all([
     prisma.invoice.findUnique({
       where: { job_card_id: cardId },
-      // `lines: take 1` answers "are the lines FROZEN?" without loading them — the same test the
-      // quote API applies. Freeze-at-issue means their EXISTENCE is the locked state.
-      select: { id: true, invoice_number: true, status: true, lines: { select: { id: true }, take: 1 } },
-    }) as Promise<{ id: string; invoice_number: string | null; status: string; lines: Array<{ id: string }> } | null>,
+      // `lines` USED to be `take: 1` — existence alone answered "are the lines FROZEN?", which is
+      // all freeze-at-issue needs. It now carries the amounts too, because the Text-pay-link button
+      // is hidden when there is nothing to pay and that predicate (lib/invoice-pay-link::
+      // offersPayLink) needs a total. Same query, more columns; a handful of rows per invoice.
+      // Re-deriving "is there anything to pay" in the page would be a second copy of a chokepoint.
+      select: {
+        id: true, invoice_number: true, status: true, series: true,
+        lines: { select: { id: true, vat_rate: true, line_vat: true, line_total: true } },
+      },
+    }) as Promise<{ id: string; invoice_number: string | null; status: string; series: string; lines: any[] } | null>,
     prisma.auditLog.findMany({
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
@@ -220,7 +227,28 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       }
     : null;
 
-  const invoice = invoiceRow ? { id: invoiceRow.id, number: invoiceRow.invoice_number ?? '', status: invoiceRow.status as 'issued' | 'paid_pending' | 'paid' } : null;
+  // ── IS THERE ANYTHING TO PAY? ────────────────────────────────────────────────────────────────
+  // Asked HERE, through the same predicate the endpoint refuses with, so the Text-pay-link button
+  // cannot be offered where /api/invoice-sms would 409 `nothing_to_pay`. `underCorrection` is the
+  // alias of canEditInvoice already computed above for quoteFrozen — one read, two uses, and they
+  // can never disagree about whether this document is settled.
+  const offersPay = !!invoiceRow && offersPayLink({
+    status: invoiceRow.status as any,
+    underCorrection: canEditInvoice({ status: invoiceRow.status, hasFrozenLines: (invoiceRow.lines?.length ?? 0) > 0 }),
+    series: invoiceRow.series as any,
+    vatRegistered: vat.registered,
+    totals: invoiceTotals(invoiceRow.lines ?? []),
+  });
+
+  const invoice = invoiceRow
+    ? {
+        id: invoiceRow.id,
+        number: invoiceRow.invoice_number ?? '',
+        status: invoiceRow.status as 'issued' | 'paid_pending' | 'paid',
+        // ABSENT IS NOT HIDDEN: false means "there is nothing to pay", not "you may not see this".
+        offersPayLink: offersPay,
+      }
+    : null;
 
   const num = (d: any) => (d == null ? 0 : Number(d));
   // Catalogue for the builder's autocomplete: only editors need it at all; costs are cost-visible

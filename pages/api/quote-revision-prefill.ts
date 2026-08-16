@@ -54,17 +54,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   );
 
   // CAN WE EMAIL THEM AT ALL? The note is email-only, so the panel must not offer a box that goes
-  // nowhere. Resolved through the ownership edge, exactly as quote-send resolves its recipient.
+  // nowhere. Resolved through the ownership edge — which quote-send NOW does too. It did not when
+  // this comment was first written: it read the card's own customer link, and this claimed
+  // otherwise. The two are aligned as of the SMS channel work, and the claim is true again.
   const ownerId = await getCurrentOwnerId(prisma as any, card.vehicle_id).catch(() => null);
   const owner = ownerId
-    ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { email: true, name: true } })
-    : (card.customer_id ? await prisma.customer.findUnique({ where: { id: card.customer_id }, select: { email: true, name: true } }) : null);
+    ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { email: true, name: true, phone_e164: true } })
+    : (card.customer_id ? await prisma.customer.findUnique({ where: { id: card.customer_id }, select: { email: true, name: true, phone_e164: true } }) : null);
   const email = (owner?.email ?? '').trim() || null;
+  // AND CAN WE TEXT THEM? The panel offers a channel now, so it needs both answers — otherwise
+  // picking Text tells the operator about the email address they haven't got.
+  const phone = (owner?.phone_e164 ?? '').trim() || null;
 
   return res.status(200).json({
     revision: true,
     customerName: owner?.name ?? null,
     email,
+    phone,
     agreedVersion: accepted.version,
     agreedPennies: accepted.gross_pennies,
     sendingPennies,

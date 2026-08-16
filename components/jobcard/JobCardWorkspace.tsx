@@ -99,7 +99,7 @@ type Props = {
   siteId: string;
   stages: Record<StageKey, boolean>;
   skipped: { intake: boolean; injob: boolean; complete: boolean };
-  invoice: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid' } | null;
+  invoice: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean } | null;
   events: AuditEvent[];
 };
 
@@ -135,7 +135,7 @@ export default function JobCardWorkspace(p: Props) {
     stages?: Record<StageKey, boolean>;
     skipped?: { intake: boolean; injob: boolean; complete: boolean };
     isComeback?: boolean;
-    invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid' } | null;
+    invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean } | null;
     events?: AuditEvent[];
     booking?: CardBooking;
     tabsState?: Record<TabKey, TabState>;
@@ -357,6 +357,30 @@ export default function JobCardWorkspace(p: Props) {
     finally { setBusy(null); }
   }
 
+  // ── TEXT THE PAY LINK ────────────────────────────────────────────────────────────────────────
+  // A SEPARATE endpoint from invoice-email, not a channel on it, and deliberately so: the email
+  // sends the DOCUMENT (PDF, footer, reply-to, garage BCC), this sends a LINK TO PAY. Same invoice,
+  // different artefact — which is also why the button disappears once there is nothing to pay while
+  // the email button stays: a receipt is still worth emailing.
+  const [smsMsg, setSmsMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  async function textPayLink() {
+    if (!eff.invoice) return;
+    setBusy('invoice-sms'); setSmsMsg(null);
+    try {
+      const res = await fetch('/api/invoice-sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: eff.invoice.id }) });
+      const d = await res.json().catch(() => ({}));
+      // THE REMAINING COUNT, not a price — the £75 includes a hundred and top-ups come in hundreds,
+      // so the balance is the only figure a garage can act on. It comes back from the send itself,
+      // so it is never one behind.
+      const left = typeof d?.allowance?.remaining === 'number' ? ` ${d.allowance.remaining} text${d.allowance.remaining === 1 ? '' : 's'} left this month.` : '';
+      setSmsMsg(res.ok
+        ? { text: `Pay link texted to the customer.${left}`, ok: true }
+        : { text: `${d?.message || 'The text couldn’t be sent.'}${left}`, ok: false });
+      if (res.ok) refreshCard();
+    } catch { setSmsMsg({ text: 'The text couldn’t be sent.', ok: false }); }
+    finally { setBusy(null); }
+  }
+
   const tabViews: TabView[] = TAB_KEYS.map((k) => ({ key: k, label: t(`tab.${k}`), reachable: eff.tabsState[k].reachable, complete: eff.tabsState[k].complete, skipped: eff.tabsState[k].skipped }));
 
   // ---------- panes ----------
@@ -521,12 +545,23 @@ export default function JobCardWorkspace(p: Props) {
           <span className="self-start text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('invoiceTab.paidChip')}</span>
         )}
         {p.canManage && !cancelled && (
-          <button disabled={busy !== null} onClick={emailInvoice}
-            className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
-            {busy === 'invoice-email' ? t('invoiceTab.emailSending') : t('invoiceTab.emailSend')}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button disabled={busy !== null} onClick={emailInvoice} data-testid="invoice-email"
+              className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
+              {busy === 'invoice-email' ? t('invoiceTab.emailSending') : t('invoiceTab.emailSend')}
+            </button>
+            {/* HIDDEN WHEN THERE IS NOTHING TO PAY. Computed server-side through offersPayLink —
+                a button whose only possible outcome is a refusal is a wasted click. */}
+            {eff.invoice.offersPayLink && (
+              <button disabled={busy !== null} onClick={textPayLink} data-testid="invoice-text-pay"
+                className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
+                {busy === 'invoice-sms' ? 'Texting…' : 'Text pay link'}
+              </button>
+            )}
+          </div>
         )}
         {emailMsg && <div className={`rounded-lg p-2 text-sm ${emailMsg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{emailMsg.text}</div>}
+        {smsMsg && <div data-testid="invoice-text-pay-result" className={`rounded-lg p-2 text-sm ${smsMsg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{smsMsg.text}</div>}
       </>
     );
     // Method picker for Mark paid — required choice, pre-selected to the first windowed method.
@@ -1170,6 +1205,32 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
   const [note, setNote] = React.useState('');
   const fmt = (p: number) => formatMoney(p, { currency, locale });
 
+  // ── THE CHANNEL ──────────────────────────────────────────────────────────────────────────────
+  // Email by default: it is free, it carries the note, and it is what a quote has always gone out
+  // on. Picking Text re-asks the server, because reachability is channel-shaped — a customer with
+  // a mobile and no email is reachable by one and not the other, and only the server knows which.
+  // Testids are quote-scoped: this card also renders the messaging compose box, which has its own
+  // channel-email / channel-sms pair, and two elements answering to one name is a gate that lies.
+  const [channel, setChannel] = React.useState<'email' | 'sms'>('email');
+  const [allowance, setAllowance] = React.useState<{ remaining: number; resetsAt: string } | null>(null);
+  const [reach, setReach] = React.useState<{ ok: boolean; reason?: string } | null>(null);
+  const [switching, setSwitching] = React.useState(false);
+
+  async function pickChannel(next: 'email' | 'sms') {
+    setChannel(next); setErr(null);
+    if (next === 'email') return;              // nothing to ask: no allowance, no cost
+    setSwitching(true);
+    try {
+      const r = await fetch(`/api/messages/send?jobCardId=${encodeURIComponent(jobCardId)}&channel=sms`);
+      const d = await r.json().catch(() => ({}));
+      setAllowance(d?.smsAllowance ?? null);
+      setReach(d?.reachability ?? (r.status === 409 ? { ok: false, reason: d?.message } : null));
+    } catch { /* leave the counts unknown rather than invent one — the send still refuses honestly */ }
+    finally { setSwitching(false); }
+  }
+
+  const spent = channel === 'sms' && allowance !== null && allowance.remaining <= 0;
+
   /** Flush any pending estimate edit FIRST, then read the diff — the prefill must describe what is
    *  actually about to be frozen, not what was on screen when the page loaded. */
   async function openPanel() {
@@ -1184,7 +1245,7 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
     } catch { await send(); }
   }
 
-  const [result, setResult] = React.useState<{ url: string; emailed: boolean; sentTo: string | null; version: number; expiresAt: string } | null>(null);
+  const [result, setResult] = React.useState<{ url: string; emailed: boolean; sent: boolean; channel: string; sentTo: string | null; version: number; expiresAt: string; unreachableReason: string | null; sendRefusalMessage: string | null } | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
 
@@ -1197,11 +1258,17 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
       await beforeSend?.().catch(() => {});
       const r = await fetch('/api/quote-send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, note: panel?.email ? (note.trim() || null) : null }),
+        // The note is email-only, and the panel only offers the box when there is an email address.
+        body: JSON.stringify({ jobCardId, channel, note: channel === 'email' && panel?.email ? (note.trim() || null) : null }),
       });
       const d = await r.json().catch(() => ({}));
+      if (d?.allowance) setAllowance(d.allowance);   // refetched from the send, so it is never one behind
       if (!r.ok) { setErr(d?.message || 'Could not send the quote.'); return; }
-      setResult({ url: d.url, emailed: !!d.emailed, sentTo: d.sentTo ?? null, version: d.version, expiresAt: d.expiresAt });
+      setResult({
+        url: d.url, emailed: !!d.emailed, sent: !!d.sent, channel: d.channel ?? 'email',
+        sentTo: d.sentTo ?? null, version: d.version, expiresAt: d.expiresAt,
+        unreachableReason: d.unreachableReason ?? null, sendRefusalMessage: d.sendRefusalMessage ?? null,
+      });
       setPanel(null); setNote('');
     } catch { setErr('Could not send the quote.'); }
     finally { setSending(false); } // never strand the busy flag
@@ -1209,12 +1276,47 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
 
   return (
     <div className="mt-4 pt-4 border-t border-line">
-      <button type="button" disabled={disabled || sending} onClick={revision ? openPanel : send}
+      {/* ── HOW IT GOES OUT ───────────────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 mb-3" data-testid="quote-channel">
+        {(['email', 'sms'] as const).map((c) => (
+          <button key={c} type="button" data-testid={`quote-channel-${c}`} aria-pressed={channel === c}
+            disabled={disabled || sending} onClick={() => pickChannel(c)}
+            className={`text-xs font-semibold rounded-lg px-3 py-1.5 border disabled:opacity-50 ${
+              channel === c ? 'bg-accent border-accent text-white' : 'bg-surface border-line text-ink hover:bg-surface-muted'}`}>
+            {c === 'email' ? 'Email' : 'Text'}
+          </button>
+        ))}
+        {channel === 'sms' && allowance && (
+          <span className="text-xs text-muted" data-testid="quote-sms-allowance">
+            {allowance.remaining} text{allowance.remaining === 1 ? '' : 's'} left this month
+          </span>
+        )}
+      </div>
+
+      {/* NOT REACHABLE IS NOT A BLOCK. The send still mints a link to hand over — so this warns
+          rather than disables, and says what will happen instead of what cannot. */}
+      {channel === 'sms' && reach && !reach.ok && !spent && (
+        <p className="text-xs text-warn mb-2" data-testid="quote-sms-unreachable">
+          {reach.reason} You can still send — you’ll get a link to pass on.
+        </p>
+      )}
+      {spent && (
+        <p className="text-xs text-warn mb-2" data-testid="quote-allowance-spent">
+          Your text allowance is spent for this month
+          {allowance?.resetsAt ? ` — it resets on ${new Date(allowance.resetsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}` : ''}.
+          Email the quote instead, or top up from the messaging centre.
+        </p>
+      )}
+
+      <button type="button" data-testid="quote-send" disabled={disabled || sending || switching || spent}
+        onClick={revision ? openPanel : send}
         className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
         {/* THE WORDING FOLLOWS THE STATE. Once a version has been accepted the customer has agreed
             to a different figure, and the point of this send is that it CHANGED — "your quote is
             ready" would bury exactly the fact they need. A revision REVIEWS before it sends. */}
-        {sending ? 'Sending…' : revision ? 'Send the updated price' : 'Send quote to customer'}
+        {sending ? 'Sending…'
+          : revision ? (channel === 'sms' ? 'Text the updated price' : 'Send the updated price')
+            : (channel === 'sms' ? 'Text quote to customer' : 'Send quote to customer')}
       </button>
 
       {/* ── REVIEW BEFORE SENDING A REVISION ────────────────────────────────────────────────────
@@ -1226,7 +1328,14 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
             Agreed {fmt(panel.agreedPennies)} (v{panel.agreedVersion}) → sending {fmt(panel.sendingPennies)}
             {' — '}{panel.differencePennies >= 0 ? '+' : '−'}{fmt(Math.abs(panel.differencePennies))}
           </p>
-          {panel.email ? (
+          {channel === 'sms' ? (
+            // A NOTE DOES NOT FIT IN A TEXT. The renderers ignore it and the segment budget is the
+            // reason — so do not show a box whose contents would not be delivered. It is not lost
+            // though: the note is written onto the version, and the version is what the link opens.
+            <p className="text-xs text-muted mt-2" data-testid="revision-note-sms">
+              Sending by text. A note can only be sent by email — the text carries the price and the link.
+            </p>
+          ) : panel.email ? (
             <>
               <label className="block text-xs font-semibold text-ink mt-2">
                 Add a note (optional) — sent with the email and shown on their quote page
@@ -1262,15 +1371,19 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
       {err && <p className="mt-2 text-sm text-danger">{err}</p>}
       {result && (
         <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">
-          <p className="text-sm text-ink">
-            {result.emailed
-              ? <>{revision ? 'Updated price' : 'Quote'} v{result.version} emailed to <span className="font-medium">{result.sentTo}</span>.</>
-              // BOTH branches follow the state. The no-email branch is the one the gate hit, and it
+          <p className="text-sm text-ink" data-testid="quote-send-result">
+            {/* THE VERB FOLLOWS THE CHANNEL. `sent` is the new field; `emailed` still means an email
+                went and is deliberately not read here as a synonym for it. The failure branches use
+                the server's own sentence rather than a second copy of the reason, because the server
+                knows which of the three silences happened. */}
+            {result.sent
+              ? <>{revision ? 'Updated price' : 'Quote'} v{result.version} {result.channel === 'sms' ? 'texted' : 'emailed'} to <span className="font-medium">{result.sentTo}</span>.</>
+              // BOTH branches follow the state. The no-address branch is the one the gate hit, and it
               // still said "Quote … is ready" for a revision — the exact wording this slice exists
               // to stop, surviving in the path a customer with no address on file takes.
-              : <>{revision ? 'Updated price' : 'Quote'} v{result.version} is ready. {result.sentTo
-                  ? <span className="text-warn">The email didn’t send — pass the link on instead.</span>
-                  : <>No email address on file — pass this link on instead.</>}</>}
+              : <>{revision ? 'Updated price' : 'Quote'} v{result.version} is ready. {result.sendRefusalMessage
+                  ? <span className="text-warn">{result.sendRefusalMessage}</span>
+                  : <>{result.unreachableReason ?? 'No address on file'} — pass this link on instead.</>}</>}
           </p>
           <div className="mt-2 flex items-center gap-2">
             <input readOnly value={result.url} onFocus={(e) => e.currentTarget.select()}

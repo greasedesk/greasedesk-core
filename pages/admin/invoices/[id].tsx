@@ -18,6 +18,9 @@ import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { buildInvoiceDoc } from '@/lib/invoice-doc';
+// SERVER-SIDE ONLY — reaches node:crypto through lib/magic-link. Next tree-shakes it out of the
+// client bundle because it is used solely inside getServerSideProps; do not read it in the component.
+import { offersPayLink } from '@/lib/invoice-pay-link';
 // THE SAME rule object the endpoint uses. Pure (no prisma), so the screen offers the control on
 // exactly the invoices the server would accept — never a button that 409s, never a hidden one that
 // would have worked.
@@ -39,6 +42,8 @@ type PageProps = {
   voidReason: string | null;
   voidCorrections: Array<{ at: string; by: string | null; from: string; to: string }>;
   hasFrozenLines: boolean; // freeze-at-issue: no lines = admin-unlocked, under correction
+  /** Is there anything to pay? Server-computed via lib/invoice-pay-link::offersPayLink. */
+  offersPayLink: boolean;
   /** The customer holds a copy. Only decides whether to show the GENERIC warning — the server's
    *  own, figure-bearing confirmation is what actually gates an amendment. */
   wasSent: boolean;
@@ -96,6 +101,22 @@ export default function InvoicePage(props: PageProps) {
       const data = await res.json().catch(() => ({}));
       setMsg(res.ok ? { text: t('emailSent'), ok: true } : { text: data?.message || t('emailError'), ok: false });
     } catch { setMsg({ text: t('emailError'), ok: false }); }
+    setBusy(null);
+  }
+
+  /** Text the customer a link to PAY. A different artefact from the email, which sends the document. */
+  async function textPayLink() {
+    setBusy('sms'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-sms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoiceId: props.invoiceId }) });
+      const data = await res.json().catch(() => ({}));
+      // The remaining allowance, not a per-message price — the figure a garage can act on.
+      const left = typeof data?.allowance?.remaining === 'number'
+        ? ` ${data.allowance.remaining} text${data.allowance.remaining === 1 ? '' : 's'} left this month.` : '';
+      setMsg(res.ok
+        ? { text: `Pay link texted to the customer.${left}`, ok: true }
+        : { text: `${data?.message || 'The text couldn’t be sent.'}${left}`, ok: false });
+    } catch { setMsg({ text: 'The text couldn’t be sent.', ok: false }); }
     setBusy(null);
   }
 
@@ -214,8 +235,17 @@ export default function InvoicePage(props: PageProps) {
                 not a safeguard. The PDF link above STAYS: the retained document must remain
                 producible (VATREC5010). */}
             {props.status !== 'void' && props.series !== 'historical' && (
-              <button onClick={emailInvoice} disabled={busy !== null} className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
+              <button onClick={emailInvoice} disabled={busy !== null} data-testid="invoice-email" className="text-sm bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50">
                 {busy === 'email' ? t('emailSending') : t('emailSend')}
+              </button>
+            )}
+            {/* ONLY WHERE THERE IS SOMETHING TO PAY. offersPayLink already excludes a void, a
+                warranty, an unlocked document and a £0 total, so this needs no second copy of
+                those conditions — unlike the email button above, which sends the document and is
+                still meaningful on a settled invoice. */}
+            {props.offersPayLink && (
+              <button onClick={textPayLink} disabled={busy !== null} data-testid="invoice-text-pay" className="text-sm bg-surface-muted border border-line text-ink rounded-lg px-4 py-2 hover:bg-surface disabled:opacity-50">
+                {busy === 'sms' ? 'Texting…' : 'Text pay link'}
               </button>
             )}
             {props.status === 'paid_pending' && props.canManage && (
@@ -625,6 +655,11 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       status: doc.status,
       series: doc.series,
       hasFrozenLines: doc.lines.length > 0, // freeze-at-issue: empty = admin-unlocked, under correction
+      // IS THERE ANYTHING TO PAY? The same predicate /api/invoice-sms refuses with, so the Text
+      // button is never offered where the send could only 409. Computed HERE rather than in the
+      // component because lib/invoice-pay-link reaches lib/magic-link and therefore node:crypto —
+      // the mistake that once shipped a blank customer page.
+      offersPayLink: offersPayLink(doc),
       wasSent: !!doc.receiptSentAt,
       amendedAt: (doc as any).amendedAt ?? null,
       amendedFromPennies: (doc as any).amendedFromPennies ?? null,
