@@ -77,23 +77,81 @@ export function refusePayment(doc: InvoiceDoc, balancePennies: number): PayRefus
 }
 
 /**
+ * EVERYTHING THAT MUST BE TRUE BEFORE STRIPE IS CALLED — resolved once, in one place.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
+ * canOfferCardPayment used to check three things (keys, refusePayment, connection ready) while
+ * createInvoicePaymentIntent checked those three AND resolved the application fee — which THROWS
+ * when no rate matches. So the page could offer a button the endpoint would refuse, and the
+ * docstring's "one rule, two readers" was true of document state and configuration only. The fee
+ * was outside the shared rule and nothing said so.
+ *
+ * Making the docstring true rather than weaker: the predicate now runs the SAME resolution the
+ * endpoint runs, and the endpoint USES what it returns rather than repeating the reads. A
+ * precondition the page cannot see is a precondition that will diverge again.
+ *
+ * What is deliberately NOT here: Stripe's own answer. paymentIntents.create can still fail, and no
+ * predicate can promise otherwise without calling it. That residue is real and the refusal wording
+ * owns it — but it is now the ONLY thing the page cannot foresee, instead of one of three.
+ */
+export type PayPreconditions =
+  | { ok: true; accountId: string; feePennies: number; rateId: string; publishableKey: string }
+  | { ok: false; refusal: PayRefusal };
+
+export async function payPreconditions(args: {
+  groupId: string;
+  doc: InvoiceDoc;
+  balancePennies: number;
+}): Promise<PayPreconditions> {
+  const stripe = getStripe();
+  const publishableKey = stripePublishableKey();
+  if (!stripe || !publishableKey) {
+    // OUR deployment, not the garage's problem — but the customer gets one sentence either way.
+    return { ok: false, refusal: { code: 'not_configured', message: 'Card payment isn’t available just now. Please contact the garage to pay another way.' } };
+  }
+
+  const refusal = refusePayment(args.doc, args.balancePennies);
+  if (refusal) return { ok: false, refusal };
+
+  // The garage's own account must be able to take money. Its own state, not our opinion of it.
+  const state = providerState(await readConnection(args.groupId, 'stripe'));
+  if (state.status !== 'ready' || !state.externalId) {
+    return { ok: false, refusal: { code: 'not_ready', message: 'This garage can’t take card payments online at the moment. Please contact them to pay another way.' } };
+  }
+
+  // THE FEE. feeForPayment THROWS when no rate matches — deliberate, because charging with no rate
+  // would take a fee of zero and look exactly like a working integration (see lib/application-fee).
+  // Caught HERE so a missing rate is a refusal the page can see, not an exception the customer
+  // meets after pressing a button we offered them.
+  const country = (await prisma.group.findUnique({ where: { id: args.groupId }, select: { tax_country_code: true } }))?.tax_country_code ?? 'GB';
+  const currency = (args.doc.currency || 'GBP').toUpperCase();
+  try {
+    const { feePennies, rateId } = await feeForPayment(prisma, {
+      groupId: args.groupId, country, currency, at: new Date(), amountPennies: args.balancePennies,
+    });
+    return { ok: true, accountId: state.externalId, feePennies, rateId, publishableKey };
+  } catch (e: any) {
+    // LOUD. No rate means we cannot charge this tenant correctly, and silence here is how it would
+    // stay broken — the customer's sentence must not be the only trace.
+    console.error('[pay] NO APPLICATION FEE RATE for', args.groupId, country, currency, '—', String(e?.message ?? e));
+    return { ok: false, refusal: { code: 'no_rate', message: 'Card payment isn’t available for this invoice. Please contact the garage to pay another way.' } };
+  }
+}
+
+/**
  * CAN THIS INVOICE BE PAID BY CARD RIGHT NOW? Answered without creating anything, so the page can
  * decide whether to render a Pay button.
  *
- * Shares refusePayment with the endpoint deliberately. The alternative — the page guessing and the
- * endpoint deciding — produces a button that appears and then immediately refuses, which reads as
- * a broken product rather than as an unavailable option. One rule, two readers, and the page never
- * offers what the endpoint would turn down.
+ * Shares payPreconditions with the endpoint deliberately — the same resolution, not a summary of
+ * it. The alternative, the page guessing and the endpoint deciding, produces a button that appears
+ * and then immediately refuses, which reads as a broken product rather than an unavailable option.
  */
 export async function canOfferCardPayment(args: {
   groupId: string;
   doc: InvoiceDoc;
   balancePennies: number;
 }): Promise<boolean> {
-  if (!getStripe() || !stripePublishableKey()) return false;
-  if (refusePayment(args.doc, args.balancePennies)) return false;
-  const row = await readConnection(args.groupId, 'stripe');
-  return providerState(row).status === 'ready';
+  return (await payPreconditions(args)).ok;
 }
 
 /**
@@ -104,10 +162,9 @@ export async function createInvoicePaymentIntent(args: {
   groupId: string;
   invoiceId: string;
 }): Promise<{ ok: true; intent: PayIntent } | { ok: false; refusal: PayRefusal }> {
+  // The client itself is needed here to make the call; whether it EXISTS is payPreconditions'
+  // question, and it answers it as a refusal the page can see rather than as a throw.
   const stripe = getStripe();
-  if (!stripe) throw new Error('PAY:not_configured');
-  const publishableKey = stripePublishableKey();
-  if (!publishableKey) throw new Error('PAY:not_configured');
 
   const doc = await buildInvoiceDoc(args.invoiceId, args.groupId);
   if (!doc) throw new Error('PAY:invoice_not_found');
@@ -121,23 +178,14 @@ export async function createInvoicePaymentIntent(args: {
   if (!inv) throw new Error('PAY:invoice_not_found');
   const balance = balanceOwedPennies(inv, totalPennies);
 
-  const refusal = refusePayment(doc, balance);
-  if (refusal) return { ok: false, refusal };
-
-  // The garage's own account must be able to take money. Its own state, not our opinion of it.
-  const row = await readConnection(args.groupId, 'stripe');
-  const state = providerState(row);
-  if (state.status !== 'ready') {
-    return { ok: false, refusal: { code: 'not_ready', message: 'This garage can’t take card payments online at the moment. Please contact them to pay another way.' } };
-  }
-
+  // ONE resolution, shared with the page. Whatever this refuses, the button was never offered for.
+  const pre = await payPreconditions({ groupId: args.groupId, doc, balancePennies: balance });
+  if (!pre.ok) return { ok: false, refusal: pre.refusal };
+  const { accountId, feePennies, rateId, publishableKey } = pre;
   const currency = (doc.currency || 'GBP').toUpperCase();
-  const country = (await prisma.group.findUnique({ where: { id: args.groupId }, select: { tax_country_code: true } }))?.tax_country_code ?? 'GB';
-  // THROWS when no rate exists. Deliberate: charging with no rate would take a fee of zero and look
-  // exactly like a working integration. See lib/application-fee.
-  const { feePennies, rateId } = await feeForPayment(prisma, {
-    groupId: args.groupId, country, currency, at: new Date(), amountPennies: balance,
-  });
+  // payPreconditions refuses when there is no client, so reaching here with none would be a bug in
+  // it rather than a condition to explain. Throw rather than invent a second refusal for it.
+  if (!stripe) throw new Error('PAY:not_configured');
 
   const pi = await stripe.paymentIntents.create(
     {
@@ -152,7 +200,7 @@ export async function createInvoicePaymentIntent(args: {
       description: `Invoice ${doc.displayNumber}`,
     },
     {
-      stripeAccount: state.externalId,
+      stripeAccount: accountId,
       // A refresh or a double-tap must not mint a second PaymentIntent. Keyed on the invoice AND the
       // amount, so a genuinely changed balance is a genuinely new intent rather than a silently
       // stale one.
@@ -160,35 +208,48 @@ export async function createInvoicePaymentIntent(args: {
     },
   );
 
-  // The binding, written server-side. `processing` because nothing has cleared: only the webhook
-  // may say otherwise. A redelivered create is a P2002 no-op inside recordPayment.
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    await recordPayment(tx, {
-      groupId: args.groupId,
-      invoiceId: args.invoiceId,
-      siteId: inv.site_id,
-      amountPennies: balance,
-      currency,
-      status: 'processing',
-      collectedAt: new Date(),
-      createdBy: null, // a customer, not a member of staff
-      sourceRef: pi.id,
-      provider: 'stripe',
+  // ── PAST THIS LINE, A PAYMENTINTENT EXISTS AT STRIPE ────────────────────────────────────────
+  // Anything that throws from here is OURS, and it is the dangerous kind: the customer can still be
+  // charged against an intent we failed to record, and the webhook resolves by source_ref — so a
+  // missing row means a real payment with nothing to attach it to. It is tagged so the endpoint
+  // cannot pass it to the Stripe classifier, and logged with the intent id so the money is
+  // findable by hand. Retrying is the correct recovery: the idempotency key replays the same
+  // intent and the binding is attempted again.
+  try {
+    // `processing` because nothing has cleared: only the webhook may say otherwise. A redelivered
+    // create is a P2002 no-op inside recordPayment.
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await recordPayment(tx, {
+        groupId: args.groupId,
+        invoiceId: args.invoiceId,
+        siteId: inv.site_id,
+        amountPennies: balance,
+        currency,
+        status: 'processing',
+        collectedAt: new Date(),
+        createdBy: null, // a customer, not a member of staff
+        sourceRef: pi.id,
+        provider: 'stripe',
+      });
+      // Fee grain is frozen onto the row the moment it exists, so what was charged stays explicable
+      // even if the rate table moves on. recordPayment does not carry these — they are Stripe-only.
+      await (tx as any).payment.updateMany({
+        where: { source_ref: pi.id },
+        data: { payment_intent_id: pi.id, application_fee_pennies: feePennies, fee_rate_id: rateId },
+      });
     });
-    // Fee grain is frozen onto the row the moment it exists, so what was charged stays explicable
-    // even if the rate table moves on. recordPayment does not carry these — they are Stripe-only.
-    await (tx as any).payment.updateMany({
-      where: { source_ref: pi.id },
-      data: { payment_intent_id: pi.id, application_fee_pennies: feePennies, fee_rate_id: rateId },
-    });
-  });
+  } catch (e: any) {
+    console.error('[pay] BINDING FAILED after intent', pi.id, 'invoice', args.invoiceId,
+      '— a payment may proceed with no Payment row:', String(e?.stack ?? e?.message ?? e));
+    throw new Error('PAY:binding_failed');
+  }
 
   return {
     ok: true,
     intent: {
       clientSecret: pi.client_secret as string,
       publishableKey,
-      accountId: state.externalId,
+      accountId,
       amountPennies: balance,
       currency,
     },

@@ -37,6 +37,14 @@ export default function PayPanel({ token, locale, currency, amountPennies }: {
   const [err, setErr] = React.useState<string | null>(null);
   const money = (p: number) => formatMoney(p, { currency, locale });
 
+  // ── SETTLED IS NOT THE SAME AS FAILED ────────────────────────────────────────────────────────
+  // A retryable failure keeps the button: pressing again is the fix. A SETTLED refusal — the
+  // invoice is void, already paid, under correction, the garage cannot take cards, we have no fee
+  // rate — will say the same thing every time, and a Pay button sitting beside its own denial reads
+  // as a broken product rather than as an unavailable option. This is the state TMBS's 100003205
+  // showed a customer: an offer and a refusal at once.
+  const [settled, setSettled] = React.useState(false);
+
   async function begin() {
     setBusy(true); setErr(null);
     try {
@@ -44,7 +52,14 @@ export default function PayPanel({ token, locale, currency, amountPennies }: {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d?.clientSecret) { setErr(d?.message || 'Card payment isn’t available just now.'); return; }
+      if (!r.ok || !d?.clientSecret) {
+        setErr(d?.message || 'Card payment isn’t available just now.');
+        // ABSENT retryable means we could not tell — a network failure, or a body we could not
+        // parse. Keep the button: an unknown is not a settlement, and the customer pressing again
+        // is exactly how an unknown resolves itself.
+        if (d?.retryable === false) setSettled(true);
+        return;
+      }
       // The garage's account, not ours. A direct charge confirmed against the platform instance
       // fails in a way that looks like a card problem.
       const s = await loadStripe(d.publishableKey, { stripeAccount: d.accountId });
@@ -53,6 +68,16 @@ export default function PayPanel({ token, locale, currency, amountPennies }: {
     } catch {
       setErr('Card payment couldn’t be started. Please try again.');
     } finally { setBusy(false); }
+  }
+
+  // The refusal ALONE. No button, and no "your card details never reach us" reassurance about a
+  // payment that is not going to happen — the customer needs the reason and the way forward.
+  if (settled) {
+    return (
+      <div className="mt-4" data-testid="pay-panel">
+        <p className="text-sm text-danger" data-testid="pay-error">{err}</p>
+      </div>
+    );
   }
 
   if (!intent || !stripe) {

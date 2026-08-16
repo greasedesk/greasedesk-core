@@ -121,8 +121,23 @@ const UNKNOWN: StripeFailure = {
   stripeMessage: null, requestId: null, docUrl: null,
 };
 
-/** Is this a Stripe SDK error? Duck-typed on the two fields the SDK always sets. */
-const looksStripe = (e: Raw): boolean => typeof e?.type === 'string' && String(e.type).startsWith('Stripe');
+/**
+ * Is this a Stripe SDK error? Duck-typed on the field the SDK always sets.
+ *
+ * ── EXPORTED, BECAUSE CALLERS WERE GUESSING ─────────────────────────────────────────────────────
+ * pay/intent wrapped its whole operation — the Stripe call AND the database transaction after it —
+ * in one catch and sent everything through logStripeFailure. A Prisma error from that transaction
+ * was therefore logged as "paymentIntents.create failed", classified UNKNOWN (because it is not a
+ * Stripe error at all), and rendered to the customer with Stripe's own non-retryable wording. Four
+ * unrelated causes produced one sentence and one misleading log line, which is precisely why a live
+ * refusal on TMBS could not be diagnosed from what we had recorded.
+ *
+ * A caller that can throw its own exceptions must ask this BEFORE reaching for the classifier.
+ */
+export const isStripeError = (e: unknown): boolean =>
+  typeof (e as Raw)?.type === 'string' && String((e as Raw).type).startsWith('Stripe');
+
+const looksStripe = (e: Raw): boolean => isStripeError(e);
 
 /** THE classification. Pure, so the gate asserts the real rule rather than a copy of it. */
 export function classifyStripeError(e: unknown): StripeFailure {
