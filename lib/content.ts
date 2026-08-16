@@ -28,6 +28,36 @@ export function sanitiseSlug(raw: string): string {
  * latest published_at. Returns null when nothing is published (→ the public route 404s; a draft is
  * never rendered publicly).
  */
+/**
+ * ⚠️ `effective_from` IS RECORDED AND NOT ENFORCED. READ THIS BEFORE PUBLISHING A MATERIAL CHANGE.
+ *
+ * This resolver filters on `status: 'published'` and orders by `published_at desc`. It DOES NOT
+ * look at `effective_from`. Nothing else does either. So:
+ *
+ *   **PUBLISHING MAKES A DOCUMENT LIVE IMMEDIATELY.** There is no way to publish now and have it
+ *   take effect in thirty days. Setting `effective_from` to a future date changes nothing at all —
+ *   the document is served the moment its row exists with `status: 'published'`.
+ *
+ * Terms §20 requires **at least 30 days' notice where a change materially affects a customer**. Given
+ * the above, the ONLY correct sequence for a material change is:
+ *
+ *   1. NOTIFY tenants (email or in-Service), naming the change and the date it takes effect;
+ *   2. WAIT the full 30 days;
+ *   3. PUBLISH.
+ *
+ * Publishing first and counting from there gives zero notice, because step 3 is the moment the new
+ * terms bind. This is the opposite of what the column's existence suggests, which is exactly why it
+ * is written here rather than in a note somewhere.
+ *
+ * A NON-material change (a clarification that creates no obligation and removes no right) may be
+ * published directly. §23 "Your invoices and your VAT records" was published on that basis on
+ * 2026-08-16: it states the position §6 already establishes rather than creating one. That call was
+ * taken knowingly, with the uncertainty accepted — it is a judgement, not a certainty.
+ *
+ * The column is a DECORATIVE INTENT until something reads it. If a staged effective date is ever
+ * genuinely needed, wiring it means teaching this function `effective_from <= now` and deciding what
+ * happens between publication and effect — which is a real design question, not a one-line filter.
+ */
 export async function resolvePublished(db: Db, slug: string, country = 'GB') {
   const pick = (cc: string) => (db as any).document.findFirst({
     where: { slug, country_code: cc, status: 'published' }, orderBy: { published_at: 'desc' },

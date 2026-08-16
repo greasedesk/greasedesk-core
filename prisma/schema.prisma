@@ -3116,7 +3116,7 @@ model CountryWaitlist {
  * separate because they answer different questions on different clocks: the refund lands in the
  * month the money left (the CASH clock, lib/payments::receivedInPeriod) and the credit note lands
  * in the VAT period of its own date (the VAT clock). Both are correct. They are allowed to differ,
- * and the accountant's ruling (2026-08-17) is that they SHOULD be allowed to.
+ * and the accountant's ruling (2026-08-16) is that they SHOULD be allowed to.
  *
  * ── THE DATE IS CONFIRMED, NEVER ADOPTED SILENTLY ───────────────────────────────────────────────
  * `date_issued` defaults to the refund's date at the surface and is confirmed by a person before

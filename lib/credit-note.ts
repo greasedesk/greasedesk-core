@@ -2,7 +2,7 @@
  * File: lib/credit-note.ts
  * THE credit-note rules: when one is required, what it must contain, and how it is minted.
  *
- * ── THE ACCOUNTANT'S RULING (2026-08-17) ────────────────────────────────────────────────────────
+ * ── THE ACCOUNTANT'S RULING (2026-08-16) ────────────────────────────────────────────────────────
  * Correcting a wrong figure on an ISSUED invoice requires a credit note plus a replacement, not an
  * amendment in place under the same number. And a refund needs a credit note: the refunded stamp
  * proves the payment EVENT but does not reverse output VAT, so every refund until now has left the

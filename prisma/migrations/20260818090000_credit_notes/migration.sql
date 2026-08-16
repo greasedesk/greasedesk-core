@@ -1,6 +1,6 @@
 -- CREDIT NOTES: an immutable VAT correction against an immutable invoice.
 --
--- The accountant's ruling (2026-08-17): correcting a wrong figure on an issued invoice requires a
+-- The accountant's ruling (2026-08-16): correcting a wrong figure on an issued invoice requires a
 -- credit note plus a replacement, not an amendment in place; and a refund needs a credit note,
 -- because the refunded stamp proves the payment event but does NOT reverse output VAT. Every refund
 -- until now has left the garage's VAT record overstated.

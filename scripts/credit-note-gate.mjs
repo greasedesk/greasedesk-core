@@ -3,7 +3,7 @@
  * Credit notes: the four predicates, the mint, and the VAT return actually netting down.
  *
  * ── WHAT THIS IS FOR ────────────────────────────────────────────────────────────────────────────
- * The accountant's ruling (2026-08-17): a refunded stamp proves the payment EVENT but does not
+ * The accountant's ruling (2026-08-16): a refunded stamp proves the payment EVENT but does not
  * reverse output VAT, so every refund until now left the garage's VAT record overstated. A credit
  * note is the correction, on its own sequence, dated on its own clock.
  *

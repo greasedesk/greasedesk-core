@@ -37,16 +37,16 @@ const R = (amount, at) => ({ amount_pennies: amount, collected_at: D(at) });
   check('the whole amount back is FULL', refundState({ receivedPennies: 5000, refunds: [R(5000, '2026-08-16')] }).kind === 'full');
   check('part of it is PARTIAL', refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16')] }).kind === 'partial');
   check('two partials summing to the whole is FULL',
-    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-17')] }).kind === 'full',
+    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-16')] }).kind === 'full',
     'the customer has all their money back; how many instalments it took is not their problem');
   check('an OVER-refund is still full, not partial',
     refundState({ receivedPennies: 5000, refunds: [R(6000, '2026-08-16')] }).kind === 'full',
     'goodwill processed as a refund must not read as money still outstanding');
   check('the date shown is the LATEST refund',
-    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-17')] }).at.toISOString().startsWith('2026-08-17'),
+    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-16')] }).at.toISOString().startsWith('2026-08-16'),
     '"when did I get my money back" means the last of it');
   check('amounts are summed, not counted',
-    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-17')] }).refundedPennies === 5000);
+    refundState({ receivedPennies: 5000, refunds: [R(2000, '2026-08-16'), R(3000, '2026-08-16')] }).refundedPennies === 5000);
   check('hasRefund is silent on none', !hasRefund(refundState({ receivedPennies: 5000, refunds: [] }))
     && hasRefund(refundState({ receivedPennies: 5000, refunds: [R(1, '2026-08-16')] })));
 

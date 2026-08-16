@@ -58,7 +58,7 @@ export async function getVatSummary(groupId: string, siteIds: string[], from: Da
 
   // ── CREDIT NOTES, SUBTRACTED ─────────────────────────────────────────────────────────────────
   // A refunded stamp proves the payment event; it does not reverse output VAT. Until credit notes
-  // existed every refund left this figure overstated (accountant's ruling, 2026-08-17).
+  // existed every refund left this figure overstated (accountant's ruling, 2026-08-16).
   //
   // Dated on `date_issued` — the credit note's OWN date, confirmed by a person. That is the VAT
   // clock, and it is allowed to fall in a different period from the refund that occasioned it: the

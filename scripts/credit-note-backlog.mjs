@@ -5,7 +5,7 @@
  * ── WHY THIS EXISTS AS A SCRIPT AND NOT A NOTE ──────────────────────────────────────────────────
  * Credit notes ship after refunds did. Anything refunded in between leaves the garage's VAT record
  * overstated until a correction is issued, and "we'll work out which ones later" is an archaeology
- * exercise that gets more expensive every day. The owner's instruction (2026-08-17) was to keep the
+ * exercise that gets more expensive every day. The owner's instruction (2026-08-16) was to keep the
  * list somewhere it can be ANSWERED FROM rather than reconstructed. This is that place.
  *
  * ── THE RULE IT APPLIES ─────────────────────────────────────────────────────────────────────────
