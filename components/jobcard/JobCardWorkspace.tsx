@@ -620,17 +620,17 @@ export default function JobCardWorkspace(p: Props) {
     const payPanel = payOpen && (
       <div className="bg-surface-muted border border-line rounded-xl p-4 space-y-3">
         <p className="text-sm font-medium text-ink">{t('invoiceTab.payMethodTitle')}</p>
-        <select value={payMethodId} onChange={(e) => setPayMethodId(e.target.value)}
+        <select value={payMethodId} onChange={(e) => setPayMethodId(e.target.value)} data-testid="pay-method"
           className="w-full sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm">
           {(payMethods ?? []).map((m) => <option key={m.id} value={m.id}>{m.name} — {t(`invoiceTab.clearance.${m.behaviour}`)}</option>)}
         </select>
         <label className="block">
           <span className="block text-xs text-muted mb-1">{t('invoiceTab.payDateLabel')}</span>
-          <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)}
+          <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} data-testid="pay-date"
             className="w-full sm:w-64 p-2 bg-surface border border-line rounded-lg text-ink text-base sm:text-sm" />
         </label>
         <div className="flex flex-col sm:flex-row gap-2">
-          <button disabled={busy !== null || !payMethodId || !payDate} onClick={confirmPay}
+          <button disabled={busy !== null || !payMethodId || !payDate} onClick={confirmPay} data-testid="pay-confirm"
             className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
           <button onClick={() => setPayOpen(false)} className="text-sm text-muted hover:text-ink px-2 py-2.5">{t('delete.cancel')}</button>
         </div>
@@ -714,7 +714,7 @@ export default function JobCardWorkspace(p: Props) {
             )}
             {mintPanel}
             {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
-              <button disabled={busy !== null} onClick={openPay} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+              <button disabled={busy !== null} onClick={openPay} data-testid="invoice-mark-paid" className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
             {payPanel}
             {stagesRemainingMsg}
@@ -728,7 +728,7 @@ export default function JobCardWorkspace(p: Props) {
             {invoiceActions}
             {agreedVersionPanel}
             {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
-              <button disabled={busy !== null} onClick={openPay} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
+              <button disabled={busy !== null} onClick={openPay} data-testid="invoice-mark-paid" className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
             {payPanel}
           </>
