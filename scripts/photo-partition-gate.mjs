@@ -91,6 +91,35 @@ try {
         : `refused, but NOT by NOT NULL: ${refused.split('\n').filter((l) => l.trim()).pop()?.trim().slice(0, 120)}`);
   check('and nothing was written', (await prisma.jobCardPhoto.count({ where: { r2_key: 'photo_gate_mustfail' } })) === 0);
 
+  // ── 3b. AND NEITHER CAN A KEYLESS ROW ──────────────────────────────────────────────────────
+  // Narrower than the partition rule: a photo row with no key is not a leak, it is an ORPHAN —
+  // an object no reader can render and no operator can find. photoKey is the only builder and it
+  // refuses rather than returning something unusable, so a null here could only mean a caller
+  // forgot.
+  console.log('\n— nor can a row with no key —');
+  let keyless = null;
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "JobCardPhoto" (id, job_card_id, group_id, stage, slot, r2_key)
+       VALUES (gen_random_uuid(), $1, $2, 'intake', 'vin', NULL)`, card.id, ZZ);
+  } catch (e) { keyless = String(e?.message ?? e); }
+  const keyByNotNull = keyless !== null && /23502|null value|not-null/i.test(keyless);
+  check('a null r2_key is REFUSED by the database', keyByNotNull,
+    keyless === null ? 'THE INSERT SUCCEEDED — the column is still nullable'
+      : keyByNotNull ? 'NOT NULL, code 23502'
+        : `refused, but NOT by NOT NULL: ${keyless.split('\n').filter((l) => l.trim()).pop()?.trim().slice(0, 120)}`);
+  // Discriminating: the same insert WITH a key must succeed, or the refusal proves only that the
+  // table rejects this shape for some other reason.
+  let legal = true, legalId = null;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `INSERT INTO "JobCardPhoto" (id, job_card_id, group_id, stage, slot, r2_key)
+       VALUES (gen_random_uuid(), $1, $2, 'intake', 'vin', $3) RETURNING id`, card.id, ZZ, `${ZZ}/photo_gate_ok`);
+    legalId = rows[0].id;
+  } catch { legal = false; }
+  check('the check is discriminating — the same row WITH a key inserts', legal && !!legalId);
+  if (legalId) await prisma.jobCardPhoto.delete({ where: { id: legalId } }).catch(() => {});
+
   // ── 4. THE REAL DATA, NOT A FIXTURE ────────────────────────────────────────────────────────
   // "Could this have happened already?" is a question about the rows that exist, and no synthetic
   // row answers it.
@@ -101,10 +130,11 @@ try {
     strays.length ? `\n    ${strays.map((p) => `${p.id} key=${p.r2_key ?? 'NULL'} group=${p.group_id}`).join('\n    ')}`
       : 'so no object is currently beyond the reach of a purge');
   check('and every one names a tenant', all.every((p) => !!p.group_id), `${all.length} rows`);
+  check('and every one names an object', all.every((p) => !!p.r2_key), `${all.length} rows`);
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
-  await prisma.jobCardPhoto.deleteMany({ where: { r2_key: 'photo_gate_mustfail' } });
+  await prisma.jobCardPhoto.deleteMany({ where: { r2_key: { in: ['photo_gate_mustfail', `${ZZ}/photo_gate_ok`] } } });
   check('no fixture row survives', (await prisma.jobCardPhoto.count({ where: { r2_key: 'photo_gate_mustfail' } })) === 0);
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
