@@ -37,7 +37,16 @@ export const COUNTED_STATUSES = ['succeeded'] as const;
 export type RecordPaymentArgs = {
   groupId: string;
   invoiceId: string;
-  siteId?: string | null;
+  /**
+   * REQUIRED, and non-nullable in the column too. It is a denormalisation of Invoice.site_id, which
+   * is `String` and therefore never absent — so a null here could only ever mean A CALLER FORGOT.
+   * It did: pages/api/jobcard-status selected the invoice without site_id, and `?? null` quietly
+   * turned an unselected field into a stored null on EVERY counter mark-paid. One such row was
+   * enough to drop £2,485.43 — 27% of an August — out of the first query written against the column.
+   * Required here so the omission fails at the type, and NOT NULL in the database so it fails at
+   * the insert. Honest-null is for meaningful absence; this absence was never meaningful.
+   */
+  siteId: string;
   amountPennies: number;
   currency?: string;
   /** 'succeeded' for money in hand; 'processing' while a clearance window runs. */
@@ -138,7 +147,7 @@ export async function recordPayment(tx: Tx, args: RecordPaymentArgs) {
       data: {
         group_id: args.groupId,
         invoice_id: args.invoiceId,
-        site_id: args.siteId ?? null,
+        site_id: args.siteId,
         provider: args.provider ?? 'manual',
         status: args.status,
         amount_pennies: args.amountPennies,

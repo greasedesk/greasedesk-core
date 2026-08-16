@@ -1923,7 +1923,11 @@ model Payment {
   id         String  @id @default(uuid())
   group_id   String
   invoice_id String
-  site_id    String?
+  /// NOT NULL, and deliberately so. A denormalisation of Invoice.site_id — which is non-nullable,
+  /// on an invoice every payment is required to have. A null could only mean a caller forgot; one
+  /// did, and it cost 27% of an August out of the revenue tile. Readers still scope through the
+  /// INVOICE (lib/payments::receivedInPeriod), because the copy can drift even when it is present.
+  site_id    String
 
   /**
    * 'stripe' | 'manual' — how the money arrived, not what the garage called it.

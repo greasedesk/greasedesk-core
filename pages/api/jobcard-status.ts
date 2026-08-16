@@ -200,7 +200,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         //              matches, so it stays pending until explicitly confirmed (warranty/EMAC).
         const inv = (await tx.invoice.findUnique({
           where: { job_card_id: jobCardId },
-          select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site: { select: { locale: true } } },
+          // site_id IS SELECTED. Its absence here is what wrote a null onto every counter payment:
+          // `siteId: inv.site_id ?? null` read an unselected field as undefined and stored null.
+          select: { id: true, job_card_id: true, series: true, status: true, vat_registered_at_issue: true, site_id: true, site: { select: { locale: true } } },
         })) as any;
         if (inv && inv.series === 'warranty') throw new Error('WARRANTY_NOT_PAYABLE'); // settles at issue — nothing to pay
         if (inv && inv.status === 'issued') {
@@ -226,7 +228,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             await tx.invoice.update({ where: { id: inv.id }, data: { status: 'paid', paid_at: now, date_paid: docDate, confirm_due_at: null, ...methodGrain } });
             // INSTANT clearance = the money is already in the drawer. Succeeded at once.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'succeeded',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
               collectedAt: docDate, createdBy: user.id as string,
@@ -239,7 +241,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // MANUAL clearance: recorded, not yet cleared. `processing` keeps it out of the cache
             // until somebody confirms the money actually arrived.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
               collectedAt: docDate, createdBy: user.id as string,
@@ -255,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // WINDOWED clearance: same reasoning as manual. The window exists precisely because the
             // money might not arrive, so it cannot count until it has.
             await recordManualPayment(tx, {
-              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id ?? null,
+              groupId: user.group_id as string, invoiceId: inv.id, siteId: inv.site_id,
               amountPennies: amountPaidPennies, status: 'processing',
               paymentMethodId: method.id, paymentMethodSnapshot: method.name,
               collectedAt: docDate, createdBy: user.id as string,

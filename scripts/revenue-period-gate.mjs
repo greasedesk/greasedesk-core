@@ -53,7 +53,7 @@ async function oldBasis(siteIds, from, to) {
     .reduce((a, r) => a + (r.amount_paid_pennies ?? invoiceTotals(r.lines).grossPennies), 0);
 }
 
-let payId = null, invId = null, cacheBefore, nullSitePayId = null, nullSiteInvId = null, nullSiteCache;
+let driftSiteId = null, payId = null, invId = null, cacheBefore, nullSitePayId = null, nullSiteInvId = null, nullSiteCache;
 const madeRefunds = [];
 try {
   if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) throw new Error('REFUSING: leftovers');
@@ -137,8 +137,20 @@ try {
   check('a refund with no receipts gives a NEGATIVE month', neg.netPennies === -1000,
     `${P(neg.netPennies)} — a clamped zero would be a lie about a month that genuinely gave money back`);
 
-  // ── THE NULL-SITE PAYMENT STILL COUNTS ─────────────────────────────────────────────────────
-  console.log('\n— a payment whose own site_id is null —');
+  // ── THE INVOICE IS THE AUTHORITY, EVEN WHEN THE COPY DISAGREES ─────────────────────────────
+  // This block used to build a payment with site_id: null — the shape that dropped £2,485.43 from a
+  // real August. That row can no longer exist: the column is NOT NULL as of
+  // 20260817090000_payment_site_id_not_null, because a null there only ever meant a caller forgot.
+  //
+  // The rule under test did NOT go away with it. Nothing makes Payment.site_id agree with its
+  // invoice's, so the copy can still drift — a moved site, a bad backfill, a hand-written row. So
+  // the fixture moved from ABSENT to WRONG, which is the case that survives the constraint.
+  console.log('\n— a payment whose own site_id disagrees with its invoice —');
+  // A second ZZ site, made and removed here. ZZ has exactly one, so there is no other way to make
+  // the two columns disagree; a site from another tenant would be a shape the app cannot produce.
+  driftSiteId = (await prisma.site.create({
+    data: { group_id: ZZ, site_name: 'ZZ Gate — drift fixture' }, select: { id: true },
+  })).id;
   const inv2 = await prisma.invoice.findFirst({
     where: { group_id: ZZ, status: 'paid', series: 'chargeable', id: { not: invId } },
     select: { id: true, site_id: true }, orderBy: { created_at: 'desc' },
@@ -147,22 +159,40 @@ try {
   nullSiteInvId = inv2.id;
   nullSiteCache = (await prisma.invoice.findUnique({ where: { id: inv2.id }, select: { amount_paid_pennies: true } })).amount_paid_pennies;
   nullSitePayId = (await prisma.payment.create({
-    data: { group_id: ZZ, invoice_id: inv2.id, site_id: null, provider: 'manual', status: 'succeeded',
-      amount_pennies: 7777, currency: 'GBP', source_ref: `${MARK}nullsite`, collected_at: new Date(JUNE_FROM.getTime() + 19 * 86400000) },
+    data: { group_id: ZZ, invoice_id: inv2.id, site_id: driftSiteId, provider: 'manual', status: 'succeeded',
+      amount_pennies: 7777, currency: 'GBP', source_ref: `${MARK}driftsite`, collected_at: new Date(JUNE_FROM.getTime() + 19 * 86400000) },
     select: { id: true },
   })).id;
-  const withNull = await receivedInPeriod(prisma, { groupId: ZZ, siteIds, from: JUNE_FROM, to: JUNE_TO });
-  check('it is COUNTED, via its invoice’s site', withNull.receivedPennies - juneAfter.receivedPennies === 7777,
+  const withDrift = await receivedInPeriod(prisma, { groupId: ZZ, siteIds, from: JUNE_FROM, to: JUNE_TO });
+  check('it is COUNTED, via its invoice’s site', withDrift.receivedPennies - juneAfter.receivedPennies === 7777,
     'scoping on Payment.site_id dropped £2,485.43 from a real August — the invoice is the authority');
-  check('and attributed to the right site', (withNull.perSite.find((s) => s.siteId === inv2.site_id)?.receivedPennies ?? 0) >= 7777);
-  // Discriminating: the naive scope would have missed it.
+  check('and attributed to the INVOICE’s site, not its own', (withDrift.perSite.find((s) => s.siteId === inv2.site_id)?.receivedPennies ?? 0) >= 7777);
+  check('the drift site gets nothing', !withDrift.perSite.some((s) => s.siteId === driftSiteId),
+    'the copy disagreed and the copy lost');
+  // Discriminating: the naive scope would have missed it — the drift site is not in siteIds.
   const naive = await prisma.payment.aggregate({
     where: { group_id: ZZ, site_id: { in: siteIds }, status: 'succeeded', collected_at: { gte: JUNE_FROM, lt: JUNE_TO } },
     _sum: { amount_pennies: true },
   });
   check('the check is discriminating — scoping on Payment.site_id MISSES it',
-    (naive._sum.amount_pennies ?? 0) === withNull.receivedPennies - 7777,
-    'the naive query is short by exactly the null-site payment');
+    (naive._sum.amount_pennies ?? 0) === withDrift.receivedPennies - 7777,
+    'the naive query is short by exactly the drifted payment');
+
+  // ── AND THE CONSTRAINT ITSELF BITES ────────────────────────────────────────────────────────
+  // The whole value of this change is that a forgotten select FAILS instead of storing a plausible
+  // null. Proven against the database, not asserted: Postgres must refuse the insert with 23502.
+  console.log('\n— the column refuses a null —');
+  let refused = null;
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Payment" (id, group_id, invoice_id, site_id, provider, status, amount_pennies, currency, source_ref, collected_at)
+       VALUES (gen_random_uuid(), $1, $2, NULL, 'manual', 'succeeded', 1, 'GBP', $3, now())`,
+      ZZ, inv2.id, `${MARK}mustfail`,
+    );
+  } catch (e) { refused = String(e?.message ?? e); }
+  check('a null site_id is REFUSED by the database', refused !== null && /23502|not-null|null value/i.test(refused),
+    refused ? refused.split('\n').find((l) => /23502|null value/i.test(l))?.trim() ?? 'refused' : 'THE INSERT SUCCEEDED — the constraint is not there');
+  check('and nothing was written', (await prisma.payment.count({ where: { source_ref: `${MARK}mustfail` } })) === 0);
 } catch (e) {
   check('run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
@@ -171,6 +201,10 @@ try {
     check('teardown removed the fixture refunds', d.count === madeRefunds.length, `${d.count} of ${madeRefunds.length}`);
   }
   for (const id of [payId, nullSitePayId]) if (id) await prisma.payment.delete({ where: { id } }).catch(() => {});
+  if (driftSiteId) {
+    await prisma.site.delete({ where: { id: driftSiteId } }).catch(() => {});
+    check('teardown removed the fixture site', (await prisma.site.count({ where: { id: driftSiteId } })) === 0);
+  }
   for (const [id, val] of [[invId, cacheBefore], [nullSiteInvId, nullSiteCache]]) {
     if (!id) continue;
     await prisma.invoice.update({ where: { id }, data: { amount_paid_pennies: val ?? null } });
