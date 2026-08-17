@@ -65,15 +65,24 @@ export function validatePaymentDate(d: Date, issueDate: Date, today: Date): 'fut
 }
 
 // ---- Company identity for the header (decision D: Site's own number/VAT wins WHEN SET, else Group) ----
-export type CompanyIdentity = { name: string; companyNumber: string | null; vatNumber: string | null; address: string | null };
+export type CompanyIdentity = {
+  /** The TRADING name, if the garage has set one. Null means they have not — not 'same as legal'. */
+  tradingName?: string | null; name: string; companyNumber: string | null; vatNumber: string | null; address: string | null };
 
 export function resolveCompanyIdentity(
-  group: { group_name: string; company_number: string | null; vat_number: string | null; address: string | null },
+  group: { group_name: string; trading_name?: string | null; company_number: string | null; vat_number: string | null; address: string | null },
   site: { company_number: string | null; vat_number: string | null; address: string | null } | null,
 ): CompanyIdentity {
   const pick = (s: string | null | undefined, g: string | null | undefined) => (s && s.trim() ? s : g ?? null) ?? null;
   return {
+    // `name` stays the REGISTERED name. A VAT invoice must identify the supplier, and for a limited
+    // company that is the registered name — the trading name is carried alongside it, never instead.
     name: group.group_name,
+    // NULL when unset, and left null rather than defaulted to the registered name: the renderer
+    // decides how to present one-name and two-name cases, and a snapshot that silently duplicates
+    // the legal name cannot be told apart later from one that genuinely had a trading name equal
+    // to it.
+    tradingName: group.trading_name?.trim() || null,
     companyNumber: pick(site?.company_number, group.company_number),
     vatNumber: pick(site?.vat_number, group.vat_number),
     address: pick(site?.address, group.address),

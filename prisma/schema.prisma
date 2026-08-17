@@ -151,6 +151,10 @@ enum ResourceType {
 model Group {
   id                            String  @id @default(uuid())
   group_name                    String
+  /// WHAT CUSTOMERS CALL YOU. `group_name` above is the REGISTERED LEGAL NAME and stays on VAT
+  /// documents; this is the shopfront. NULL = not set, which is the common case — every reader
+  /// falls back with `trading_name || group_name`, and the writer normalises '' to NULL so the
+  /// column means "not set" rather than carrying an empty string N readers must defend against.
   trading_name                  String?
   company_number                String?
   vat_number                    String?
@@ -217,7 +221,12 @@ model Group {
   // an existing tenant keeps exactly today's behaviour until someone sets this deliberately.
   ops_email                 String?
   invoice_reply_to          String? // business Reply-To on invoice emails (fallback: billing_email)
-  invoice_sender_name       String? // display name on the GreaseDesk-owned From (fallback: group_name)
+  /// Display name on the GreaseDesk-owned From line. A NARROWING of trading_name, not a peer:
+  /// the fallback chain is `invoice_sender_name || trading_name || group_name`, so a garage that
+  /// sets only a trading name gets it here too. Set this ONLY when the email From should differ
+  /// from the trading name — otherwise three name fields is how a garage ends up with three names
+  /// and no idea which appears where. NULL = use the trading name.
+  invoice_sender_name       String?
   invoice_footer_text       String? // payment terms / footer block — multi-line, rendered on the document
   invoice_bcc               String? // garage-copy BCC (fallback: billing_email)
   logo_r2_key               String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
@@ -1866,6 +1875,15 @@ model Invoice {
   company_name_snapshot       String
   company_vat_number_snapshot String?
   company_address_snapshot    String?
+  /// The TRADING name as it stood at issue. Frozen for the same reason every other snapshot here is:
+  /// a garage that rebrands must not have every historical document reprint under the new name — an
+  /// invoice is a record of what the customer received, not a view of who the garage is today. Same
+  /// failure shape as a labour rate revaluing closed months.
+  ///
+  /// NULL is TEMPORAL and honest: rows issued before this column existed genuinely carried no
+  /// trading name, and the renderer falls back to company_name_snapshot for them rather than
+  /// pretending. It is not "a caller forgot" — the mint always writes it now.
+  company_trading_name_snapshot String?
   customer_name_snapshot      String
   customer_address_snapshot   String?
   vehicle_reg_snapshot        String?
@@ -3158,6 +3176,15 @@ model CreditNote {
   company_vat_number_snapshot String?
   /// NULL when the invoice had none. Same copy-not-resolve rule as the VAT number above.
   company_address_snapshot   String?
+  /// The TRADING name as it stood at issue. Frozen for the same reason every other snapshot here is:
+  /// a garage that rebrands must not have every historical document reprint under the new name — an
+  /// invoice is a record of what the customer received, not a view of who the garage is today. Same
+  /// failure shape as a labour rate revaluing closed months.
+  ///
+  /// NULL is TEMPORAL and honest: rows issued before this column existed genuinely carried no
+  /// trading name, and the renderer falls back to company_name_snapshot for them rather than
+  /// pretending. It is not "a caller forgot" — the mint always writes it now.
+  company_trading_name_snapshot String?
   customer_name_snapshot     String
   /// NULL when the customer had no address on the invoice. A meaningful absence: plenty of
   /// counter jobs never collect one, and inventing one on the correction would differ from the

@@ -145,7 +145,8 @@ export async function mintCreditNote(tx: Prisma.TransactionClient, args: {
     where: { id: args.invoiceId },
     select: {
       id: true, group_id: true, site_id: true, vat_registered_at_issue: true,
-      company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
+      company_name_snapshot: true, company_trading_name_snapshot: true,
+      company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       group: { select: { invoice_credit_note_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true } },
     },
@@ -179,6 +180,10 @@ export async function mintCreditNote(tx: Prisma.TransactionClient, args: {
       // does not read as a pair.
       vat_registered_at_issue: inv.vat_registered_at_issue,
       company_name_snapshot: inv.company_name_snapshot,
+      // COPIED FROM THE INVOICE, not re-resolved from the tenant today — the same rule the other
+      // particulars follow. A credit note showing a newer trading name than the invoice it corrects
+      // would not read as a pair.
+      company_trading_name_snapshot: inv.company_trading_name_snapshot,
       company_vat_number_snapshot: inv.company_vat_number_snapshot,
       company_address_snapshot: inv.company_address_snapshot,
       customer_name_snapshot: inv.customer_name_snapshot,

@@ -3,7 +3,7 @@
  * Edit the caller's own Group (company) details. ADMIN/owner only — gated server-side via the
  * same getVisibility().isAdmin check used for user-management / location-create. Group-scoped.
  *
- *   PATCH { group_name?, company_number?, address?, vat_number?, vat_registered?, default_vat_rate? }
+ *   PATCH { group_name?, trading_name?, company_number?, address?, vat_number?, vat_registered?, default_vat_rate? }
  *
  * vat_registered is the master switch; default_vat_rate is the ONE company default that cascades as
  * an editable pre-fill to quotes + overheads. Both gate/feed via lib/tenant-vat.ts.
@@ -35,12 +35,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = sUser.group_id as string;
 
   const {
-    group_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
+    group_name, trading_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
     invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp, ops_email,
     util_red_below, util_amber_below,
   } = (req.body || {}) as {
-    group_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
+    group_name?: string; trading_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
@@ -55,6 +55,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!clean) return res.status(400).json({ message: 'Company name cannot be empty.' });
     data.group_name = clean;
   }
+  // '' → NULL, AT THE WRITE. A text input that has been focused and cleared submits an empty
+  // string, and a column carrying '' means every reader must defend against two kinds of "unset".
+  // One writer enforcing the meaning beats N readers coping with it.
+  if (trading_name !== undefined) data.trading_name = trading_name.trim().slice(0, 120) || null;
   if (company_number !== undefined) data.company_number = company_number.trim() || null;
   if (address !== undefined) data.address = address.trim() || null;
   if (phone !== undefined) data.phone = phone.trim() || null;

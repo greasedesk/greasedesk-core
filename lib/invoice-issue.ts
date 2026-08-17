@@ -28,7 +28,7 @@ import { dueDateFor } from '@/lib/account-terms';
 const CARD_SELECT = {
   site_id: true,
   odometer_in: true,
-  group: { select: { group_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
+  group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true, account_terms_days: true } },
   vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
@@ -79,6 +79,9 @@ async function createInvoiceRow(
       // date that would put it on a chase list.
       due_date: series === 'chargeable' ? dueDateFor(card.customer, issuedAt) : null,
       company_name_snapshot: identity.name,
+      // FROZEN AT ISSUE, like every other snapshot on this row. A rebrand must not rewrite the name
+      // on documents already in customers' hands.
+      company_trading_name_snapshot: identity.tradingName ?? null,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,
       customer_name_snapshot: card.customer?.name ?? '',

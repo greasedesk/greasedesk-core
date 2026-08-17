@@ -16,19 +16,20 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 
 type PageProps = {
-  groupName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string; taxLabel: string; taxModel: string;
+  groupName: string; tradingName: string; companyNumber: string; address: string; vatRegistered: boolean; vatNumber: string; defaultVatRate: string; vinHint: string; phone: string; whatsapp: string; taxLabel: string; taxModel: string;
 };
 
 const inputClass = 'mt-1 w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent';
 const labelClass = 'block text-xs text-muted';
 
 export default function CompanyDetails(props: PageProps) {
-  const { groupName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp, taxLabel, taxModel, companyNumberLabel, companyNumberPlaceholder, phonePlaceholder, countryName } = props as any;
+  const { groupName, tradingName, companyNumber, address, vatRegistered, vatNumber, defaultVatRate, vinHint, phone, whatsapp, taxLabel, taxModel, companyNumberLabel, companyNumberPlaceholder, phonePlaceholder, countryName } = props as any;
   const L = taxLabel || 'VAT';
   const isSalesTax = taxModel === 'sales_tax'; // US: flat rate, NO tax number to ask for
   const { t } = useTranslation('company');
   const router = useRouter();
   const [name, setName] = useState(groupName);
+  const [trading, setTrading] = useState(tradingName);
   const [num, setNum] = useState(companyNumber);
   // "Not registered" is an ANSWER, not an empty field. Without it this page was a dead end for a
   // sole trader: the setup signal links here, and the only way to satisfy it was to invent a
@@ -51,7 +52,7 @@ export default function CompanyDetails(props: PageProps) {
       const res = await fetch('/api/company', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          group_name: name, company_number: noCoNumber ? '' : num, address: addr,
+          group_name: name, trading_name: trading, company_number: noCoNumber ? '' : num, address: addr,
           phone: phoneVal, whatsapp: waVal,
           vin_hint_text: vinHintText,
           vat_registered: vatReg, vat_number: vatReg ? vat : '', // clear number when de-registering
@@ -83,7 +84,23 @@ export default function CompanyDetails(props: PageProps) {
         <p className="text-sm text-muted mb-4">{t('details.intro')}</p>
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         <form onSubmit={save} className="space-y-3">
-          <div><label className={labelClass}>{t('details.name')} *</label><input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} /></div>
+          <div>
+            <label className={labelClass}>{t('details.name')} *</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} required className={inputClass} data-testid="legal-name" />
+            <p className="mt-1 text-xs text-muted">Your registered legal name. This appears on invoices and VAT documents.</p>
+          </div>
+          {/* SECOND, AND PRESENTED AS A NARROWING OF THE FIRST — not a peer. Two boxes both asking
+              "what do customers call you" is how a garage ends up with three names and no idea
+              which appears where. The helper text says what happens when it is left empty, because
+              most garages will never set it. */}
+          <div>
+            <label className={labelClass}>Trading name</label>
+            <input value={trading} onChange={(e) => setTrading(e.target.value)} className={inputClass}
+              placeholder={name} data-testid="trading-name" />
+            <p className="mt-1 text-xs text-muted">
+              What customers see — on texts, emails and quotes. Leave it empty if it is the same as your registered name.
+            </p>
+          </div>
           <div>
             <label className={labelClass}>{companyNumberLabel}</label>
             <input value={num} onChange={(e) => setNum(e.target.value)} className={inputClass}
@@ -143,12 +160,13 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
   const g = (await prisma.group.findUnique({
     where: { id: gate.vis.groupId as string },
     select: {
-      group_name: true, company_number: true, company_number_not_applicable: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true, country_code: true, ref: true,
+      group_name: true, trading_name: true, company_number: true, company_number_not_applicable: true, address: true, vat_registered: true, vat_number: true, default_vat_rate: true, vin_hint_text: true, phone: true, whatsapp: true, tax_label: true, tax_model: true, country_code: true, ref: true,
     },
   })) as any;
   return {
     props: {
       groupName: g?.group_name ?? '',
+      tradingName: g?.trading_name ?? '',
       companyNumber: g?.company_number ?? '',
       companyNumberNotApplicable: !!(g as any)?.company_number_not_applicable,
       address: g?.address ?? '',

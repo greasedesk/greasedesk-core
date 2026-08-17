@@ -38,10 +38,14 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
 
   const group = (await prisma.group.findUnique({
     where: { id: groupId },
-    select: { group_name: true, billing_email: true, invoice_email_footer: true, invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, inbound_token: true },
+    select: { group_name: true, trading_name: true, billing_email: true, invoice_email_footer: true, invoice_reply_to: true, invoice_sender_name: true, invoice_bcc: true, inbound_token: true },
   })) as any;
   // Invoicing-tab settings with sensible fallbacks (pre-config tenants behave exactly as before).
-  const senderName = (group.invoice_sender_name || '').trim() || group.group_name;
+  // invoice_sender_name || trading_name || group_name — a NARROWING chain, not three peers. A
+  // garage that sets only a trading name gets it on the From line too; invoice_sender_name exists
+  // for the case where the email From should differ from the trading name, which is rare.
+  const displayName = (group.trading_name || '').trim() || group.group_name;
+  const senderName = (group.invoice_sender_name || '').trim() || displayName;
   // ONE resolver — see lib/reply-to. Hands out the inbound address ONLY for entitled tenants.
   const { hasModule } = await import('@/lib/modules');
   const replyTo = resolveReplyTo(group, { inboundEnabled: await hasModule(groupId, 'inbound') });
@@ -51,7 +55,7 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
   const total = formatMoney(doc.vatRegistered ? doc.totals.grossPennies : doc.totals.netPennies, { currency: doc.currency, locale: doc.locale });
   // Localised HERE (this path owns the tenant's locale); ASSEMBLED by the template. The body lines
   // are translated strings, not HTML — the invoice_document template builds the markup.
-  const subject = t('email.subject', { number: doc.number, garage: group.group_name });
+  const subject = t('email.subject', { number: doc.number, garage: displayName });
 
   try {
     // MINTED BEFORE THE PDF RENDERS, deliberately. Nothing on the PDF uses it yet, but the QR code
@@ -81,7 +85,7 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
         body: t('email.body', { garage: group.group_name, number: doc.number, total }),
         vehicleLine: doc.vehicle.reg ? `${t('vehicle')}: ${doc.vehicle.reg}${doc.vehicle.desc ? ` (${doc.vehicle.desc})` : ''}` : null,
         signoff: t('email.signoff'),
-        garageName: group.group_name,
+        garageName: displayName,
         footerLine: group.invoice_email_footer ? t('email.footer') : null,
         // Absent on a receipt, so the template renders no button at all rather than a dead one.
         payLink: payLink?.url ?? null,
