@@ -6,6 +6,7 @@
  * Returns { found:false } for an unknown reg (a new car). Authority = canAccessSite for any of the
  * caller's sites (they can create cards here; reading a reg they can book is the same tier).
  */
+import { openDueItemsForVehicle } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -43,6 +44,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // count matters: someone is about to give this customer a slot. Derived (lib/no-show), never a
   // stored counter.
   const noShows = await noShowHistory(prisma, ownerId);
+  // OPEN DUE ITEMS ride with the lookup for the same reason the no-show count does: this fires at
+  // the moment somebody is booking the car in, which is exactly when "it also needs discs" turns
+  // a slot into a bigger job. Same chokepoint the card reads (lib/due-items).
+  const dueItems = await openDueItemsForVehicle(prisma, user.group_id, vehicle.id);
 
   return res.status(200).json({
     found: true,
@@ -53,5 +58,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
     owner: { name: owner?.name ?? '', phone: owner?.phone ?? '', email: owner?.email ?? '' },
     noShows,
+    dueItems,
   });
 }

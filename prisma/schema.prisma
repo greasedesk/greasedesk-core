@@ -121,6 +121,26 @@ enum BillingStatus {
   lapsed // canceled / unpaid: reads stay open forever, writes blocked, nothing deleted
 }
 
+/// WHICH CLOCK MAKES A DUE ITEM DUE — STATED, never inferred from which column happens to be
+/// filled. A date and a mileage can BOTH be present ("by March, or 60k, whichever first" is a real
+/// thing a mechanic says) and only one is binding; letting the presence of a value carry the
+/// decision is the demo_expires_at lesson — one column answering two questions.
+enum DueBasis {
+  date
+  mileage
+  next_service
+}
+
+/// WHAT THE CUSTOMER SAID — THREE states, and the distinction is the whole commercial point.
+/// `not_raised` (nobody asked them yet) and `declined` (they were asked and said no) are different
+/// facts, and only `declined` is a lead. Collapsing them would make declined vanishingly rare and
+/// silently destroy the marketing list this model exists to build.
+enum DueItemResponse {
+  not_raised
+  declined
+  agreed_later
+}
+
 enum ItemType {
   labour
   part
@@ -402,6 +422,7 @@ model Group {
   smsTopUps           SmsTopUp[]
   commissionRefusals  CommissionRefusal[]
   credit_notes CreditNote[]
+  due_items          VehicleDueItem[]
 }
 
 /**
@@ -1396,6 +1417,66 @@ model Customer {
   @@index([group_id, email])
 }
 
+/// A JOB THE CAR NEEDS THAT NOBODY IS DOING TODAY — found at intake, surfaced next time.
+///
+/// ── WHY IT HANGS OFF THE VEHICLE ───────────────────────────────────────────────────────────────
+/// The car is the identity that survives (the car-first re-root): the job card closes, the owner
+/// may change, the car comes back. An item keyed to the card would die with the job it was found
+/// on, and finding it again next year is the entire point.
+///
+/// ── THE CUSTOMER IS NEVER STORED HERE ──────────────────────────────────────────────────────────
+/// DELIBERATE, and NOT an oversight to be "optimised" into a stored customer_id later. Who to
+/// remind is resolved AT REMINDER TIME through the VehicleOwnership edge, because the car may have
+/// changed hands between the finding and the reminder — and a reminder belongs to whoever owns it
+/// then, not to whoever owned it in March. Same principle as every other derived read here.
+model VehicleDueItem {
+  id         String @id @default(uuid())
+  group_id   String
+  vehicle_id String
+
+  /// PROVENANCE that outlives the job. SetNull, not Cascade: an admin hard-deleting a job card
+  /// must not delete the fact that the car needs discs — the finding is about the CAR.
+  found_on_job_card_id String?
+
+  /// What the car needs, in the mechanic's words. Freeform because that is the bay reality.
+  description String
+  /// Optional link to the priced service, when it maps to one. NULLABLE on purpose: a catalogue
+  /// entry can be retired (lib/catalogue-retire) and the finding must survive that.
+  service_catalogue_id String?
+
+  /// WHICH CLOCK BINDS. Stated, never inferred — see DueBasis.
+  due_basis   DueBasis
+  /// The non-binding one may still be recorded as context; only the basis decides.
+  due_date    DateTime?
+  due_mileage Int?
+
+  /// THREE-STATE, and there is NO default: the capture surface must make someone choose, or a
+  /// mechanic tapping through at speed would silently record every finding as `not_raised` and
+  /// `declined` — the only one that is a lead — would never appear.
+  customer_response DueItemResponse
+  /// When they answered. NULL for `not_raised`, because nobody answered: that is an absence of an
+  /// event, not an event at time-unknown.
+  response_at DateTime?
+
+  /// Open until done or dismissed. `closed_job_card_id` names the job that finally did it.
+  closed_at         DateTime?
+  closed_job_card_id String?
+  /// Why it was closed without being done, when that is what happened. NULL while open.
+  closed_reason String?
+
+  created_by String?
+  created_at DateTime @default(now())
+
+  group             Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle           Vehicle  @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  found_on_job_card JobCard? @relation("DueItemFoundOn", fields: [found_on_job_card_id], references: [id], onDelete: SetNull)
+  closed_job_card   JobCard? @relation("DueItemClosedBy", fields: [closed_job_card_id], references: [id], onDelete: SetNull)
+
+  /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
+  @@index([group_id, vehicle_id, closed_at])
+  @@index([found_on_job_card_id])
+}
+
 model Vehicle {
   id                      String    @id @default(uuid())
   group_id                String
@@ -1434,6 +1515,7 @@ model Vehicle {
   bookings   Booking[]
   job_cards  JobCard[]
   threads    MessageThread[]
+  due_items  VehicleDueItem[]
 
   @@index([group_id, customer_id])
   @@index([registration])
@@ -1655,6 +1737,8 @@ model JobCard {
   @@index([resource_id, scheduled_date])
   @@index([resource_id, start_at])
   @@index([duplicated_from_id])
+  due_items_found    VehicleDueItem[] @relation("DueItemFoundOn")
+  due_items_closed   VehicleDueItem[] @relation("DueItemClosedBy")
 }
 
 model JobCardPhoto {

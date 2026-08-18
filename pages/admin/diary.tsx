@@ -1169,6 +1169,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // derived and carried by the lookup. Cleared with each new lookup so a warning never outlives the
   // customer it belongs to.
   const [noShows, setNoShows] = useState<{ count: number; dates: string[] } | null>(null);
+  // OPEN FINDINGS on this car — surfaced at the moment the slot is being agreed, which is when
+  // "it also needs discs" turns a half-hour booking into a bigger one. Cleared per lookup, same
+  // as the no-show warning, so it never outlives the car it belongs to.
+  const [dueItems, setDueItems] = useState<Array<{ id: string; description: string }> | null>(null);
   // VIN-keyed decode (US / vPIC). Same fill-blanks-only policy and the same non-throwing contract
   // as the reg path; vPIC cannot know colour/mileage so those are never touched.
   async function lookupByVin() {
@@ -1196,6 +1200,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     const r = await lookupVehicleByReg(reg);
     setLookBusy(false);
     setNoShows(r.ok ? (r.noShows ?? null) : null);
+    setDueItems(r.ok ? (r.dueItems ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
     if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
     // Fill BLANKS ONLY — a manual correction is never clobbered.
@@ -1311,6 +1316,11 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                 )}
               </div>
               {lookMsg && <p className={`text-[11px] mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
+              {dueItems && dueItems.length > 0 && (
+                <p className="text-[11px] mt-1 font-semibold text-accent" data-testid="due-items-hint">
+                  {t('create.dueItems', { list: dueItems.map((d) => d.description).slice(0, 3).join(', ') })}
+                </p>
+              )}
               {noShows && (
                 <p className="text-[11px] mt-1 font-semibold text-warn" data-testid="no-show-history">
                   {t('create.noShowHistory', { count: noShows.count, dates: noShows.dates.slice(0, 3).join(', ') })}

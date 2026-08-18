@@ -26,7 +26,9 @@ export type LookupMotMeta = { motExpiry: string | null; lastMotMileage: number |
 export type VehicleLookupResult =
   | { ok: true; reg: string; source: 'records' | 'dvsa'; vehicle: LookupVehicleFields; owner: LookupOwnerFields | null; mot: LookupMotMeta | null;
       /** Owner's missed bookings, present only on a records hit with history (null = none or unknown). */
-      noShows?: { count: number; dates: string[] } | null }
+      noShows?: { count: number; dates: string[] } | null;
+      /** Open due items on this car (null = none, or a non-records hit). */
+      dueItems?: Array<{ id: string; description: string; dueBasis: string; dueDate: string | null; dueMileage: number | null; customerResponse: string }> | null }
   | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
@@ -62,6 +64,9 @@ export async function lookupVehicleByReg(
           // Present only on a records hit with a resolved owner — a DVSA hit knows the car, not the
           // customer, and must not imply a clean history it never checked.
           noShows: data.noShows && data.noShows.count > 0 ? { count: Number(data.noShows.count), dates: (data.noShows.dates ?? []).map(S) } : null,
+          // Open findings on this car — present only on a records hit (DVSA knows the car, not
+          // what we found on it last March).
+          dueItems: Array.isArray(data.dueItems) && data.dueItems.length ? data.dueItems : null,
           mot: null,
         };
       }

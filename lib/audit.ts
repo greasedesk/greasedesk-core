@@ -56,6 +56,10 @@ export type AuditAction =
   // actually moving is the webhook's to record, on the Refund row, with no user_id — because
   // Stripe's dashboard and a chargeback produce that same movement with nobody of ours involved.
   // Collapsing them would make "who refunded this?" unanswerable for two of the three origins.
+  // A job the car needs that nobody is doing today — found at intake, and closed when done or
+  // dismissed. Keyed on the VehicleDueItem (entity/entityId), because the finding outlives the card.
+  | 'due_item.found'
+  | 'due_item.closed'
   | 'refund.requested'
   // The application fee returned by a route other than settleApplicationFeeRefund — a human in the
   // Stripe dashboard. Recorded so the value on the row is right AND its provenance is explicit.

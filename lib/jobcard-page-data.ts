@@ -9,6 +9,7 @@
  * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
+import { openDueItemsForVehicle } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
@@ -128,7 +129,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -149,6 +150,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         : { count: 0, dates: [] };
       return { edgeOwnerId: ownerId, ownerRow: or, ownerNoShows: hist };
     })(),
+    // OPEN DUE ITEMS for THIS CAR — what it still needs, found on this visit or any earlier one.
+    // Keyed to the vehicle, so a finding from last March surfaces on today's card (lib/due-items).
+    openDueItemsForVehicle(prisma, groupId, row.vehicle?.id as string | undefined),
     // The site's default labour rate (Financial settings) — pre-fills new labour lines and is the
     // rate the upcoming margin feature reads (labour retail = labour_hours × rate).
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: row.site_id, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }) as Promise<{ default_labour_rate: unknown } | null>,
@@ -383,6 +387,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     messagesUnread: conversation.unread,
     reachability,
     registration: row.vehicle?.registration ?? '—',
+    // What this CAR still needs — open findings from this visit or any earlier one. The upsell
+    // list, in front of whoever has the car today.
+    dueItems,
     createdAt: row.created_at.toISOString(),
     status: row.status,
     jobCardId: row.id,

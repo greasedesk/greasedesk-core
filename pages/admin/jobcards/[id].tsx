@@ -23,6 +23,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
 import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorkspace';
+import { type DueItemView } from '@/components/jobcard/DueItems';
 import { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
@@ -32,6 +33,8 @@ import { diaryReturnHref } from '@/lib/diary-return';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type PageProps = {
+  /** Open findings on this CAR, server-rendered so the panel is right on first paint. */
+  dueItems?: DueItemView[];
   // READ-ONLY message history for this card's (customer, vehicle) thread.
   conversation: import('@/components/messages/ConversationView').ConversationMessage[];
   threadId: string | null;
@@ -154,6 +157,7 @@ export default function JobCardDetailPage(props: PageProps) {
         priceUnconfirmed={props.priceUnconfirmed}
         isAdmin={props.isAdmin}
         owner={props.owner}
+        dueItems={props.dueItems}
         conversation={props.conversation}
         threadId={props.threadId}
         messagesUnread={props.messagesUnread}

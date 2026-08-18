@@ -408,5 +408,34 @@
     "confirm": "Confirm no-show",
     "keep": "Keep the booking",
     "history": "⚠ {{count}} no-show(s) on record ({{dates}})"
+  },
+  "dueItems": {
+    "title": "What this car also needs",
+    "add": "+ Record a finding",
+    "empty": "Nothing recorded for this car.",
+    "descPlaceholder": "What does it need? e.g. Front discs and pads",
+    "basisLabel": "What makes it due?",
+    "basisOpt": {
+      "date": "By a date",
+      "mileage": "At a mileage",
+      "next_service": "Next service"
+    },
+    "basis": {
+      "date": "due by {{date}}",
+      "mileage": "due at {{mileage}} miles",
+      "next_service": "due at the next service"
+    },
+    "responseLabel": "Has the customer been told?",
+    "response": {
+      "not_raised": "Not raised yet",
+      "declined": "They declined",
+      "agreed_later": "Wants it later"
+    },
+    "mileagePlaceholder": "e.g. 60000",
+    "save": "Record it",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "close": "Mark done",
+    "saveError": "Could not record that."
   }
 }

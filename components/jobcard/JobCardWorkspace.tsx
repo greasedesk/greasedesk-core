@@ -18,6 +18,7 @@ import { lineFlags, toPlausible, partsProfit } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
+import DueItems, { type DueItemView } from '@/components/jobcard/DueItems';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -73,6 +74,8 @@ type Props = {
   priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
+  /** Open findings on THIS CAR — from this visit or any earlier one (lib/due-items). */
+  dueItems?: DueItemView[];
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
     noShowDates?: string[] };
@@ -854,7 +857,8 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
-          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
+          <DueItems jobCardId={p.jobCardId} items={p.dueItems ?? []} canEdit={p.canOperate && !inactive} />
+        <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>
       )}
