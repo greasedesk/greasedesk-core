@@ -45,6 +45,7 @@ import { freezeQuoteVersion, attachMagicLink } from '@/lib/quote-version';
 import { formatMoney } from '@/lib/format-money';
 import { resolveContactRoutes } from '@/lib/contact-routes';
 import { reachabilityForJobCard } from '@/lib/message-threads';
+import { describeSendFailure, type FailedSend } from '@/lib/send-outcome';
 import { smsAllowance } from '@/lib/sms-allowance';
 import { writeAudit } from '@/lib/audit';
 
@@ -187,6 +188,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let deliveryStatus: string = 'not_attempted';
   let notificationId: string | null = null;
   let sendRefusalMessage: string | null = null;
+  /** WHICH silence, as a stable code — so a caller or a test names the branch, not the prose. */
+  let sendRefusalCode: string | null = null;
+  /** Would trying again plausibly work? Only a provider rejection is retryable. */
+  let sendRetryable = false;
 
   if (recipient) {
     const sent = await sendNotification({
@@ -219,11 +224,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // The allowance can still be spent here despite the pre-check above: two operators sending at
     // the same moment both read a balance of one.
     if (!sent.ok) {
-      sendRefusalMessage = sent.skipCode === 'allowance_spent'
-        ? 'Your SMS allowance ran out as this was sending — the quote is frozen and the link below still works.'
-        : sent.suppressed
-          ? `${reach && 'customerName' in reach ? reach.customerName : 'This customer'} has opted out of ${channel === 'sms' ? 'text messages' : 'emails'} — the link below still works.`
-          : `The ${channel === 'sms' ? 'text' : 'email'} couldn’t be sent, but the link below still works.`;
+      // ONE MAPPING, shared with invoice-sms. This used to name two skip codes and sweep every
+      // other cause into the single sentence:
+      //     "The text couldn’t be sent, but the link below still works."
+      // Which is what a DEMO TENANT’s deliberate refusal said on 2026-08-18, pointing the
+      // diagnosis at a provider that had never been contacted.
+      const why = describeSendFailure(sent as FailedSend, {
+        channel,
+        customerName: reach && 'customerName' in reach ? reach.customerName : null,
+      });
+      sendRefusalMessage = `${why.message} The quote is frozen and the link below still works.`;
+      sendRefusalCode = why.code;
+      sendRetryable = why.retryable;
     }
   }
 
@@ -271,6 +283,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // (unreachableReason) and an address we could not use (sendRefusalMessage).
     unreachableReason,
     sendRefusalMessage,
+    sendRefusalCode,
+    sendRetryable,
     deliveryStatus,
     notificationId,
     ...(channel === 'sms' ? { allowance: await smsAllowance(prisma, card.group_id) } : {}),

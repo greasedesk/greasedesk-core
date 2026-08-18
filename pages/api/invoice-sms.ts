@@ -24,6 +24,7 @@ import { mintInvoicePayLink } from '@/lib/invoice-pay-link';
 import { reachabilityForJobCard } from '@/lib/message-threads';
 import { sendNotification } from '@/lib/notify';
 import { smsAllowance } from '@/lib/sms-allowance';
+import { describeSendFailure, type FailedSend } from '@/lib/send-outcome';
 import { formatMoney } from '@/lib/format-money';
 import { writeAudit } from '@/lib/audit';
 import { Prisma } from '@prisma/client';
@@ -72,13 +73,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   const allowance = await smsAllowance(prisma, user.group_id);
-  if (sent.skipCode === 'allowance_spent') {
-    return res.status(409).json({ code: 'allowance_spent', message: 'Your SMS allowance is spent for this month — nothing was sent. Top up, or email the invoice instead.', allowance });
+  if (!sent.ok) {
+    // ONE MAPPING, shared with quote-send. The catch-all here used to be:
+    //     "The text couldn’t be sent — please try again shortly."
+    // for every cause it did not name — advice that is simply false for a demo tenant, an
+    // opted-out customer or an unconfigured provider. Retrying those repeats the same refusal.
+    const why = describeSendFailure(sent as FailedSend, { channel: 'sms', customerName: reach.customerName });
+    // Caller-specific advice, appended rather than folded in: the shared mapping states the cause,
+    // this states what THIS screen can do about it.
+    const advice = why.code === 'allowance_spent' ? ' Top up, or email the invoice instead.'
+      : why.retryable ? ' Please try again shortly.'
+      : '';
+    // THE STATUS FOLLOWS THE FACT. 502 says an upstream failed and is only true when one did.
+    return res.status(why.retryable ? 502 : 409)
+      .json({ code: why.code, retryable: why.retryable, message: `${why.message} Nothing was sent.${advice}`, allowance });
   }
-  if (sent.suppressed) {
-    return res.status(409).json({ code: 'suppressed', message: `${reach.customerName} has opted out of text messages — nothing was sent.`, allowance });
-  }
-  if (!sent.ok) return res.status(502).json({ message: 'The text couldn’t be sent — please try again shortly.', allowance });
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await writeAudit(tx, {

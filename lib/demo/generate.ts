@@ -29,7 +29,8 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { toE164Digits } from '@/lib/contact-routes';
+import { customerPhoneFields } from '@/lib/contact-routes';
+import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard } from '@/lib/invoice-issue';
 import { tServer } from '@/lib/server-i18n';
 import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
@@ -39,9 +40,11 @@ import { dueDateFor } from '@/lib/account-terms';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
-  STREETS, TOWN, POSTCODE_AREA, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
+  STREETS, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
   RETURN_INTERVAL_MONTHS, COMEBACK_RATE_PCT, NEGATIVE_LINE_RATE_PCT,
 } from '@/lib/demo/profile';
+import { localityFor } from '@/lib/demo/locality';
+import { refuseDemoSubject, demoSubjectColumns } from '@/lib/demo/demo-subject';
 
 // ── the shape of a demo ──────────────────────────────────────────────────────────────────────────
 export const DEMO_SPEC = {
@@ -482,6 +485,18 @@ export async function generateDemoTenant(opts: {
   isDemo?: boolean;
   /** The tenant's own phone. Reps read it aloud: the SMS suffix says "To reply, call <this>". */
   groupPhone?: string;
+  /**
+   * WHERE the demo's data sits. Defaults to a town derived from `groupName`, so two demo tenants
+   * never present identically named sites — the thing that made a wrong-tenant diagnosis invisible.
+   */
+  town?: string;
+  postcodeArea?: string;
+  /**
+   * THE ONE CUSTOMER WHOSE NUMBER IS REAL. Every other row sits on Ofcom's drama range and reaches
+   * nobody, which makes a demo text arrive nowhere. Passed IN rather than edited afterwards: the
+   * refresh model is regenerate, so a hand-edited row is silently destroyed by the next refresh.
+   */
+  demoSubject?: { name: string; phone: string };
   onProgress?: (step: string, detail?: string) => void;
 }): Promise<DemoGenerationResult> {
   const r = rng(opts.seed);
@@ -493,6 +508,14 @@ export async function generateDemoTenant(opts: {
 
   // ── 1. GROUP, SITE, RESOURCES ────────────────────────────────────────────────────────────────
   say('tenant');
+  // Derived ONCE, then used for the group address, the site name and every customer address, so
+  // they cannot disagree about what town this tenant is in.
+  const { town: TOWN, postcodeArea: POSTCODE_AREA } = localityFor(opts.groupName, {
+    town: opts.town, postcodeArea: opts.postcodeArea,
+  });
+  // The TENANT'S dial code, from its country profile — never guessed from the digits, and never an
+  // ISO code by mistake. Demo tenants are GB today; this reads the profile so they need not stay so.
+  const demoDialCode = resolveTenantProfile({ country_code: 'GB' }).dialCode;
   const group = await prisma.group.create({
     data: {
       group_name: opts.groupName, trading_name: opts.groupName,
@@ -702,10 +725,13 @@ export async function generateDemoTenant(opts: {
         // reachabilityForJobCard resolves an SMS recipient from `phone_e164` ALONE, so quote-send's
         // `if (recipient)` skipped the send entirely and the screen said "the text couldn't be
         // sent" — with no NotificationLog row, because sendNotification was never called. Twilio was
-        // never contacted. Derived through the same chokepoint the API write uses (toE164Digits),
-        // never hand-formatted here.
-        phone: demoPhone(i),
-        phone_e164: toE164Digits(demoPhone(i), 'GB'),
+        // never contacted.
+        //
+        // Through customerPhoneFields, which is THE customer-phone write shape — the same one
+        // pages/api/jobcard.ts and jobcard-details.ts use. Its second argument is a DIAL CODE
+        // ('44'), not an ISO country: calling toE164Digits(x, 'GB') here concatenated literally and
+        // produced "GB7700900002". The chokepoint exists so this cannot be got wrong twice.
+        ...customerPhoneFields(demoPhone(i), demoDialCode),
         address: `${1 + Math.floor(r() * 180)} ${pick(r, STREETS)}, ${TOWN}, ${POSTCODE_AREA}${1 + Math.floor(r() * 9)} ${Math.floor(r() * 9)}${pick(r, ['AA', 'BD', 'EF', 'HJ'])}`,
       },
       select: { id: true },
@@ -1166,6 +1192,25 @@ export async function generateDemoTenant(opts: {
   const soldToDate = planned
     .filter((j) => j.start >= monthStart && j.start <= addDays(dayStart(now), 1) && !j.isComeback)
     .reduce((s, j) => s + j.chargedHours, 0);
+
+  // ── THE DESIGNATED DEMO SUBJECT ────────────────────────────────────────────────────────────────
+  // Applied LAST, onto the customer with the most recent job card, so the subject already has
+  // something to send about rather than being an empty record the rep builds up on the spot.
+  if (opts.demoSubject) {
+    const refusal = refuseDemoSubject(group.id, true, { ref: null, is_internal: true }, opts.demoSubject);
+    // The tenant is one this function just created as is_internal, so `listed` is true by
+    // construction here; the number checks are what this call is for — above all the refusal of a
+    // drama-range number, which would be the defect arriving disguised as the fix.
+    if (refusal) throw new Error(`DEMO_SUBJECT_REFUSED (${refusal.code}): ${refusal.message}`);
+    const recent = await prisma.jobCard.findFirst({
+      where: { group_id: group.id, customer_id: { not: null } },
+      orderBy: { created_at: 'desc' }, select: { customer_id: true },
+    });
+    if (recent?.customer_id) {
+      await prisma.customer.update({ where: { id: recent.customer_id }, data: demoSubjectColumns(opts.demoSubject) });
+      say('demo subject', `${opts.demoSubject.name} — the one reachable number`);
+    }
+  }
 
   say('done');
   return {

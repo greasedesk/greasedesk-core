@@ -48,6 +48,12 @@ const DEMO_PHONE = '03305553333';
 const DEMO_NAME = 'Kingsford Motor Company';
 const DEMO_OWNER = 'demo@greasedesk.com';
 
+/**
+ * THE ONE REAL NUMBER in the tenant, owner-supplied. Kept here rather than in lib/demo/profile.ts,
+ * which scripts/demo-profile-extract.mjs rewrites wholesale and would delete.
+ */
+const DEMO_SUBJECT = { name: 'Hugh Gunn', phone: '07397387332' };
+
 if (CREATE) {
   console.log('CREATE — generating a fresh sales-demo tenant.\n');
   const res = await generateDemoTenant({
@@ -64,6 +70,7 @@ if (CREATE) {
     // Ofcom's drama range for every customer number: unroutable regardless of the flag.
     isDemo: false,
     groupPhone: DEMO_PHONE,
+    demoSubject: DEMO_SUBJECT,
     onProgress: (s, d) => console.log(`  ${s}${d ? ` — ${d}` : ''}`),
   });
   const g = await prisma.group.findUnique({ where: { id: res.groupId }, select: { ref: true, is_demo: true, is_internal: true, phone: true } });
