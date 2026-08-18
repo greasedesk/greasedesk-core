@@ -19,6 +19,7 @@ import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
 import { OFF_DIARY_STATUSES } from '@/lib/jobcard-status';
+import { noShowLostInPeriod } from '@/lib/no-show';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
@@ -544,6 +545,28 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     let potentialPennies = 0;
     for (const s of daily.perSite) { const rate = rateBySite.get(s.siteId); if (rate != null) potentialPennies += Math.round(s.sellable * rate * 100); }
 
+    // ── BOOKED TIME LOST TO NO-SHOWS — a NAMED SLICE of the gap this chart already draws ────────
+    // Not a tile: the gap is on this panel, and a separate figure invites "gap + no-shows" mental
+    // addition, which double-counts (the lost hours are already inside unsold). The HOURS are a
+    // record (frozen booking facts); the £ is a valuation at TODAY'S rate — the third tile valuing
+    // a historical fact at a current rate, alongside warranty and cost-base (one open question,
+    // answered once, not here). Attribution is the SLOT'S month — see lib/no-show for why a closed
+    // month legitimately moves.
+    const lost = await noShowLostInPeriod(prisma, { groupId, siteIds, from, to });
+    let lostValuePennies = 0; let lostValueComplete = true;
+    for (const sSite of lost.perSite) {
+      const rate = rateBySite.get(sSite.siteId);
+      if (rate == null) { lostValueComplete = false; continue; }
+      lostValuePennies += Math.round((sSite.minutes / 60) * rate * 100);
+    }
+    const noShows = {
+      count: lost.count,
+      minutes: lost.minutes,
+      // NULL when no rate covers ANY of the lost time — hours-only is honest; £0.00 would be a lie.
+      valuePennies: lost.minutes > 0 && lostValuePennies === 0 && !lostValueComplete ? null : lostValuePennies,
+      valueComplete: lostValueComplete,
+    };
+
     const imported = await periodImportState(groupId, siteIds, from, to);
     const withheld = imported.suppressDerived === true;
 
@@ -638,6 +661,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       sellableToDatePennies: withheld ? null : sellableToDatePennies,
       effectiveRatePennies,
       billedTotalCentihours: billedTotalCenti,
+      noShows,
       ratesMissing, imported, months,
     };
   },

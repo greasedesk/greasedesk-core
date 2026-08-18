@@ -65,7 +65,9 @@
     "partial": "part month",
     "noData": "not trading",
     "noCapacity": "no capacity set",
-    "clipped": "Measured from {{from}} — your records do not go back further, so earlier months are not counted."
+    "clipped": "Measured from {{from}} — your records do not go back further, so earlier months are not counted.",
+    "noShowLost": "of which {{hours}}h of booked time was lost to {{count}} no-show(s) — ~{{value}} at today’s labour rate",
+    "noShowLostNoRate": "of which {{hours}}h of booked time was lost to {{count}} no-show(s)"
   },
   "pnl": {
     "title": "Profit & loss",

@@ -608,6 +608,20 @@ export default function AdminDashboard(props: PageProps) {
                   <p className="text-ink">{t('capacity.rateCharged', { rate: cap.headlineRateMixed ? t('effRate.mixed') : money(cap.headlineRatePennies) })}</p>
                   <p className="text-ink">{t(monthMeta?.inProgress ? 'capacity.rateEffectiveToDate' : 'capacity.rateEffective', { rate: withheld ? t('effRate.withheld') : money(cap.effectiveRatePennies) })}</p>
                 </div>
+                {/* BOOKED TIME LOST TO NO-SHOWS — absent when zero: absence is the good news, and
+                    an ever-present £0.00 line is furniture. Hours are a record; the £ is a
+                    valuation at today's rate and the wording says both ("booked time", "at today's
+                    labour rate"). Attributed to the SLOT's month — lib/no-show explains why a
+                    closed month legitimately moves and must not be "fixed" into today's. */}
+                {(cap.noShows?.count ?? 0) > 0 && (
+                  <p className="text-sm text-warn mt-2" data-testid="capacity-no-show-line">
+                    {t(cap.noShows.valuePennies != null ? 'capacity.noShowLost' : 'capacity.noShowLostNoRate', {
+                      hours: (Math.round((cap.noShows.minutes / 60) * 10) / 10).toLocaleString(props.locale),
+                      count: cap.noShows.count,
+                      value: cap.noShows.valuePennies != null ? money(cap.noShows.valuePennies) : '',
+                    })}
+                  </p>
+                )}
                 {(cap.ratesMissing?.length ?? 0) > 0 && <p className="text-xs text-warn mt-2">{t('pnl.breakEvenNoRate', { sites: cap.ratesMissing.join(', ') })}</p>}
                 <details className="mt-3">
                   <summary className="text-xs text-accent cursor-pointer">{t('capacity.howTitle')}</summary>

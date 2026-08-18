@@ -10,7 +10,7 @@ import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { findTransition, nextTransitions, OFF_DIARY_STATUSES, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
 const { applyCardTransition } = await import('../lib/jobcard-transition.ts');
-const { noShowHistory } = await import('../lib/no-show.ts');
+const { noShowHistory, noShowLostInPeriod } = await import('../lib/no-show.ts');
 const { QUOTE_CLOSED_CARD_STATUSES } = await import('../lib/quotes-list.ts');
 const { WIP_STATUSES } = await import('../lib/wip.ts');
 const { readFileSync } = await import('node:fs');
@@ -110,6 +110,38 @@ try {
   await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'no_show', to: 'draft', actorUserId: null }));
   hist = await noShowHistory(prisma, cust.id);
   check('REOPEN corrects the count to 1 by construction — no counter to unwind', hist.count === 1, JSON.stringify(hist));
+  // ── 4. THE CAPACITY LINE: slot-month attribution, reopen correction, absent-when-zero ─────────
+  console.log('\n— booked time lost, attributed to the SLOT\'s month —');
+  // `two` was reopened above, so exactly ONE no-show stands: card one, slot 2026-08-17, 120 min.
+  const aug = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-08-01T00:00:00Z'), to: new Date('2026-09-01T00:00:00Z') });
+  check('the slot month carries the loss', aug.count === 1 && aug.minutes === 120, JSON.stringify(aug));
+  const sep = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-10-01T00:00:00Z') });
+  check('a month with no slots reads zero — the UI line is ABSENT, never £0.00', sep.count === 0 && sep.minutes === 0);
+  // A no-show MARKED long after its slot: backdate the second card's slot to July, re-mark it.
+  await prisma.jobCard.update({ where: { id: two.id }, data: { start_at: new Date('2026-07-10T09:00:00Z'), end_at: new Date('2026-07-10T10:30:00Z'), booking_duration_minutes: 90 } });
+  await prisma.$transaction(async (tx) => {
+    await applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'draft', to: 'quoted', actorUserId: null }).catch(() => {});
+    return applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'quoted', to: 'no_show', actorUserId: null });
+  }).catch(() => {});
+  const jul = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-07-01T00:00:00Z'), to: new Date('2026-08-01T00:00:00Z') });
+  check('marked TODAY, slot in JULY → lands in JULY (the closed month legitimately moves)',
+    jul.count === 1 && jul.minutes === 90,
+    `${JSON.stringify(jul)} — today's date never enters the query`);
+  await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'no_show', to: 'draft', actorUserId: null }));
+  const jul2 = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-07-01T00:00:00Z'), to: new Date('2026-08-01T00:00:00Z') });
+  check('and the reopen un-moves it, in the month the slot sat', jul2.count === 0 && jul2.minutes === 0);
+
+  // The wiring and the wording — the tile carries it, the panel hides zero, the words say what it is.
+  const tilesSrc = readFileSync('lib/dashboard-tiles.ts', 'utf8');
+  check('the capacity compute carries noShows via the one helper', /noShowLostInPeriod\(prisma/.test(tilesSrc));
+  const dash = readFileSync('pages/admin/dashboard.tsx', 'utf8');
+  check('the panel renders the line only when count > 0', /cap\.noShows\?\.count \?\? 0\) > 0/.test(dash));
+  const i18n = JSON.parse(readFileSync('public/locales/en-GB/dashboard.json', 'utf8'));
+  check('the wording says BOOKED TIME and AT TODAY\'S RATE — a record and a valuation, labelled',
+    /booked time/.test(i18n.capacity.noShowLost) && /today.s labour rate/.test(i18n.capacity.noShowLost),
+    i18n.capacity.noShowLost);
+  check('  …and the no-rate variant shows hours only, never £0.00',
+    /booked time/.test(i18n.capacity.noShowLostNoRate) && !/rate/.test(i18n.capacity.noShowLostNoRate));
 } catch (e) {
   check('fixture run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
