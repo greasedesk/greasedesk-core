@@ -16,6 +16,8 @@ const { prisma } = await import('../lib/db.ts');
 const { neverSubscribes } = await import('../lib/demo-tenant.ts');
 const { getSetupSignals } = await import('../lib/setup-signals.ts');
 const { readFileSync } = await import('node:fs');
+const { refuseDemoBilling, isDemoGroup } = await import('../lib/demo-tenant.ts');
+const { refuseDemoMaintenance } = await import('../lib/demo-tenants.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -72,6 +74,39 @@ check('setup-signals calls neverSubscribes', /neverSubscribes\(group\)/.test(src
 const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 check('and no longer tests group.is_demo directly', !/group\?\.is_demo/.test(code));
 check('  …with the reason kept for the next reader', /is_demo = false\s*\n?\s*\/\/ so it could text|so it could text/.test(src));
+
+// ── 6. THE THIRD READER: A REP MUST NOT REACH A REAL STRIPE CHECKOUT ────────────────────────────
+console.log('\n— the billing refusal asks the same question —');
+const fakeRes = () => { const r = { code: null, body: null }; r.status = (c) => { r.code = c; return { json: (b) => { r.body = b; return b; } }; }; return r; };
+const demoRes = fakeRes();
+check('refuseDemoBilling REFUSES the sales demo', (await refuseDemoBilling(demoRes, G)) === true,
+  `${demoRes.code} ${demoRes.body?.code ?? ''}`);
+// PROVE RED: the predicate it used to call still says "not a demo" for this tenant.
+check('the OLD predicate (isDemoGroup) would have LET IT THROUGH', (await isDemoGroup(G)) === false,
+  'is_demo is false so it can text — which is exactly why the billing refusal was open');
+if (real) {
+  const realRes = fakeRes();
+  check(`and it does NOT refuse ${real.ref}`, (await refuseDemoBilling(realRes, real.id)) === false,
+    'a paying tenant must still be able to reach checkout');
+}
+
+// ── 7. MAINTENANCE TARGETING: THE FROZEN REFERENCE IS EXCLUDED BY THE LIST ──────────────────────
+console.log('\n— a maintenance script writes only to a declared, still-internal demo —');
+const frozen = await prisma.group.findFirst({ where: { ref: 'GB-GD2236' }, select: { id: true, ref: true, is_internal: true, is_demo: true } });
+check('the frozen reference demo is REFUSED', refuseDemoMaintenance(frozen.id, frozen)?.code === 'not_listed',
+  'not by an id check — it is simply absent from DEMO_TENANTS, so "listed" already excludes it');
+check('the declared sales demo is ALLOWED', refuseDemoMaintenance(G, { ref: g.ref, is_internal: true, is_demo: false }) === null);
+check('a declared demo that stopped being internal is REFUSED',
+  refuseDemoMaintenance(G, { ref: g.ref, is_internal: false, is_demo: false })?.code === 'not_internal',
+  'the list is a claim; is_internal is the fact, checked at the moment of use');
+
+// ── 8. THE LEDGER THE BACKFILL WROTE ───────────────────────────────────────────────────────────
+console.log('\n— and the tenant now has a ledger —');
+const payCount = await prisma.payment.count({ where: { invoice: { group_id: G } } });
+const paidInv = await prisma.invoice.count({ where: { group_id: G, status: 'paid', series: 'chargeable' } });
+check('every paid chargeable invoice has a Payment row', payCount === paidInv, `${payCount} rows for ${paidInv} invoices`);
+const orphan = await prisma.invoice.count({ where: { group_id: G, status: 'paid', series: 'chargeable', payments: { none: {} } } });
+check('no paid invoice is left without one', orphan === 0, `${orphan} orphans`);
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma.$disconnect();

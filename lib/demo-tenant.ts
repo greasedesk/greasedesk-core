@@ -69,6 +69,15 @@ export async function isDemoGroup(groupId: string | null | undefined): Promise<b
   return !!g?.is_demo;
 }
 
+/** neverSubscribes, resolved from the database. One indexed lookup, both flags. */
+export async function groupNeverSubscribes(groupId: string | null | undefined): Promise<boolean> {
+  if (!groupId) return false;
+  const g = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { is_demo: true, is_internal: true },
+  })) as { is_demo: boolean; is_internal: boolean | null } | null;
+  return neverSubscribes(g);
+}
+
 /**
  * ── A DEMO MUST NOT REACH STRIPE ────────────────────────────────────────────────────────────────
  * Checkout on a demo would SUCCEED, and that is worse than failing. The endpoint has no idea the
@@ -98,7 +107,11 @@ export async function refuseDemoBilling(
   res: { status: (c: number) => { json: (b: any) => any } },
   groupId: string | null | undefined,
 ): Promise<boolean> {
-  if (!(await isDemoGroup(groupId))) return false;
+  // neverSubscribes, NOT isDemoGroup. THE THIRD READER of the same question found in two days.
+  // The sales demo is is_demo = false so it can send real texts, which left this refusal open: a
+  // rep clicking Licences mid-demo could reach a genuine Stripe checkout. Production runs on test
+  // keys, so that limits the damage rather than preventing the embarrassment.
+  if (!(await groupNeverSubscribes(groupId))) return false;
   res.status(DEMO_BILLING_REFUSAL.status).json({
     message: DEMO_BILLING_REFUSAL.message, code: DEMO_BILLING_REFUSAL.code,
   });

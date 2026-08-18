@@ -45,6 +45,8 @@ import {
 } from '@/lib/demo/profile';
 import { localityFor } from '@/lib/demo/locality';
 import { refuseDemoSubject, demoSubjectColumns } from '@/lib/demo/demo-subject';
+import { recordPayment } from '@/lib/payments';
+import { invoiceTotals } from '@/lib/invoice';
 
 // ── the shape of a demo ──────────────────────────────────────────────────────────────────────────
 export const DEMO_SPEC = {
@@ -459,6 +461,9 @@ async function resilient<T>(
 }
 
 /** One demo customer's number: Ofcom's reserved mobile drama range, stable for a given index. */
+/** ONE currency for the tenant: the site is created with it and every ledger row carries it. */
+const DEMO_CURRENCY = 'GBP';
+
 const demoPhone = (i: number): string => `07700 900${String(i % 1000).padStart(3, '0')}`;
 
 export async function generateDemoTenant(opts: {
@@ -530,7 +535,7 @@ export async function generateDemoTenant(opts: {
   });
   const site = await prisma.site.create({
     data: {
-      group_id: group.id, site_name: `${TOWN} Workshop`, currency_code: 'GBP', timezone: 'Europe/London',
+      group_id: group.id, site_name: `${TOWN} Workshop`, currency_code: DEMO_CURRENCY, timezone: 'Europe/London',
       open_hour: DEMO_SPEC.openHour, close_hour: DEMO_SPEC.closeHour, open_days: [...DEMO_SPEC.workingDays],
       address: `${pick(r, STREETS)}, ${TOWN}, ${POSTCODE_AREA}1 2CD`, phone: '01234 496000',
     },
@@ -972,7 +977,10 @@ export async function generateDemoTenant(opts: {
     // Warranty invoices are SKIPPED: the mint lands them at `settled` — £0, closed, never AR — and
     // marking one paid would contradict the goodwill model.
     const inv = await prisma.invoice.findFirst({
-      where: { job_card_id: card.id }, select: { id: true, series: true, status: true },
+      // `lines` because the ledger row needs the invoice's own gross — the frozen lines, which are
+      // what the document says, not a figure recomputed from the card.
+      where: { job_card_id: card.id },
+      select: { id: true, series: true, status: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     });
     if (inv && inv.series !== 'warranty') {
       const ageDays = Math.round((dayStart(now).getTime() - dayStart(job.start).getTime()) / DAY);
@@ -1020,6 +1028,29 @@ export async function generateDemoTenant(opts: {
             status: 'paid', paid_at: paidOn, date_paid: paidOn,
             payment_method_id: m.id, payment_method_snapshot: m.name,
           },
+        });
+        // ── AND THE LEDGER ROW ─────────────────────────────────────────────────────────────────
+        // Marking the invoice paid used to be the whole of it, and it was enough right up until
+        // revenue stopped deriving from `amount_paid_pennies` and started deriving from Payment
+        // rows in the period. Then the first screen a prospect sees read £0.00 revenue against
+        // £260,008.21 issued, on 714 invoices the tenant considered paid.
+        //
+        // Through recordPayment — the SAME writer the app uses — so the demo's ledger is produced
+        // by the production path rather than by a second one that has to be kept in step. It also
+        // recomputes amount_paid_pennies, which the generator never set at all.
+        //
+        // `source_ref` is keyed on the invoice, so a re-run cannot double-count: recordPayment
+        // returns null on the unique violation rather than throwing.
+        await recordPayment(prisma as never, {
+          groupId: group.id, invoiceId: inv.id, siteId: site.id,
+          provider: 'manual', status: 'succeeded',
+          // Paid in full: the demo has no part-payment case, and the amount is the document's.
+          amountPennies: invoiceTotals(inv.lines).grossPennies,
+          currency: DEMO_CURRENCY,
+          paymentMethodId: m.id, paymentMethodSnapshot: m.name,
+          sourceRef: `demo:${inv.id}`,
+          collectedAt: paidOn,
+          createdBy: null,
         });
       }
     }

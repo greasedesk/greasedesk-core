@@ -31,12 +31,20 @@
  *                 unique source_ref makes a second run a no-op, but skipping early keeps the
  *                 output honest about what is left to do.
  *
- * DEMO TENANTS ARE REFUSED OUTRIGHT. Nothing in one is real, and the reference demo is frozen.
+ * DEMO TENANTS: refused UNLESS declared in lib/demo-tenants::DEMO_TENANTS and still is_internal.
+ *
+ * This used to refuse every demo outright — "nothing in one is real, and the reference demo is
+ * frozen". The first half is true and is precisely why a demo needs this: the sales demo's 743 paid
+ * invoices had no Payment rows, so the dashboard a prospect sees first read £0.00 revenue against
+ * £260k issued. "Not real" describes what the data MEANS, not whether it should be self-consistent.
+ * The second half is preserved exactly — the frozen reference is absent from that list, so being
+ * listed already excludes it.
  */
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { invoiceTotals, effectivePaidDate } = await import('../lib/invoice.ts');
 const { recordPayment } = await import('../lib/payments.ts');
+const { refuseDemoMaintenance } = await import('../lib/demo-tenants.ts');
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 const APPLY = process.argv.includes('--apply');
@@ -56,7 +64,11 @@ try {
     select: { id: true, ref: true, group_name: true, is_demo: true, is_internal: true },
   });
   if (!g) throw new Error(`no tenant with ref ${REF}`);
-  if (g.is_demo) throw new Error(`${REF} is a DEMO tenant — nothing in it is real and the reference demo is frozen`);
+  if (g.is_demo || g.is_internal) {
+    // Both conditions checked against the database at the moment of use, via the shared predicate.
+    const refusal = refuseDemoMaintenance(g.id, g);
+    if (refusal) throw new Error(`${REF} (${refusal.code}): ${refusal.message}`);
+  }
 
   console.log(`\n${g.group_name} (${g.ref})${g.is_internal ? '  [internal]' : ''}   ${APPLY ? 'APPLY' : 'DRY RUN'}`);
   console.log('─'.repeat(78));

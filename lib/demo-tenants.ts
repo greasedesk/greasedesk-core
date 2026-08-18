@@ -81,3 +81,44 @@ export function refuseRefresh(
   }
   return null;
 }
+
+/**
+ * MAY A MAINTENANCE SCRIPT WRITE TO THIS DEMO TENANT?
+ *
+ * Distinct from `refuseRefresh` on purpose. That one authorises DESTRUCTION and its message says so.
+ * This authorises a repair — a ledger backfill, a column fill — on a tenant whose data is invented.
+ * The two conditions are the same because the targeting discipline is the same: a list entry is a
+ * claim written once, `is_internal` is the fact that makes it true, checked at the moment of use.
+ *
+ * The FROZEN REFERENCE is excluded by construction, not by a name check: Marketbridge is
+ * deliberately absent from DEMO_TENANTS, so "listed" already means "not the frozen one". A second,
+ * explicit exclusion by id would be a rule that could drift out of step with the list it duplicates.
+ *
+ * WHY THIS EXISTS AT ALL: scripts/payment-backfill refused every `is_demo` tenant outright, on the
+ * reasoning that nothing in a demo is real. True, and it is exactly why a demo needs the repair —
+ * its 743 paid invoices had no Payment rows, so the dashboard a prospect sees first read £0.00
+ * revenue. "Not real" is an argument about what the data MEANS, not about whether it should be
+ * self-consistent.
+ */
+export function refuseDemoMaintenance(
+  groupId: string,
+  group: { ref: string | null; is_internal: boolean | null; is_demo: boolean } | null,
+): RefreshRefusal | null {
+  if (!isListedDemoTenant(groupId)) {
+    return {
+      code: 'not_listed',
+      message: `${groupId} is a demo tenant but is not declared in lib/demo-tenants::DEMO_TENANTS. `
+        + `Maintenance scripts write only to declared demos — which excludes the frozen reference demo, `
+        + `deliberately absent from that list.`,
+    };
+  }
+  if (!group) return { code: 'not_found', message: `${groupId} is listed as a demo tenant but does not exist.` };
+  if (group.is_internal !== true) {
+    return {
+      code: 'not_internal',
+      message: `${group.ref ?? groupId} is listed but is NOT is_internal. Something has changed since it `
+        + `was listed — check the tenant before the list.`,
+    };
+  }
+  return null;
+}

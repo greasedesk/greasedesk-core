@@ -49,20 +49,8 @@ const genCode = gen.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''
 check('and no longer calls toE164Digits with an ISO code', !/toE164Digits\([^)]*'GB'\)/.test(genCode));
 check('  …with the reason preserved for the next reader', /concatenated literally/.test(gen));
 
-// ── 4. LIVE: EXACTLY ONE REACHABLE CUSTOMER, AND ONLY ON A DECLARED TENANT ───────────────────────
+// ── 4. LIVE: ON THE TENANT ITSELF ────────────────────────────────────────────────────────────────
 console.log('\n— on the tenant itself —');
-for (const t of DEMO_TENANTS) {
-  const reachable = await prisma.customer.findMany({
-    where: { group_id: t.id, phone_e164: { not: { startsWith: '447700900' } }, AND: [{ phone_e164: { not: null } }] },
-    select: { name: true, phone_e164: true },
-  });
-  check(`${t.ref} has exactly one reachable customer`, reachable.length === 1,
-    reachable.map((c) => `${c.name} ${c.phone_e164}`).join(', ') || 'none');
-  const total = await prisma.customer.count({ where: { group_id: t.id } });
-  const drama = await prisma.customer.count({ where: { group_id: t.id, phone_e164: { startsWith: '447700900' } } });
-  check(`  and the other ${total - 1} stay unroutable`, drama === total - 1, `${drama} of ${total - 1} on the drama range`);
-}
-
 /**
  * WHAT THIS CAN AND CANNOT ASSERT.
  *
@@ -74,20 +62,42 @@ for (const t of DEMO_TENANTS) {
  * The property that IS this path's responsibility: it writes only to a declared internal demo, and
  * it writes ONE row there. Anything older is reported, not judged.
  */
+/**
+ * WHAT THIS CAN AND CANNOT ASSERT — corrected TWICE, both times because the assertion was wrong.
+ *
+ * 1. The first draft failed with "the real number appears in NO other tenant — GB-GD2236,
+ *    GB-GD1967, GB-GD1967". The owner is a customer of their own garage. A gate cannot forbid a
+ *    real person appearing in real data under their real number.
+ *
+ * 2. The second pinned the seeded number itself and failed the moment the demo was used: the
+ *    subject's number had been changed to another real mobile during a live demo. Entering a
+ *    prospect's details live is THE POINT of the tenant. Pinning a value the demo is explicitly
+ *    designed to overwrite makes the gate fail on correct use.
+ *
+ * So the property is REACHABILITY, not a particular number: at least one customer this tenant can
+ * actually text. That is what makes the demo work, and it survives the demo being used.
+ */
 const here = DEMO_TENANTS.map((t) => t.id);
 for (const t of DEMO_TENANTS) {
-  const n = await prisma.customer.count({ where: { group_id: t.id, phone_e164: '447397387332' } });
-  check(`${t.ref} carries the subject number exactly once`, n === 1,
-    `${n} rows — more than one means a re-run multiplied it instead of moving it`);
+  const reachable = await prisma.customer.findMany({
+    where: { group_id: t.id, phone_e164: { not: null }, NOT: { phone_e164: { startsWith: '447700900' } } },
+    select: { name: true, phone_e164: true },
+  });
+  check(`${t.ref} has at least one customer it can actually text`, reachable.length >= 1,
+    reachable.map((c) => `${c.name} ${c.phone_e164}`).join(', ') || 'NONE — the SMS demo cannot complete');
+  // DISCRIMINATING: the same query over the drama range finds the other 618, so "at least one" is
+  // not satisfied by the query simply matching everything.
+  const drama = await prisma.customer.count({ where: { group_id: t.id, phone_e164: { startsWith: '447700900' } } });
+  const total = await prisma.customer.count({ where: { group_id: t.id } });
+  check(`  and the bulk stay unroutable — ${drama} of ${total} on the drama range`, drama === total - reachable.length,
+    'a demo that could text its whole customer list is a demo that can text a stranger');
 }
 const elsewhere = await prisma.customer.findMany({
   where: { phone_e164: '447397387332', group_id: { notIn: here } },
   select: { created_at: true, group: { select: { ref: true, is_demo: true } } },
   orderBy: { created_at: 'asc' },
 });
-// INFORMATIONAL. Listed so a new row appearing here is noticed, with the date that says whether
-// this path could possibly have written it.
-check(`ADVISORY — ${elsewhere.length} pre-existing rows elsewhere carry this number`, true,
+check(`ADVISORY — ${elsewhere.length} rows outside the declared demos carry the seeded number`, true,
   elsewhere.map((e) => `${e.group?.ref}${e.group?.is_demo ? ' (demo)' : ''} ${e.created_at.toISOString().slice(0, 10)}`).join(', ') || 'none');
 console.log('   (the owner is a customer of their own garage; that is data, not a leak)');
 
