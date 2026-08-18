@@ -6,17 +6,18 @@
  * phone endpoint projects the money fields OUT — absent, not hidden).
  */
 import { prisma } from '@/lib/db';
-import { OFF_DIARY_STATUSES } from '@/lib/jobcard-status';
+import { HIDDEN_FROM_DIARY } from '@/lib/jobcard-status';
 
 /** Booked cards overlapping [rangeStart, rangeEnd) at a site — the diary's booking query, verbatim.
  *  NOTE: the select carries the money fields the DESKTOP diary needs for its (financeVisibility-
  *  gated) totals; a money-free consumer must project them out server-side. */
 export function fetchDayBookings(siteId: string, rangeStart: Date, rangeEnd: Date): Promise<any[]> {
   return prisma.jobCard.findMany({
-    // cancelled/declined are excluded — a cancelled job must not occupy a lift on the board. (NOTE:
-    // cancelling does not itself clear resource_id/start_at, so this filter is what keeps the slot
-    // visually free; see the report on unbook-on-cancel.)
-    where: { site_id: siteId, resource_id: { not: null }, status: { notIn: OFF_DIARY_STATUSES }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
+    // THE DISPLAY QUESTION, deliberately not the occupancy one. cancelled/declined vanish — the
+    // slot was freed with notice, and a ghost would claim waste that never happened. no_show is NOT
+    // hidden: it renders as a greyed ghost (the time genuinely died), while the occupancy guard
+    // (FREES_THE_SLOT, lib/diary-booking) still lets a walk-in take the lift.
+    where: { site_id: siteId, resource_id: { not: null }, status: { notIn: HIDDEN_FROM_DIARY }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
     select: {
       id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true, held_on_lift: true,
       resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },

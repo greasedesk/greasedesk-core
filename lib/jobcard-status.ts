@@ -35,19 +35,54 @@ export const statusSubset = (decisions: Record<JobStatus, boolean>): JobStatus[]
 export const QUOTE_DONE_STATUSES: JobStatus[] = ['accepted', 'in_progress', 'invoiced', 'paid', 'done'];
 export const INVOICE_DONE_STATUSES: JobStatus[] = ['invoiced', 'paid', 'done'];
 
-// TERMINAL-INACTIVE: a card in one of these does NOT occupy a resource slot. ONE definition, shared by
-// the diary DISPLAY reader (lib/diary-day) and the occupancy GUARD (lib/diary-booking), so the two can
-// never disagree on what "occupied" means. (The slot data is deliberately KEPT — the record of when/
-// where the job had been booked survives — but it no longer blocks the lift or shows on the board.)
-export const OFF_DIARY_STATUSES: JobStatus[] = statusSubset({
+/**
+ * ── TWO QUESTIONS THAT USED TO SHARE ONE ANSWER ────────────────────────────────────────────────
+ * "Does this card block the lift?" and "does this card render on the board?" were one list
+ * (OFF_DIARY_STATUSES) because every status answered both the same way. no_show is the first that
+ * doesn't: the slot is genuinely FREE (a walk-in should take it) but the wasted booking must stay
+ * VISIBLE, greyed — a diary showing nothing there tells the owner nobody was booked, which is a
+ * different and false fact.
+ *
+ * The old name is RETIRED ENTIRELY, not kept for one of the two: the rename is the audit. Every
+ * reader broke at compile and had to say which question it was asking; a surviving
+ * OFF_DIARY_STATUSES would invite the next reader to grab it without deciding.
+ *
+ * THE INVARIANT: HIDDEN_FROM_DIARY ⊆ FREES_THE_SLOT, asserted at module load below. A status
+ * hidden but still occupying would be a PHANTOM BLOCKER — a slot nothing shows but nobody can
+ * book — which is strictly worse than either failure the shared constant used to prevent, and
+ * exactly the kind of thing that only surfaces when a garage can't book into visibly empty space.
+ */
+
+/** Statuses whose card does NOT occupy its slot — the OCCUPANCY question. Read by the booking
+ *  guard (lib/diary-booking) and the forward-booked-hours read (dashboard-tiles). The slot data is
+ *  deliberately KEPT on the card either way — for a no-show it is what the ghost and the lost-time
+ *  figure are built on. */
+export const FREES_THE_SLOT: JobStatus[] = statusSubset({
   draft: false, quoted: false, accepted: false, in_progress: false,
   invoiced: false, paid: false, done: false,
   declined: true, cancelled: true,
-  // A no-show frees the slot the moment it is marked — the customer is not coming, and the lift
-  // should take a walk-in. The slot data survives (same rule as cancelled): the record of when
-  // they had been booked is exactly what the no-show count is built on.
-  no_show: true,
+  no_show: true, // the customer is not coming; a walk-in should take the lift
 });
+
+/** Statuses whose card does not RENDER on the board — the DISPLAY question (lib/diary-day; also
+ *  the phone's My Day, same chokepoint by design). cancelled/declined vanish: the slot was freed
+ *  with notice (often days ahead), and a ghost would claim waste that never happened. no_show is
+ *  NOT here — it renders greyed, because that time genuinely died. */
+export const HIDDEN_FROM_DIARY: JobStatus[] = statusSubset({
+  draft: false, quoted: false, accepted: false, in_progress: false,
+  invoiced: false, paid: false, done: false,
+  declined: true, cancelled: true,
+  no_show: false,
+});
+
+// FAIL AT BOOT, not at the first un-bookable slot. (Both lists are statusSubset-total, so a new
+// status must answer both questions; this catches the WRONG pair of answers.)
+for (const s of HIDDEN_FROM_DIARY) {
+  if (!FREES_THE_SLOT.includes(s)) {
+    throw new Error(`PHANTOM_BLOCKER: status '${s}' is hidden from the diary but still occupies its slot. `
+      + 'HIDDEN_FROM_DIARY must be a subset of FREES_THE_SLOT.');
+  }
+}
 
 /**
  * IS THIS CARD IN THE DIARY? The booking fact is `resource_id + start_at + end_at` — a lift and a

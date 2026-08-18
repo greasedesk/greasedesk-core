@@ -8,9 +8,10 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { findTransition, nextTransitions, OFF_DIARY_STATUSES, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
+const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
 const { applyCardTransition } = await import('../lib/jobcard-transition.ts');
 const { noShowHistory, noShowLostInPeriod } = await import('../lib/no-show.ts');
+const { fetchDayBookings } = await import('../lib/diary-day.ts');
 const { QUOTE_CLOSED_CARD_STATUSES } = await import('../lib/quotes-list.ts');
 const { WIP_STATUSES } = await import('../lib/wip.ts');
 const { readFileSync } = await import('node:fs');
@@ -35,14 +36,15 @@ check('no_show has exactly one exit: reopen to draft', exits.length === 1 && exi
 
 // ── 2. THE UNIONS ────────────────────────────────────────────────────────────────────────────────
 console.log('\n— every reader that enumerates statuses has decided —');
-check('no_show is OFF-DIARY — the slot frees for a walk-in', OFF_DIARY_STATUSES.includes('no_show'), OFF_DIARY_STATUSES.join(', '));
+check('no_show FREES the slot for a walk-in', FREES_THE_SLOT.includes('no_show'), FREES_THE_SLOT.join(', '));
+check('and stays VISIBLE as a ghost — not hidden from the board', !HIDDEN_FROM_DIARY.includes('no_show'), HIDDEN_FROM_DIARY.join(', '));
 check('no_show closes the quote thread', QUOTE_CLOSED_CARD_STATUSES.includes('no_show'));
 check('no_show is NOT work-in-progress', !WIP_STATUSES.includes('no_show'), WIP_STATUSES.join(', '));
 check('money label is unpaid, never unknown', paymentState('no_show') === 'unpaid',
   'unknown would render the raw status where a money chip belongs');
 const tiles = readFileSync('lib/dashboard-tiles.ts', 'utf8');
-check('the forward-booked read uses OFF_DIARY_STATUSES, not an inline list',
-  /status: \{ notIn: OFF_DIARY_STATUSES as any \}/.test(tiles),
+check('the forward-booked read uses FREES_THE_SLOT — the occupancy question',
+  /status: \{ notIn: FREES_THE_SLOT as any \}/.test(tiles),
   'the one reader that would have kept counting a no-show as booked hours');
 const tilesCode = tiles.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 check("  …and the inline ['cancelled', 'declined'] is gone from the code", !/notIn: \['cancelled', 'declined'\]/.test(tilesCode));
@@ -130,6 +132,38 @@ try {
   await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'no_show', to: 'draft', actorUserId: null }));
   const jul2 = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-07-01T00:00:00Z'), to: new Date('2026-08-01T00:00:00Z') });
   check('and the reopen un-moves it, in the month the slot sat', jul2.count === 0 && jul2.minutes === 0);
+
+  // ── 5. THE GHOST: visible on the board, free on the lift, absent from the money ───────────────
+  console.log('\n— the ghost: display keeps it, occupancy frees it, the money never counts it —');
+  // Re-mark card one (reopened above? no — card one still stands as no_show, slot 2026-08-17).
+  // Give it a priced line so the money exclusion is tested against a NON-zero value: a £0 fixture
+  // would pass a broken reducer too.
+  await prisma.jobCardItem.create({ data: { job_card_id: card.id, item_type: 'labour', description: 'gate: priced ghost line', qty: 1, unit_price: 100, vat_rate: 20 } });
+  const dayRows = await fetchDayBookings(site.id, new Date('2026-08-17T00:00:00Z'), new Date('2026-08-18T00:00:00Z'));
+  const ghostRow = dayRows.find((r) => r.id === card.id);
+  check('the DISPLAY read returns the no-show — the board shows the wasted slot', !!ghostRow, `${dayRows.length} rows for the day`);
+  check('  …status rides with it, so the renderer can grey it', ghostRow?.status === 'no_show');
+  // The OCCUPANCY question, asked exactly as the guard asks it: an overlapping booking search that
+  // excludes FREES_THE_SLOT must NOT see the ghost — the walk-in takes the lift.
+  const blockers = await prisma.jobCard.findMany({
+    where: { resource_id: ghostRow.resource_id, status: { notIn: FREES_THE_SLOT }, start_at: { lt: new Date('2026-08-17T11:00:00Z') }, end_at: { gt: new Date('2026-08-17T09:00:00Z') } },
+    select: { id: true },
+  });
+  check('the OCCUPANCY read does NOT see it — the slot is genuinely free', !blockers.some((b) => b.id === card.id),
+    `${blockers.length} live blockers in the ghost's window`);
+  // THE MONEY. The gssp reducer must skip ghosts, or the wasted slot adds itself back into
+  // "Booked" through the display path while the forward-booked read drops it — two readers
+  // disagreeing about one fact, on money. Comment-stripped scan, plus the block-value guard.
+  const diarySrc = readFileSync('pages/admin/diary.tsx', 'utf8');
+  const diaryCode = diarySrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('the totals reducer skips ghosts', /if \(!ghost && startMs >= rangeStartMs/.test(diaryCode),
+    'a no-show renders but must never land in bookedPennies/marginPennies');
+  check('the block value is zero for a ghost', /fin\.seeValues && !ghost \?/.test(diaryCode));
+  check('the ghost is discriminating — its line is PRICED (£100), so a broken reducer would show money',
+    Number(ghostRow?.items?.[0]?.unit_price ?? 0) === 100);
+  check('the ghost grey lives OUTSIDE the tenant palette', /GHOST_COLOUR/.test(readFileSync('lib/diary-colours.ts', 'utf8'))
+    && !/GHOST/.test(readFileSync('lib/status-colours.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')),
+    'fixed grey in diary-colours; the curated band map never learns it');
 
   // The wiring and the wording — the tile carries it, the panel hides zero, the words say what it is.
   const tilesSrc = readFileSync('lib/dashboard-tiles.ts', 'utf8');

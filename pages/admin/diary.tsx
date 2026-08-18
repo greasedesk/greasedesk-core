@@ -14,7 +14,7 @@ import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import { resolveColour, blockTint, RESOURCE_PALETTE } from '@/lib/diary-colours';
+import { resolveColour, blockTint, RESOURCE_PALETTE, GHOST_COLOUR, GHOST_FILL } from '@/lib/diary-colours';
 import { bandColour, statusBand, STATUS_BANDS, resolveStatusColours, DEFAULT_STATUS_COLOURS, type StatusBand } from '@/lib/status-colours';
 
 const BAND_LABEL: Record<StatusBand, string> = Object.fromEntries(STATUS_BANDS.map((b) => [b.key, b.label])) as Record<StatusBand, string>;
@@ -590,26 +590,38 @@ export default function DiaryPage(props: PageProps) {
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
   function JobBlock({ c, col, top, height, leftPct, widthPct }: { c: DiaryCard; col: { date: string; resourceId?: string }; top: number; height: number; leftPct: number; widthPct: number }) {
-    const liftColour = resolveColour(c.resourceColour); // the lift's own colour → block OUTLINE
-    const fill = cardFill(c);                           // the job-status band → block FILL
+    // A GHOST: the customer never arrived. Renders greyed in the SAME overlap layout as live
+    // blocks (a rebooked slot shows both side-by-side — two things happened there). Fixed grey,
+    // never the tenant band palette; click still opens the card (history is not stranded); drag,
+    // double-click and the context menu are off — moving a terminal fact is meaningless.
+    const ghost = c.status === 'no_show';
+    const liftColour = ghost ? GHOST_COLOUR : resolveColour(c.resourceColour); // lift colour → OUTLINE
+    const fill = ghost ? null : cardFill(c);                                   // status band → FILL
     return (
       <div
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => onBlockClick(c, e)}
-        onDoubleClick={(e) => onBlockDbl(c, e)}
-        onContextMenu={(e) => onBlockMenu(c, col, e)}
-        onTouchStart={(e) => onBlockLongPress(c, col, e)}
+        onDoubleClick={(e) => { if (!ghost) onBlockDbl(c, e); }}
+        onContextMenu={(e) => { if (ghost) e.preventDefault(); else onBlockMenu(c, col, e); }}
+        onTouchStart={(e) => { if (!ghost) onBlockLongPress(c, col, e); }}
         onTouchEnd={cancelPress}
         onTouchMove={cancelPress}
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: blockTint(fill), border: `2px solid ${liftColour}` }}
+        data-testid={ghost ? 'diary-ghost-block' : undefined}
+        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : blockTint(fill as string), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
         className={`diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
-        title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}`}
+        title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}${ghost ? ` · ${t('ghost.title')}` : ''}`}
       >
-        <span className="diary-reg block font-semibold text-[11px] text-ink px-1 pt-0.5 truncate">{c.reg}</span>
+        <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : 'text-ink'}`}>{c.reg}</span>
+        {ghost && height > 28 && (
+          <span className="inline-block ml-1 mt-0.5 text-[8px] leading-none py-0.5 rounded-full border px-1.5 font-medium whitespace-nowrap"
+            style={{ color: GHOST_COLOUR, borderColor: GHOST_COLOUR, backgroundColor: GHOST_FILL }}>
+            {t('ghost.tag')}
+          </span>
+        )}
         {/* Status-band label — THE single status word, always present (non-gated; the colour reinforces
             it, never replaces it). Shown wherever a pill fits (>28, matching where the pay pill used to
             appear) so short blocks still carry the word. */}
-        {height > 28 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
+        {!ghost && height > 28 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
         {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
             overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
         {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
@@ -618,7 +630,7 @@ export default function DiaryPage(props: PageProps) {
           <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
         ))}
         {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
-        {showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
+        {!ghost && showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
         {/* Payment pill retained ONLY where it says something the band does not: the warranty/settled
             "No charge" (£0 outcome). Everywhere else it duplicated the band word ("Paid"/"Paid",
             "Invoiced" vs "Complete, unpaid") and collided with the inline band pill on short blocks. */}
@@ -1729,7 +1741,13 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
     // still its parts-cost drag. Period-matched by BOOKING day (no cross-period double-count).
     const revenueEx = c.is_comeback ? 0 : (totals.labour_pennies + totals.parts_pennies);
     const startMs = (c.start_at as Date).getTime();
-    if (startMs >= rangeStartMs && startMs < rangeEndMs) {
+    // GHOSTS ARE EXCLUDED FROM THE MONEY. A no-show renders (the display list keeps it) but earns
+    // nothing — counting it here would add the wasted slot back into "Booked" through the display
+    // path while the forward-booked read correctly drops it: two readers disagreeing about the
+    // same fact, reborn one level up, on money. The capacity panel's lost-time line is where this
+    // slot's cost is named.
+    const ghost = c.status === 'no_show';
+    if (!ghost && startMs >= rangeStartMs && startMs < rangeEndMs) {
       bookedPennies += revenueEx;
       marginPennies += revenueEx - totals.parts_cost_pennies;
       const dk = ymd(new Date(startMs));
@@ -1744,7 +1762,9 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       isComeback: !!c.is_comeback, // the pay pill reads `settled` for a comeback from invoiced onward
       // Block value (EX-VAT): normal job = ex-VAT revenue; comeback = the DRAIN = −(ex-VAT parts cost),
       // matching what the margin total subtracts. Totals compute from `totals` directly, unaffected.
-      valuePennies: fin.seeValues ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
+      // A ghost's value is 0 unconditionally — nothing will be earned, and a £ on the block
+      // would read as live work.
+      valuePennies: fin.seeValues && !ghost ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
       // Agreed one price, sent another. Gated with the other money grain: a chip naming two totals
       // is a money disclosure, so it follows the same see-values permission as the block value.
       priceUnconfirmed: fin.seeValues ? quotePriceUnconfirmed(c.quoteVersions ?? []) : null,

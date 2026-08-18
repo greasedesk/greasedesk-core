@@ -32,3 +32,11 @@ export function resolveColour(c: string | null | undefined): string {
 export function blockTint(hex: string): string {
   return `${hex}22`;
 }
+
+/**
+ * THE GHOST — a no-show block on the board. FIXED, deliberately outside the tenant-curated status
+ * palette: that palette is for live work states a garage may re-colour, and "this didn't happen"
+ * must not be re-colourable into looking live. One grey, everywhere a ghost renders.
+ */
+export const GHOST_COLOUR = '#94A3B8'; // slate-400
+export const GHOST_FILL = '#94A3B81F'; // ~12% alpha — paler than any live tint

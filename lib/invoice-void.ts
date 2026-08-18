@@ -76,7 +76,7 @@ export function canVoid(inv: { status: string; lineCount: number }): { ok: true 
 
 /**
  * ── OFF-LEDGER: THE ONE PLACE THAT SAYS "A VOID IS NOT MONEY" ───────────────────────────────────
- * Same shape as OFF_DIARY_STATUSES in lib/jobcard-status (a cancelled job keeps its slot data but
+ * Same shape as FREES_THE_SLOT in lib/jobcard-status (a cancelled job keeps its slot data but
  * stops occupying a lift): a voided invoice keeps its number, lines and snapshots but stops being
  * money. Six figures hang off fetchLedgerInvoices alone, so this is written ONCE and spread in,
  * never restated per query. `notIn` rather than `not` so a second off-ledger status is one edit.

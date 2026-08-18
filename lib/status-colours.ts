@@ -36,9 +36,11 @@ export const DEFAULT_STATUS_COLOURS: Record<StatusBand, string> = {
 };
 
 /** Map a card's status (+ comeback flag) to its band. WARRANTY WINS over the lifecycle band.
- *  Cancelled, declined and no_show never reach here — OFF_DIARY_STATUSES excludes them from the
- *  diary query (a dead job must not occupy a lift). `done` shares the paid band (terminal, money
- *  is in). */
+ *  Cancelled and declined never reach here — HIDDEN_FROM_DIARY excludes them from the diary
+ *  query. no_show DOES reach the board now, but as a GHOST: the block renders in the fixed ghost
+ *  grey (lib/diary-colours), never through this band map — the tenant palette is for live work
+ *  states, and "this didn't happen" must not be re-colourable into looking live. `done` shares
+ *  the paid band (terminal, money is in). */
 export function statusBand(status: string, isComeback: boolean | null | undefined): StatusBand {
   if (isComeback) return 'warranty';
   switch (status) {

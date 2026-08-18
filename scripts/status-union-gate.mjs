@@ -18,7 +18,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { JOB_STATUSES, OFF_DIARY_STATUSES, paymentState } = await import('../lib/jobcard-status.ts');
+const { JOB_STATUSES, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState } = await import('../lib/jobcard-status.ts');
 const { readFileSync } = await import('node:fs');
 
 const out = [];
@@ -49,7 +49,8 @@ check('the check is discriminating — a fake status DOES read unknown', payment
 // ── 4. THE LISTS STAY ON THE COMPILE-TIME RAIL ──────────────────────────────────────────────────
 console.log('\n— membership lists go through statusSubset (bare arrays opt out of tsc) —');
 for (const [file, name] of [
-  ['lib/jobcard-status.ts', 'OFF_DIARY_STATUSES'],
+  ['lib/jobcard-status.ts', 'FREES_THE_SLOT'],
+  ['lib/jobcard-status.ts', 'HIDDEN_FROM_DIARY'],
   ['lib/quotes-list.ts', 'QUOTE_CLOSED_CARD_STATUSES'],
   ['lib/wip.ts', 'WIP_STATUSES'],
 ]) {
@@ -59,8 +60,29 @@ for (const [file, name] of [
 }
 // And no NEW bare inline status lists in query positions — the drift that bit at tiles:374.
 const tiles = readFileSync('lib/dashboard-tiles.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-check('dashboard-tiles has no inline status notIn list', !/notIn: \['[a-z_']+,?\s*'/.test(tiles), 'reads OFF_DIARY_STATUSES');
-check('  …and OFF_DIARY_STATUSES currently carries no_show', OFF_DIARY_STATUSES.includes('no_show'));
+check('dashboard-tiles has no inline status notIn list', !/notIn: \['[a-z_']+,?\s*'/.test(tiles), 'reads FREES_THE_SLOT');
+
+// ── 5. THE SPLIT: two questions, and the invariant between them ─────────────────────────────────
+console.log('\n— display and occupancy are separate questions with a subset invariant —');
+check('no_show FREES the slot — a walk-in can take the lift', FREES_THE_SLOT.includes('no_show'));
+check('but is NOT hidden — the wasted booking stays visible as a ghost', !HIDDEN_FROM_DIARY.includes('no_show'));
+check('cancelled and declined vanish AND free — freed with notice, no waste to show',
+  ['cancelled', 'declined'].every((x) => FREES_THE_SLOT.includes(x) && HIDDEN_FROM_DIARY.includes(x)));
+// THE INVARIANT. Hidden-but-occupying is a PHANTOM BLOCKER — a slot nothing shows but nobody can
+// book — strictly worse than either failure the old shared list prevented.
+const phantoms = HIDDEN_FROM_DIARY.filter((x) => !FREES_THE_SLOT.includes(x));
+check('HIDDEN_FROM_DIARY ⊆ FREES_THE_SLOT — no phantom blockers', phantoms.length === 0,
+  phantoms.join(', ') || `${HIDDEN_FROM_DIARY.length} hidden, all freeing`);
+check('  …and the module asserts it at BOOT, not just here',
+  /PHANTOM_BLOCKER/.test(readFileSync('lib/jobcard-status.ts', 'utf8')));
+// THE RETIREMENT. The old name invited a reader to grab it without choosing a question. Comments
+// may explain the history; CODE may not reference it.
+let survivors = [];
+for (const f of ['lib/diary-day.ts', 'lib/diary-booking.ts', 'lib/dashboard-tiles.ts', 'lib/jobcard-status.ts', 'lib/status-colours.ts', 'lib/invoice-void.ts']) {
+  const code = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  if (/OFF_DIARY_STATUSES/.test(code)) survivors.push(f);
+}
+check('OFF_DIARY_STATUSES is retired from CODE everywhere', survivors.length === 0, survivors.join(', ') || 'comments only');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma.$disconnect();
