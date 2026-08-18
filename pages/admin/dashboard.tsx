@@ -435,7 +435,14 @@ export default function AdminDashboard(props: PageProps) {
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="w-28 shrink-0 text-sm font-semibold text-ink">{t('marginStrip.grossProfit')}</span>
               <Figure className="text-2xl font-bold tabular-nums text-ink">{money(grossProfit)}</Figure>
-              <span className="text-sm text-muted">· {pctStr(grossPct)} {t('marginStrip.ofRevenue', { revenue: money(totalRevenue) })}</span>
+              {/* ITS OWN LINE BELOW lg. This span carries "· 75.9% of £216,673.57 revenue" — long,
+                  unshrinkable, and a sibling of a Figure that is `flex-1 basis-0`. On an iPad the
+                  two competed and the Figure lost: 95px of "£164,480.02" into 90px of room, already
+                  at the 0.6 minScale floor where Figure deliberately stops shrinking and lets
+                  overflow-hidden clip. Squeezed harder it renders as a bare "£" — a currency symbol
+                  with no number, which is worse than a small one. basis-full gives the money the
+                  row to itself; lg:basis-auto keeps the desktop line unchanged. */}
+              <span className="basis-full lg:basis-auto text-sm text-muted">· {pctStr(grossPct)} {t('marginStrip.ofRevenue', { revenue: money(totalRevenue) })}</span>
               {monthWindow && <span className="ml-auto text-xs text-muted">{monthLabel(monthWindow, props.locale)}</span>}
             </div>
           </div>

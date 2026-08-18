@@ -17,6 +17,7 @@
  *   * = the only two that can be "not applicable".
  */
 import { prisma } from '@/lib/db';
+import { neverSubscribes } from '@/lib/demo-tenant';
 
 export type SignalState = 'done' | 'todo' | 'not_applicable';
 export type SetupSignalKey =
@@ -49,7 +50,7 @@ export async function getSetupSignals(groupId: string, primarySiteId: string | n
   ] = await Promise.all([
     prisma.site.count({ where: { group_id: groupId } }),
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, service_code: 'LABOUR_HR', default_labour_rate: { not: null } }, select: { id: true } }),
-    prisma.group.findUnique({ where: { id: groupId }, select: { tax_default_rate_bp: true, company_number: true, employees_not_applicable: true, company_number_not_applicable: true, is_demo: true } }),
+    prisma.group.findUnique({ where: { id: groupId }, select: { tax_default_rate_bp: true, company_number: true, employees_not_applicable: true, company_number_not_applicable: true, is_demo: true, is_internal: true } }),
     prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true } }),
     prisma.resource.count({ where: { site: { group_id: groupId } } }),
     prisma.costPerson.count({ where: { group_id: groupId, is_active: true } }),
@@ -66,11 +67,11 @@ export async function getSetupSignals(groupId: string, primarySiteId: string | n
     { key: 'location',       state: siteCount > 0 ? 'done' : 'todo',                             gated: true,  canBeNA: false, href: '/admin/settings/locations' },
     { key: 'labour_rate',    state: labourSvc ? 'done' : 'todo',                                 gated: true,  canBeNA: false, href: '/admin/settings/financial' },
     { key: 'tax',            state: group?.tax_default_rate_bp != null ? 'done' : 'todo',        gated: true,  canBeNA: false, href: '/admin/settings/financial' },
-    // A DEMO HAS NO SUBSCRIPTION AND NEVER WILL, so this signal is done because there is nothing
-    // to do — not because a row says so. The alternative was writing a fake GroupBilling status,
-    // which lib/onboarding already refused for the same reason: that table mirrors Stripe's truth
-    // and the webhook reads it. Same tenant flag, same argument, one more reader.
-    { key: 'subscription',   state: (group?.is_demo || SUBSCRIBED.has(billing?.subscription_status ?? '')) ? 'done' : 'todo', gated: true, canBeNA: false, href: '/admin/settings/licences' },
+    // AN INTERNAL TENANT HAS NO SUBSCRIPTION AND NEVER WILL, so this signal is done because there
+    // is nothing to do — not because a row says so. Through neverSubscribes, which is the named
+    // question: this used to read `is_demo` alone, and when the sales demo became is_demo = false
+    // so it could text, the nag stuck at "7 of 8 done" with `subscription` outstanding forever.
+    { key: 'subscription',   state: (neverSubscribes(group) || SUBSCRIBED.has(billing?.subscription_status ?? '')) ? 'done' : 'todo', gated: true, canBeNA: false, href: '/admin/settings/licences' },
     { key: 'resources',      state: resourceCount > 0 ? 'done' : 'todo',                         gated: false, canBeNA: false, href: diaryHref },
     { key: 'employees',      state: naState(employeeCount > 0, !!group?.employees_not_applicable), gated: false, canBeNA: true,  href: '/admin/hr' },
     { key: 'company_number', state: naState(!!(group?.company_number && group.company_number.trim()), !!group?.company_number_not_applicable), gated: false, canBeNA: true, href: '/admin/settings/company/details' },

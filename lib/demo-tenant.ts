@@ -38,6 +38,28 @@ export const isReservedPhone = (v: string | null | undefined): boolean => {
 export const isReservedEmail = (v: string | null | undefined): boolean =>
   /@(example\.(com|net|org)|.*\.invalid)$/i.test(String(v ?? '').trim());
 
+/**
+ * WILL THIS TENANT EVER BUY A SUBSCRIPTION? Stated once, because the answer is not `is_demo`.
+ *
+ * `is_demo` means "never send messages from here". `is_internal` means "this is ours". They were
+ * one flag doing two jobs and were split on 2026-08-18 when the sales demo needed to send real
+ * texts: it became `is_demo = false`, and every reader that had been using that flag to mean
+ * "internal" silently changed its mind.
+ *
+ * Two readers were found the same way — by the tenant looking broken. The onboarding gate locked
+ * the demo behind /onboarding/phone, and this one left the setup nag reading "7 of 8 done" forever
+ * with `subscription` outstanding. Both were asking "is this tenant ours?" through a flag that had
+ * stopped answering it.
+ *
+ * So the question gets a name. An internal tenant has no subscription and never will: the signal is
+ * done because there is nothing to do, not because a row says so. Writing a fake GroupBilling
+ * status was the alternative and lib/onboarding refused it for the reason that still holds — that
+ * table mirrors Stripe's truth and the webhook reads it.
+ */
+export const neverSubscribes = (
+  group: { is_demo?: boolean | null; is_internal?: boolean | null } | null | undefined,
+): boolean => !!(group?.is_demo || group?.is_internal);
+
 /** Is this tenant a demo? One indexed lookup, and the only place the question is asked. */
 export async function isDemoGroup(groupId: string | null | undefined): Promise<boolean> {
   if (!groupId) return false;
