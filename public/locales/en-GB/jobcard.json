@@ -80,7 +80,8 @@
     "invoiced": "Invoiced",
     "paid": "Paid",
     "done": "Done",
-    "cancelled": "Cancelled"
+    "cancelled": "Cancelled",
+    "no_show": "No-show"
   },
   "action": {
     "quoted": "Mark as quoted",
@@ -93,7 +94,8 @@
     "cancelled": "Cancel job",
     "draft": "Reopen",
     "working": "Working…",
-    "error": "Could not update the status."
+    "error": "Could not update the status.",
+    "no_show": "Mark as no-show"
   },
   "stage": {
     "title": "Stages",
@@ -399,5 +401,12 @@
   },
   "messages": {
     "heading": "Messages"
+  },
+  "noShowBanner": "This customer didn’t turn up — the job is closed as a no-show and everything is read-only. Reopen it if they arrive.",
+  "noShow": {
+    "notePlaceholder": "Optional note — e.g. didn’t answer the phone",
+    "confirm": "Confirm no-show",
+    "keep": "Keep the booking",
+    "history": "⚠ {{count}} no-show(s) on record ({{dates}})"
   }
 }

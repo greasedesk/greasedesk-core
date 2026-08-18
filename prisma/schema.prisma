@@ -47,6 +47,7 @@ enum JobCardStatus {
   paid
   done
   cancelled
+  no_show
 }
 
 enum TenantStatus {

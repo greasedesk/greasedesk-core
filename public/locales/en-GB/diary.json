@@ -161,7 +161,8 @@
     "startTime": "Start time",
     "pickLift": "Choose a lift…",
     "lookupVpic": "Filled from the VIN decoder — colour and mileage aren’t in a VIN, add them yourself.",
-    "vinInvalid": "A VIN is 17 characters, letters and numbers, no I, O or Q."
+    "vinInvalid": "A VIN is 17 characters, letters and numbers, no I, O or Q.",
+    "noShowHistory": "⚠ {{count}} no-show(s) on record for this customer ({{dates}})."
   },
   "menu": {
     "hint": "Right-click (or long-press) the diary to book a job or add a note.",

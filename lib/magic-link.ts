@@ -246,7 +246,7 @@ export async function resolveMagicLink(
  * written before 2026-08-08, plus `in_progress` (ruling): a started job has no true reason word,
  * and "invoiced" would be a lie while "cancelled" would be a worse one.
  */
-export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | null;
+export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | 'no_show' | null;
 
 /** Kill one link (sent to the wrong address). Idempotent. */
 export async function revokeMagicLink(id: string, reason: RevokeReason): Promise<void> {

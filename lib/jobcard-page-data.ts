@@ -9,6 +9,7 @@
  * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
+import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
@@ -127,7 +128,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow }, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -139,7 +140,14 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       const or = ownerId
         ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true } })
         : (row.customer ?? null);
-      return { edgeOwnerId: ownerId, ownerRow: or };
+      // The customer's missed-booking history rides with the owner — derived (lib/no-show), so a
+      // reopened card corrects it by construction. THIS card counts too when it is itself a
+      // no-show: the section shows the customer's full record, and hiding the newest instance
+      // would understate exactly the fact the count exists to surface.
+      const hist = ownerId ?? row.customer_id
+        ? await noShowHistory(prisma, ownerId ?? (row.customer_id as string | null))
+        : { count: 0, dates: [] };
+      return { edgeOwnerId: ownerId, ownerRow: or, ownerNoShows: hist };
     })(),
     // The site's default labour rate (Financial settings) — pre-fills new labour lines and is the
     // rate the upcoming margin feature reads (labour retail = labour_hours × rate).
@@ -220,6 +228,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // NULL all the way to the screen: no terms is "pays on collection", not "we don't know".
     accountTermsDays: (ownerRow as any)?.account_terms_days ?? null,
     accountName: (ownerRow as any)?.account_name ?? null,
+    // Missed bookings, most recent first — shown beside the customer so whoever books the next
+    // slot sees the form. Empty array = clean history (derived, so it is a real zero).
+    noShowDates: ownerNoShows.dates,
   };
 
   const booking: CardBooking = isBookedCard(row as any)

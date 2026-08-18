@@ -6,6 +6,7 @@
  * Returns { found:false } for an unknown reg (a new car). Authority = canAccessSite for any of the
  * caller's sites (they can create cards here; reading a reg they can book is the same tier).
  */
+import { noShowHistory } from '@/lib/no-show';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
@@ -38,6 +39,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const owner = ownerId
     ? ((await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, email: true } })) as { name: string; phone: string | null; email: string | null } | null)
     : null;
+  // THE NO-SHOW HISTORY RIDES WITH THE OWNER, because this lookup fires at the exact moment the
+  // count matters: someone is about to give this customer a slot. Derived (lib/no-show), never a
+  // stored counter.
+  const noShows = await noShowHistory(prisma, ownerId);
 
   return res.status(200).json({
     found: true,
@@ -47,5 +52,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fuel: vehicle.fuel_type ?? '', year: vehicle.year ?? null, engineCc: vehicle.engine_cc ?? null,
     },
     owner: { name: owner?.name ?? '', phone: owner?.phone ?? '', email: owner?.email ?? '' },
+    noShows,
   });
 }

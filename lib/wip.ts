@@ -6,9 +6,17 @@
  * disagree: a tile that leads to a different total is worse than no link. (Same discipline as
  * lib/invoice-list-filters.ts::listWhere, which keeps the debtors tile and the invoices list aligned.)
  */
+import { statusSubset } from '@/lib/jobcard-status';
 import type { Prisma } from '@prisma/client';
 
-export const WIP_STATUSES = ['accepted', 'in_progress'] as const;
+// TOTAL BY CONSTRUCTION (lib/jobcard-status::statusSubset): a new JobStatus fails to compile here
+// until someone decides whether it is work-in-progress. Terminal statuses (cancelled, no_show)
+// drop out of WIP by decision, not by omission.
+export const WIP_STATUSES = statusSubset({
+  draft: false, quoted: false, declined: false,
+  accepted: true, in_progress: true,
+  invoiced: false, paid: false, done: false, cancelled: false, no_show: false,
+});
 export const WIP_AGE_DAYS = 14; // a card open longer than this is the actual problem — surfaced, not hidden
 
 /** The filter: accepted/in-progress cards with no invoice raised. The lifecycle already excludes

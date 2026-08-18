@@ -35,9 +35,10 @@ export const DEFAULT_STATUS_COLOURS: Record<StatusBand, string> = {
   warranty: '#8B5CF6',         // violet — distinct from the four traffic-light bands
 };
 
-/** Map a card's status (+ comeback flag) to its band. WARRANTY WINS over the lifecycle band. Cancelled
- *  and declined never reach here — they are excluded from the diary query (a cancelled job must not
- *  occupy a lift). `done` shares the paid band (terminal, money is in). */
+/** Map a card's status (+ comeback flag) to its band. WARRANTY WINS over the lifecycle band.
+ *  Cancelled, declined and no_show never reach here — OFF_DIARY_STATUSES excludes them from the
+ *  diary query (a dead job must not occupy a lift). `done` shares the paid band (terminal, money
+ *  is in). */
 export function statusBand(status: string, isComeback: boolean | null | undefined): StatusBand {
   if (isComeback) return 'warranty';
   switch (status) {

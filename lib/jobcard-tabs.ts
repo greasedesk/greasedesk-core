@@ -93,9 +93,11 @@ export function computeTabs(s: CardGateState): Record<TabKey, TabState> {
     refund: { reachable: true, complete: false },
   };
 
-  // Cancelled: everything viewable (read-only). Reachability opened so history isn't stranded; the
-  // page renders a cancelled banner and disables mutating controls. Completeness reflects reality.
-  if (s.status === 'cancelled') {
+  // Cancelled / no-show: everything viewable (read-only). Reachability opened so history isn't
+  // stranded; the page renders the terminal banner and disables mutating controls. Completeness
+  // reflects reality. no_show joins because it is the same kind of end: no work happened, nothing
+  // to mutate — only the FACT differs, and the fact lives in the status.
+  if (s.status === 'cancelled' || s.status === 'no_show') {
     for (const k of TAB_KEYS) tabs[k] = { ...tabs[k], reachable: true };
   }
   return tabs;

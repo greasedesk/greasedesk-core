@@ -32,7 +32,16 @@ export type TransitionRefusal = { code: 'illegal_transition'; message: string };
  */
 export async function applyCardTransition(
   tx: Prisma.TransactionClient,
-  args: { groupId: string; jobCardId: string; from: JobStatus; to: JobStatus; actorUserId: string | null },
+  args: {
+    groupId: string; jobCardId: string; from: JobStatus; to: JobStatus; actorUserId: string | null;
+    /**
+     * Optional free text, written into the AUDIT DIFF — the event's own record — never a column.
+     * A no-show's "didn't answer the phone" belongs on the moment it was marked; cancellation has
+     * carried no reason since the beginning, and a note that is optional here keeps a no-show from
+     * being more ceremonious than a cancellation.
+     */
+    note?: string | null;
+  },
 ): Promise<{ ok: true; moved: boolean } | { ok: false; refusal: TransitionRefusal }> {
   if (args.from === args.to) return { ok: true, moved: false };
 
@@ -50,7 +59,7 @@ export async function applyCardTransition(
     userId: args.actorUserId,
     jobCardId: args.jobCardId,
     action: `status.${args.to}` as any,
-    diff: { from: args.from, to: args.to },
+    diff: { from: args.from, to: args.to, ...(args.note?.trim() ? { note: args.note.trim().slice(0, 500) } : {}) },
   });
   return { ok: true, moved: true };
 }

@@ -24,7 +24,9 @@ export type LookupOwnerFields = { name: string; phone: string; email: string };
 export type LookupMotMeta = { motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null };
 
 export type VehicleLookupResult =
-  | { ok: true; reg: string; source: 'records' | 'dvsa'; vehicle: LookupVehicleFields; owner: LookupOwnerFields | null; mot: LookupMotMeta | null }
+  | { ok: true; reg: string; source: 'records' | 'dvsa'; vehicle: LookupVehicleFields; owner: LookupOwnerFields | null; mot: LookupMotMeta | null;
+      /** Owner's missed bookings, present only on a records hit with history (null = none or unknown). */
+      noShows?: { count: number; dates: string[] } | null }
   | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
@@ -57,6 +59,9 @@ export async function lookupVehicleByReg(
             fuel: S(v.fuel), engineCc: Snum(v.engineCc), vin: S(v.vin), mileage: Snum(v.mileage),
           },
           owner: { name: S(o.name), phone: S(o.phone), email: S(o.email) },
+          // Present only on a records hit with a resolved owner — a DVSA hit knows the car, not the
+          // customer, and must not imply a clean history it never checked.
+          noShows: data.noShows && data.noShows.count > 0 ? { count: Number(data.noShows.count), dates: (data.noShows.dates ?? []).map(S) } : null,
           mot: null,
         };
       }

@@ -17,7 +17,7 @@
  */
 import { prisma } from '@/lib/db';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
-import { isBookedCard } from '@/lib/jobcard-status';
+import { isBookedCard, statusSubset } from '@/lib/jobcard-status';
 import { acceptanceProvenance, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
 
 export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
@@ -120,7 +120,13 @@ export function quotePriceUnconfirmed(
  * The card already records all of this. Reading it here — rather than mirroring it into a quote
  * status — is what stops the two drifting apart.
  */
-export const QUOTE_CLOSED_CARD_STATUSES = ['invoiced', 'paid', 'done', 'cancelled'] as const;
+// TOTAL BY CONSTRUCTION (lib/jobcard-status::statusSubset): adding a JobStatus fails to compile
+// here until someone decides whether it closes the quote thread.
+export const QUOTE_CLOSED_CARD_STATUSES = statusSubset({
+  draft: false, quoted: false, accepted: false, declined: false, in_progress: false,
+  invoiced: true, paid: true, done: true, cancelled: true,
+  no_show: true, // a no-show ends the conversation the same way a cancellation does
+});
 
 export type QuoteRow = {
   jobCardId: string;

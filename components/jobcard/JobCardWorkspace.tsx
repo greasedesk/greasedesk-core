@@ -73,7 +73,9 @@ type Props = {
   priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
-  owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null };
+  owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
+    /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
+    noShowDates?: string[] };
   // Message history for this card's (customer, vehicle) thread — server-resolved.
   conversation?: ConversationMessage[];
   threadId?: string | null;
@@ -181,6 +183,11 @@ export default function JobCardWorkspace(p: Props) {
   }
 
   const cancelled = eff.status === 'cancelled';
+  const noShow = eff.status === 'no_show';
+  // READ-ONLY is a property of "terminally inactive", not of cancellation specifically — a no-show
+  // is the same kind of end (no work happened, nothing to mutate); only the FACT differs, and the
+  // fact lives in the status and its own banner below.
+  const inactive = cancelled || noShow;
 
   // ----- active tab from URL, defaulting to the first reachable-incomplete step -----
   const firstOpen = useMemo(() => {
@@ -196,7 +203,7 @@ export default function JobCardWorkspace(p: Props) {
   // freeze-at-issue lock. Before this the browser only had the first, so the autosave, the
   // tab-change commit and the route-leave commit all fired at a frozen card and collected 409s —
   // and the tab-change commit BLOCKS on failure, so the pane stopped swapping.
-  const quoteEditable = p.canEditPricing && !cancelled && !p.quoteFrozen;
+  const quoteEditable = p.canEditPricing && !inactive && !p.quoteFrozen;
 
   // OPENING IS A CLICK, NOT A RENDER. The active tab comes from ?tab= in the URL, so a card can
   // load straight onto Messages from a link or a back-navigation — rendering it proves nobody read
@@ -281,8 +288,8 @@ export default function JobCardWorkspace(p: Props) {
     return run(`skip:${stage}`, postJSON('/api/jobcard-stage', { jobCardId: p.jobCardId, stage, done: skipTo, skip: true, reason: reason || undefined }),
       { skipped, ...(status ? { status } : {}), tabsState: clientTabs({ skipped, ...(status ? { status } : {}) }) });
   };
-  const setStatus = (to: JobStatus) =>
-    run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to }),
+  const setStatus = (to: JobStatus, note?: string) =>
+    run(`status:${to}`, postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to, ...(note?.trim() ? { note: note.trim() } : {}) }),
       { status: to, tabsState: clientTabs({ status: to }) });
   const setComeback = (v: boolean) =>
     run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }),
@@ -442,13 +449,13 @@ export default function JobCardWorkspace(p: Props) {
         <div className="flex flex-wrap gap-2 justify-end">
           {/* Soft gate: skipped state — audited; undo re-opens the stage. */}
           {isSkipped ? (
-            <button type="button" disabled={!p.canOperate || cancelled || busy !== null} onClick={() => setSkip(stage, false)}
+            <button type="button" disabled={!p.canOperate || inactive || busy !== null} onClick={() => setSkip(stage, false)}
               className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-warn-soft text-warn border border-line disabled:opacity-50">
               {t('stageSkip.skippedToggle', { label })}
             </button>
           ) : (
             <>
-              {skippable && !done && p.canOperate && !cancelled && !skipOpen && (
+              {skippable && !done && p.canOperate && !inactive && !skipOpen && (
                 <button type="button" disabled={busy !== null} onClick={() => setSkipOpen(true)}
                   className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 border border-line text-muted hover:text-ink disabled:opacity-50">
                   {t('stageSkip.button')}
@@ -456,7 +463,7 @@ export default function JobCardWorkspace(p: Props) {
               )}
               <button
                 type="button"
-                disabled={!p.canOperate || cancelled || busy !== null || (!done && detailsBlocked)}
+                disabled={!p.canOperate || inactive || busy !== null || (!done && detailsBlocked)}
                 title={!done && detailsBlocked ? t('tab.detailsMinData') : undefined}
                 onClick={() => setStage(stage, !done)}
                 // OUTLINED, NOT FILLED. It used to wear the same filled accent as Save, which was
@@ -503,7 +510,7 @@ export default function JobCardWorkspace(p: Props) {
         threadId={p.threadId ?? null}
         jobCardId={p.jobCardId}
         reachability={p.reachability ?? null}
-        canSend={p.canOperate && !cancelled}
+        canSend={p.canOperate && !inactive}
         onSent={setConvo}
       />
     </div>
@@ -511,13 +518,21 @@ export default function JobCardWorkspace(p: Props) {
 
   const detailsPane = (
       <div className="space-y-5">
+        {/* Missed-booking history, derived server-side — in front of whoever is looking at this
+            customer, because the next booking is decided here or in the diary (which shows the
+            same fact via the reg lookup). */}
+        {(eff.owner.noShowDates?.length ?? 0) > 0 && (
+          <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 text-sm font-semibold" data-testid="no-show-history">
+            {t('noShow.history', { count: eff.owner.noShowDates!.length, dates: eff.owner.noShowDates!.slice(0, 3).join(', ') })}
+          </div>
+        )}
         <CustomerDetailsForm
           vehicleIdLabel={p.vehicleIdLabel}
           vehicleLookupProvider={p.vehicleLookupProvider}
           jobCardId={p.jobCardId}
           owner={eff.owner}
           vehicle={eff.vehicle}
-          canEdit={p.canOperate && !cancelled}
+          canEdit={p.canOperate && !inactive}
           locale={p.locale}
           onSaved={refreshCard}
           stageAction={<StageComplete stage="details" label={t('tab.details')} />}
@@ -532,7 +547,7 @@ export default function JobCardWorkspace(p: Props) {
           ) : <p className="text-muted text-sm">{t('field.noFlags')}</p>}
         </div>
 
-        <JobCardNotes jobCardId={p.jobCardId} canEdit={p.canOperate && !cancelled} initialNotes={p.garageNotes} />
+        <JobCardNotes jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} initialNotes={p.garageNotes} />
       </div>
   );
 
@@ -556,13 +571,13 @@ export default function JobCardWorkspace(p: Props) {
     // (Start-work button there + server auto-advance on in-job/completion activity), so a card
     // reaching Invoice still `accepted` is an anomaly — a muted note + secondary button, never a
     // prescribed "start work then invoice" step.
-    const startWorkBtn = eff.status === 'accepted' && allAdvanced && p.canOperate && !cancelled && (
+    const startWorkBtn = eff.status === 'accepted' && allAdvanced && p.canOperate && !inactive && (
       <>
         <p className="text-sm text-muted">{t('invoiceTab.neverStarted')}</p>
         <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{t('action.in_progress')}</button>
       </>
     );
-    const stagesRemainingMsg = !allAdvanced && preInvoice && !cancelled && (
+    const stagesRemainingMsg = !allAdvanced && preInvoice && !inactive && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
     );
     // THE AGREED-VERSION CORRECTION, wherever the invoice link renders (normal + comeback). Absent
@@ -573,7 +588,7 @@ export default function JobCardWorkspace(p: Props) {
     // moment. It is also the moment the mechanic can still fix it in one click, before a number is
     // burned. (Until estimate-save minted a revision there was nothing to compare either, so both
     // halves had to change together.)
-    const agreedVersionPanel = p.agreedVersionFix && !cancelled && (
+    const agreedVersionPanel = p.agreedVersionFix && !inactive && (
       <AgreedVersionFixPanel
         jobCardId={p.jobCardId} fix={p.agreedVersionFix} disabled={busy !== null}
         currency={p.currency} locale={p.locale} onDone={refreshCard}
@@ -586,7 +601,7 @@ export default function JobCardWorkspace(p: Props) {
         {eff.invoice.status === 'paid_pending' && (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold rounded-full px-2.5 py-1 bg-warn-soft text-warn">{t('invoiceTab.pendingChip')}</span>
-            {p.canManage && !cancelled && (
+            {p.canManage && !inactive && (
               <button disabled={busy !== null}
                 onClick={() => { if (window.confirm(t('invoiceTab.unmarkConfirm'))) run('unmark-paid', postJSON('/api/invoice-unmark-paid', { invoiceId: eff.invoice!.id }), { status: 'invoiced', invoice: { ...eff.invoice!, status: 'issued' }, tabsState: clientTabs({ status: 'invoiced' }) }); }}
                 className="text-xs rounded-lg px-3 py-1.5 border border-line text-warn hover:bg-warn-soft disabled:opacity-50">
@@ -618,7 +633,7 @@ export default function JobCardWorkspace(p: Props) {
         ) : eff.invoice.status === 'paid' && (
           <span className="self-start text-xs font-semibold rounded-full px-2.5 py-1 bg-ok-soft text-ok">{t('invoiceTab.paidChip')}</span>
         )}
-        {p.canManage && !cancelled && (
+        {p.canManage && !inactive && (
           <div className="flex flex-col sm:flex-row gap-2">
             <button disabled={busy !== null} onClick={emailInvoice} data-testid="invoice-email"
               className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink hover:bg-surface-muted disabled:opacity-50">
@@ -731,11 +746,11 @@ export default function JobCardWorkspace(p: Props) {
             {invoiceActions}
             {agreedVersionPanel}
             {startWorkBtn}
-            {eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !cancelled && !mintOpen && (
+            {eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !inactive && !mintOpen && (
               <button disabled={busy !== null} onClick={startMint} className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('comeback.markInvoiced')}</button>
             )}
             {mintPanel}
-            {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
+            {eff.status === 'invoiced' && p.canManage && !inactive && !payOpen && (
               <button disabled={busy !== null} onClick={openPay} data-testid="invoice-mark-paid" className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
             {payPanel}
@@ -749,12 +764,12 @@ export default function JobCardWorkspace(p: Props) {
             </Link>
             {invoiceActions}
             {agreedVersionPanel}
-            {eff.status === 'invoiced' && p.canManage && !cancelled && !payOpen && (
+            {eff.status === 'invoiced' && p.canManage && !inactive && !payOpen && (
               <button disabled={busy !== null} onClick={openPay} data-testid="invoice-mark-paid" className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
             {payPanel}
           </>
-        ) : eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !cancelled ? (
+        ) : eff.status === 'in_progress' && allAdvanced && p.canIssueInvoice && !inactive ? (
           <>
             <p className="text-sm text-muted">{t('invoiceTab.readyToMint')}</p>
             {!mintOpen && (
@@ -776,6 +791,7 @@ export default function JobCardWorkspace(p: Props) {
   return (
     <>
       {cancelled && <div className="bg-danger-soft text-danger rounded-xl px-4 py-3 mb-5 text-sm">{t('cancelledBanner')}</div>}
+      {noShow && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm" data-testid="no-show-banner">{t('noShowBanner')}</div>}
       {eff.isComeback && <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 mb-5 text-sm">{t('comeback.banner')}</div>}
       {/* Ownership moved since the source card — its own PROMINENT notice, never a clause on the
           cost line (amendment 2026-07-28): a skimmer of the cost advisory must still see this. */}
@@ -796,7 +812,7 @@ export default function JobCardWorkspace(p: Props) {
       <div className={active === 'quote' ? 'space-y-5' : 'hidden'}>
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
-            status={eff.status} canManage={p.canManage && !cancelled} cancelled={cancelled}
+            status={eff.status} canManage={p.canManage && !inactive} cancelled={inactive}
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} currency={p.currency} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
@@ -828,7 +844,7 @@ export default function JobCardWorkspace(p: Props) {
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
               intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}
-          {p.canOperate && !cancelled && (
+          {p.canOperate && !inactive && (
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
               <input type="checkbox" className="w-5 h-5 mt-0.5" checked={eff.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
@@ -838,7 +854,7 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
-          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !cancelled} locked={eff.stages.intake} locale={p.locale} />
+          <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>
       )}
@@ -848,21 +864,21 @@ export default function JobCardWorkspace(p: Props) {
           {/* Start-work lives HERE on the spine — after Intake, before In-Job photos (which evidence
               the work). SOFT: a guide, not a gate — stages tick in any order; the Invoice-tab rescue
               remains the backstop. in_progress anchors the future clocking/labour-actuals grain. */}
-          {eff.status === 'accepted' && p.canOperate && !cancelled && (
+          {eff.status === 'accepted' && p.canOperate && !inactive && (
             <div className="bg-accent-soft border border-line rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <p className="text-sm text-ink">{t('startWork.hint')}</p>
               <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto shrink-0 text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.in_progress')}</button>
             </div>
           )}
-          <PhotoStage jobCardId={p.jobCardId} stage="injob" canEdit={p.canOperate && !cancelled} locked={eff.stages.injob} locale={p.locale} />
+          <PhotoStage jobCardId={p.jobCardId} stage="injob" canEdit={p.canOperate && !inactive} locked={eff.stages.injob} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="injob" label={t('tab.injob')} /></div>
         </div>
       )}
 
       {active === 'completion' && (
         <div className="space-y-5">
-          <PhotoStage jobCardId={p.jobCardId} stage="completion" canEdit={p.canOperate && !cancelled} locked={eff.stages.complete} locale={p.locale} />
-          <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !cancelled} busy={busy} setBusy={setBusy} setErr={setErr} onDone={refreshCard} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
+          <PhotoStage jobCardId={p.jobCardId} stage="completion" canEdit={p.canOperate && !inactive} locked={eff.stages.complete} locale={p.locale} />
+          <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !inactive} busy={busy} setBusy={setBusy} setErr={setErr} onDone={refreshCard} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>
       )}
@@ -877,7 +893,7 @@ export default function JobCardWorkspace(p: Props) {
             <RefundPanel
               payments={(refundData.payments ?? []).map((x: any) => ({ ...x, collectedAt: new Date(x.collectedAt) }))}
               methods={refundData.methods ?? []}
-              canManage={!!refundData.canManage && !cancelled}
+              canManage={!!refundData.canManage && !inactive}
               invoiceRefusal={refundData.invoiceRefusal ?? null}
               money={(pennies: number) => formatMoney(pennies, { currency: p.currency, locale: p.locale })}
               today={refundData.today}
@@ -904,7 +920,7 @@ function QuoteActions(props: {
   status: JobStatus; canManage: boolean; cancelled: boolean;
   resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
-  t: (k: string, o?: any) => string; setStatus: (to: JobStatus) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
+  t: (k: string, o?: any) => string; setStatus: (to: JobStatus, note?: string) => void; commitEstimate: () => Promise<{ ok: boolean; message?: string }>;
   quoteSupersededNoLink: boolean;
   quoteSendBlockedReason: string | null;
   acceptanceNote: string | null;
@@ -1004,9 +1020,20 @@ function QuoteActions(props: {
     setErr([est.message, secondMsg].filter(Boolean).join(' — '));
   }
 
+  // HOOKS BEFORE THE EARLY RETURN. These two used to sit below it; the moment a no-show applied,
+  // canManage flipped false, the component returned early, and React threw "rendered fewer hooks
+  // than expected" — found on the served page, on the very transition this panel exists to make.
+  // Optional free text with the mark — one inline row, no modal. Consistent with cancellation,
+  // which carries no reason at all: the note must never be a gate.
+  const [noShowOpen, setNoShowOpen] = useState(false);
+  const [noShowNote, setNoShowNote] = useState('');
+
   if (!canManage) return null;
   const fmtMoney = (pennies: number) => formatMoney(pennies, { currency: props.currency, locale: props.locale });
-  const canCancel = !['done', 'cancelled'].includes(status);
+  const canCancel = !['done', 'cancelled', 'no_show'].includes(status);
+  // Pre-work + a real slot held — the same rule the server's transition table + booking_exists gate
+  // enforce; this only decides whether to OFFER the button. `booking` is this panel's own prop.
+  const canNoShow = ['draft', 'quoted', 'accepted'].includes(status) && !!booking;
   const btn = 'text-sm font-semibold rounded-lg px-4 py-2.5 disabled:opacity-50';
 
   return (
@@ -1076,8 +1103,22 @@ function QuoteActions(props: {
             <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className={`${btn} bg-surface-muted text-ink`}>{t('booking.unbook')}</button>
           </>
         )}
+        {canNoShow && !noShowOpen && (
+          <button disabled={busy !== null} onClick={() => setNoShowOpen(true)} className={`${btn} bg-warn-soft text-warn`} data-testid="no-show-button">{t('action.no_show')}</button>
+        )}
         {canCancel && <button disabled={busy !== null} onClick={() => props.setStatus('cancelled')} className={`${btn} bg-danger-soft text-danger sm:ml-auto`}>{t('action.cancelled')}</button>}
       </div>
+      {noShowOpen && (
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center bg-warn-soft rounded-lg p-3" data-testid="no-show-confirm">
+          <input value={noShowNote} onChange={(e) => setNoShowNote(e.target.value)} maxLength={500}
+            placeholder={t('noShow.notePlaceholder')}
+            className="flex-1 p-2 text-sm bg-surface border border-line rounded-lg text-ink" />
+          <button disabled={busy !== null} onClick={() => { props.setStatus('no_show', noShowNote); setNoShowOpen(false); }}
+            className={`${btn} bg-warn text-white`}>{t('noShow.confirm')}</button>
+          <button disabled={busy !== null} onClick={() => { setNoShowOpen(false); setNoShowNote(''); }}
+            className={`${btn} bg-surface-muted text-ink`}>{t('noShow.keep')}</button>
+        </div>
+      )}
 
       {/* SEND QUOTE TO CUSTOMER (slice-2a). Freezes the estimate as a version, mints a 14-day
           magic link and emails it. The URL is ALWAYS shown afterwards so it can be handed over by

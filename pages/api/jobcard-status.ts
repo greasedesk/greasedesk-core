@@ -14,7 +14,7 @@ import { applyCardTransition } from '@/lib/jobcard-transition';
 import { canAccessSite, canManageSite, requireCanWrite, requireTenantApi } from '@/lib/admin-guard';
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
-import { findTransition, JobStatus } from '@/lib/jobcard-status';
+import { findTransition, JobStatus, isBookedCard } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
@@ -45,6 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
       stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
       odometer_in: true, vehicle: { select: { vin: true, mileage_at_create: true } },
+      // The booking fact, for the booking_exists gate — the same three fields isBookedCard reads.
+      resource_id: true, start_at: true, end_at: true,
       _count: { select: { items: true } },
     },
   })) as any;
@@ -76,6 +78,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Gates.
   if (tr.gate === 'estimate_exists' && (card._count?.items ?? 0) === 0) {
     return res.status(409).json({ message: 'Add at least one estimate line before quoting.' });
+  }
+  if (tr.gate === 'booking_exists' && !isBookedCard(card)) {
+    // A no-show is a fact about a SLOT that was held and wasted. A card that never held one has
+    // nothing to not show up for — cancel it instead.
+    return res.status(409).json({ message: 'This job has no booking, so it can’t be a no-show. Cancel it instead.' });
   }
   if (tr.gate === 'all_stages_done') {
     // Soft gates: a photo stage counts when completed OR skipped (a skip is an audited first-class
@@ -151,6 +158,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const moved = await applyCardTransition(tx, {
           groupId: scope.groupId, jobCardId,
           from: card.status as JobStatus, to, actorUserId: scope.userId,
+          // Optional free text (no-show: "didn't answer the phone"). Into the audit diff — the
+          // event's own record — never a column. Ignored as undefined for every other caller.
+          note: typeof req.body?.note === 'string' ? req.body.note : null,
         });
         if (!moved.ok) throw new Error(`TRANSITION:${moved.refusal.message}`);
       }
@@ -160,6 +170,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // is the worst of the four states: the customer says yes to work nobody is going to do.
       // In THIS tx, so a failed cancellation cannot leave the link dead behind it.
       if (to === 'cancelled') await revokeMagicLinksForCard(jobCardId, 'cancelled', tx);
+      // A NO-SHOW KILLS THE LINK TOO — same defect class as cancellation: a customer who didn't
+      // turn up must not still be holding a live quote link for work nobody is going to do.
+      if (to === 'no_show') await revokeMagicLinksForCard(jobCardId, 'no_show', tx);
       if (to === 'invoiced') {
         // COMEBACK NUMBERING GUARD (locked): a comeback mints a £0 invoice from the SEPARATE
         // warranty series — never the chargeable customer-facing sequence. Both counters stay

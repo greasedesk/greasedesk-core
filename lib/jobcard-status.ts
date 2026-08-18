@@ -7,17 +7,28 @@
  */
 export type JobStatus =
   | 'draft' | 'quoted' | 'accepted' | 'declined'
-  | 'in_progress' | 'invoiced' | 'paid' | 'done' | 'cancelled';
+  | 'in_progress' | 'invoiced' | 'paid' | 'done' | 'cancelled' | 'no_show';
 
 // operational = any site-assigned user (incl. STANDARD mechanics); commercial = manager/admin only.
 export type TransitionKind = 'operational' | 'commercial';
-// estimate_exists: ≥1 line item; all_stages_done: all four stage flags true.
-export type TransitionGate = 'estimate_exists' | 'all_stages_done';
+// estimate_exists: ≥1 line item; all_stages_done: all four stage flags true; booking_exists: the
+// card holds a real slot (isBookedCard) — a no-show without a booking is a claim about nothing.
+export type TransitionGate = 'estimate_exists' | 'all_stages_done' | 'booking_exists';
 export type Transition = { to: JobStatus; kind: TransitionKind; gate?: TransitionGate };
 
 export const JOB_STATUSES: JobStatus[] = [
-  'draft', 'quoted', 'accepted', 'declined', 'in_progress', 'invoiced', 'paid', 'done', 'cancelled',
+  'draft', 'quoted', 'accepted', 'declined', 'in_progress', 'invoiced', 'paid', 'done', 'cancelled', 'no_show',
 ];
+
+/**
+ * A SUBSET OF STATUSES, TOTAL BY CONSTRUCTION. Every membership list built from this is a
+ * Record<JobStatus, boolean>, so adding a status FAILS TO COMPILE at every list until someone
+ * decides whether the new status belongs — the same guarantee PAY_STATE_BY_STATUS already gives
+ * the money label. Bare arrays don't do this: five times in one week a new value was added and its
+ * readers were found by accident, because an array is silent about the value it doesn't mention.
+ */
+export const statusSubset = (decisions: Record<JobStatus, boolean>): JobStatus[] =>
+  JOB_STATUSES.filter((s) => decisions[s]);
 
 // Milestone membership sets (NOT a numeric rank — the lifecycle branches: declined/cancelled are not
 // "further along" than accepted). The tab chokepoint reads these to decide Quote/Invoice completeness.
@@ -28,7 +39,15 @@ export const INVOICE_DONE_STATUSES: JobStatus[] = ['invoiced', 'paid', 'done'];
 // the diary DISPLAY reader (lib/diary-day) and the occupancy GUARD (lib/diary-booking), so the two can
 // never disagree on what "occupied" means. (The slot data is deliberately KEPT — the record of when/
 // where the job had been booked survives — but it no longer blocks the lift or shows on the board.)
-export const OFF_DIARY_STATUSES: JobStatus[] = ['cancelled', 'declined'];
+export const OFF_DIARY_STATUSES: JobStatus[] = statusSubset({
+  draft: false, quoted: false, accepted: false, in_progress: false,
+  invoiced: false, paid: false, done: false,
+  declined: true, cancelled: true,
+  // A no-show frees the slot the moment it is marked — the customer is not coming, and the lift
+  // should take a walk-in. The slot data survives (same rule as cancelled): the record of when
+  // they had been booked is exactly what the no-show count is built on.
+  no_show: true,
+});
 
 /**
  * IS THIS CARD IN THE DIARY? The booking fact is `resource_id + start_at + end_at` — a lift and a
@@ -49,16 +68,22 @@ export function isBookedCard(card: { resource_id: string | null; start_at: Date 
   return !!card.resource_id && !!card.start_at && !!card.end_at;
 }
 
+// NO-SHOW is a different fact from cancellation: a cancellation is notice, a no-show is silence.
+// It is reachable only from the pre-work statuses — a card whose work has started cannot become a
+// no-show, and the table refuses it rather than anyone remembering it — and only on a card that
+// actually held a slot (the booking_exists gate). One exit, like cancelled: reopen to draft, for
+// the customer who turns up an hour late or the mis-click.
 const TRANSITIONS: Record<JobStatus, Transition[]> = {
-  draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }],
-  quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],
+  draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
+  quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
   declined: [{ to: 'accepted', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }], // declined → accepted = reopen
-  accepted: [{ to: 'in_progress', kind: 'operational' }, { to: 'cancelled', kind: 'commercial' }],
+  accepted: [{ to: 'in_progress', kind: 'operational' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
   in_progress: [{ to: 'invoiced', kind: 'commercial', gate: 'all_stages_done' }, { to: 'cancelled', kind: 'commercial' }],
   invoiced: [{ to: 'paid', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],
   paid: [{ to: 'done', kind: 'commercial' }],
   done: [],
   cancelled: [{ to: 'draft', kind: 'commercial' }], // reopen to a live state
+  no_show: [{ to: 'draft', kind: 'commercial' }],   // reopen — and the derived count corrects itself
 };
 
 export function nextTransitions(from: JobStatus): Transition[] {
@@ -87,7 +112,7 @@ export type PaymentState = 'unpaid' | 'invoiced' | 'paid' | 'settled' | 'unknown
  */
 const PAY_STATE_BY_STATUS: Record<JobStatus, PaymentState> = {
   draft: 'unpaid', quoted: 'unpaid', accepted: 'unpaid', declined: 'unpaid',
-  in_progress: 'unpaid', cancelled: 'unpaid',
+  in_progress: 'unpaid', cancelled: 'unpaid', no_show: 'unpaid',
   invoiced: 'invoiced',
   paid: 'paid', done: 'paid',
 };

@@ -1153,6 +1153,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // hot path — so a new card carries make/colour/year now and gets its MOT check later.
   const [lookBusy, setLookBusy] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  // The owner's missed bookings, surfaced AT THE MOMENT OF BOOKING — the whole reason the count is
+  // derived and carried by the lookup. Cleared with each new lookup so a warning never outlives the
+  // customer it belongs to.
+  const [noShows, setNoShows] = useState<{ count: number; dates: string[] } | null>(null);
   // VIN-keyed decode (US / vPIC). Same fill-blanks-only policy and the same non-throwing contract
   // as the reg path; vPIC cannot know colour/mileage so those are never touched.
   async function lookupByVin() {
@@ -1179,6 +1183,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     // MOT hot path (the job card captures MOT as its own explicit action).
     const r = await lookupVehicleByReg(reg);
     setLookBusy(false);
+    setNoShows(r.ok ? (r.noShows ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
     if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
     // Fill BLANKS ONLY — a manual correction is never clobbered.
@@ -1294,6 +1299,11 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                 )}
               </div>
               {lookMsg && <p className={`text-[11px] mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
+              {noShows && (
+                <p className="text-[11px] mt-1 font-semibold text-warn" data-testid="no-show-history">
+                  {t('create.noShowHistory', { count: noShows.count, dates: noShows.dates.slice(0, 3).join(', ') })}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>

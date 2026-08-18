@@ -18,6 +18,7 @@ import { clipToData } from '@/lib/tenant-data-start';
 import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
+import { OFF_DIARY_STATUSES } from '@/lib/jobcard-status';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
@@ -369,9 +370,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       if (rate == null) remainingNoRate.push(s.siteName);
       else remainingValuePennies += Math.round(s.available * rate * 100);
     }
-    // Diary hours ALREADY BOOKED in the remaining window (a live booking, not a cancelled/declined one).
+    // Diary hours ALREADY BOOKED in the remaining window — a LIVE booking. Through
+    // OFF_DIARY_STATUSES, not an inline list: this used to say ['cancelled', 'declined'] and was
+    // the one reader that would have kept counting a no-show as booked hours while the diary freed
+    // the slot — the exact drift the shared constant exists to prevent.
     const booked = (await prisma.jobCard.findMany({
-      where: { site_id: { in: siteIds }, resource_id: { not: null }, status: { notIn: ['cancelled', 'declined'] as any }, start_at: { gte: end, lt: to } },
+      where: { site_id: { in: siteIds }, resource_id: { not: null }, status: { notIn: OFF_DIARY_STATUSES as any }, start_at: { gte: end, lt: to } },
       select: { booking_duration_minutes: true, start_at: true, end_at: true },
     })) as any[];
     const bookedMinutes = booked.reduce((a, b) => a + (b.booking_duration_minutes ?? (b.start_at && b.end_at ? Math.round(((b.end_at as Date).getTime() - (b.start_at as Date).getTime()) / 60000) : 0)), 0);

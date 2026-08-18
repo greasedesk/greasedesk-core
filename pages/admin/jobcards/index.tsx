@@ -56,7 +56,7 @@ type JobCardRow = {
 
 // Per-status tabs (ruling 2026-07-10, replaces Current/Completed). Paid includes cards in the
 // clearance window (paid_pending is an INVOICE state — the card sits at `paid` through it).
-// Statuses without a named tab (invoiced, done, declined, cancelled) appear under All only.
+// Statuses without a named tab (invoiced, done, declined, cancelled, no_show) appear under All only.
 // 'quoted' RETIRED (slice: Quotes section): the Quotes lens now covers every quoted card —
 // both those with a sent QuoteVersion and those quoted verbally — so the tab was a strict subset.
 const TABS = ['all', 'draft', 'accepted', 'in_progress', 'paid'] as const;
