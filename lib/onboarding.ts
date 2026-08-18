@@ -117,10 +117,24 @@ export async function getOnboardingState(
   // read it, and a lie there is a lie in the one place the money is decided.
   //
   // Returning early also skips five queries per request for a tenant whose answer cannot change.
-  const demoGroup = (await prisma.group.findUnique({
-    where: { id: groupId }, select: { is_demo: true },
-  })) as { is_demo: boolean } | null;
-  if (demoGroup?.is_demo) return { onboarded: true, firstIncompleteStep: null };
+  // ── is_internal, NOT is_demo ────────────────────────────────────────────────────────────────
+  // This read `is_demo`, which made ONE FLAG do two unrelated jobs: block outbound sends
+  // (lib/demo-tenant::demoSendDecision) and skip setup. They only looked like the same thing while
+  // every GreaseDesk-owned tenant was both.
+  //
+  // The sales demo broke them apart. It must SEND — demoSendDecision refuses every message from an
+  // is_demo tenant, and its only exception matches the owner's email, so an SMS can never pass —
+  // and therefore cannot be is_demo. With the bypass keyed on is_demo it landed on
+  // /onboarding/phone at "Step 2 of 6" and the product was unreachable.
+  //
+  // `is_internal` is the honest key: it means GreaseDesk owns this tenant, which is exactly the
+  // population that has no subscription to buy and no setup to complete. Every tenant that
+  // bypassed before still bypasses — the reference demo is both flags — and no customer tenant is
+  // is_internal.
+  const ownGroup = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { is_internal: true },
+  })) as { is_internal: boolean | null } | null;
+  if (ownGroup?.is_internal === true) return { onboarded: true, firstIncompleteStep: null };
 
   // (A) COUNTRY FIRST — a SUPPORTED country must be chosen. An unsupported one leaves country_code
   // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.

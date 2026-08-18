@@ -160,15 +160,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   return (
     <div className="min-h-screen bg-content text-ink flex">
       {/* --- Desktop sidebar (dark rail) --- */}
-      <aside className="hidden md:block w-64 bg-sidebar border-r border-sidebar-line p-4 sticky top-0 h-screen overflow-y-auto">
-        <div className="mb-8"><BrandLogo /></div>
+      {/* ── A FLEX COLUMN, NOT AN ABSOLUTE FOOTER ────────────────────────────────────────────
+          The bottom block used to be `absolute bottom-4` inside this `overflow-y-auto` box. An
+          absolutely-positioned child is placed against the SCROLLABLE content, so the moment the
+          nav grew taller than the rail it stopped sitting below the links and started sitting ON
+          them: Payments over Products, Settings over Products, Sign Out over Roster. It looked
+          fine on a tall desktop window and broke on an iPad, which is why nobody caught it.
+          Now: the nav is the only thing that scrolls (flex-1 + min-h-0 — without min-h-0 a flex
+          child refuses to shrink below its content and the whole rail scrolls instead), and the
+          footer is in normal flow, so it cannot overlap anything by construction. */}
+      <aside className="hidden md:flex w-64 bg-sidebar border-r border-sidebar-line p-4 sticky top-0 h-screen flex-col">
+        <div className="mb-8 shrink-0"><BrandLogo /></div>
 
-        <nav className="space-y-2">
+        <nav className="space-y-2 flex-1 min-h-0 overflow-y-auto">
           <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} canViewInvoices={canViewInvoices} isAdmin={isAdmin} messagesCount={messagesCount} />
         </nav>
 
         {/* Settings (cog) sits at the bottom, directly above Sign Out. */}
-        <div className="absolute bottom-4 left-0 w-full px-4 space-y-1">
+        <div className="shrink-0 pt-3 mt-2 border-t border-sidebar-line space-y-1">
           <Link href="/admin/settings" className={navLink(router.pathname.startsWith('/admin/settings'))}>
             <span className="mr-3 text-lg">⚙️</span>
             {t('nav.settings')}

@@ -62,9 +62,19 @@ export function LineCard({ code, description, fields, trailing, onRemove, remove
   canEdit?: boolean;
 }) {
   return (
-    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:items-end gap-2">
+    // ── WHY IT WRAPS, AND WHY THE DESCRIPTION HAS A FLOOR ────────────────────────────────────
+    // The row goes horizontal at sm: (640px) and carries code + description + price + qty + cost +
+    // total + remove. The fixed field widths (w-28/24/20/28) plus gaps come to roughly 450px, and
+    // `sm:flex-1` on the description is `flex: 1 1 0%` — basis ZERO, so it takes only what is left.
+    // On an iPad in portrait, with the sidebar, that left about 20px: "Brake fluid change" rendered
+    // as "B r" stacked vertically, and the Qty/Unit price labels collided with their inputs.
+    //
+    // flex-wrap lets the fields drop to a second line instead of crushing the description, and the
+    // min-width gives the description a floor so it never becomes the thing that gives way. Wide
+    // screens are unchanged — there is room, so nothing wraps.
+    <div className="bg-surface-muted border border-line rounded-lg p-3 mb-2 flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-2">
       {code}
-      <div className="sm:flex-1">{description}</div>
+      <div className="sm:flex-1 sm:min-w-[14rem]">{description}</div>
       {fields}
       {trailing}
       {canEdit && onRemove && (

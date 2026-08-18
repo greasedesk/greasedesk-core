@@ -98,11 +98,56 @@ check(`ADVISORY — the authored pool looks authored, not sourced (${(rate * 100
 console.log('   (a shared common forename is arithmetic; a pool that mostly matched would not be)\n');
 
 // ── 2. REPRODUCIBLE ──────────────────────────────────────────────────────────────────────────────
-const before = createHash('sha256').update(profile).digest('hex');
-execSync('node scripts/demo-profile-extract.mjs', { stdio: 'pipe' });
-const after = createHash('sha256').update(readFileSync(PATH, 'utf8')).digest('hex');
-check('regenerating is byte-identical', before === after, `${before.slice(0, 16)} vs ${after.slice(0, 16)}`);
-console.log(`  profile sha256: ${after}`);
+/**
+ * THE PROPERTY IS DETERMINISM, NOT STASIS — and the two are not the same check.
+ *
+ * This used to compare a fresh extract against the COMMITTED file and fail when they differed.
+ * That reads as "the extractor is reproducible" but actually asserts "TMBS has not traded since the
+ * profile was last committed" — and TMBS is a live garage. It duly failed on 2026-08-18 with a
+ * longer max job duration, an older p90 vehicle and a footprint ratio of 1.27 against 1.32: three
+ * real numbers moving because a real workshop did real work. Nothing was broken.
+ *
+ * So: run the extractor TWICE and compare the two outputs to each other. That fixes the input and
+ * tests the only thing the extractor controls. Drift from the committed file is reported as
+ * ADVISORY, with the deltas, because it is information — the profile is a calibration INPUT chosen
+ * offline, and re-adopting today's TMBS numbers is a decision a person makes, not a gate.
+ *
+ * The committed file is restored either way. A gate that leaves a tracked file rewritten has
+ * performed a teardown failure on the repository.
+ */
+const committed = createHash('sha256').update(profile).digest('hex');
+try {
+  execSync('node scripts/demo-profile-extract.mjs', { stdio: 'pipe' });
+  const runA = readFileSync(PATH, 'utf8');
+  execSync('node scripts/demo-profile-extract.mjs', { stdio: 'pipe' });
+  const runB = readFileSync(PATH, 'utf8');
+  const a = createHash('sha256').update(runA).digest('hex');
+  const b = createHash('sha256').update(runB).digest('hex');
+  check('the extractor is DETERMINISTIC — two runs against the same tenant agree', a === b,
+    `${a.slice(0, 16)} vs ${b.slice(0, 16)}`);
+
+  const drifted = a !== committed;
+  // The DIFF ITSELF, not a reconstructed key→value map. An earlier version regexed `"key": number`
+  // out of both files and paired them by key, which silently paired ARRAY INDICES and reported
+  // `8 0.5→0.4` — an advisory naming figures it had not identified. Show the changed lines.
+  let deltas = [];
+  if (drifted) {
+    const wasLines = profile.split('\n'), nowLines = runA.split('\n');
+    for (let i = 0; i < Math.max(wasLines.length, nowLines.length); i++) {
+      if (wasLines[i] !== nowLines[i]) deltas.push(`${(wasLines[i] ?? '').trim()} → ${(nowLines[i] ?? '').trim()}`.slice(0, 90));
+    }
+  }
+  check(`ADVISORY — the committed profile still matches TMBS today${drifted ? ` (${deltas.length} lines moved)` : ''}`,
+    true, drifted ? '' : 'no drift');
+  for (const d of deltas.slice(0, 8)) console.log(`     ${d}`);
+  if (drifted) console.log('   (TMBS trades; re-adopting is an offline decision, not a gate failure)');
+  console.log(`  committed profile sha256: ${committed}`);
+} finally {
+  // Restore the tracked file the extractor just overwrote, whatever happened above.
+  execSync(`git checkout -- ${PATH}`, { stdio: 'pipe' });
+  const back = createHash('sha256').update(readFileSync(PATH, 'utf8')).digest('hex');
+  check('teardown restored the committed profile exactly', back === committed, `${back.slice(0, 16)}`);
+}
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma.$disconnect();

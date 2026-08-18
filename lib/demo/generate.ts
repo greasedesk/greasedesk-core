@@ -29,6 +29,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { toE164Digits } from '@/lib/contact-routes';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard } from '@/lib/invoice-issue';
 import { tServer } from '@/lib/server-i18n';
 import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
@@ -454,6 +455,9 @@ async function resilient<T>(
   }
 }
 
+/** One demo customer's number: Ofcom's reserved mobile drama range, stable for a given index. */
+const demoPhone = (i: number): string => `07700 900${String(i % 1000).padStart(3, '0')}`;
+
 export async function generateDemoTenant(opts: {
   seed: string;
   now: Date;
@@ -691,8 +695,17 @@ export async function generateDemoTenant(opts: {
           account_name: tradingName,
         } : {}),
         email: `${first}.${last}${i}`.toLowerCase() + '@example.com',
-        // Ofcom's reserved drama range — unroutable, and lib/demo-tenant refuses the send anyway.
-        phone: `07700 900${String(i % 1000).padStart(3, '0')}`,
+        // Ofcom's reserved drama range — unroutable by construction, so a demo tenant can never
+        // text a real person even when it is is_demo = false and its sends are not blocked.
+        //
+        // BOTH COLUMNS. Writing only the raw `phone` made every demo customer UNREACHABLE by SMS:
+        // reachabilityForJobCard resolves an SMS recipient from `phone_e164` ALONE, so quote-send's
+        // `if (recipient)` skipped the send entirely and the screen said "the text couldn't be
+        // sent" — with no NotificationLog row, because sendNotification was never called. Twilio was
+        // never contacted. Derived through the same chokepoint the API write uses (toE164Digits),
+        // never hand-formatted here.
+        phone: demoPhone(i),
+        phone_e164: toE164Digits(demoPhone(i), 'GB'),
         address: `${1 + Math.floor(r() * 180)} ${pick(r, STREETS)}, ${TOWN}, ${POSTCODE_AREA}${1 + Math.floor(r() * 9)} ${Math.floor(r() * 9)}${pick(r, ['AA', 'BD', 'EF', 'HJ'])}`,
       },
       select: { id: true },
