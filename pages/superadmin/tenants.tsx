@@ -71,7 +71,13 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
             <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: '#7C8AA3' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
             {/* Count is CUSTOMER tenants only — internal (GreaseDesk-owned gate/test) tenants stay in
                 the list, badged, but never inflate the headline number. */}
-            <span className="text-xs" style={{ color: '#7C8AA3' }}>{rows.filter((r) => !r.isInternal).length} tenants</span>
+            {/* BOTH NUMBERS. The count was correct — customer tenants only — but it sat beside a
+                longer list with nothing saying why, so it read as broken. A plausible number the
+                reader cannot reconcile costs more trust than a missing one. */}
+            <span className="text-xs" style={{ color: '#7C8AA3' }}>
+              {rows.filter((r) => !r.isInternal).length} customer tenants
+              {rows.some((r) => r.isInternal) && ` · ${rows.filter((r) => r.isInternal).length} internal`}
+            </span>
           </div>
           {msg && <div className="mb-4 text-sm rounded-lg px-3 py-2" style={{ background: '#12294a', border: '1px solid #1C3257' }}>{msg}</div>}
           <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid #1C3257' }}>

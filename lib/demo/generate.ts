@@ -462,6 +462,22 @@ export async function generateDemoTenant(opts: {
   ownerName: string;
   ownerPasswordHash: string;
   expiresAt: Date | null;
+  /**
+   * `is_demo` on the created tenant. DEFAULTS TRUE — the safety flag that makes sendNotification
+   * refuse, keeps the tenant out of counts and commission, and puts it in the lifecycle sweep.
+   *
+   * FALSE is for a SALES DEMO that must actually send: demoSendDecision blocks every send from an
+   * is_demo tenant, and its only exception compares the recipient to the owner's EMAIL — so an SMS,
+   * whose recipient is a phone number, can never match. A demo that shows a text arriving cannot be
+   * is_demo. That is safe here only because the generator seeds Ofcom's reserved drama range for
+   * every customer number, so the data is unroutable independently of the flag.
+   *
+   * `is_internal` stays TRUE either way — it is what keeps the tenant out of tenant counts,
+   * forecasts and commission, and those exclusions must not depend on the sending decision.
+   */
+  isDemo?: boolean;
+  /** The tenant's own phone. Reps read it aloud: the SMS suffix says "To reply, call <this>". */
+  groupPhone?: string;
   onProgress?: (step: string, detail?: string) => void;
 }): Promise<DemoGenerationResult> {
   const r = rng(opts.seed);
@@ -480,7 +496,8 @@ export async function generateDemoTenant(opts: {
       vat_registered: true, vat_number: 'GB482910733', company_number: '09461820',
       billing_email: opts.ownerEmail,
       address: `${pick(r, STREETS)}, ${TOWN}, ${POSTCODE_AREA}1 2CD`,
-      is_demo: true, is_internal: true, demo_seed: opts.seed, demo_expires_at: opts.expiresAt,
+      is_demo: opts.isDemo ?? true, is_internal: true, demo_seed: opts.seed, demo_expires_at: opts.expiresAt,
+      phone: opts.groupPhone ?? null,
     },
     select: { id: true },
   });
