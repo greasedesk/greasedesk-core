@@ -463,6 +463,7 @@ model Group {
   due_item_lines     DueItemLine[]
   tyre_readings      TyreReading[]
   battery_readings   BatteryReading[]
+  marketing_contacts MarketingContact[]
 }
 
 /**
@@ -1766,6 +1767,55 @@ enum CcaStandard {
 ///
 /// Replay-safe by construction, like TyreReading and unlike a due item: a redelivered outbox
 /// envelope upserts on the natural key, so the phone sends no client-supplied id.
+/// Why a car is on a marketing list. Two reasons, two lists, two badges' worth of work.
+enum MarketingReason {
+  mot
+  service
+}
+
+/// What the garage did about it. `contacted` is not an outcome — it is the first step — but it is
+/// enough to take the car off the badge, which is the badge's whole job.
+enum MarketingState {
+  contacted
+  booked
+  declined
+  snoozed
+}
+
+/// WHAT A GARAGE HAS DONE ABOUT A CAR THAT IS DUE.
+///
+/// Without this the Marketing section is a report, and a badge over a report only ever grows. One
+/// row per (vehicle, reason), updated in place; the history lives in AuditLog.
+///
+/// `booked` TRUSTS THE TAP — it does not check that a booking exists. Verifying against a real
+/// Booking is right eventually and is a second thing to get wrong today, so the consequence is
+/// stated instead: a car marked booked that never was disappears from the list until `for_date`
+/// passes, at which point it comes back.
+model MarketingContact {
+  id         String @id @default(uuid())
+  group_id   String
+  vehicle_id String
+
+  reason MarketingReason
+  state  MarketingState
+
+  /// The trigger this contact was about. The record is SPENT once it passes — see the migration.
+  for_date DateTime
+  /// Set if and only if state is `snoozed`, enforced by a CHECK constraint: a snooze with no end
+  /// is a hide, and a hide is how a list quietly empties.
+  snooze_until DateTime?
+
+  actor_id   String?
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  group   Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+
+  @@unique([group_id, vehicle_id, reason])
+  @@index([group_id, reason, for_date])
+}
+
 model BatteryReading {
   id         String @id @default(uuid())
   group_id   String
@@ -1873,6 +1923,7 @@ model Vehicle {
   @@index([group_id, registration_normalized])
   tyre_readings    TyreReading[]
   battery_readings BatteryReading[]
+  marketing_contacts MarketingContact[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped

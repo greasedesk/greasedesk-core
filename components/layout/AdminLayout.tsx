@@ -24,7 +24,7 @@ type NavItemDef = { key: string; href: string; icon: string; ready: boolean; loc
   /** Optional count rendered as a pill. `countKey` names which count this item reads — the value is
    *  passed in by the page, because only the page's server side knows it. Absent = no pill, and a
    *  ZERO renders NOTHING: a badge showing 0 is noise pretending to be information. */
-  countKey?: 'messages' };
+  countKey?: 'messages' | 'marketing' };
 
 // `key` is a stable i18n key (translated via t(`nav.${key}`)); display text lives in locale files.
 // locScope marks sections that expand a per-location sub-menu.
@@ -37,6 +37,10 @@ const navItems: NavItemDef[] = [
   // open conversations while nothing could arrive, because a badge that could only ever read zero
   // is decoration; inbound made unread a real number. See lib/message-threads::unreadThreadCount.
   { key: 'messages', href: '/admin/messages', icon: '💬', ready: true, countKey: 'messages' },
+  // The count is UNACTIONED cars, not the size of the lists — same lesson as Messages above, from
+  // the other side: a badge that only ever grows is one a garage stops seeing. It falls as the list
+  // is worked. See lib/marketing-lists::isUnactioned.
+  { key: 'marketing', href: '/admin/marketing', icon: '📣', ready: true, countKey: 'marketing' },
   { key: 'invoices', href: '/admin/invoices', icon: '🧾', ready: true, needsInvoicePerm: true },
   // After the money that's owed, before the things that cost money. adminOnly for the same reason
   // as HR: payout history and bank details are owner-grade, and a can_invoice mechanic may RAISE an
@@ -67,11 +71,11 @@ const subLink = (active: boolean) =>
 
 // Shared nav renderer (desktop sidebar + mobile overlay). onNavigate closes the mobile menu.
 function NavList({
-  pathname, siteQuery, locations, primarySiteId, t, onNavigate, canViewInvoices, isAdmin, messagesCount,
+  pathname, siteQuery, locations, primarySiteId, t, onNavigate, canViewInvoices, isAdmin, messagesCount, marketingCount,
 }: {
   pathname: string; siteQuery: string; locations: Loc[]; primarySiteId: string | null;
   t: (k: string) => string; onNavigate?: () => void; canViewInvoices?: boolean; isAdmin?: boolean;
-  messagesCount?: number | null;
+  messagesCount?: number | null; marketingCount?: number | null;
 }) {
   return (
     <>
@@ -90,6 +94,14 @@ function NavList({
                 <span data-testid="nav-count-messages"
                   className="ml-auto text-xs font-semibold rounded-full px-2 py-0.5 bg-accent text-white">
                   {messagesCount}
+                </span>
+              )}
+              {/* ZERO RENDERS NOTHING, like Messages: an empty list is a finished list, and a pill
+                  saying 0 is decoration. Null (not yet known) renders nothing either. */}
+              {item.countKey === 'marketing' && typeof marketingCount === 'number' && marketingCount > 0 && (
+                <span data-testid="nav-count-marketing"
+                  className="ml-auto text-xs font-semibold rounded-full px-2 py-0.5 bg-accent text-white">
+                  {marketingCount}
                 </span>
               )}
             </Link>
@@ -120,6 +132,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   // columns. It also meant the pill appeared ONLY on the Messages page, the one place you don't
   // need telling. Null until known: absent renders no pill, and unknown is not zero.
   const [messagesCount, setMessagesCount] = useState<number | null>(null);
+  const [marketingCount, setMarketingCount] = useState<number | null>(null);
   const router = useRouter();
   const { t } = useTranslation('common');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -134,6 +147,17 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     fetch('/api/messages/unread')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (live && d) setMessagesCount(typeof d.unread === 'number' ? d.unread : null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [router.pathname, router.asPath]);
+
+  // Repeats on navigation for the same reason: the number falls as somebody works the list, and a
+  // badge that only refreshed on a hard reload would look stuck.
+  useEffect(() => {
+    let live = true;
+    fetch('/api/marketing/unactioned')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d) setMarketingCount(typeof d.unactioned === 'number' ? d.unactioned : null); })
       .catch(() => {});
     return () => { live = false; };
   }, [router.pathname, router.asPath]);
@@ -233,6 +257,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId}
                 t={t} onNavigate={() => setIsSidebarOpen(false)} canViewInvoices={canViewInvoices} isAdmin={isAdmin}
                 messagesCount={messagesCount}
+                marketingCount={marketingCount}
               />
             </nav>
             <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/settings'))}`}>

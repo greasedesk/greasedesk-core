@@ -72,6 +72,9 @@ export type AuditAction =
   | 'intake.offer_dismissed'
   // The service computer, transcribed. One event per save, whatever moved.
   | 'service_schedule.recorded'
+  // What a garage did about a car on a marketing list. Keyed on the VEHICLE, not a job card — the
+  // car is due whether or not it has ever been booked in.
+  | 'marketing.contact_recorded'
   // MEASUREMENTS taken in the bay. Recorded as their own actions rather than folded into
   // due_item.found: the finding is a conclusion and these are the evidence it was drawn from, so
   // "what did the tester actually say" stays answerable after somebody edits the description.
