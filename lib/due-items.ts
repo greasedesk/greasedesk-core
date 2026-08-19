@@ -13,6 +13,18 @@
  * pre-selects one would make `declined` vanishingly rare while looking like it was recording it —
  * the failure mode is silent, which is what makes it worth a refusal rather than a default.
  *
+ * THE ONE EXCEPTION, AND WHY IT IS NOT A HOLE IN THIS RULE. lib/service-schedule defaults the
+ * response to `not_raised`. The argument above is about a FINDING — something spotted with a
+ * customer at the car, where "did you mention it?" has an answer and `declined` is the lead. A
+ * schedule row is transcribed off a service computer ten months before that conversation happens:
+ * there is no answer to give, and demanding six taps would produce six meaningless `not_raised`
+ * records instead of one honest absence.
+ *
+ * Both halves are stated at both files ON PURPOSE. They look like the same rule contradicting
+ * itself, and the next person to notice will want to harmonise them — which would either put a
+ * pointless tap on a transcription form or let a default creep back onto findings, where it is the
+ * silent failure described above.
+ *
  * ── THE CUSTOMER IS NOT PART OF THE RECORD ──────────────────────────────────────────────────────
  * Resolved at reminder time through the ownership edge. Never stored, never joined here.
  */

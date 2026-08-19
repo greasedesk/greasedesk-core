@@ -10,6 +10,7 @@
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
 import { latestTyres, latestBattery } from '@/lib/vehicle-condition';
+import { SCHEDULE_KEYS } from '@/lib/service-schedule';
 import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferIntakePrompts, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
@@ -494,6 +495,11 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastBattery,
     /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
     observationCounts,
+    /** The car's CURRENT service schedule — the open due items carrying a schedule key, so the
+     *  form opens on what is already recorded rather than blank. A schedule is a current state. */
+    serviceSchedule: dueItems
+      .filter((d) => d.observationKey && SCHEDULE_KEYS.has(d.observationKey))
+      .map((d) => ({ key: d.observationKey as string, dueDate: d.dueDate, dueMileage: d.dueMileage })),
     /** Offer the intake prompts on this card? Two SITE facts (lib/intake-items), never a browser
      *  dismissal — a banner that comes back teaches people dismissal does not work here. */
     offerIntakePrompts: shouldOfferIntakePrompts({

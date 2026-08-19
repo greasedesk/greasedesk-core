@@ -26,6 +26,7 @@ import TyreCapture from '@/components/jobcard/TyreCapture';
 import BatteryCapture from '@/components/jobcard/BatteryCapture';
 import ObservationTaps from '@/components/jobcard/ObservationTaps';
 import IntakePromptsOffer from '@/components/jobcard/IntakePromptsOffer';
+import ServiceSchedule from '@/components/jobcard/ServiceSchedule';
 import type { TyreCondition, BatteryCondition } from '@/lib/vehicle-condition';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
@@ -94,6 +95,7 @@ type Props = {
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
   offerIntakePrompts?: boolean;
+  serviceSchedule?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   batteryCondition?: BatteryCondition | null;
@@ -897,6 +899,12 @@ export default function JobCardWorkspace(p: Props) {
         {p.offerIntakePrompts && (
           <IntakePromptsOffer jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} onDismissed={refreshCard} />
         )}
+        {/* THE SCHEDULE ABOVE THE FINDINGS. It is transcription, not discovery: a service advisor
+            copies it off a screen before anybody looks at the car, and it is the source of next
+            year's reminders. Not per-site switchable — it has no escalation to protect. */}
+        <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
+          recorded={(p.serviceSchedule ?? []) as never} motExpiry={eff.vehicle.motExpiry ?? null}
+          onSaved={refreshCard} />
         {/* FINDINGS FIRST — it is the reason the mechanic is at the car, and the MOT read-only
             line rides with it so nobody retypes a DVSA fact. Then tyres, then the photos and video
             that evidence them. */}
