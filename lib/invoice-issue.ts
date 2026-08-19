@@ -19,6 +19,7 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { printedDueItemsBlock, openDueItemsForVehicle } from '@/lib/due-items';
+import { printedTyreLines } from '@/lib/tyres';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
@@ -66,9 +67,25 @@ async function createInvoiceRow(
   // Built BEFORE the row is created, from what is true at this instant — the open findings on this
   // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
   // moment from the rest of the document.
+  // THE LATEST READING PER CORNER for this car — the tyre condition as it stood at mint, frozen
+  // with everything else. A reading taken after this invoice must not change what it printed.
+  const tyreRows = card.vehicle?.id
+    ? await (tx as Prisma.TransactionClient).tyreReading.findMany({
+        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
+        orderBy: { measured_at: 'desc' },
+        select: { corner: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
+      })
+    : [];
+  const latestTyre = new Map<string, { corner: never; depths: { outer: number; centre: number; inner: number } }>();
+  for (const r of tyreRows as Array<{ corner: string; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>) {
+    if (!latestTyre.has(r.corner)) {
+      latestTyre.set(r.corner, { corner: r.corner as never, depths: { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths } });
+    }
+  }
   const dueItemsBlock = printedDueItemsBlock({
     motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
     items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
+    tyreLines: printedTyreLines([...latestTyre.values()]),
   });
 
   const invoice = await tx.invoice.create({

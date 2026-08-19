@@ -17,6 +17,7 @@
 import { prisma } from '@/lib/db';
 import { presignGet } from '@/lib/r2';
 import { openDueItemsForVehicle, dueLabel, latestCustomerAnswers, type CustomerAnswer, type OpenDueItem } from '@/lib/due-items';
+import { tyreSlot, cornerFromSlot, minDepth, shoulderSpread, CORNER_LABEL, TYRE_TYPE_LABEL, LEGAL_MIN_TENTHS, ADVISE_BELOW_TENTHS, ALIGNMENT_SPREAD_TENTHS, type TyreCorner, type TyreType } from '@/lib/tyres';
 
 export type ReportMedia = {
   id: string;
@@ -37,6 +38,21 @@ export type ReportFinding = {
   answered: CustomerAnswer | null;
 };
 
+export type ReportTyre = {
+  corner: TyreCorner;
+  label: string;
+  type: string;
+  /** Millimetres, one decimal — the customer's units, not our storage tenths. */
+  outer: string; centre: string; inner: string;
+  /** The lowest of the three, which is what the law and the advisory both care about. */
+  lowest: string;
+  /** 'ok' | 'advise' | 'illegal' — a band, so the page colours without re-deriving thresholds. */
+  band: 'ok' | 'advise' | 'illegal';
+  /** Worn across its width, and which way. NULL when the tread is even. */
+  unevenEdge: 'inside' | 'outside' | null;
+  photos: ReportMedia[];
+};
+
 export type IntakeReport = {
   garageName: string;
   garagePhone: string | null;
@@ -47,6 +63,8 @@ export type IntakeReport = {
   /** Damage stills and any other intake photos. */
   photos: ReportMedia[];
   findings: ReportFinding[];
+  /** Four corners, in the car's own layout. A MEASUREMENT — never given yes/no buttons. */
+  tyres: ReportTyre[];
   /** True once every finding has an answer — the page then thanks them rather than nagging. */
   allAnswered: boolean;
 };
@@ -90,7 +108,38 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
   });
 
   const videos = media.filter((m) => m.media_type === 'video');
-  const stills = media.filter((m) => m.media_type !== 'video');
+  // Tyre photos are shown WITH their corner, so they must not also appear in the general grid.
+  const stills = media.filter((m) => m.media_type !== 'video' && !cornerFromSlot(m.slot));
+
+  // ── TYRES: the latest reading per corner, with the photo that proves it ────────────────────
+  // Latest per corner across the car's whole history, not just this visit: a customer looking at
+  // their check-in wants the current state of the car, and a corner not re-measured today is still
+  // the truth about that corner.
+  const tyreRows = (await prisma.tyreReading.findMany({
+    where: { group_id: groupId, vehicle_id: card.vehicle_id },
+    orderBy: { measured_at: 'desc' },
+    select: { corner: true, type: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
+  })) as Array<{ corner: TyreCorner; type: TyreType; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>;
+  const latestByCorner = new Map<TyreCorner, typeof tyreRows[number]>();
+  for (const r of tyreRows) if (!latestByCorner.has(r.corner)) latestByCorner.set(r.corner, r);
+
+  const tyres: ReportTyre[] = [];
+  for (const [corner, r] of latestByCorner) {
+    const d = { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths };
+    const low = minDepth(d);
+    const spread = shoulderSpread(d);
+    tyres.push({
+      corner, label: CORNER_LABEL[corner], type: TYRE_TYPE_LABEL[r.type],
+      outer: (d.outer / 10).toFixed(1), centre: (d.centre / 10).toFixed(1), inner: (d.inner / 10).toFixed(1),
+      lowest: (low / 10).toFixed(1),
+      band: low < LEGAL_MIN_TENTHS ? 'illegal' : low < ADVISE_BELOW_TENTHS ? 'advise' : 'ok',
+      unevenEdge: spread >= ALIGNMENT_SPREAD_TENTHS ? (d.inner < d.outer ? 'inside' : 'outside') : null,
+      photos: await Promise.all(media.filter((m) => m.slot === tyreSlot(corner)).map(shape)),
+    });
+  }
+  // The car's own layout: fronts first, left then right.
+  const ORDER: TyreCorner[] = ['front_left', 'front_right', 'rear_left', 'rear_right'];
+  tyres.sort((a, b) => ORDER.indexOf(a.corner) - ORDER.indexOf(b.corner));
 
   const items = await openDueItemsForVehicle(prisma, groupId, card.vehicle_id);
   const answers = await latestCustomerAnswers(prisma, items.map((i: OpenDueItem) => i.id));
@@ -112,6 +161,7 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
     walkaround: videos.length ? await shape(videos[0]) : null,
     photos: await Promise.all(stills.map(shape)),
     findings,
+    tyres,
     allAnswered: findings.length > 0 && findings.every((f) => f.answered !== null),
   };
 }

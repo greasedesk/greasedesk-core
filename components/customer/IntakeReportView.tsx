@@ -19,6 +19,12 @@ import React, { useCallback, useRef, useState } from 'react';
 
 type Media = { id: string; kind: 'photo' | 'video'; url: string | null; posterUrl: string | null; label: string | null; durationSeconds: number | null; rotation: number };
 type Finding = { id: string; description: string; timing: string; answered: 'yes' | 'no' | 'call_me' | null };
+type Tyre = {
+  corner: string; label: string; type: string;
+  outer: string; centre: string; inner: string; lowest: string;
+  band: 'ok' | 'advise' | 'illegal'; unevenEdge: 'inside' | 'outside' | null;
+  photos: Media[];
+};
 
 type Props = {
   token: string;
@@ -29,6 +35,7 @@ type Props = {
   walkaround: Media | null;
   photos: Media[];
   findings: Finding[];
+  tyres?: Tyre[];
 };
 
 /**
@@ -127,6 +134,45 @@ export default function IntakeReportView(p: Props) {
               </figure>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* ── TYRES: A MEASUREMENT, NOT A DECISION ───────────────────────────────────────────────
+          Its own section, deliberately, and with NO yes/no buttons. A tyre reading is a fact about
+          the car; putting answer buttons on it would ask the customer to approve a measurement.
+          Anything it advises appears below in "What your car needs", where decisions live.
+
+          Laid out as the car is — fronts on top, left on the left — because that is how a person
+          holds a car in their head, and because a worn corner in its own position needs no caption
+          to be understood. */}
+      {(p.tyres?.length ?? 0) > 0 && (
+        <section data-testid="report-tyres">
+          <h2 className="text-sm font-semibold text-ink mb-2">Your tyres</h2>
+          <div className="grid grid-cols-2 gap-2">
+            {p.tyres!.map((ty) => {
+              const tone = ty.band === 'illegal' ? 'border-danger bg-danger-soft'
+                : ty.band === 'advise' ? 'border-warn bg-warn-soft' : 'border-line bg-surface';
+              const num = ty.band === 'illegal' ? 'text-danger' : ty.band === 'advise' ? 'text-warn' : 'text-ink';
+              return (
+                <div key={ty.corner} className={`rounded-xl border p-3 ${tone}`} data-testid={`report-tyre-${ty.corner}`}>
+                  <p className="text-xs text-muted">{ty.label}</p>
+                  <p className={`text-2xl font-bold tabular-nums ${num}`}>{ty.lowest}<span className="text-sm font-medium">mm</span></p>
+                  <p className="text-[11px] text-muted">{ty.outer} / {ty.centre} / {ty.inner} across</p>
+                  {/* THE ALIGNMENT FIND, in the customer's words — the reason three readings exist. */}
+                  {ty.unevenEdge && (
+                    <p className="text-[11px] font-medium text-warn mt-1">Worn on the {ty.unevenEdge} edge</p>
+                  )}
+                  {ty.band === 'illegal' && <p className="text-[11px] font-medium text-danger mt-1">Below the legal limit</p>}
+                  {ty.photos[0]?.url && (
+                    <img src={ty.photos[0].url} alt={`${ty.label} tyre`} loading="lazy"
+                      className="mt-2 w-full aspect-[4/3] object-cover rounded-lg" />
+                  )}
+                  <p className="text-[11px] text-muted mt-1">{ty.type}</p>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted mt-2">The legal minimum is 1.6mm. We advise replacing below 3mm.</p>
         </section>
       )}
 

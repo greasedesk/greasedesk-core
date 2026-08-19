@@ -204,12 +204,17 @@ export function effectiveDueDate(
 export function printedDueItemsBlock(args: {
   motExpiry: Date | null;
   items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage'>>;
+  /** Pre-rendered tyre lines (lib/tyres::printedTyreLines). TEXT, so they freeze like the rest. */
+  tyreLines?: string[];
 }): string | null {
   const lines: string[] = [];
   if (args.motExpiry) {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
   for (const it of args.items) lines.push(`${it.description} ${dueLabel(it)}`);
+  // TYRES AS TEXT, deliberately — a four-corner table would print prettier and freeze worse. The
+  // invoice is a document and what matters is that it reprints identically (the B(iii) argument).
+  for (const t of args.tyreLines ?? []) lines.push(t);
   // NULL, not an empty string: nothing to say is not the same as a block that printed empty, and a
   // reader of the column can tell them apart.
   if (!lines.length) return null;

@@ -19,7 +19,8 @@
  * Chip values are the real-world clusters, and 1.6 is present because it is the legal limit and a
  * mechanic reaches for it by name.
  */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { resizeImage } from '@/lib/image-resize';
 
 export type TyreCorner = 'front_left' | 'front_right' | 'rear_left' | 'rear_right';
 export type TyreType = 'summer_standard' | 'summer_runflat' | 'winter_standard' | 'winter_runflat';
@@ -41,6 +42,8 @@ const blank = (type: TyreType): Corner => ({ type, even: null, outer: null, cent
 
 type Props = { jobCardId: string; canEdit: boolean; defaultType?: TyreType | null; onSaved: () => void };
 
+const tyreSlot = (c: TyreCorner) => `tyre_${c}`;
+
 export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }: Props) {
   const seedType = defaultType ?? 'summer_standard';
   const [state, setState] = useState<Record<TyreCorner, Corner>>({
@@ -49,6 +52,34 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // PROOF, per corner. One shared file input retargeted at whichever corner asked for it — four
+  // inputs would be four hidden elements doing the same job.
+  const fileRef = useRef<HTMLInputElement>(null);
+  const shotFor = useRef<TyreCorner | null>(null);
+  const [shots, setShots] = useState<Partial<Record<TyreCorner, number>>>({});
+  const [upBusy, setUpBusy] = useState<TyreCorner | null>(null);
+
+  async function onPhoto(files: FileList | null) {
+    const corner = shotFor.current; shotFor.current = null;
+    if (!files?.length || !corner) return;
+    setUpBusy(corner); setErr(null);
+    try {
+      // THE EXISTING PIPELINE, unchanged: client resize → presigned R2 PUT → commit. The slot is
+      // the only new thing, and JobCardPhoto.slot is already a free string.
+      const blob = await resizeImage(files[0]);
+      const pre = await fetch('/api/photos/presign', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId, stage: 'intake', slot: tyreSlot(corner), contentType: 'image/jpeg' }) });
+      if (!pre.ok) { setErr('Could not start the upload.'); return; }
+      const { photoId, key, uploadUrl } = await pre.json();
+      const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      if (!put.ok) { setErr('The photo didn’t upload.'); return; }
+      await fetch('/api/photos', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobCardId, stage: 'intake', slot: tyreSlot(corner), photoId, key, label: `${CORNERS.find((x) => x.key === corner)?.label} tyre` }) });
+      setShots((s) => ({ ...s, [corner]: (s[corner] ?? 0) + 1 }));
+      onSaved();
+    } catch { setErr('The photo didn’t upload.'); }
+    finally { setUpBusy(null); if (fileRef.current) fileRef.current.value = ''; }
+  }
 
   const set = (c: TyreCorner, patch: Partial<Corner>) => setState((s) => ({ ...s, [c]: { ...s[c], ...patch } }));
   const depthsOf = (c: Corner) => c.uneven
@@ -83,6 +114,10 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }
         <span className="text-xs text-muted" data-testid="tyre-progress">{filled} of 4</span>
       </div>
       <p className="text-xs text-muted mb-3">Tap the tread depth. Only open a tyre up if it’s worn unevenly.</p>
+
+      {/* One input, retargeted. capture="environment" opens the rear camera on a phone. */}
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+        onChange={(e) => onPhoto(e.target.files)} />
 
       <div className="space-y-3">
         {CORNERS.map(({ key, label }) => {
@@ -122,6 +157,11 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }
               )}
 
               <div className="flex flex-wrap items-center gap-2 mt-2">
+                <button type="button" disabled={!canEdit || busy || upBusy !== null}
+                  onClick={() => { shotFor.current = key; fileRef.current?.click(); }}
+                  data-testid={`tyre-${key}-photo`} className="text-xs text-accent underline">
+                  {upBusy === key ? 'Uploading…' : shots[key] ? `Photo ✓${shots[key]! > 1 ? ` ×${shots[key]}` : ''}` : 'Photo'}
+                </button>
                 <button type="button" disabled={!canEdit || busy} onClick={() => set(key, { uneven: !c.uneven })}
                   data-testid={`tyre-${key}-uneven`} className="text-xs text-accent underline">
                   {c.uneven ? 'Same across the tyre' : 'Worn unevenly'}

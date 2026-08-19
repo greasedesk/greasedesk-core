@@ -28,6 +28,21 @@ export const ALIGNMENT_SPREAD_TENTHS = 20;
 
 export type TyreDepths = { outer: number; centre: number; inner: number };
 
+/**
+ * THE PHOTO SLOT for one corner. `JobCardPhoto.slot` is already a free-text key, so a corner photo
+ * needs no schema change and inherits the whole existing pipeline — presign, R2, the phone's
+ * replay-safe outbox, the customer report's presigned reads.
+ *
+ * A worn inside edge photographed NEXT TO the number that proves it is the single most persuasive
+ * thing on the customer report, which is why the photo belongs to the CORNER and not to a general
+ * pile of intake stills.
+ */
+export const tyreSlot = (corner: TyreCorner): string => `tyre_${corner}`;
+export const cornerFromSlot = (slot: string | null | undefined): TyreCorner | null => {
+  const m = /^tyre_(front_left|front_right|rear_left|rear_right)$/.exec(String(slot ?? ''));
+  return m ? (m[1] as TyreCorner) : null;
+};
+
 export const minDepth = (d: TyreDepths): number => Math.min(d.outer, d.centre, d.inner);
 /** The shoulder-to-shoulder difference. Centre is excluded: it is low on an over-inflated tyre,
  *  which is a pressure fault, not an alignment one. */
@@ -80,6 +95,28 @@ export function tyreAdvisories(corner: TyreCorner, d: TyreDepths): TyreAdvisory[
     });
   }
   return out;
+}
+
+/**
+ * THE PRINTED TYRE LINES for the invoice's frozen advisory block — plain text, one per corner.
+ *
+ *   Front left — 6.0 / 4.0 / 2.0mm (inside edge worn)
+ *
+ * Text and not a table for the same reason the rest of the block is text: it has to survive
+ * freeze-at-issue byte-for-byte, and a structured child table freezes worse than a string.
+ */
+export function printedTyreLines(
+  readings: Array<{ corner: TyreCorner; depths: TyreDepths }>,
+): string[] {
+  const ORDER: TyreCorner[] = ['front_left', 'front_right', 'rear_left', 'rear_right'];
+  return [...readings]
+    .sort((a, b) => ORDER.indexOf(a.corner) - ORDER.indexOf(b.corner))
+    .map(({ corner, depths: d }) => {
+      const uneven = shoulderSpread(d) >= ALIGNMENT_SPREAD_TENTHS
+        ? ` (${d.inner < d.outer ? 'inside' : 'outside'} edge worn)` : '';
+      const illegal = minDepth(d) < LEGAL_MIN_TENTHS ? ' — BELOW LEGAL LIMIT' : '';
+      return `${CORNER_LABEL[corner]} — ${mm(d.outer)} / ${mm(d.centre)} / ${mm(d.inner)}mm${uneven}${illegal}`;
+    });
 }
 
 export type WearRate =
