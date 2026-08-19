@@ -18,6 +18,7 @@ import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { zoneChoicesFor, initialZone, type ZoneOption } from '@/lib/timezone-choices';
 import { US_STATES } from '@/lib/us-states';
 import TimezoneField from '@/components/TimezoneField';
+import { INTAKE_ITEMS, INTAKE_SWITCH, promptSwitches, type IntakeItem } from '@/lib/intake-items';
 import { parseBreaks } from '@/lib/occupancy';
 import SettingsLayout from '@/components/layout/SettingsLayout';
 import { RESOURCE_PALETTE, resolveColour } from '@/lib/diary-colours';
@@ -43,7 +44,9 @@ type LocationView = {
   isActive: boolean;
   isCurrent: boolean;
   /** The four intake prompts for THIS site (lib/intake-items). */
-  intakePrompts: Record<'findings' | 'mileage_vin' | 'walkaround' | 'diag_scan', boolean>;
+  /** DERIVED from lib/intake-items, not restated. Four literals here were one of five copies
+   *  of the item list, and the copies are what made oil_level unreachable when it shipped. */
+  intakePrompts: Record<IntakeItem, boolean>;
   resources: ResourceView[];
   openDays: number[];
   openHour: number;
@@ -305,15 +308,19 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
  * have the same kit in both.
  */
 function IntakePromptsPanel({ loc, onChanged }: { loc: LocationView; onChanged: () => void }) {
-  const ITEMS = [
-    ['findings', 'What the car needs', 'Feeds next year’s reminders'],
-    ['mileage_vin', 'Mileage and VIN', 'Also fills the mileage history'],
-    ['walkaround', 'Walkaround video', 'Evidence if a customer disputes damage'],
-    ['diag_scan', 'Diagnostic scan', 'A photo of the scanner screen is enough'],
-  ] as const;
+  // COPY IS OWNED HERE, the LIST is not. A total Record over IntakeItem means a sixth prompt fails
+  // to compile until somebody writes its words — which is the right place to be stopped, because
+  // a checkbox with no explanation of what it does is a checkbox nobody ticks.
+  const COPY: Record<IntakeItem, { label: string; why: string }> = {
+    findings: { label: 'What the car needs', why: 'Feeds next year’s reminders' },
+    mileage_vin: { label: 'Mileage and VIN', why: 'Also fills the mileage history' },
+    walkaround: { label: 'Walkaround video', why: 'Evidence if a customer disputes damage' },
+    diag_scan: { label: 'Diagnostic scan', why: 'A photo of the scanner screen is enough' },
+    oil_level: { label: 'Oil level', why: 'Five taps on the dipstick — over-max counts too' },
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [state, setState] = useState(loc.intakePrompts);
-  async function toggle(item: typeof ITEMS[number][0]) {
+  async function toggle(item: IntakeItem) {
     const next = { ...state, [item]: !state[item] };
     setState(next); setBusy(item);
     try {
@@ -330,14 +337,14 @@ function IntakePromptsPanel({ loc, onChanged }: { loc: LocationView; onChanged: 
         undone is emailed to the manager.
       </p>
       <div className="space-y-1.5">
-        {ITEMS.map(([key, label, why]) => (
+        {INTAKE_ITEMS.map((key) => (
           <label key={key} className="flex items-start gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={state[key]} disabled={busy !== null}
+            <input type="checkbox" checked={!!state[key]} disabled={busy !== null}
               onChange={() => toggle(key)} data-testid={`intake-prompt-${key}`}
               className="mt-0.5 w-4 h-4 shrink-0" />
             <span>
-              <span className="text-ink">{label}</span>
-              <span className="block text-xs text-muted">{why}</span>
+              <span className="text-ink">{COPY[key].label}</span>
+              <span className="block text-xs text-muted">{COPY[key].why}</span>
             </span>
           </label>
         ))}
@@ -535,6 +542,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const sites = (await prisma.site.findMany({
     where: { id: { in: vis.siteIds } }, // visible sites only
     orderBy: { site_name: 'asc' },
+    // `include`, so every Site scalar comes back — including a prompt column added later. If this
+    // ever narrows to a `select`, it must use INTAKE_PROMPT_SELECT or the newest prompt silently
+    // reads false on this screen, which is the defect this whole change removes.
     include: { resources: { orderBy: { display_order: 'asc' } } },
   })) as SiteDbRow[];
 
@@ -548,12 +558,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     stateCode: (s as any).state_code ?? null,
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
-    intakePrompts: {
-      findings: !!(s as any).intake_prompt_findings,
-      mileage_vin: !!(s as any).intake_prompt_mileage_vin,
-      walkaround: !!(s as any).intake_prompt_walkaround,
-      diag_scan: !!(s as any).intake_prompt_diag_scan,
-    },
+    // DERIVED, so a new prompt reaches this screen without anybody remembering to add it here.
+    intakePrompts: Object.fromEntries(
+      INTAKE_ITEMS.map((i) => [i, promptSwitches(s as unknown as Record<string, unknown>)[INTAKE_SWITCH[i]]]),
+    ) as Record<IntakeItem, boolean>,
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
     openDays: s.open_days ?? [1, 2, 3, 4, 5, 6],
     openHour: s.open_hour ?? 8,

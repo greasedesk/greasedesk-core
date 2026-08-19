@@ -11,7 +11,7 @@
  * Creating/removing a Location should adjust the Group's billing when the billing module exists.
  * The hooks are marked with TODO(billing) below. No billing is implemented here.
  */
-import { INTAKE_ITEMS, INTAKE_SWITCH, type IntakeItem } from '@/lib/intake-items';
+import { INTAKE_ITEMS, INTAKE_SWITCH, INTAKE_PROMPT_SELECT, type IntakeItem } from '@/lib/intake-items';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       where: { group_id: groupId, id: { in: vis.activeSiteIds } },
       orderBy: { site_name: 'asc' },
       select: { id: true, site_name: true, address: true, phone: true, whatsapp: true,
-        intake_prompt_findings: true, intake_prompt_mileage_vin: true, intake_prompt_walkaround: true, intake_prompt_diag_scan: true },
+        ...INTAKE_PROMPT_SELECT },
     });
     // primarySiteId drives the nav's default-location highlight when no ?site is set.
     // canViewInvoices gates the Invoices nav item (the page + API re-check server-side).
@@ -91,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { id, site_name, address, is_active, phone, whatsapp, timezone, state_code, intakePrompts } = (req.body || {}) as {
       id?: string; site_name?: string; address?: string; is_active?: boolean; phone?: string; whatsapp?: string;
       timezone?: string; state_code?: string | null;
-      /** The four intake prompts (lib/intake-items). Partial — only the named ones move. */
+      /** The intake prompts (lib/intake-items). Partial — only the named ones move. */
       intakePrompts?: Partial<Record<IntakeItem, boolean>>;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });

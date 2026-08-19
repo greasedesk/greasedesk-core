@@ -16,7 +16,9 @@ const O = await import('../lib/oil-level.ts');
 const I = await import('../lib/intake-items.ts');
 const C = await import('../lib/observations.ts');
 const { readFileSync } = await import('node:fs');
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const prisma = new PrismaClient();
+const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const out = [];
@@ -27,7 +29,7 @@ const prose = (t) => t.replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ');
  *  must fail loudly AND completely. Third time this shape has bitten; it is now the default here. */
 const say = (level) => O.oilLevelAdvisory(level)?.description ?? '«no advisory raised»';
 
-let fix = null;
+let fix = null, browser = null;
 
 try {
   // ── 1. FIVE READINGS, THREE ADVISORIES ───────────────────────────────────────────────────────
@@ -106,19 +108,55 @@ try {
   await record('above_max');
   const over = await prisma.vehicleDueItem.findFirst({ where: { vehicle_id: veh.id, closed_at: null }, select: { description: true } });
   check('and over-max raises its own', /above the maximum mark/.test(over?.description ?? ''), over?.description);
+
+  // ── AND IT ACTUALLY REACHES THE CARD ─────────────────────────────────────────────────────────
+  // The point of the derivation fix. Before it, switching this on did nothing at all: the column
+  // was never selected, so the item could not be prompted even from the database. Proven on the
+  // SERVED page, because that is where it was invisible.
+  console.log('\n— switched on, it appears —');
+  const fixSite = await prisma.site.create({
+    data: { group_id: ZZ, site_name: 'ZZ Oil Prompt Site', intake_prompt_oil_level: true },
+    select: { id: true },
+  });
+  fix.site = fixSite.id;
+  const pCard = await prisma.jobCard.create({
+    data: { group_id: ZZ, site_id: fixSite.id, vehicle_id: veh.id, status: 'in_progress', stage_details_done: true },
+    select: { id: true },
+  });
+  fix.pCard = pCard.id;
+
+  browser = await chromium.launch({ channel: 'chrome' });
+  const page = await (await browser.newContext()).newPage();
+  await page.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await page.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+  await page.goto(`${BASE}/admin/jobcards/${pCard.id}`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Intake', exact: false }).first().click();
+  await page.waitForSelector('[data-testid="oil-level-chips"]', { timeout: 25000 });
+  check('the dipstick chips render on the served card', true);
+  check('  …all five of them',
+    (await page.locator('[data-testid^="oil-level-"]').count()) === O.OIL_LEVELS.length + 1,
+    'five chips plus their container');
+  check('  …and only the switched-on prompt appears',
+    (await page.locator('[data-testid="intake-checklist"] li').count()) === 1,
+    'the other four are off for this site, and an unprompted item must never show');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
+  if (browser) await browser.close().catch(() => {});
   if (fix) {
     const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
     // AuditLog is append-only. Its rows for this card stay, correctly.
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
-    await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
+    await step('cards', () => prisma.jobCard.deleteMany({ where: { id: { in: [fix.card, fix.pCard].filter(Boolean) } } }));
     await step('vehicle', () => prisma.vehicle.delete({ where: { id: fix.veh } }));
+    await step('site', () => (fix.site ? prisma.site.delete({ where: { id: fix.site } }) : Promise.resolve()));
     // ZZ-SCOPED: a global count reports another garage's work as ours.
     check('teardown removed every fixture row (ZZ only)',
       (await prisma.vehicle.count({ where: { group_id: ZZ, id: fix.veh } })) === 0
-      && (await prisma.vehicleDueItem.count({ where: { group_id: ZZ, vehicle_id: fix.veh } })) === 0);
+      && (await prisma.vehicleDueItem.count({ where: { group_id: ZZ, vehicle_id: fix.veh } })) === 0
+      && (await prisma.site.count({ where: { group_id: ZZ, site_name: { contains: 'Oil Prompt' } } })) === 0);
   }
 }
 
@@ -133,6 +171,36 @@ check('  …but every one is still nameable',
 check('twelve remain on the top level', C.TOP_LEVEL.length === 12, C.TOP_LEVEL.map((o) => o.key).join(', '));
 check('the reason retirement exists is written down',
   /cannot be named in a count/.test(prose(readFileSync('lib/observations.ts', 'utf8'))));
+
+// ── 5. THE SWITCH IS REACHABLE — THE CLASS, NOT THE INSTANCE ────────────────────────────────────
+// oil_level shipped with a switch, an endpoint, chips and a gate, and was UNREACHABLE: five files
+// wrote the four column names out by hand, so the fifth was never selected, read as `undefined`,
+// and could never be prompted. INTAKE_SWITCH is a total Record and protected exactly one file.
+console.log('\n— a sixth prompt would reach every surface —');
+check('the Prisma select is derived from the switch map',
+  Object.keys(I.INTAKE_PROMPT_SELECT).length === I.INTAKE_ITEMS.length
+  && I.INTAKE_ITEMS.every((it) => I.INTAKE_PROMPT_SELECT[I.INTAKE_SWITCH[it]] === true),
+  Object.keys(I.INTAKE_PROMPT_SELECT).join(', '));
+check('  …including the newest one', I.INTAKE_PROMPT_SELECT.intake_prompt_oil_level === true,
+  'this is the exact key that was missing');
+check('a missing column reads FALSE, never true', promptFalse(),
+  'an unloaded switch must mean "not prompted" — the opposite would put an unasked item in the escalation');
+function promptFalse() {
+  const sw = I.promptSwitches({ intake_prompt_findings: true });
+  return sw.intake_prompt_findings === true && sw.intake_prompt_oil_level === false;
+}
+
+// NO FILE OUTSIDE lib/intake-items MAY NAME A PROMPT COLUMN. That is the class.
+const FILES = [
+  'lib/jobcard-page-data.ts', 'pages/api/locations.ts', 'pages/admin/settings/locations.tsx',
+];
+const offenders = FILES.filter((f) => /intake_prompt_[a-z_]+/.test(
+  readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')));
+check('no surface names a prompt column literally any more', offenders.length === 0,
+  offenders.join(', ') || 'the three that did, now derived');
+check('  …and the scanner would catch one if it came back',
+  /intake_prompt_[a-z_]+/.test('site: { select: { intake_prompt_findings: true } }'),
+  'a pattern that matches nothing proves nothing');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma.$disconnect();

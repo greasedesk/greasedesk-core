@@ -35,6 +35,39 @@ export const INTAKE_SWITCH: Record<IntakeItem, 'intake_prompt_findings' | 'intak
   oil_level: 'intake_prompt_oil_level',
 };
 
+/**
+ * THE PRISMA `select` FOR THE SWITCHES, derived from the map above.
+ *
+ * ── WHY THIS IS NOT FIVE LITERALS ───────────────────────────────────────────────────────────────
+ * INTAKE_SWITCH is a total Record, so a new item cannot be added without naming its column. That
+ * protects exactly one file. Everywhere else the four column names were written out by hand — two
+ * Prisma selects, a view type, a gssp mapping and a checkbox list — and each of those had quietly
+ * become a second source of truth.
+ *
+ * The cost was not theoretical. `oil_level` shipped with its switch, its endpoint, its chips and
+ * its gate, and was UNREACHABLE: lib/jobcard-page-data selected four columns by name, so the fifth
+ * was never loaded, read as `undefined`, and the item could never be prompted — not even by setting
+ * the column directly in the database.
+ *
+ * Derive the select and a sixth item appears everywhere at once, or fails to compile.
+ */
+export const INTAKE_PROMPT_SELECT = Object.fromEntries(
+  INTAKE_ITEMS.map((i) => [INTAKE_SWITCH[i], true as const]),
+) as Record<(typeof INTAKE_SWITCH)[IntakeItem], true>;
+
+/**
+ * The switches off a site row, in the shape intakeItemStates wants.
+ *
+ * MISSING IS FALSE, and that is the safe direction: an unloaded column must mean "not prompted",
+ * never "prompted". The opposite would put an item nobody was asked for into the escalation, which
+ * is the failure the whole prompt design exists to avoid.
+ */
+export function promptSwitches(site: Record<string, unknown> | null | undefined): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const item of INTAKE_ITEMS) out[INTAKE_SWITCH[item]] = site?.[INTAKE_SWITCH[item]] === true;
+  return out;
+}
+
 /** The photo slot that satisfies the diagnostic-scan item — a photo of the scanner screen. */
 export const DIAG_SCAN_SLOT = 'diag_scan';
 
