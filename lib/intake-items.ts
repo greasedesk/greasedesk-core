@@ -23,15 +23,16 @@
  * record, with an actor and a timestamp, and it satisfies the item exactly as a finding does.
  */
 
-export const INTAKE_ITEMS = ['findings', 'mileage_vin', 'walkaround', 'diag_scan'] as const;
+export const INTAKE_ITEMS = ['findings', 'mileage_vin', 'walkaround', 'diag_scan', 'oil_level'] as const;
 export type IntakeItem = typeof INTAKE_ITEMS[number];
 
 /** The Site column that switches each prompt on. TOTAL — a new item must name its switch. */
-export const INTAKE_SWITCH: Record<IntakeItem, 'intake_prompt_findings' | 'intake_prompt_mileage_vin' | 'intake_prompt_walkaround' | 'intake_prompt_diag_scan'> = {
+export const INTAKE_SWITCH: Record<IntakeItem, 'intake_prompt_findings' | 'intake_prompt_mileage_vin' | 'intake_prompt_walkaround' | 'intake_prompt_diag_scan' | 'intake_prompt_oil_level'> = {
   findings: 'intake_prompt_findings',
   mileage_vin: 'intake_prompt_mileage_vin',
   walkaround: 'intake_prompt_walkaround',
   diag_scan: 'intake_prompt_diag_scan',
+  oil_level: 'intake_prompt_oil_level',
 };
 
 /** The photo slot that satisfies the diagnostic-scan item — a photo of the scanner screen. */
@@ -45,6 +46,10 @@ export type IntakeFacts = {
   vin: string | null;
   hasIntakeVideo: boolean;
   hasDiagScanPhoto: boolean;
+  /** The level recorded on THIS card, whatever it was. NULL = nobody looked yet.
+   *  A reading of `between` satisfies the item exactly as `below_min` does — the item is "did you
+   *  check", not "was there a problem", which is the same reason "nothing found" is an artefact. */
+  oilLevelAt: Date | null;
 };
 
 export type IntakeItemState = {
@@ -65,6 +70,9 @@ export function intakeItemDone(item: IntakeItem, f: IntakeFacts): boolean {
     case 'mileage_vin': return f.odometerIn != null && !!f.vin?.trim();
     case 'walkaround': return f.hasIntakeVideo;
     case 'diag_scan': return f.hasDiagScanPhoto;
+    // ANY recorded level, including a healthy one. The affirmative IS the artefact here — there is
+    // no version of this item satisfied only by finding something wrong.
+    case 'oil_level': return f.oilLevelAt != null;
   }
 }
 

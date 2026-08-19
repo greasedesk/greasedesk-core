@@ -16,6 +16,7 @@
  *                    a mileage basis. Not "every tyre split": that car goes on a ramp, not a form.
  */
 import './_gate-preflight.mjs';
+const { explainIfClientStale } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -294,6 +295,7 @@ try {
   check('and the queue actually delivered', readings === 4, `${readings} readings landed`);
 } catch (e) {
   check('timing run completed', false, String(e?.message ?? e).slice(0, 300));
+  await explainIfClientStale(B);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

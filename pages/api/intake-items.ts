@@ -4,6 +4,7 @@
  *
  *   POST { jobCardId, action: 'nothing_found' }                  → the affirmative
  *   POST { jobCardId, action: 'skip', item, reason? }            → an audited skip
+ *   POST { jobCardId, action: 'oil_level', level }                → the dipstick reading
  *
  * OPERATIONAL authority: this is the person at the car.
  *
@@ -17,6 +18,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
+import { isOilLevel, oilLevelAdvisory, OIL_LEVEL_KEY } from '@/lib/oil-level';
 import { writeAudit } from '@/lib/audit';
 import { INTAKE_ITEMS, type IntakeItem } from '@/lib/intake-items';
 
@@ -27,13 +29,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
   const groupId = user.group_id as string;
 
-  const { jobCardId, action, item, reason } = (req.body || {}) as
-    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found'; item?: IntakeItem; reason?: string };
+  const { jobCardId, action, item, reason, level } = (req.body || {}) as
+    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found' | 'oil_level'; item?: IntakeItem; reason?: string; level?: string };
   if (!jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
 
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: groupId },
-    select: { id: true, site_id: true, intake_nothing_found_at: true },
+    select: { id: true, site_id: true, vehicle_id: true, intake_nothing_found_at: true },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
@@ -68,6 +70,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // log is for — and it must not outlive the gap, because doing the thing afterwards makes the item
   // done (lib/intake-items derives `skipped` against `done`). A column would have to be cleared by
   // every path that could satisfy the item, including the phone's upload API.
+  if (action === 'oil_level') {
+    // FIVE READINGS, THREE OF WHICH ADVISE. The other two are recorded and say nothing — which is
+    // the whole point: "checked, it's fine" is a record no absence can express.
+    if (!isOilLevel(level)) return res.status(400).json({ message: 'Choose where the oil sits on the dipstick.' });
+    const advisory = oilLevelAdvisory(level);
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // THE EVENT FIRST, always. It satisfies the checklist item whatever the reading was, and a
+      // correction appends rather than overwrites.
+      await writeAudit(tx, { groupId, userId: user.id as string, jobCardId, action: 'intake.oil_level', diff: { level } });
+
+      const open = await tx.vehicleDueItem.findFirst({
+        where: { group_id: groupId, vehicle_id: card.vehicle_id, closed_at: null, observation_key: OIL_LEVEL_KEY },
+        select: { id: true },
+      });
+      if (!advisory) {
+        // Corrected to a healthy level, or topped up on the spot. Leaving the old warning open
+        // would put a finding on the invoice for something no longer true.
+        if (open) {
+          await tx.vehicleDueItem.update({
+            where: { id: open.id },
+            data: { closed_at: new Date(), closed_job_card_id: jobCardId, closed_reason: 'Re-checked and within range' },
+          });
+        }
+        return;
+      }
+      const data = {
+        observation_key: OIL_LEVEL_KEY,
+        description: advisory.description,
+        due_basis: 'next_service' as const,
+        // The description says WHAT was seen and the basis says when — no timing in the words.
+        timing_in_description: false,
+      };
+      if (open) await tx.vehicleDueItem.update({ where: { id: open.id }, data });
+      else {
+        await tx.vehicleDueItem.create({
+          data: {
+            group_id: groupId, vehicle_id: card.vehicle_id, found_on_job_card_id: jobCardId,
+            customer_response: 'not_raised' as never, created_by: user.id as string, ...data,
+          },
+        });
+      }
+    });
+    return res.status(200).json({ ok: true, level, advisory: advisory?.description ?? null });
+  }
+
   if (action === 'skip') {
     if (!item || !(INTAKE_ITEMS as readonly string[]).includes(item)) {
       return res.status(400).json({ message: 'A valid item is required.' });

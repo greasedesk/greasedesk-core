@@ -133,7 +133,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, oilRow, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -169,6 +169,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       where: { group_id: groupId, entity_id: cardId, action: 'intake.item_skipped' },
       orderBy: { created_at: 'desc' }, select: { diff_json: true },
     }) as Promise<Array<{ diff_json: unknown }>>,
+    // THE OIL LEVEL RECORDED ON THIS CARD, latest wins. Derived from the audit log for the same
+    // reason a skip is: correcting a reading should leave a trail rather than overwrite one, and
+    // the only question either surface asks is "what does this card currently say".
+    prisma.auditLog.findFirst({
+      where: { group_id: groupId, entity_id: cardId, action: 'intake.oil_level' },
+      orderBy: { created_at: 'desc' }, select: { diff_json: true, created_at: true },
+    }) as Promise<{ diff_json: unknown; created_at: Date } | null>,
     // THIS CAR'S LAST TYRE TYPE — the prefill that makes the type control a confirmation rather
     // than an entry. A car rarely changes tyre type between services.
     (async () => {
@@ -406,6 +413,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       vin: row.vehicle?.vin ?? null,
       hasIntakeVideo: intakeFacts.hasIntakeVideo,
       hasDiagScanPhoto: intakeFacts.hasDiagScanPhoto,
+      oilLevelAt: oilRow?.created_at ?? null,
     },
     (row.site ?? {}) as Record<string, boolean>,
     skipsByItem as never,
@@ -484,6 +492,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastBattery,
     /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
     observationCounts,
+    /** The oil level recorded on THIS card, so the chips show which one is selected. NULL = not
+     *  checked. `between` is a recorded reading like any other, not an absence. */
+    oilLevel: ((oilRow?.diff_json ?? {}) as { level?: string }).level ?? null,
     /** The car's CURRENT tyre and battery condition — the same values the customer report shows. */
     tyreCondition,
     batteryCondition,

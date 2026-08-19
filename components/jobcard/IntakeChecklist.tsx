@@ -11,9 +11,14 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
+import { OIL_LEVELS } from '@/lib/oil-level';
+import type { IntakeItem } from '@/lib/intake-items';
 
 export type IntakeItemView = {
-  item: 'findings' | 'mileage_vin' | 'walkaround' | 'diag_scan';
+  /** DERIVED from lib/intake-items, not restated. The four names used to be written out here, so
+   *  adding a fifth item compiled everywhere except the one comparison that needed it — the union
+   *  had quietly become a second source of truth. */
+  item: IntakeItem;
   prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null;
 };
 
@@ -22,6 +27,8 @@ type Props = {
   items: IntakeItemView[];
   canEdit: boolean;
   nothingFoundAt: string | null;
+  /** The reading already on this card, so the chips show which one is selected. NULL = not checked. */
+  oilLevel?: string | null;
   /** Jump to the Quote tab, where findings are recorded. */
   onGoToFindings: () => void;
   onChanged: () => void;
@@ -29,7 +36,7 @@ type Props = {
 
 const CHIPS = ['equipment_fault', 'customer_waiting'] as const;
 
-export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoundAt, onGoToFindings, onChanged }: Props) {
+export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoundAt, oilLevel = null, onGoToFindings, onChanged }: Props) {
   const { t } = useTranslation('jobcard');
   const [busy, setBusy] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState<string | null>(null);
@@ -79,6 +86,23 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
                 {/* ONE TAP, and the most important control here: a clean car must be able to satisfy
                     the findings prompt without a skip, or every properly-checked clean car becomes
                     a false escalation and the admin stops reading. */}
+                {/* THE DIPSTICK. Five readings, always recorded — "between" satisfies the item
+                    exactly as "below min" does, because the item is "did you check", not "was
+                    there a problem". Three of the five raise a finding; over-max is the one a
+                    yes/no question cannot see. */}
+                {it.item === 'oil_level' && (
+                  <div className="flex flex-wrap gap-1.5 w-full" data-testid="oil-level-chips">
+                    {OIL_LEVELS.map((lv) => (
+                      <button key={lv} type="button" disabled={busy !== null}
+                        onClick={() => post({ action: 'oil_level', level: lv }, `oil-${lv}`)}
+                        data-testid={`oil-level-${lv}`}
+                        className={`min-h-[44px] px-3 text-sm font-medium rounded-lg border ${
+                          oilLevel === lv ? 'bg-accent text-white border-accent' : 'bg-surface border-line text-ink'}`}>
+                        {t(`intake.oilLevel.${lv}`)}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {it.item === 'findings' && (
                   <>
                     <button type="button" disabled={busy !== null} onClick={() => post({ action: 'nothing_found' }, 'nf')}

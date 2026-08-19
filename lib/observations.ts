@@ -66,6 +66,19 @@ export type Observation = {
    * oversight.
    */
   carriesOwnTiming: boolean;
+  /**
+   * RETIRED, NOT DELETED — off the tap list, still nameable.
+   *
+   * The key exists so an observation can be counted across the whole book, and a key with no
+   * catalogue entry cannot be named in a count: a report would show a bare `pollen_filter_dirty`,
+   * or silently drop it. Deleting the line is only safe while no row has ever used it, and "no row
+   * has ever used it" is a fact about today, not a property of the design.
+   *
+   * So an entry that stops being offered keeps its line and gains this flag. Existing findings are
+   * unaffected either way — the description is the record, the key is the index — and bringing one
+   * back is a one-word edit rather than an archaeology exercise.
+   */
+  retired?: boolean;
   /** Members of a two-step group are hidden from the top level and reached through their parent. */
   group?: ObservationGroup;
 };
@@ -90,10 +103,14 @@ export const OBSERVATIONS: readonly Observation[] = [
   { key: 'wipers_smearing', label: 'Wipers smearing', description: 'Wiper blades smearing', basis: 'next_service', carriesOwnTiming: false },
   { key: 'screenwash_empty', label: 'Screenwash empty', description: 'Screenwash empty', basis: 'next_service', carriesOwnTiming: false },
   { key: 'tyre_pressures_low', label: 'Pressures low', description: 'Tyre pressures low', basis: 'next_service', carriesOwnTiming: false },
-  { key: 'air_filter_dirty', label: 'Air filter dirty', description: 'Air filter dirty', basis: 'next_service', carriesOwnTiming: false },
-  { key: 'pollen_filter_dirty', label: 'Pollen filter dirty', description: 'Pollen filter dirty', basis: 'next_service', carriesOwnTiming: false },
-  { key: 'wipers_split', label: 'Wiper split', description: 'Wiper blade split', basis: 'next_service', carriesOwnTiming: false },
-  { key: 'brake_fluid_discoloured', label: 'Brake fluid dark', description: 'Brake fluid is discoloured', basis: 'next_service', carriesOwnTiming: false },
+  // retired 2026-08-19
+  { retired: true, key: 'air_filter_dirty', label: 'Air filter dirty', description: 'Air filter dirty', basis: 'next_service', carriesOwnTiming: false },
+  // retired 2026-08-19
+  { retired: true, key: 'pollen_filter_dirty', label: 'Pollen filter dirty', description: 'Pollen filter dirty', basis: 'next_service', carriesOwnTiming: false },
+  // retired 2026-08-19 — "wipers smearing" covers what a mechanic actually taps
+  { retired: true, key: 'wipers_split', label: 'Wiper split', description: 'Wiper blade split', basis: 'next_service', carriesOwnTiming: false },
+  // retired 2026-08-19
+  { retired: true, key: 'brake_fluid_discoloured', label: 'Brake fluid dark', description: 'Brake fluid is discoloured', basis: 'next_service', carriesOwnTiming: false },
   { key: 'coolant_low', label: 'Coolant low', description: 'Coolant below the minimum mark', basis: 'next_service', carriesOwnTiming: false },
   { key: 'aux_belt_squealing', label: 'Belt squealing', description: 'Auxiliary belt squealing', basis: 'next_service', carriesOwnTiming: false },
   // TWO KEYS, NOT ONE WITH A VALUE. A high biting point usually leads to a clutch replacement and a
@@ -102,7 +119,8 @@ export const OBSERVATIONS: readonly Observation[] = [
   { key: 'clutch_biting_high', label: 'Biting point high', description: 'Clutch biting point is high', basis: 'next_service', carriesOwnTiming: false },
   { key: 'clutch_biting_low', label: 'Biting point low', description: 'Clutch biting point is low', basis: 'next_service', carriesOwnTiming: false },
   { key: 'exhaust_blowing', label: 'Exhaust blowing', description: 'Exhaust blowing', basis: 'next_service', carriesOwnTiming: false },
-  { key: 'number_plate_faded', label: 'Number plate faded', description: 'Number plate faded or cracked', basis: 'next_service', carriesOwnTiming: false },
+  // retired 2026-08-19
+  { retired: true, key: 'number_plate_faded', label: 'Number plate faded', description: 'Number plate faded or cracked', basis: 'next_service', carriesOwnTiming: false },
   { key: 'handbrake_travel', label: 'Handbrake travel', description: 'Handbrake travel is excessive', basis: 'next_service', carriesOwnTiming: false },
   { key: 'suspension_knock', label: 'Suspension knock', description: 'Knock from the suspension', basis: 'next_service', carriesOwnTiming: false },
   { key: 'oil_leak_engine', label: 'Oil leak, engine', description: 'Oil leak from the engine', basis: 'next_service', carriesOwnTiming: false },
@@ -123,9 +141,13 @@ const BY_KEY: ReadonlyMap<string, Observation> = new Map(OBSERVATIONS.map((o) =>
 export const observationByKey = (key: string): Observation | null => BY_KEY.get(key) ?? null;
 export const OBSERVATION_KEYS: ReadonlySet<string> = new Set(OBSERVATIONS.map((o) => o.key));
 
+/** Still offered. A retired entry stays in OBSERVATIONS so its key can be named, and disappears
+ *  from every surface that offers a tap. */
+export const isOffered = (o: Observation): boolean => o.retired !== true;
+
 /** The ones that appear at the top level — group members are reached through their parent. */
-export const TOP_LEVEL: readonly Observation[] = OBSERVATIONS.filter((o) => !o.group);
-export const bulbMembers = (): readonly Observation[] => OBSERVATIONS.filter((o) => o.group === 'bulb');
+export const TOP_LEVEL: readonly Observation[] = OBSERVATIONS.filter((o) => !o.group && isOffered(o));
+export const bulbMembers = (): readonly Observation[] => OBSERVATIONS.filter((o) => o.group === 'bulb' && isOffered(o));
 
 /** How many float above the "More" line. Six is what fits above the fold at 390px without scroll. */
 export const VISIBLE_BEFORE_MORE = 6;

@@ -48,6 +48,7 @@ type JobData = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   batteryCondition?: BatteryCondition | null;
   intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
@@ -517,7 +518,7 @@ export default function MobileJobCard() {
                   nobody was ever prompted about. */}
               {job && (job.intakeItems?.length ?? 0) > 0 && (
                 <PhoneIntakeChecklist jobCardId={job.id} items={job.intakeItems!}
-                  nothingFoundAt={job.nothingFoundAt ?? null} onChanged={refreshPhotos} />
+                  nothingFoundAt={job.nothingFoundAt ?? null} oilLevel={job.oilLevel ?? null} onChanged={refreshPhotos} />
               )}
               {/* THE TAP-LIST BEFORE THE TYPING. Most findings are not novel, and the one that is
                   should be reached past the eighteen that are — not the other way round. */}

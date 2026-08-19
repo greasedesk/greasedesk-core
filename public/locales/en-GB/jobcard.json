@@ -455,7 +455,8 @@
       "findings": "Check what the car needs",
       "mileage_vin": "Record mileage and VIN",
       "walkaround": "Walkaround video",
-      "diag_scan": "Diagnostic scan"
+      "diag_scan": "Diagnostic scan",
+      "oil_level": "Check oil level"
     },
     "nothingFound": "Nothing found",
     "recordFinding": "Record a finding",
@@ -470,6 +471,15 @@
       "equipment_fault": "Equipment fault",
       "customer_waiting": "Customer waiting"
     },
-    "footnote": "Nothing here blocks the job. Anything left undone is emailed to the manager."
+    "footnote": "Nothing here blocks the job. Anything left undone is emailed to the manager.",
+    "oilLevel": {
+      "below_min": "Below min",
+      "at_min": "At min",
+      "between": "Between",
+      "at_max": "At max",
+      "above_max": "Over max",
+      "prompt": "Where is it on the dipstick?",
+      "recorded": "Recorded: {{level}}"
+    }
   }
 }

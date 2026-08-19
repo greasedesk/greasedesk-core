@@ -66,6 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // problem again, one level up.
     intakeItems: p.intakeItems ?? [],
     nothingFoundAt: p.nothingFoundAt ?? null,
+    oilLevel: p.oilLevel ?? null,
     // Work sold — NO money fields, for anyone: no unitPrice, no unit_cost. Descriptions and
     // quantities are the job; the sell price has no use in a bay.
     lines: p.lines.map((l) => ({

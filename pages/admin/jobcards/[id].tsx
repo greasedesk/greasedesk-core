@@ -42,6 +42,7 @@ type PageProps = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  oilLevel?: string | null;
   tyreCondition?: unknown[];
   batteryCondition?: unknown;
   /** Derived report state — never stored. */
@@ -175,6 +176,7 @@ export default function JobCardDetailPage(props: PageProps) {
         lastTyreType={props.lastTyreType}
         lastBattery={props.lastBattery}
         observationCounts={props.observationCounts}
+        oilLevel={props.oilLevel}
         tyreCondition={props.tyreCondition as never}
         batteryCondition={props.batteryCondition as never}
         conversation={props.conversation}

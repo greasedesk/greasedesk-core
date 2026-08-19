@@ -8,6 +8,7 @@
  * says so — the failure mode is a plausible advisory, not an error.
  */
 import './_gate-preflight.mjs';
+const { explainIfClientStale } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
@@ -364,6 +365,7 @@ try {
 
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

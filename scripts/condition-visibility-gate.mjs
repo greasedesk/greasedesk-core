@@ -23,6 +23,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
+const { explainIfClientStale } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -179,6 +180,7 @@ try {
     'a blank space is the thing this whole slice exists to stop');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

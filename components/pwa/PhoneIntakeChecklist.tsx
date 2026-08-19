@@ -15,17 +15,25 @@
 import React, { useState } from 'react';
 
 const LABEL: Record<string, string> = {
+  oil_level: 'Check oil level',
   findings: 'Check what the car needs',
   mileage_vin: 'Record mileage and VIN',
   walkaround: 'Walkaround video',
   diag_scan: 'Diagnostic scan',
 };
 const CHIPS = ['Equipment fault', 'Customer waiting'];
+const OIL = [
+  ['below_min', 'Below min'], ['at_min', 'At min'], ['between', 'Between'],
+  ['at_max', 'At max'], ['above_max', 'Over max'],
+] as const;
 
 type Item = { item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null };
 
-export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt, onChanged }: {
-  jobCardId: string; items: Item[]; nothingFoundAt: string | null; onChanged?: () => void;
+export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt, oilLevel = null, onChanged }: {
+  jobCardId: string; items: Item[]; nothingFoundAt: string | null;
+  /** The reading already on this card, so the chips show which one is selected. */
+  oilLevel?: string | null;
+  onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState<string | null>(null);
@@ -62,6 +70,21 @@ export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt,
             {!it.done && skipOpen !== it.item && (
               <div className="flex flex-wrap gap-2 mt-2">
                 {/* ONE TAP for the clean car — the affirmative that keeps the escalation believable. */}
+                {/* THE DIPSTICK, on the phone — the surface the mechanic is actually holding when
+                    the bonnet is open. Always recorded; three of the five raise a finding. */}
+                {it.item === 'oil_level' && (
+                  <div className="flex flex-wrap gap-1.5 w-full" data-testid="ph-oil-chips">
+                    {OIL.map(([lv, label]) => (
+                      <button key={lv} type="button" disabled={busy !== null}
+                        onClick={() => post({ action: 'oil_level', level: lv }, `oil-${lv}`)}
+                        data-testid={`ph-oil-${lv}`}
+                        className={`min-h-[44px] px-3 text-sm font-semibold rounded-lg border ${
+                          oilLevel === lv ? 'bg-accent text-white border-accent' : 'bg-surface border-line text-ink'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {it.item === 'findings' && (
                   <button type="button" disabled={busy !== null} onClick={() => post({ action: 'nothing_found' }, 'nf')}
                     data-testid="ph-nothing-found"

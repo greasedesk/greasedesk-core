@@ -92,6 +92,7 @@ type Props = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   batteryCondition?: BatteryCondition | null;
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
@@ -901,7 +902,7 @@ export default function JobCardWorkspace(p: Props) {
           openKeys={(p.dueItems ?? []).map((d) => d.observationKey).filter(Boolean) as string[]}
           onSaved={refreshCard} />
         <IntakeChecklist jobCardId={p.jobCardId} items={eff.intakeItems}
-          canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
+          canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt} oilLevel={p.oilLevel ?? null}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
         <TyreCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
           defaultType={(p.lastTyreType as never) ?? null} recorded={p.tyreCondition ?? []} onSaved={refreshCard} />

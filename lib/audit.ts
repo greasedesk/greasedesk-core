@@ -63,6 +63,9 @@ export type AuditAction =
   | 'intake.nothing_found'
   | 'intake.nothing_found_cleared'
   | 'intake.item_skipped'
+  // The dipstick reading, whatever it was. A healthy level is a RECORD, not an absence — the same
+  // argument as intake.nothing_found, and the reason the checklist item can be satisfied at all.
+  | 'intake.oil_level'
   // MEASUREMENTS taken in the bay. Recorded as their own actions rather than folded into
   // due_item.found: the finding is a conclusion and these are the evidence it was drawn from, so
   // "what did the tester actually say" stays answerable after somebody edits the description.

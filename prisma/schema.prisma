@@ -1237,6 +1237,9 @@ model Site {
   intake_prompt_mileage_vin Boolean @default(false)
   intake_prompt_walkaround Boolean @default(false)
   intake_prompt_diag_scan  Boolean @default(false)
+  /// The level is not stored here — see the migration. This switch only decides whether a mechanic
+  /// is ASKED, like the four above it.
+  intake_prompt_oil_level  Boolean @default(false)
 }
 
 model SiteFeature {
