@@ -1490,6 +1490,20 @@ model VehicleDueItem {
   /// must not delete the fact that the car needs discs — the finding is about the CAR.
   found_on_job_card_id String?
 
+  /// WHICH OBSERVATION THIS IS, when a machine wrote it — see lib/observation-keys.
+  ///
+  /// NULL means A HUMAN TYPED IT. That is the meaningful absence: a free-text finding has no key
+  /// because nobody chose one, and it must never be matched by a writer looking for its own row.
+  ///
+  /// Before this column, machine writers found their open item by description PREFIX, which also
+  /// matched hand-typed findings — "Battery terminals corroded" was rewritten into a battery
+  /// advisory by the next test, silently. A key cannot collide with prose, and it survives a
+  /// mechanic rewording the description.
+  ///
+  /// It is also the only way to count an observation across the book: "how many wiper blades did
+  /// we spot and never sell" is unanswerable against a string.
+  observation_key String?
+
   /// What the car needs, in the mechanic's words. Freeform because that is the bay reality.
   description String
   /// Optional link to the priced service, when it maps to one. NULLABLE on purpose: a catalogue
@@ -1526,6 +1540,10 @@ model VehicleDueItem {
 
   /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
   @@index([group_id, vehicle_id, closed_at])
+  /// A machine writer finding its OWN open item. Paired with a partial unique index on
+  /// (group, vehicle, observation_key) WHERE closed_at IS NULL — declared in the migration, since
+  /// Prisma cannot express a partial unique. One open item per observation per car, enforced.
+  @@index([group_id, vehicle_id, observation_key])
   @@index([found_on_job_card_id])
   /// The customer's OWN answers, token-authenticated. See DueItemCustomerAnswer for why these are
   /// kept apart from `customer_response` above.

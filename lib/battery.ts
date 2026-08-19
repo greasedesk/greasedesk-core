@@ -218,10 +218,8 @@ export function projectedReplaceDate(currentSoh: number, from: Date, decline: So
 
 // ── THE WRITER ───────────────────────────────────────────────────────────────────────────────────
 import type { Prisma } from '@prisma/client';
+import { BATTERY_KEY } from '@/lib/observation-keys';
 
-/** The description prefix every battery due item shares, so the writer can find its own open item
- *  to correct rather than stacking a near-duplicate. One string, one place. */
-export const BATTERY_ITEM_PREFIX = 'Battery';
 
 /**
  * Record a battery test and raise what it advises. ONE writer, so a reading cannot exist without
@@ -286,10 +284,13 @@ export async function recordBatteryReading(
   });
 
   const advisory = batteryAdvisory(n, at);
+  // BY KEY, not by description prefix. The prefix version matched prose: a hand-typed "Battery
+  // terminals corroded" is an open finding starting with "Battery", so the next test rewrote the
+  // mechanic's own observation into a battery advisory, silently.
   const existing = await t.vehicleDueItem.findFirst({
     where: {
       group_id: args.groupId, vehicle_id: args.vehicleId, closed_at: null,
-      description: { startsWith: BATTERY_ITEM_PREFIX },
+      observation_key: BATTERY_KEY,
     },
     select: { id: true },
   });
@@ -321,6 +322,7 @@ export async function recordBatteryReading(
   const projected = advisory.state === 'monitor' ? projectedReplaceDate(n.sohPct, at, decline) : null;
 
   const data = {
+    observation_key: BATTERY_KEY,
     description: advisory.description,
     due_basis: (projected ? 'date' : 'next_service') as 'date' | 'next_service',
     due_date: projected,

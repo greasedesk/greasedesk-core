@@ -164,6 +164,7 @@ export function milesToLegal(currentTenths: number, rate: WearRate): number | nu
 
 // ── THE WRITER ───────────────────────────────────────────────────────────────────────────────────
 import type { Prisma } from '@prisma/client';
+import { tyreDepthKey, TYRE_ALIGNMENT_KEY } from '@/lib/observation-keys';
 
 /**
  * Record four corners and raise what they advise. ONE writer, so a reading can never exist without
@@ -223,11 +224,17 @@ export async function recordTyreReadings(
       const toLegal = a.kind === 'depth' ? milesToLegal(minDepth(c.depths), rate) : null;
       const useMileage = a.kind === 'depth' && toLegal != null && args.odometer != null;
       // Same corner, same kind, still open → correct it rather than stacking a near-duplicate.
+      //
+      // BY KEY, not by description prefix. The prefix version matched prose: a hand-typed "Rear
+      // left brake pad low" starts with "Rear left", so the next depth advisory for that corner
+      // silently rewrote the mechanic's own finding into a tyre one.
+      const key = a.kind === 'depth' ? tyreDepthKey(a.corner) : TYRE_ALIGNMENT_KEY;
       const existing = await (tx as Prisma.TransactionClient).vehicleDueItem.findFirst({
-        where: { group_id: args.groupId, vehicle_id: args.vehicleId, closed_at: null, description: { startsWith: a.kind === 'depth' ? CORNER_LABEL[a.corner] : 'Check alignment' } },
+        where: { group_id: args.groupId, vehicle_id: args.vehicleId, closed_at: null, observation_key: key },
         select: { id: true },
       });
       const data = {
+        observation_key: key,
         description: a.description,
         due_basis: (useMileage ? 'mileage' : 'next_service') as 'mileage' | 'next_service',
         due_mileage: useMileage ? (args.odometer as number) + (toLegal as number) : null,
