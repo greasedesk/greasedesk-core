@@ -42,6 +42,8 @@ type LocationView = {
   stateCode: string | null;
   isActive: boolean;
   isCurrent: boolean;
+  /** The four intake prompts for THIS site (lib/intake-items). */
+  intakePrompts: Record<'findings' | 'mileage_vin' | 'walkaround' | 'diag_scan', boolean>;
   resources: ResourceView[];
   openDays: number[];
   openHour: number;
@@ -292,6 +294,58 @@ function AddLocation({ onChanged }: { onChanged: () => void }) {
 }
 
 // --- Location card (edit / delete + its resources) ---
+/**
+ * THE FOUR INTAKE PROMPTS, per site. Default OFF, so the feature ships inert and a garage opts in.
+ *
+ * Framed as what it BUYS rather than what it demands: "this is where next year's reminders come
+ * from" lands with an owner in a way "your mechanics must photograph things" does not — and it is
+ * the truer description, because the findings are the marketing list's raw material.
+ *
+ * PER SITE because the scanner is a physical object one site owns; a two-branch garage will not
+ * have the same kit in both.
+ */
+function IntakePromptsPanel({ loc, onChanged }: { loc: LocationView; onChanged: () => void }) {
+  const ITEMS = [
+    ['findings', 'What the car needs', 'Feeds next year’s reminders'],
+    ['mileage_vin', 'Mileage and VIN', 'Also fills the mileage history'],
+    ['walkaround', 'Walkaround video', 'Evidence if a customer disputes damage'],
+    ['diag_scan', 'Diagnostic scan', 'A photo of the scanner screen is enough'],
+  ] as const;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [state, setState] = useState(loc.intakePrompts);
+  async function toggle(item: typeof ITEMS[number][0]) {
+    const next = { ...state, [item]: !state[item] };
+    setState(next); setBusy(item);
+    try {
+      await fetch('/api/locations', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: loc.id, intakePrompts: { [item]: next[item] } }) });
+      onChanged();
+    } finally { setBusy(null); }
+  }
+  return (
+    <div className="mt-4" data-testid={`intake-prompts-${loc.id}`}>
+      <div className="text-xs uppercase text-muted">Ask at intake</div>
+      <p className="text-xs text-muted mt-1 mb-2">
+        Prompts for the mechanic before the car goes in. Nothing here blocks a job — anything left
+        undone is emailed to the manager.
+      </p>
+      <div className="space-y-1.5">
+        {ITEMS.map(([key, label, why]) => (
+          <label key={key} className="flex items-start gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={state[key]} disabled={busy !== null}
+              onChange={() => toggle(key)} data-testid={`intake-prompt-${key}`}
+              className="mt-0.5 w-4 h-4 shrink-0" />
+            <span>
+              <span className="text-ink">{label}</span>
+              <span className="block text-xs text-muted">{why}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LocationCard({ loc, isAdmin, onChanged, countryUi }: { loc: LocationView; isAdmin: boolean; onChanged: () => void; countryUi: CountryUi }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(loc.name);
@@ -373,6 +427,8 @@ function LocationCard({ loc, isAdmin, onChanged, countryUi }: { loc: LocationVie
         )}
       </div>
       {err && <p className="text-danger text-xs mt-1">{err}</p>}
+
+      {isAdmin && <IntakePromptsPanel loc={loc} onChanged={onChanged} />}
 
       <div className="mt-4">
         <div className="text-xs uppercase text-muted">Resources</div>
@@ -492,6 +548,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     stateCode: (s as any).state_code ?? null,
     isActive: s.is_active,
     isCurrent: s.id === user.site_id,
+    intakePrompts: {
+      findings: !!(s as any).intake_prompt_findings,
+      mileage_vin: !!(s as any).intake_prompt_mileage_vin,
+      walkaround: !!(s as any).intake_prompt_walkaround,
+      diag_scan: !!(s as any).intake_prompt_diag_scan,
+    },
     resources: s.resources.map((r: ResDbRow) => ({ id: r.id, name: r.name, type: r.type, display_order: r.display_order, is_active: r.is_active, colour: r.colour })),
     openDays: s.open_days ?? [1, 2, 3, 4, 5, 6],
     openHour: s.open_hour ?? 8,

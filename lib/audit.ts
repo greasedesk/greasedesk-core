@@ -58,6 +58,11 @@ export type AuditAction =
   // Collapsing them would make "who refunded this?" unanswerable for two of the three origins.
   // A job the car needs that nobody is doing today — found at intake, and closed when done or
   // dismissed. Keyed on the VehicleDueItem (entity/entityId), because the finding outlives the card.
+  // Intake prompts (lib/intake-items): the affirmative, its undo, and a skip. A skip is an EVENT
+  // and lives only here — it must not outlive the gap it describes.
+  | 'intake.nothing_found'
+  | 'intake.nothing_found_cleared'
+  | 'intake.item_skipped'
   | 'due_item.found'
   | 'due_item.closed'
   | 'refund.requested'

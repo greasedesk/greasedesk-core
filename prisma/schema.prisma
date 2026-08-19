@@ -1192,6 +1192,18 @@ model Site {
   import_batches   ImportBatch[]
 
   @@index([group_id])
+
+  // ── INTAKE PROMPTS (per SITE, default OFF) ────────────────────────────────────────────────────
+  // PROMPT, never require: the mechanic is asked, and may proceed regardless. A hard gate gets
+  // worked around and the data ends up looking captured when it isn't. Named `prompt` rather than
+  // `require` so the next reader cannot mistake them for gates.
+  // Per SITE because the scanner is a physical object one site owns, and a multi-site group will
+  // not have the same kit everywhere. Read at RENDER — never stamped onto a card — so switching one
+  // on mid-job starts prompting, and switching it off stops it generating anything.
+  intake_prompt_findings   Boolean @default(false)
+  intake_prompt_mileage_vin Boolean @default(false)
+  intake_prompt_walkaround Boolean @default(false)
+  intake_prompt_diag_scan  Boolean @default(false)
 }
 
 model SiteFeature {
@@ -1780,6 +1792,18 @@ model JobCard {
   @@index([duplicated_from_id])
   due_items_found    VehicleDueItem[] @relation("DueItemFoundOn")
   due_items_closed   VehicleDueItem[] @relation("DueItemClosedBy")
+
+  /// ── "CHECKED, NOTHING FOUND" ──────────────────────────────────────────────────────────────────
+  /// The affirmative that keeps the escalation honest. Absence of findings is NOT absence of
+  /// looking: without this, a car that genuinely needs nothing can never satisfy the findings
+  /// prompt, so a mechanic who did the job properly is forced to skip — and the admin gets a false
+  /// escalation. Enough of those and the email is ignored, which kills the whole escalation design.
+  ///
+  /// CLEARED when a due item is recorded on this card: the current state is then "findings exist",
+  /// and a stale affirmative alongside real findings would say two things at once. The audit log
+  /// keeps the history of both.
+  intake_nothing_found_at DateTime?
+  intake_nothing_found_by String?
 }
 
 model JobCardPhoto {

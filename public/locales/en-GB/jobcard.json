@@ -441,5 +441,29 @@
     "saveError": "Could not record that.",
     "motExpiry": "MOT expires {{date}}",
     "motSource": "— from DVSA, no need to record it"
+  },
+  "intake": {
+    "title": "Before the car goes in",
+    "progress": "{{done}} of {{total}} done",
+    "item": {
+      "findings": "Check what the car needs",
+      "mileage_vin": "Record mileage and VIN",
+      "walkaround": "Walkaround video",
+      "diag_scan": "Diagnostic scan"
+    },
+    "nothingFound": "Nothing found",
+    "recordFinding": "Record a finding",
+    "undoNothingFound": "undo “nothing found”",
+    "skip": "Skip",
+    "skipConfirm": "Skip this",
+    "cancel": "Cancel",
+    "skippedWithReason": "skipped — {{reason}}",
+    "skippedNoReason": "skipped, no reason given",
+    "reasonPlaceholder": "Optional — why was it skipped?",
+    "reason": {
+      "equipment_fault": "Equipment fault",
+      "customer_waiting": "Customer waiting"
+    },
+    "footnote": "Nothing here blocks the job. Anything left undone is emailed to the manager."
   }
 }

@@ -9,6 +9,7 @@
  * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
+import { intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
 import { openDueItemsForVehicle } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
@@ -63,6 +64,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     where: { id: cardId, site_id: { in: vis.siteIds } },
     include: {
       customer: { select: { name: true, phone: true, email: true } },
+      // The intake affirmative ("checked, nothing found") — one half of the findings done-state.
+      site: { select: { intake_prompt_findings: true, intake_prompt_mileage_vin: true, intake_prompt_walkaround: true, intake_prompt_diag_scan: true } },
       vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
       items: { orderBy: { created_at: 'asc' } },
       // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
@@ -129,7 +132,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -150,6 +153,21 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         : { count: 0, dates: [] };
       return { edgeOwnerId: ownerId, ownerRow: or, ownerNoShows: hist };
     })(),
+    // INTAKE ARTEFACTS — what the four prompts derive their done-states FROM. Counted, not fetched:
+    // the states need to know whether a video and a scan photo exist, never their contents.
+    (async () => {
+      const [video, scan, onCard] = await Promise.all([
+        prisma.jobCardPhoto.count({ where: { job_card_id: cardId, stage: 'intake', media_type: 'video' } }),
+        prisma.jobCardPhoto.count({ where: { job_card_id: cardId, stage: 'intake', slot: DIAG_SCAN_SLOT } }),
+        prisma.vehicleDueItem.count({ where: { group_id: groupId, found_on_job_card_id: cardId } }),
+      ]);
+      return { hasIntakeVideo: video > 0, hasDiagScanPhoto: scan > 0, dueItemCount: onCard };
+    })(),
+    // The most recent skip per item, from the audit log — a skip is an event, never a column.
+    prisma.auditLog.findMany({
+      where: { group_id: groupId, entity_id: cardId, action: 'intake.item_skipped' },
+      orderBy: { created_at: 'desc' }, select: { diff_json: true },
+    }) as Promise<Array<{ diff_json: unknown }>>,
     // OPEN DUE ITEMS for THIS CAR — what it still needs, found on this visit or any earlier one.
     // Keyed to the vehicle, so a finding from last March surfaces on today's card (lib/due-items).
     openDueItemsForVehicle(prisma, groupId, row.vehicle?.id as string | undefined),
@@ -327,6 +345,26 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     injob: !!row.stage_injob_done, complete: !!row.stage_complete_done,
   };
   const skipped = { intake: !!row.stage_intake_skipped, injob: !!row.stage_injob_skipped, complete: !!row.stage_complete_skipped };
+  // THE FOUR PROMPTS, derived. Switches read at RENDER from the site, so flipping one mid-job takes
+  // effect on the next load rather than being stamped onto the card.
+  const skipsByItem: Partial<Record<string, { reason: string | null }>> = {};
+  for (const r of skipRows) {
+    const d = (r.diff_json ?? {}) as { item?: string; reason?: string | null };
+    if (d.item && !(d.item in skipsByItem)) skipsByItem[d.item] = { reason: d.reason ?? null };
+  }
+  const intakeItems = intakeItemStates(
+    {
+      dueItemCount: intakeFacts.dueItemCount,
+      nothingFoundAt: (row as { intake_nothing_found_at?: Date | null }).intake_nothing_found_at ?? null,
+      odometerIn: row.odometer_in ?? null,
+      vin: row.vehicle?.vin ?? null,
+      hasIntakeVideo: intakeFacts.hasIntakeVideo,
+      hasDiagScanPhoto: intakeFacts.hasDiagScanPhoto,
+    },
+    (row.site ?? {}) as Record<string, boolean>,
+    skipsByItem as never,
+  );
+
   const tabsState = computeTabs({
     status: row.status as JobStatus,
     stages,
@@ -390,6 +428,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // What this CAR still needs — open findings from this visit or any earlier one. The upsell
     // list, in front of whoever has the car today.
     dueItems,
+    // The four intake prompts, already resolved to prompted/done/skipped server-side.
+    intakeItems,
+    nothingFoundAt: ((row as { intake_nothing_found_at?: Date | null }).intake_nothing_found_at ?? null)?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     status: row.status,
     jobCardId: row.id,

@@ -19,6 +19,7 @@ import { diaryReturnHref } from '@/lib/diary-return';
 import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import DueItems, { type DueItemView } from '@/components/jobcard/DueItems';
+import IntakeChecklist, { type IntakeItemView } from '@/components/jobcard/IntakeChecklist';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -76,6 +77,9 @@ type Props = {
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   /** Open findings on THIS CAR — from this visit or any earlier one (lib/due-items). */
   dueItems?: DueItemView[];
+  /** The four intake prompts, resolved server-side (lib/intake-items). */
+  intakeItems?: IntakeItemView[];
+  nothingFoundAt?: string | null;
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
     noShowDates?: string[] };
@@ -143,6 +147,8 @@ export default function JobCardWorkspace(p: Props) {
   // logic (validation/guards/audit/money) is byte-identical — this is client data flow only.
   type Overlay = {
     status?: JobStatus;
+    intakeItems?: IntakeItemView[];
+    nothingFoundAt?: string | null;
     stages?: Record<StageKey, boolean>;
     skipped?: { intake: boolean; injob: boolean; complete: boolean };
     isComeback?: boolean;
@@ -156,6 +162,10 @@ export default function JobCardWorkspace(p: Props) {
   const [ov, setOv] = useState<Overlay>({});
   const eff = {
     status: ov.status ?? p.status,
+    // The four intake prompts follow the same overlay path as the stage flags: they are card state,
+    // they change from this screen, and /api/jobcard-pane already returns them resolved.
+    intakeItems: ov.intakeItems ?? p.intakeItems ?? [],
+    nothingFoundAt: ov.nothingFoundAt !== undefined ? ov.nothingFoundAt : (p.nothingFoundAt ?? null),
     stages: ov.stages ?? p.stages,
     skipped: ov.skipped ?? p.skipped,
     isComeback: ov.isComeback ?? p.isComeback,
@@ -183,6 +193,7 @@ export default function JobCardWorkspace(p: Props) {
         status: d.status, stages: d.stages, skipped: d.skipped, isComeback: d.isComeback,
         invoice: d.invoice, events: d.events, booking: d.booking, tabsState: d.tabsState,
         vehicle: d.vehicle, owner: d.owner,
+        intakeItems: d.intakeItems, nothingFoundAt: d.nothingFoundAt ?? null,
       });
     } catch { /* quiet */ }
   }
@@ -867,6 +878,9 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
+        <IntakeChecklist jobCardId={p.jobCardId} items={eff.intakeItems}
+          canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
+          onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
         <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>

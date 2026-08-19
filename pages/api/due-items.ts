@@ -120,6 +120,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       select: { id: true },
     });
+    // A FINDING CONTRADICTS "nothing found". Cleared here rather than left to disagree: the current
+    // state is "findings exist", and a card asserting both at once says two things. The audit log
+    // keeps the history of both events.
+    await tx.jobCard.update({ where: { id: card.id }, data: { intake_nothing_found_at: null, intake_nothing_found_by: null } });
     await writeAudit(tx, {
       groupId, userId: user.id as string, jobCardId: card.id,
       action: 'due_item.found',

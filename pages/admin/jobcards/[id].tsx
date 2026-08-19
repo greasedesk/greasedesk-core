@@ -24,6 +24,7 @@ import { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/compo
 import { PromoLite } from '@/lib/promo';
 import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import { type DueItemView } from '@/components/jobcard/DueItems';
+import { type IntakeItemView } from '@/components/jobcard/IntakeChecklist';
 import { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
@@ -35,6 +36,9 @@ import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/veh
 type PageProps = {
   /** Open findings on this CAR, server-rendered so the panel is right on first paint. */
   dueItems?: DueItemView[];
+  /** The four intake prompts, resolved server-side. */
+  intakeItems?: IntakeItemView[];
+  nothingFoundAt?: string | null;
   // READ-ONLY message history for this card's (customer, vehicle) thread.
   conversation: import('@/components/messages/ConversationView').ConversationMessage[];
   threadId: string | null;
@@ -158,6 +162,8 @@ export default function JobCardDetailPage(props: PageProps) {
         isAdmin={props.isAdmin}
         owner={props.owner}
         dueItems={props.dueItems}
+        intakeItems={props.intakeItems}
+        nothingFoundAt={props.nothingFoundAt}
         conversation={props.conversation}
         threadId={props.threadId}
         messagesUnread={props.messagesUnread}

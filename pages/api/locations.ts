@@ -11,6 +11,7 @@
  * Creating/removing a Location should adjust the Group's billing when the billing module exists.
  * The hooks are marked with TODO(billing) below. No billing is implemented here.
  */
+import { INTAKE_ITEMS, INTAKE_SWITCH, type IntakeItem } from '@/lib/intake-items';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
@@ -47,7 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sites = await prisma.site.findMany({
       where: { group_id: groupId, id: { in: vis.activeSiteIds } },
       orderBy: { site_name: 'asc' },
-      select: { id: true, site_name: true, address: true, phone: true, whatsapp: true },
+      select: { id: true, site_name: true, address: true, phone: true, whatsapp: true,
+        intake_prompt_findings: true, intake_prompt_mileage_vin: true, intake_prompt_walkaround: true, intake_prompt_diag_scan: true },
     });
     // primarySiteId drives the nav's default-location highlight when no ?site is set.
     // canViewInvoices gates the Invoices nav item (the page + API re-check server-side).
@@ -86,9 +88,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') {
     // Editing a location (a billable unit) is admin/owner-only — site managers manage resources, not locations.
     if (!vis.isAdmin) return res.status(403).json({ message: 'Only an admin can edit a location.' });
-    const { id, site_name, address, is_active, phone, whatsapp, timezone, state_code } = (req.body || {}) as {
+    const { id, site_name, address, is_active, phone, whatsapp, timezone, state_code, intakePrompts } = (req.body || {}) as {
       id?: string; site_name?: string; address?: string; is_active?: boolean; phone?: string; whatsapp?: string;
       timezone?: string; state_code?: string | null;
+      /** The four intake prompts (lib/intake-items). Partial — only the named ones move. */
+      intakePrompts?: Partial<Record<IntakeItem, boolean>>;
     };
     if (!id) return res.status(400).json({ message: 'Missing id.' });
     if (!(await visibleSite(id))) return res.status(404).json({ message: 'Location not found.' });
@@ -124,6 +128,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // WhatsApp is stored as E.164 DIGITS so wa.me links are correct by construction — a UK-local
     // number is converted here, at the write, rather than at every render (lib/contact-routes).
     if (whatsapp !== undefined) data.whatsapp = whatsapp.trim() ? toE164Digits(whatsapp, profPatch.dialCode) : null;
+
+    // INTAKE PROMPTS — per site, and through the switch map so a new item cannot be wired to the
+    // wrong column. Booleans only: `undefined` leaves a switch alone, which is what makes a partial
+    // update safe.
+    if (intakePrompts) {
+      for (const item of INTAKE_ITEMS) {
+        const v = intakePrompts[item];
+        if (typeof v === 'boolean') data[INTAKE_SWITCH[item]] = v;
+      }
+    }
 
     await prisma.site.update({ where: { id }, data });
     return res.status(200).json({ message: 'Location updated.' });
