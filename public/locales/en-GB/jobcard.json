@@ -174,7 +174,7 @@
     "details": "Customer Details",
     "messages": "Messages",
     "quote": "Quote",
-    "intake": "Intake Photos",
+    "intake": "Intake",
     "injob": "In-Job Photos",
     "completion": "Completion Photos",
     "invoice": "Invoice",
@@ -443,7 +443,10 @@
     "motExpiry": "MOT expires {{date}}",
     "motSource": "— from DVSA, no need to record it",
     "closurePrompt": "This has been invoiced — mark it done?",
-    "closureConfirm": "Mark done"
+    "closureConfirm": "Mark done",
+    "stripTitle": "What this car also needs",
+    "stripWanted": "wants a price",
+    "stripHint": "Recorded at the car, on the Intake tab."
   },
   "intake": {
     "title": "Before the car goes in",

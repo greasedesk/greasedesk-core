@@ -166,13 +166,24 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }
                   data-testid={`tyre-${key}-uneven`} className="text-xs text-accent underline">
                   {c.uneven ? 'Same across the tyre' : 'Worn unevenly'}
                 </button>
-                {/* THE TYPE, pre-filled from this car's last reading — usually a confirmation, not
-                    an entry. Tucked to the right so it does not compete with the depth chips. */}
-                <select value={c.type} disabled={!canEdit || busy} onChange={(e) => set(key, { type: e.target.value as TyreType })}
-                  data-testid={`tyre-${key}-type`}
-                  className="ml-auto text-xs bg-surface border border-line rounded-lg px-2 py-1.5 text-ink">
-                  {TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                </select>
+              </div>
+
+              {/* ── TYPE: FOUR VISIBLE OPTIONS, ONE TAP ──────────────────────────────────────────
+                  This was a <select>, which on a phone is tap-scroll-tap and a native wheel that
+                  covers the screen — three interactions and a lost sense of place, for a field that
+                  is usually already correct. Four chips are one tap and, more often, zero: the
+                  value is pre-filled from this car's last reading, so the row reads as a
+                  confirmation. Same reasoning as the depth chips, and it matters more here because
+                  the select was the only non-chip control left in the form. */}
+              <div className="flex flex-wrap gap-1.5 mt-2" role="radiogroup" aria-label={`${label} tyre type`}>
+                {TYPES.map((ty) => (
+                  <button key={ty.key} type="button" role="radio" aria-checked={c.type === ty.key}
+                    disabled={!canEdit || busy} onClick={() => set(key, { type: ty.key })}
+                    data-testid={`tyre-${key}-type-${ty.key}`}
+                    className={`min-h-[36px] text-xs font-medium rounded-lg border px-2.5 ${c.type === ty.key ? 'bg-ink text-white border-ink' : 'bg-surface border-line text-muted'}`}>
+                    {ty.label}
+                  </button>
+                ))}
               </div>
             </div>
           );

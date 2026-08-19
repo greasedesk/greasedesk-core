@@ -101,14 +101,32 @@ check('the description field is still freeform — blocking the string would be 
   /maxLength=\{500\}/.test(ui2) && !/MOT/i.test(ui2.split('data-testid="due-item-desc"')[0].split('placeholder')[1] ?? ''),
   'the fix is removing the motive, not policing the input');
 
-// ── 3d. THE PANEL SITS WITH THE ESTIMATE ───────────────────────────────────────────────────────
-console.log('\n— findings inform the quote, so they live beside it —');
+// ── 3d. CAPTURE WHERE THE CAR IS, INFORMATION WHERE THE PRICING IS ─────────────────────────────
+// SUPERSEDES the first arrangement, which put the capture panel on Quote. That did not work in
+// practice: a mechanic recording findings had to scroll past quote actions, booking and send, and
+// an estimator had a form in the way. Two activities, two people, two moments — so the FORM went
+// to Intake (where the car is) and a READ-ONLY STRIP stays beside the estimate builder.
+console.log('\n— the form at the car, the information at the desk —');
 const ws = readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8');
-const quotePane = ws.slice(ws.indexOf("active === 'quote' ?"), ws.indexOf("active === 'quote' ?") + 900);
-check('DueItems renders in the QUOTE pane', /<DueItems/.test(quotePane));
-const intakePane = ws.slice(ws.indexOf("{active === 'intake' &&"), ws.indexOf("{active === 'intake' &&") + 700);
-check('  …and NOT in the intake pane — moved, not duplicated', !/<DueItems/.test(intakePane),
-  'two copies of one list is two things to keep in step');
+const quoteAt = ws.indexOf("active === 'quote' ?");
+const intakeAt = ws.indexOf("{active === 'intake' &&");
+const quotePane = ws.slice(quoteAt, quoteAt + 900);
+const intakePane = ws.slice(intakeAt, intakeAt + 1800);
+check('the CAPTURE panel renders on INTAKE', /<DueItems/.test(intakePane));
+check('  …and not on Quote — one form, one home', !/<DueItems\s/.test(quotePane),
+  'the form in the estimator\'s way is what made the first arrangement fail');
+check('the READ-ONLY strip renders on Quote', /<DueItemsStrip/.test(quotePane),
+  'the estimator needs the information, not the form');
+check('  …and the strip is genuinely read-only', !/onChange|button/.test(readFileSync('components/jobcard/DueItemsStrip.tsx', 'utf8')),
+  'a finding is captured where the car is');
+// ORDER on the intake tab: findings, then tyres, then the photos that evidence them, then send.
+const pos = (needle) => intakePane.indexOf(needle);
+check('intake order is findings → tyres → photos → send',
+  pos('<DueItems') < pos('<TyreCapture') && pos('<TyreCapture') < pos('<PhotoStage') && pos('<PhotoStage') < pos('<SendIntakeReport'),
+  'the report carries the photos, so it goes out after them');
+const i18nJc = JSON.parse(readFileSync('public/locales/en-GB/jobcard.json', 'utf8'));
+check('the tab is called "Intake", not "Intake Photos"', i18nJc.tab.intake === 'Intake',
+  'photos are one part of it — findings, tyres and mileage/VIN live there too');
 
 // ── 3e. THE PRINTED BLOCK, AND ITS FREEZE ──────────────────────────────────────────────────────
 console.log('\n— the block a customer keeps —');
