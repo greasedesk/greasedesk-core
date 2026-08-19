@@ -98,6 +98,48 @@ const parseMotDate = (v: any): string | undefined => {
 /** Exported for the gate: the parse is the difference between a rate and no rate. */
 export const __parseMotDateForTest = parseMotDate;
 
+/**
+ * WHICH MOT FIELDS TO WRITE BACK, given what we hold and what DVSA just said.
+ *
+ * ── REFRESH, DO NOT MERELY FILL ─────────────────────────────────────────────────────────────────
+ * The first backfill wrote the expiry only when the column was empty (`&& !v.mot_expiry`). That is
+ * the right instinct for filling holes and the wrong one for a field DVSA is authoritative for: we
+ * do not hold a better MOT expiry than DVSA does, so there is nothing to protect. The consequence,
+ * measured 19 Aug 2026 on TMBS: the sweep looked up all 221 cars, filled 67 blanks, and refreshed
+ * NOTHING — so every date on the marketing page was as old as the last time we happened to see the
+ * car. SH64HWW showed 22 July 2026, a month in the past, having been looked up that same evening.
+ *
+ * ── AND ABSENCE NEVER OVERWRITES ────────────────────────────────────────────────────────────────
+ * A DVSA response with no expiry is far more likely a lookup miss, a car with no test history yet,
+ * or a field we could not parse than a car that genuinely lost its MOT. Honest-null: we refuse to
+ * turn "we did not learn anything" into "there is nothing to know". An EARLIER expiry does
+ * overwrite — that is DVSA correcting us, which is the case this exists to serve.
+ *
+ * PURE, so both directions are provable without a network call, and shared because the per-row
+ * refresh button will be its second caller.
+ */
+export type MotFieldsNow = { mot_expiry: Date | null; last_mot_mileage: number | null; last_mot_date: Date | null };
+export type MotFieldWrite = Partial<MotFieldsNow>;
+
+export function motFieldsToWrite(current: MotFieldsNow, incoming: DvsaVehicle | null): MotFieldWrite {
+  const out: MotFieldWrite = {};
+  if (!incoming) return out; // no response at all — never a reason to erase anything
+  const day = (iso?: string) => (iso ? new Date(`${iso}T00:00:00.000Z`) : null);
+  const same = (a: Date | null, b: Date | null) => (a?.getTime() ?? null) === (b?.getTime() ?? null);
+
+  const expiry = day(incoming.motExpiry);
+  if (expiry && !same(expiry, current.mot_expiry)) out.mot_expiry = expiry;
+
+  // The two the rate depends on, held to the same rule. They were stale for the same reason.
+  if (incoming.lastMotMileage != null && incoming.lastMotMileage !== current.last_mot_mileage) {
+    out.last_mot_mileage = incoming.lastMotMileage;
+  }
+  const lastDate = day(incoming.lastMotDate);
+  if (lastDate && !same(lastDate, current.last_mot_date)) out.last_mot_date = lastDate;
+
+  return out;
+}
+
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   // Env presence — NAMES/booleans only, never values.

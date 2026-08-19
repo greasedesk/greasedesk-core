@@ -44,6 +44,7 @@ import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { dvsaLookup, dvsaConfigured } = await import('../lib/dvsa.ts');
 const { recordOdometerReadings, mileageRate } = await import('../lib/odometer.ts');
+const { motFieldsToWrite } = await import('../lib/dvsa.ts');
 const prisma = new PrismaClient();
 
 const args = process.argv.slice(2);
@@ -67,7 +68,7 @@ if (!group) { console.error(`\n  No group ${GROUP}.\n`); process.exit(2); }
 
 const vehicles = await prisma.vehicle.findMany({
   where: { group_id: GROUP },
-  select: { id: true, registration: true, mot_expiry: true, last_mot_mileage: true },
+  select: { id: true, registration: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true },
   orderBy: { created_at: 'asc' },
   ...(LIMIT ? { take: LIMIT } : {}),
 });
@@ -79,6 +80,8 @@ const perCar = [];
 let rateAfter = 0;
 const rateRefused = {};
 const anomalies = [];
+const corrected = [];
+const now = new Date();
 // What each car ALREADY has, so the projection is "after the sweep", not "from DVSA alone".
 const existingReadings = new Map();
 for (const v of vehicles) {
@@ -103,18 +106,25 @@ for (const v of vehicles) {
     continue;
   }
 
-  if (data.motExpiry && !v.mot_expiry) {
-    gotExpiry += 1;
-    if (WRITE) {
-      await prisma.vehicle.update({
-        where: { id: v.id },
-        data: {
-          mot_expiry: new Date(`${data.motExpiry}T00:00:00.000Z`),
-          ...(data.lastMotMileage != null ? { last_mot_mileage: data.lastMotMileage } : {}),
-          ...(data.lastMotDate ? { last_mot_date: new Date(`${data.lastMotDate}T00:00:00.000Z`) } : {}),
-        },
+  // REFRESH, NOT FILL — see lib/dvsa::motFieldsToWrite. Counted separately, because "gained a date
+  // we never had" and "corrected a date that had gone stale" are different facts about the fleet.
+  const write = motFieldsToWrite(
+    { mot_expiry: v.mot_expiry ?? null, last_mot_mileage: v.last_mot_mileage ?? null, last_mot_date: v.last_mot_date ?? null },
+    data,
+  );
+  if (write.mot_expiry) {
+    if (v.mot_expiry) {
+      corrected.push({
+        reg: v.registration,
+        from: v.mot_expiry.toISOString().slice(0, 10),
+        to: write.mot_expiry.toISOString().slice(0, 10),
+        wasExpired: v.mot_expiry < now,
+        stillExpired: write.mot_expiry < now,
       });
-    }
+    } else gotExpiry += 1;
+  }
+  if (Object.keys(write).length && WRITE) {
+    await prisma.vehicle.update({ where: { id: v.id }, data: write });
   }
   // PER-CAR, because a mean hides the shape. A fleet of nines and a fleet of twos-and-fifteens
   // average the same and mean completely different things for a rate.
@@ -189,7 +199,14 @@ console.log(`  zero readings      ${counts.filter((n) => n === 0).length} found-
 console.log(`\n  looked up          ${looked}`);
 console.log(`  no DVSA record     ${missed}`);
 console.log(`  errors             ${errors}`);
-console.log(`  MOT dates to gain  ${gotExpiry}`);
+console.log(`  MOT dates to gain  ${gotExpiry}   (blank before)`);
+console.log(`  MOT dates to FIX   ${corrected.length}   (stale — the sweep used to skip these entirely)`);
+for (const c of corrected) {
+  const tag = c.wasExpired && !c.stillExpired ? 'was EXPIRED, now current'
+    : c.wasExpired && c.stillExpired ? 'still expired'
+    : 'moved';
+  console.log(`    ${c.reg.padEnd(9)} ${c.from} → ${c.to}   ${tag}`);
+}
 console.log(`  cars with history  ${gotReadings}`);
 console.log(`  readings to store  ${readingRows}  (${gotReadings ? (readingRows / gotReadings).toFixed(1) : 0} per car)`);
 console.log(`  mot readings       ${before} → ${after}`);

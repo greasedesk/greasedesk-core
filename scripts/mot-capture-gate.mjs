@@ -62,6 +62,48 @@ try {
     /2016\.07\.31/.test(prose(readFileSync('lib/dvsa.ts', 'utf8'))),
     'the reason for the replacement is otherwise invisible and somebody deletes it');
 
+  // ── 0a. REFRESH, DO NOT MERELY FILL ──────────────────────────────────────────────────────────
+  // The first sweep wrote an expiry only into an EMPTY column. It therefore looked up all 221 cars,
+  // filled 67 blanks and refreshed nothing — so every MOT date on the marketing page was as old as
+  // the last time we happened to see that car. SH64HWW read 22 July 2026, a month in the past,
+  // having been looked up that same evening.
+  console.log('\n— DVSA is authoritative for a date it issues —');
+  const DV = await import('../lib/dvsa.ts');
+  const D0 = (iso) => new Date(`${iso}T00:00:00.000Z`);
+  const held = { mot_expiry: D0('2026-07-22'), last_mot_mileage: 50000, last_mot_date: D0('2025-07-22') };
+
+  const renewed = DV.motFieldsToWrite(held, { motExpiry: '2027-07-25', lastMotMileage: 58000, lastMotDate: '2026-07-25' });
+  check('a NEWER expiry overwrites a stale one',
+    renewed.mot_expiry?.toISOString().slice(0, 10) === '2027-07-25', JSON.stringify(renewed.mot_expiry));
+  check('  …and so do the two fields the rate depends on',
+    renewed.last_mot_mileage === 58000 && renewed.last_mot_date?.toISOString().slice(0, 10) === '2026-07-25',
+    'they were stale for exactly the same reason');
+  check('an EARLIER expiry also overwrites — that is DVSA correcting us',
+    DV.motFieldsToWrite(held, { motExpiry: '2026-03-01' }).mot_expiry?.toISOString().slice(0, 10) === '2026-03-01',
+    'we do not hold a better MOT date than the body that issues them');
+  check('an unchanged expiry writes nothing',
+    Object.keys(DV.motFieldsToWrite(held, { motExpiry: '2026-07-22', lastMotMileage: 50000, lastMotDate: '2025-07-22' })).length === 0,
+    'no update, no audit noise, no pointless write');
+
+  console.log('\n— but an absence never erases —');
+  check('no response at all leaves everything alone',
+    Object.keys(DV.motFieldsToWrite(held, null)).length === 0);
+  check('a response with NO expiry leaves the one we hold',
+    DV.motFieldsToWrite(held, { make: 'MINI' }).mot_expiry === undefined,
+    'far more likely a lookup miss or a car with no test history than an MOT that vanished');
+  check('  …and leaves the mileage and date too',
+    Object.keys(DV.motFieldsToWrite(held, { make: 'MINI' })).length === 0,
+    'honest-null: "we learned nothing" must not become "there is nothing to know"');
+  check('a car we hold nothing for still gains what DVSA has',
+    DV.motFieldsToWrite({ mot_expiry: null, last_mot_mileage: null, last_mot_date: null }, { motExpiry: '2027-01-09' })
+      .mot_expiry?.toISOString().slice(0, 10) === '2027-01-09');
+  check('the sweep no longer guards on an empty column',
+    !/&& !v\.mot_expiry/.test(readFileSync('scripts/dvsa-backfill.mjs', 'utf8')),
+    'that guard is what made a lookup of all 221 cars refresh none of them');
+  check('  …and reports gained and corrected separately',
+    /MOT dates to FIX/.test(readFileSync('scripts/dvsa-backfill.mjs', 'utf8')),
+    '"never had one" and "had a stale one" are different facts about a fleet');
+
   // ── 0b. AN ENDPOINT THAT ARGUES WITH ITS NEIGHBOUR IS NOT A RATE ─────────────────────────────
   console.log('\n— only the ends set the rate, so only the ends can lie —');
   const O2 = await import('../lib/odometer.ts');
