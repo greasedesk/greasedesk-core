@@ -20,7 +20,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
-import { recordBatteryReading, CCA_STANDARDS, type CcaStandard } from '@/lib/battery';
+import { recordBatteryReading, CCA_STANDARDS, MIN_RATED_CCA, MAX_RATED_CCA, type CcaStandard } from '@/lib/battery';
 
 const pct = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 100;
 
@@ -54,8 +54,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // than a constraint violation.
   const ratedCca = b.ratedCca == null || b.ratedCca === ('' as never) ? null : Number(b.ratedCca);
   const ccaStandard = b.ccaStandard ? String(b.ccaStandard).toUpperCase() : null;
-  if (ratedCca != null && (!Number.isInteger(ratedCca) || ratedCca <= 0 || ratedCca > 3000)) {
-    return res.status(400).json({ message: 'Rated CCA must be a whole number between 1 and 3000.' });
+  if (ratedCca != null && (!Number.isInteger(ratedCca) || ratedCca < MIN_RATED_CCA || ratedCca > MAX_RATED_CCA)) {
+    // HELPS, DOES NOT SCOLD. The person reading this is standing at a car with a tester in one hand
+    // and a phone in the other, and the overwhelmingly likely cause is a digit dropped off the end.
+    // So: say what we got, say where to find the right number, and give a realistic range to aim
+    // at. No "invalid", no "must" — and it names the label on the battery rather than a rule.
+    return res.status(400).json({
+      message: `${ratedCca} CCA looks like a typo — most car batteries are between 400 and 800. The rating is printed on the battery label, next to the EN or SAE mark.`,
+    });
   }
   if (ccaStandard != null && !CCA_STANDARDS.includes(ccaStandard as CcaStandard)) {
     return res.status(400).json({ message: 'Unknown CCA standard.' });

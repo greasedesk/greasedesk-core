@@ -24,6 +24,22 @@ const nextConfig = {
       '/**': ['./public/locales/**'],
     },
   },
+  // lib/db is reachable from a page's import graph (pages/c/[token] → lib/magic-link → lib/db), so
+  // webpack tries to resolve its imports for the BROWSER bundle as well as the server one. The
+  // dev-only staleness guard in lib/client-freshness reads a file, and `fs` has no browser
+  // equivalent, so the client build failed to resolve it and every page 500'd.
+  //
+  // `false` means "resolve this to an empty module in the client bundle" — the standard answer, and
+  // safe here because nothing in that file is ever CALLED in a browser: clientIsStale runs only
+  // inside the Prisma query extension, which is server-side by construction. If a browser path ever
+  // does reach it, the failure is a clear "readFileSync is not a function", not a silent wrong
+  // answer — see the null-means-cannot-tell rule in lib/client-freshness.
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = { ...config.resolve.fallback, fs: false, path: false, crypto: false };
+    }
+    return config;
+  },
 };
 
 module.exports = nextConfig;

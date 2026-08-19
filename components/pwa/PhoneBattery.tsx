@@ -20,6 +20,7 @@
  */
 import React, { useState } from 'react';
 import { enqueueBattery } from '@/lib/pwa-outbox';
+import { MIN_RATED_CCA, MAX_RATED_CCA } from '@/lib/battery';
 
 const STANDARDS = ['EN', 'SAE', 'DIN', 'JIS', 'IEC'] as const;
 const num = (s: string) => (s.trim() === '' ? null : Number(s));
@@ -39,10 +40,16 @@ export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard,
 
   const v = num(voltage), sc = num(soc), sh = num(soh);
   const ok = (n: number | null, lo: number, hi: number) => n != null && Number.isFinite(n) && n >= lo && n <= hi;
+  // Shown only once something out-of-range has been typed — a hint after the fact, never a warning
+  // before anybody has done anything.
+  const ccaOdd = ratedCca.trim() !== '' && !ok(num(ratedCca), MIN_RATED_CCA, MAX_RATED_CCA);
   // All three or nothing — a test missing one number would silently change which state it lands in.
   // And the rating is both-or-neither: a rating without its standard is not comparable to another.
   const ready = ok(v, 0.1, 30) && ok(sc, 0, 100) && ok(sh, 0, 100)
-    && ((ratedCca.trim() === '' && std === '') || (num(ratedCca) != null && std !== ''));
+    // The floor is checked HERE too, so the Save button stays off rather than the mechanic tapping
+    // it and getting a sentence back. lib/battery owns the number; this just asks it.
+    && ((ratedCca.trim() === '' && std === '')
+      || (num(ratedCca) != null && std !== '' && (num(ratedCca) as number) >= MIN_RATED_CCA && (num(ratedCca) as number) <= MAX_RATED_CCA));
 
   async function save() {
     await enqueueBattery({
@@ -99,6 +106,9 @@ export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard,
         </div>
       </div>
 
+      {ccaOdd && (
+        <p className="text-xs text-warn mt-2" data-testid="phone-battery-cca-hint">Most car batteries are 400–800. It’s on the battery label, by the EN or SAE mark.</p>
+      )}
       {queued && <p className="text-sm text-ok mt-3" data-testid="phone-battery-queued">Saved. It’ll sync when you have signal.</p>}
       <button type="button" disabled={!ready} onClick={save} data-testid="phone-battery-save"
         className="mt-3 w-full min-h-[48px] text-sm font-semibold bg-accent text-white rounded-lg disabled:opacity-50">

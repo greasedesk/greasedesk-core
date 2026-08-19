@@ -24,6 +24,7 @@
  * being wrong, and repeating them only hides it.
  */
 import { PrismaClient } from '@prisma/client';
+import { clientIsStale, warnOnce, STALE_CLIENT_MESSAGE } from '@/lib/client-freshness';
 
 /** Never sent: the connection itself could not be obtained. Safe to repeat anything. */
 const NEVER_SENT = new Set(['P1001', 'P1002', 'P2024']);
@@ -48,6 +49,32 @@ function baseClient() {
   return new PrismaClient({
     // Optional: uncomment the line below to see your database queries in the terminal
     // log: ['query'],
+  });
+}
+
+/**
+ * REFUSE TO ANSWER FROM A CLIENT THIS PROCESS HAS OUTLIVED. See lib/client-freshness for the whole
+ * argument; the short version is that a stale in-memory client presents as a broken feature rather
+ * than as an error, and twice in one day that sent the investigation to the wrong subsystem.
+ *
+ * Wrapped around EVERY operation rather than checked in one route, because the symptom appears
+ * wherever the new model happens to be read — and the point is that you should never have to work
+ * out which read that was.
+ *
+ * Development only. In production the client is generated before the process starts, so the window
+ * cannot open and this would be a file read on the hot path guarding an impossible state.
+ */
+function withFreshnessGuard(client: PrismaClient) {
+  return client.$extends({
+    query: {
+      async $allOperations({ args, query }: any) {
+        if (clientIsStale()) {
+          warnOnce();
+          throw new Error(STALE_CLIENT_MESSAGE);
+        }
+        return query(args);
+      },
+    },
   });
 }
 
@@ -87,8 +114,15 @@ function withTransientRetry(client: PrismaClient) {
  * The cast is doing real work and is worth the comment. Deleting it does not make the code safer,
  * it makes 200 errors appear and someone revert the whole thing.
  */
-export const prisma: ReturnType<typeof baseClient> = (globalForPrisma.prisma
-  ?? (process.env.DB_RETRY_TRANSIENT === '1' ? withTransientRetry(baseClient()) : baseClient())) as ReturnType<typeof baseClient>;
+function buildClient() {
+  const base = process.env.DB_RETRY_TRANSIENT === '1' ? withTransientRetry(baseClient()) : baseClient();
+  // OUTSIDE the retry, deliberately: a stale client is not transient and must not be retried six
+  // times with backoff before the human sees the message.
+  return process.env.NODE_ENV === 'production' ? base : withFreshnessGuard(base as PrismaClient);
+}
+
+export const prisma: ReturnType<typeof baseClient> =
+  (globalForPrisma.prisma ?? buildClient()) as ReturnType<typeof baseClient>;
 
 // REMOVED: export default prisma; <--- THIS WAS THE CONFLICTING LINE
 

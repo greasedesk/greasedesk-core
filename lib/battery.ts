@@ -41,6 +41,21 @@ export const SOH_TRUSTED_ABOVE_SOC = 60;
 /** Charge below which, on a HEALTHY battery, something other than the battery is wrong. */
 export const CHARGING_FAULT_BELOW_SOC = 50;
 
+/**
+ * THE FLOOR ON A RATED CCA, and why it is not zero.
+ *
+ * The first real user of this form typed 9. It saved: the original bounds were 1–3000, so a rating
+ * no car battery has went in silently, and the health percentage was computed against it. Eight per
+ * cent of nine is arithmetically fine and physically meaningless.
+ *
+ * 100 is comfortably below the smallest thing a garage will meet — a small motorcycle battery is
+ * around 100–200 CCA and a city car starts near 300 — so this refuses typos without refusing
+ * anybody's actual work. It is a bound on the DENOMINATOR specifically, because that is the number
+ * everything else is measured against and the only one that cannot be sanity-checked by eye.
+ */
+export const MIN_RATED_CCA = 100;
+export const MAX_RATED_CCA = 3000;
+
 export type CcaStandard = 'EN' | 'SAE' | 'DIN' | 'JIS' | 'IEC';
 export const CCA_STANDARDS: CcaStandard[] = ['EN', 'SAE', 'DIN', 'JIS', 'IEC'];
 

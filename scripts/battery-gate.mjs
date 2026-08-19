@@ -11,6 +11,7 @@ import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
+const { readFileSync } = await import('node:fs');
 const D = await import('../lib/due-items.ts');
 const prisma = new PrismaClient();
 
@@ -200,6 +201,15 @@ try {
   } catch { refused = true; }
   check('a rating without its standard is refused by the DATABASE, not just the form', refused,
     'EN, SAE and DIN rate the same battery differently — the pair is the unit of meaning');
+  // ── 9a. THE FLOOR ON THE DENOMINATOR ─────────────────────────────────────────────────────────
+  // From the first real user of this form, who typed 9. It saved — the bounds were 1–3000 — so a
+  // rating no car battery has went in silently and the health figure was measured against it.
+  console.log('\n— a rating no car battery has —');
+  check('the floor is well below the smallest real battery', B.MIN_RATED_CCA === 100,
+    'a small motorcycle battery is 100–200 CCA and a city car starts near 300, so this refuses typos and nobody’s work');
+  check('  …and the reason it exists is recorded against the number',
+    /The first real user of this form typed 9/.test(readFileSync('lib/battery.ts', 'utf8').replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ')),
+    'a bound with no story attached is the kind somebody loosens');
   // ── 9b. ON THE SERVED DESKTOP PAGE ───────────────────────────────────────────────────────────
   // The phone form is proven in scripts/phone-capture-timing and the customer report below. This is
   // the third surface, and it was flagged unproven twice before being closed — the pure rules can
@@ -229,6 +239,13 @@ try {
   check('the battery form renders on the served Intake tab', true);
 
   // ALL THREE OR NOTHING, on the page rather than in the predicate.
+  //
+  // ── EVERY STEP STARTS FROM A KNOWN STATE ────────────────────────────────────────────────────
+  // The first draft toggled the EN radio off and on to reuse one page load, and the standard is a
+  // toggle, so the assertions became order-dependent and reported the opposite of the truth. The
+  // typo case now gets its own reload instead, and the API probe runs LAST — it writes a reading,
+  // and a written reading PREFILLS the rating on the next load, which would quietly satisfy the
+  // very rule the pair test is trying to break.
   check('Save is refused before anything is entered', await dPage.locator('[data-testid="battery-save"]').isDisabled());
   await dPage.fill('[data-testid="battery-voltage"]', '11.98');
   await dPage.fill('[data-testid="battery-soc"]', '0');
@@ -236,8 +253,11 @@ try {
     await dPage.locator('[data-testid="battery-save"]').isDisabled(),
     'a test missing one number would silently change which state it lands in');
   await dPage.fill('[data-testid="battery-soh"]', '17');
+  check('  …and allowed on three, because the rating is optional',
+    await dPage.locator('[data-testid="battery-save"]').isEnabled(),
+    'honest-null: an unrecorded rating is a known gap, not a blocked form');
 
-  // BOTH OR NEITHER, on the page: a rating without its standard must not be sendable.
+  // BOTH OR NEITHER, from a clean field.
   await dPage.fill('[data-testid="battery-rated-cca"]', '700');
   check('a rating without its standard is refused before the request',
     await dPage.locator('[data-testid="battery-save"]').isDisabled(),
@@ -260,6 +280,49 @@ try {
   check('  …raising the RETEST advisory, not a replacement',
     deskItem?.observation_key === 'battery' && !/replace/i.test(deskItem?.description ?? 'replace'),
     deskItem?.description ?? 'no advisory');
+
+  // THE TYPO, ON ITS OWN PAGE LOAD. The button stays off and a hint appears in the field's own
+  // place, so nobody has to submit to find out — an error after a tap teaches worse than a line of
+  // text before one.
+  await dPage.goto(`${BASE}/admin/jobcards/${dCard.id}`, { waitUntil: 'domcontentloaded' });
+  await dPage.getByRole('button', { name: 'Intake', exact: false }).first().click();
+  await dPage.waitForSelector('[data-testid="battery-capture"]', { timeout: 25000 });
+  await dPage.fill('[data-testid="battery-voltage"]', '12.5');
+  await dPage.fill('[data-testid="battery-soc"]', '90');
+  await dPage.fill('[data-testid="battery-soh"]', '80');
+  await dPage.fill('[data-testid="battery-rated-cca"]', '9');
+  check('a 9 CCA rating keeps Save switched off', await dPage.locator('[data-testid="battery-save"]').isDisabled(),
+    'even though the rating was prefilled correctly a moment ago — typing over it must not slip through');
+  check('  …with the hint in the field’s own place, not an error banner',
+    /400–800/.test(await dPage.locator('[data-testid="battery-cca-hint"]').innerText()),
+    await dPage.locator('[data-testid="battery-cca-hint"]').innerText());
+
+  // THE MESSAGE ITSELF, through an AUTHENTICATED request. The first draft posted anonymously and
+  // got 401 — the handler checks the session before the body, which is right (validation behaviour
+  // is not something to hand an anonymous caller) and meant the assertion never reached the rule
+  // it named. Posted from the logged-in page so the cookies are real.
+  const post = (body) => dPage.evaluate(async (b) => {
+    const r = await fetch('/api/battery-readings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(b),
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, body);
+
+  const bad = await post({ jobCardId: dCard.id, voltage: 12.5, socPct: 90, sohPct: 80, ratedCca: 9, ccaStandard: 'EN' });
+  check('9 CCA is refused', bad.status === 400, `${bad.status}: ${bad.body?.message ?? ''}`);
+  check('  …and the message HELPS rather than scolds', (() => {
+    const m = String(bad.body?.message ?? '');
+    return /looks like a typo/.test(m)          // names the likely cause, not the user's error
+      && /400 and 800/.test(m)                  // gives a number to aim at
+      && /battery label/.test(m)                // says where to find it
+      && !/invalid|must be|error/i.test(m);     // and none of the words that read as a telling-off
+  })(), bad.body?.message);
+  check('  …and it repeats back what was actually typed', /^9 CCA/.test(String(bad.body?.message ?? '')),
+    'a dropped digit is the likely cause, so showing the number is how someone sees it');
+  const okCca = await post({ jobCardId: dCard.id, voltage: 12.5, socPct: 90, sohPct: 80, ratedCca: 720, ccaStandard: 'EN' });
+  check('a real rating goes straight through', okCca.status === 200, `${okCca.status}: ${okCca.body?.message ?? ''}`);
+  // That last one wrote a reading; the form assertions below overwrite it on the same card (one
+  // test per visit), so the card is left in the state the page put it in, not the probe.
 
   // ── 10. ON THE SERVED CUSTOMER REPORT ────────────────────────────────────────────────────────
   // The screen a prospect looks at during a demo. Asserted on the PAGE, not on buildIntakeReport's

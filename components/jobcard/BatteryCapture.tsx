@@ -17,7 +17,7 @@
  */
 import React, { useRef, useState } from 'react';
 import { resizeImage } from '@/lib/image-resize';
-import { CCA_STANDARDS, BATTERY_SLOTS, BATTERY_SLOT_LABEL, type BatterySlot, type CcaStandard } from '@/lib/battery';
+import { CCA_STANDARDS, MIN_RATED_CCA, MAX_RATED_CCA, BATTERY_SLOTS, BATTERY_SLOT_LABEL, type BatterySlot, type CcaStandard } from '@/lib/battery';
 
 type Props = {
   jobCardId: string;
@@ -47,11 +47,17 @@ export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastC
 
   const v = num(voltage), sc = num(soc), sh = num(soh);
   const inRange = (n: number | null, lo: number, hi: number) => n != null && Number.isFinite(n) && n >= lo && n <= hi;
+  // Shown only once something out-of-range has been typed — a hint after the fact, never a warning
+  // before anybody has done anything.
+  const ccaOdd = ratedCca.trim() !== '' && !inRange(num(ratedCca), MIN_RATED_CCA, MAX_RATED_CCA);
   // All three, or nothing. A test with two of the numbers is not a test — and a missing one would
   // silently change which state lib/battery lands in.
   const ready = inRange(v, 0.1, 30) && inRange(sc, 0, 100) && inRange(sh, 0, 100)
     // Both or neither: a rating without its standard is not comparable to another rating.
-    && ((ratedCca.trim() === '' && std === '') || (num(ratedCca) != null && std !== ''));
+    // The floor is checked HERE too, so the Save button stays off rather than the mechanic tapping
+    // it and getting a sentence back. lib/battery owns the number; this just asks it.
+    && ((ratedCca.trim() === '' && std === '')
+      || (num(ratedCca) != null && std !== '' && (num(ratedCca) as number) >= MIN_RATED_CCA && (num(ratedCca) as number) <= MAX_RATED_CCA));
 
   async function onPhoto(files: FileList | null) {
     const slot = shotFor.current; shotFor.current = null;
@@ -149,9 +155,10 @@ export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastC
           </div>
         </div>
       </div>
-      <p className="text-[11px] text-muted mt-1">
-        Health is measured against this rating, so it is worth getting right — and it can’t be added
-        afterwards. It’ll be remembered for next time.
+      <p className={`text-[11px] mt-1 ${ccaOdd ? 'text-warn' : 'text-muted'}`} data-testid="battery-cca-hint">
+        {ccaOdd
+          ? 'Most car batteries are 400–800. It’s on the battery label, by the EN or SAE mark.'
+          : 'Health is measured against this rating, so it is worth getting right — and it can’t be added afterwards. It’ll be remembered for next time.'}
       </p>
 
       {/* PROOF. One shared file input retargeted at whichever screen is being photographed. */}
