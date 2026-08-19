@@ -11,7 +11,7 @@
  * Creating/removing a Location should adjust the Group's billing when the billing module exists.
  * The hooks are marked with TODO(billing) below. No billing is implemented here.
  */
-import { INTAKE_ITEMS, INTAKE_SWITCH, INTAKE_PROMPT_SELECT, type IntakeItem } from '@/lib/intake-items';
+import { INTAKE_ITEMS, INTAKE_SWITCH, INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, type IntakeItem } from '@/lib/intake-items';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
@@ -136,6 +136,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const item of INTAKE_ITEMS) {
         const v = intakePrompts[item];
         if (typeof v === 'boolean') data[INTAKE_SWITCH[item]] = v;
+      }
+      // TURNING THEM ALL OFF IS AN ANSWER. The offer on the Intake tab must not come back for a
+      // garage that used prompts and stopped — that is the shape people learn to ignore. Recorded
+      // on the same flag as "No thanks" rather than inferred from a toggle history we do not keep
+      // (see shouldOfferIntakePrompts). Stamped only on the transition, so it never moves again.
+      const before = await prisma.site.findUnique({ where: { id }, select: { ...INTAKE_PROMPT_SELECT, intake_offer_dismissed_at: true } }) as Record<string, unknown> | null;
+      if (before) {
+        const after = { ...promptSwitches(before), ...Object.fromEntries(
+          INTAKE_ITEMS.filter((i) => typeof intakePrompts[i] === 'boolean').map((i) => [INTAKE_SWITCH[i], intakePrompts[i] as boolean]),
+        ) };
+        if (anyPromptEnabled(promptSwitches(before)) && !anyPromptEnabled(after) && before.intake_offer_dismissed_at == null) {
+          data.intake_offer_dismissed_at = new Date();
+          data.intake_offer_dismissed_by = user.id as string;
+        }
       }
     }
 

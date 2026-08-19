@@ -5,6 +5,7 @@
  *   POST { jobCardId, action: 'nothing_found' }                  → the affirmative
  *   POST { jobCardId, action: 'skip', item, reason? }            → an audited skip
  *   POST { jobCardId, action: 'oil_level', level }                → the dipstick reading
+ *   POST { jobCardId, action: 'dismiss_offer' }                   → "no thanks" to the offer
  *
  * OPERATIONAL authority: this is the person at the car.
  *
@@ -31,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = user.group_id as string;
 
   const { jobCardId, action, item, reason, level } = (req.body || {}) as
-    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found' | 'oil_level'; item?: IntakeItem; reason?: string; level?: string };
+    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found' | 'oil_level' | 'dismiss_offer'; item?: IntakeItem; reason?: string; level?: string };
   if (!jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
 
   const card = await prisma.jobCard.findFirst({
@@ -71,6 +72,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // log is for — and it must not outlive the gap, because doing the thing afterwards makes the item
   // done (lib/intake-items derives `skipped` against `done`). A column would have to be cleared by
   // every path that could satisfy the item, including the phone's upload API.
+  if (action === 'dismiss_offer') {
+    // A SITE FACT, never a browser one. A banner that reappears on the next device teaches people
+    // that dismissing things here does not work, and that lesson spreads to every other dismissal.
+    //
+    // IDEMPOTENT and never re-stamped: the first answer is the answer, and a later one would move a
+    // date that support may be reading to explain why somebody's banner went away.
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const site = await tx.site.findUnique({ where: { id: card.site_id }, select: { intake_offer_dismissed_at: true } });
+      if (site?.intake_offer_dismissed_at) return;
+      await tx.site.update({
+        where: { id: card.site_id },
+        data: { intake_offer_dismissed_at: new Date(), intake_offer_dismissed_by: user.id as string },
+      });
+      await writeAudit(tx, {
+        groupId, userId: user.id as string, jobCardId,
+        action: 'intake.offer_dismissed', diff: { siteId: card.site_id, via: 'no_thanks' },
+      });
+    });
+    return res.status(200).json({ ok: true });
+  }
+
   if (action === 'oil_level') {
     // FIVE READINGS, THREE OF WHICH ADVISE. The other two are recorded and say nothing — which is
     // the whole point: "checked, it's fine" is a record no absence can express.

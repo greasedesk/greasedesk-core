@@ -25,6 +25,7 @@ import SendIntakeReport from '@/components/jobcard/SendIntakeReport';
 import TyreCapture from '@/components/jobcard/TyreCapture';
 import BatteryCapture from '@/components/jobcard/BatteryCapture';
 import ObservationTaps from '@/components/jobcard/ObservationTaps';
+import IntakePromptsOffer from '@/components/jobcard/IntakePromptsOffer';
 import type { TyreCondition, BatteryCondition } from '@/lib/vehicle-condition';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
@@ -92,6 +93,7 @@ type Props = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  offerIntakePrompts?: boolean;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   batteryCondition?: BatteryCondition | null;
@@ -890,6 +892,11 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
+        {/* THE OFFER, above everything, and only when this site has never switched a prompt on and
+            never said no. One line, not a warning — see the component. */}
+        {p.offerIntakePrompts && (
+          <IntakePromptsOffer jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} onDismissed={refreshCard} />
+        )}
         {/* FINDINGS FIRST — it is the reason the mechanic is at the car, and the MOT read-only
             line rides with it so nobody retypes a DVSA fact. Then tyres, then the photos and video
             that evidence them. */}

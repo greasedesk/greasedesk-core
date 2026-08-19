@@ -1240,6 +1240,15 @@ model Site {
   /// The level is not stored here — see the migration. This switch only decides whether a mechanic
   /// is ASKED, like the four above it.
   intake_prompt_oil_level  Boolean @default(false)
+
+  /// "No thanks" to the offer on the Intake tab. A SITE FACT, deliberately, not a browser
+  /// dismissal: a prompt that comes back on the next device teaches people that dismissing things
+  /// here does not work, and that lesson spreads to every dismissal we ever ship.
+  ///
+  /// Never cleared. Enabling prompts and then disabling them all again is a NEW decision and the
+  /// offer stays gone — Settings is where that decision lives and can be revisited.
+  intake_offer_dismissed_at DateTime?
+  intake_offer_dismissed_by String?
 }
 
 model SiteFeature {

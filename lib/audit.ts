@@ -66,6 +66,10 @@ export type AuditAction =
   // The dipstick reading, whatever it was. A healthy level is a RECORD, not an absence — the same
   // argument as intake.nothing_found, and the reason the checklist item can be satisfied at all.
   | 'intake.oil_level'
+  // The offer on the Intake tab, answered. Two routes to the same answer: "No thanks", or turning
+  // off the last remaining prompt — both mean the garage has decided, and both are recorded so a
+  // support question about a vanished banner has an answer.
+  | 'intake.offer_dismissed'
   // MEASUREMENTS taken in the bay. Recorded as their own actions rather than folded into
   // due_item.found: the finding is a conclusion and these are the evidence it was drawn from, so
   // "what did the tester actually say" stays answerable after somebody edits the description.

@@ -10,7 +10,7 @@
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
 import { latestTyres, latestBattery } from '@/lib/vehicle-condition';
-import { INTAKE_PROMPT_SELECT, promptSwitches, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
+import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferIntakePrompts, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
@@ -68,7 +68,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // The intake affirmative ("checked, nothing found") — one half of the findings done-state.
       // DERIVED from INTAKE_SWITCH. Four literals here made oil_level unreachable: the column
       // was never loaded, so the switch read `undefined` and the item could never be prompted.
-      site: { select: INTAKE_PROMPT_SELECT },
+      site: { select: { ...INTAKE_PROMPT_SELECT, intake_offer_dismissed_at: true } },
       vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
       items: { orderBy: { created_at: 'asc' } },
       // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
@@ -494,6 +494,12 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastBattery,
     /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
     observationCounts,
+    /** Offer the intake prompts on this card? Two SITE facts (lib/intake-items), never a browser
+     *  dismissal — a banner that comes back teaches people dismissal does not work here. */
+    offerIntakePrompts: shouldOfferIntakePrompts({
+      anyPromptEnabled: anyPromptEnabled(promptSwitches(row.site as Record<string, unknown> | null)),
+      dismissedAt: ((row.site ?? {}) as { intake_offer_dismissed_at?: Date | null }).intake_offer_dismissed_at ?? null,
+    }),
     /** The oil level recorded on THIS card, so the chips show which one is selected. NULL = not
      *  checked. `between` is a recorded reading like any other, not an absence. */
     oilLevel: ((oilRow?.diff_json ?? {}) as { level?: string }).level ?? null,

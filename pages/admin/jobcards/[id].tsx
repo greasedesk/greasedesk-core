@@ -42,6 +42,7 @@ type PageProps = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  offerIntakePrompts?: boolean;
   oilLevel?: string | null;
   tyreCondition?: unknown[];
   batteryCondition?: unknown;
@@ -176,6 +177,7 @@ export default function JobCardDetailPage(props: PageProps) {
         lastTyreType={props.lastTyreType}
         lastBattery={props.lastBattery}
         observationCounts={props.observationCounts}
+        offerIntakePrompts={props.offerIntakePrompts}
         oilLevel={props.oilLevel}
         tyreCondition={props.tyreCondition as never}
         batteryCondition={props.batteryCondition as never}

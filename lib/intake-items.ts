@@ -84,6 +84,40 @@ export function promptSwitches(site: Record<string, unknown> | null | undefined)
   return out;
 }
 
+/**
+ * SHOULD THIS SITE BE OFFERED THE PROMPTS? Two site facts, neither about the browser.
+ *
+ * ── WHY IT IS OFFERED AT ALL ────────────────────────────────────────────────────────────────────
+ * Every prompt defaults OFF and the panel that switches them on lives in Settings → Locations.
+ * Measured 2026-08-19: five real tenants had all five off and always had, and the only tenant with
+ * any enabled was the demo. The feature was not undiscovered because it was hidden — it was
+ * undiscovered because nothing on the screen where a garage would want it ever mentioned it.
+ *
+ * ── TWO FACTS, AND WHY "EVER ENABLED" IS NOT A THIRD ────────────────────────────────────────────
+ * A garage with three of five on has made a choice; second-guessing it is the nag — so a currently
+ * enabled prompt hides the offer. A garage that turned them all off after having them on has also
+ * ANSWERED the question, and the offer must stay gone for them too.
+ *
+ * The obvious way to know that is a history of toggles, and there is none: pages/api/locations
+ * writes no audit for a prompt change and SiteConfigEvent is for effective-dated capacity, not
+ * this. Rather than add a history table to answer one question, the WRITER stamps
+ * `intake_offer_dismissed_at` when it switches off the last remaining prompt. Turning them all off
+ * IS the answer, so it is recorded as one — which collapses two facts into one flag that cannot
+ * disagree with itself, and needs no retroactive history we do not have.
+ *
+ * PURE, so both conditions are provable without a database.
+ */
+export function shouldOfferIntakePrompts(site: {
+  anyPromptEnabled: boolean;
+  dismissedAt: Date | null;
+}): boolean {
+  return !site.anyPromptEnabled && site.dismissedAt == null;
+}
+
+/** True when ANY prompt is currently on for this site. */
+export const anyPromptEnabled = (switches: Record<string, boolean>): boolean =>
+  INTAKE_ITEMS.some((i) => switches[INTAKE_SWITCH[i]] === true);
+
 /** The photo slot that satisfies the diagnostic-scan item — a photo of the scanner screen. */
 export const DIAG_SCAN_SLOT = 'diag_scan';
 
