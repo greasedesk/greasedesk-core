@@ -12,11 +12,21 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle' | 'video'; jobCardId: string;
+  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
-  payload?: { vin?: string; mileageIn?: number };                      // kind:'vehicle' — vehicle FACTS from the bay
+  payload?: {
+    vin?: string; mileageIn?: number;                                  // kind:'vehicle' — vehicle FACTS from the bay
+    // kind:'due_item' — a finding, keyed by the envelope's OWN id so a replay upserts (the server
+    // accepts it as the row id; see pages/api/due-items). A due item has no natural key, which is
+    // exactly why it needs this and the tyre kind below does not.
+    description?: string; dueBasis?: string; dueDate?: string; dueMileage?: number; customerResponse?: string;
+    // kind:'tyres' — four corners at once. NO id is passed and none is needed: TyreReading is
+    // unique on (job_card_id, corner), so a replayed envelope upserts the same rows by
+    // construction. Load-bearing, not tidiness.
+    corners?: Array<{ corner: string; type: string; depths: { outer: number; centre: number; inner: number } }>;
+  };
   durationSeconds?: number | null;                                     // kind:'video'
   // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
   // JS read path — arrayBuffer()/slice() — can fail on a disk-backed IDB Blob whose bytes are
@@ -99,6 +109,42 @@ export async function enqueuePoster(args: { jobCardId: string; stage: string; bl
     id: crypto.randomUUID(), kind: 'photo', jobCardId: args.jobCardId, label: args.label, stage: args.stage, slot: 'poster',
     posterFor: args.posterFor, blob: args.blob, contentType: 'image/jpeg', createdAt: Date.now(),
     attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
+  triggerDrain();
+  return item.id;
+}
+
+/** A FINDING from the bay — the id is minted HERE, at capture, and travels as the row id so a
+ *  replayed envelope upserts instead of duplicating. See pages/api/due-items for why this kind
+ *  needs an id and the tyre kind does not. */
+export async function enqueueDueItem(args: {
+  jobCardId: string; description: string; dueBasis: string; dueDate?: string; dueMileage?: number; customerResponse: string;
+}): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'due_item', jobCardId: args.jobCardId,
+    payload: {
+      description: args.description, dueBasis: args.dueBasis, customerResponse: args.customerResponse,
+      ...(args.dueDate ? { dueDate: args.dueDate } : {}),
+      ...(args.dueMileage != null ? { dueMileage: args.dueMileage } : {}),
+    },
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
+  triggerDrain();
+  return item.id;
+}
+
+/** FOUR TYRES at once — one envelope, because a mechanic measures a car, not a corner, and a
+ *  half-delivered set is a worse record than none. Replay-safe without an id: (card, corner) is a
+ *  natural key. */
+export async function enqueueTyres(args: {
+  jobCardId: string;
+  corners: Array<{ corner: string; type: string; depths: { outer: number; centre: number; inner: number } }>;
+}): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'tyres', jobCardId: args.jobCardId, payload: { corners: args.corners },
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item));
   triggerDrain();

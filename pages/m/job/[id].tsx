@@ -27,6 +27,10 @@ import InstallBar from '@/components/pwa/InstallBar';
 import WalkaroundRecorder, { canRecord } from '@/components/media/WalkaroundRecorder';
 import { posterFromVideoBlob } from '@/lib/video-poster';
 import MediaGallery from '@/components/media/MediaGallery';
+import PhoneFindings from '@/components/pwa/PhoneFindings';
+import PhoneTyres from '@/components/pwa/PhoneTyres';
+import PhoneIntakeChecklist from '@/components/pwa/PhoneIntakeChecklist';
+import PhoneSendReport from '@/components/pwa/PhoneSendReport';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null };
 type JobData = {
@@ -35,6 +39,12 @@ type JobData = {
   vehicle: { registration: string; make: string | null; model: string | null; colour: string | null; vin: string | null; mileageIn: number | null };
   vinHint?: string | null;
   lines: JobLine[]; notes: string; invoice: { number: string; status: string } | null;
+  /** Intake capture context — read-only; the writes go through the outbox. */
+  dueItems?: Array<{ id: string; description: string }>;
+  motExpiry?: string | null;
+  lastTyreType?: string | null;
+  intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
+  nothingFoundAt?: string | null;
   currency: string; locale: string;
 };
 type StagePhoto = { id: string; stage: string; slot?: string | null; mediaType: 'photo' | 'video'; url: string | null; posterUrl?: string | null; rotation?: number; durationSeconds?: number | null; label: string | null };
@@ -490,6 +500,26 @@ export default function MobileJobCard() {
                   unbroken take can't be accused of cropping damage out of frame); photos stay
                   free-form for the sharp deliberate stills a pan can't give (VIN, mileage,
                   damage close-ups). */}
+              {/* ── INTAKE CAPTURE, BEFORE THE PHOTOS ──────────────────────────────────────────
+                  The mechanic is at the car with this phone; until now this whole feature lived on
+                  a desktop nobody is standing at, which made the measured capture time meaningless.
+                  Order matches the desktop tab: findings, tyres, then the photos that evidence
+                  them. Both write through the OUTBOX, so a dead-signal bay costs nothing. */}
+              {/* THE CHECKLIST FIRST — it is the thing that says what is still outstanding, and it
+                  is useless on a screen the mechanic is not at: the escalation would name items
+                  nobody was ever prompted about. */}
+              {job && (job.intakeItems?.length ?? 0) > 0 && (
+                <PhoneIntakeChecklist jobCardId={job.id} items={job.intakeItems!}
+                  nothingFoundAt={job.nothingFoundAt ?? null} onChanged={refreshPhotos} />
+              )}
+              {job && (
+                <PhoneFindings jobCardId={job.id} existing={job.dueItems ?? []}
+                  motExpiry={job.motExpiry ?? null} onQueued={refreshPhotos} />
+              )}
+              {job && (
+                <PhoneTyres jobCardId={job.id} defaultType={job.lastTyreType ?? null} onQueued={refreshPhotos} />
+              )}
+
               {STAGES.map((stage) => {
                 const st = (photos ?? []).filter((p) => p.stage === stage);
                 const mine = shots[stage] ?? [];
@@ -577,6 +607,13 @@ export default function MobileJobCard() {
                   </section>
                 );
               })}
+
+
+              {/* SEND LAST — the report carries the photos, so it goes out after them. Capture-first:
+
+                  the action is here because the car is on the ramp; the reply status stays on the desk. */}
+
+              {job && <PhoneSendReport jobCardId={job.id} findingCount={(job.dueItems ?? []).length} />}
             </>
           )}
         </main>

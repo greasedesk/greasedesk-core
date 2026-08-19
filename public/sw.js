@@ -82,6 +82,26 @@ async function sendItem(item) {
     if (!res.ok) throw Object.assign(new Error('vehicle:' + res.status), { status: res.status });
     return;
   }
+  /* A FINDING. The envelope's own id travels as the row id, so a redelivery upserts rather than
+     recording the same thing twice — the server answers 200 with replayed:true. */
+  if (item.kind === 'due_item') {
+    const res = await fetch('/api/due-items', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ id: item.id, jobCardId: item.jobCardId, ...(item.payload || {}) }),
+    });
+    if (!res.ok) throw Object.assign(new Error('due_item:' + res.status), { status: res.status });
+    return;
+  }
+  /* FOUR TYRES in one envelope. No id: TyreReading is unique on (job_card_id, corner), so a replay
+     upserts the same rows by construction. */
+  if (item.kind === 'tyres') {
+    const res = await fetch('/api/tyre-readings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ jobCardId: item.jobCardId, corners: (item.payload || {}).corners || [] }),
+    });
+    if (!res.ok) throw Object.assign(new Error('tyres:' + res.status), { status: res.status });
+    return;
+  }
   if (item.kind !== 'photo') throw Object.assign(new Error('unknown-kind'), { terminal: true }); // future kinds add a sender here
   const pres = await fetch('/api/photos/presign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',

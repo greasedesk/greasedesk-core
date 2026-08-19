@@ -43,6 +43,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       mileageIn: p.vehicle.mileageIn,
     },
     vinHint: grp?.vin_hint_text ?? null, // tenant-worded; null = no hint rendered
+    // ── INTAKE CAPTURE, on the surface the mechanic is holding ────────────────────────────────
+    // Open findings so the bay does not record a duplicate, the DVSA MOT so nobody retypes it, and
+    // the car's last tyre type so the type control is a confirmation rather than an entry. All
+    // READ-ONLY context — the writes go through the outbox. Still NO money on this surface.
+    dueItems: (p.dueItems ?? []).map((d: { id: string; description: string }) => ({ id: d.id, description: d.description })),
+    motExpiry: p.vehicle.motExpiry ?? null,
+    lastTyreType: p.lastTyreType ?? null,
+    // The four prompts, already resolved server-side. On the phone because an escalation firing
+    // for items nobody was ever prompted about is worse than no escalation — the false-positive
+    // problem again, one level up.
+    intakeItems: p.intakeItems ?? [],
+    nothingFoundAt: p.nothingFoundAt ?? null,
     // Work sold — NO money fields, for anyone: no unitPrice, no unit_cost. Descriptions and
     // quantities are the job; the sell price has no use in a bay.
     lines: p.lines.map((l) => ({
