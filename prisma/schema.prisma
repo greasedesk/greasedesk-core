@@ -129,6 +129,12 @@ enum DueBasis {
   date
   mileage
   next_service
+  /// BOTH values required, and the EARLIER projected one binds. This is what a garage actually
+  /// writes — "Oil service due in 10k miles or 11/2025" — and neither leg alone is the answer:
+  /// choose `date` and a high-mileage car is reminded late; choose `mileage` and a low-mileage car
+  /// is never reminded at all. Ordering it needs a mileage rate (lib/odometer); without one the
+  /// DATE still bounds it, and the caller is told the mileage leg went unevaluated.
+  whichever_first
 }
 
 /// WHAT THE CUSTOMER SAID — THREE states, and the distinction is the whole commercial point.

@@ -815,7 +815,14 @@ export default function JobCardWorkspace(p: Props) {
       {/* The Quote section stays MOUNTED across steps (hidden when inactive) so its in-progress
           estimate state is never destroyed by a step change — the root of the "quote lost on next
           screen" bug. Persistence to the DB is handled by selectTab / route-away commits above. */}
+      {/* FINDINGS SIT WITH THE ESTIMATE, not with the intake photos. What the car needs is the raw
+          material for what we quote, so the list belongs beside the builder that turns a finding
+          into a line — and the Quote tab is reachable at detailsComplete, which is early enough for
+          a car that arrived to be looked at before anything was priced. Moved, never duplicated:
+          two copies of one list is two things to keep in step. */}
       <div className={active === 'quote' ? 'space-y-5' : 'hidden'}>
+        <DueItems jobCardId={p.jobCardId} items={p.dueItems ?? []} canEdit={p.canOperate && !inactive}
+          motExpiry={eff.vehicle.motExpiry ?? null} />
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={eff.status} canManage={p.canManage && !inactive} cancelled={inactive}
@@ -860,7 +867,6 @@ export default function JobCardWorkspace(p: Props) {
 
       {active === 'intake' && (
         <div className="space-y-5">
-          <DueItems jobCardId={p.jobCardId} items={p.dueItems ?? []} canEdit={p.canOperate && !inactive} />
         <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>

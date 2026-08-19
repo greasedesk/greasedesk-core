@@ -7,7 +7,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel } = await import('../lib/due-items.ts');
+const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate } = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -57,6 +57,58 @@ check('  …and Save is disabled until someone chooses', /response !== null/.tes
 const api = readFileSync('pages/api/due-items.ts', 'utf8');
 check('the API refuses through the SAME predicate, so a forgetful client cannot write a defaulted row',
   /refuseDueItem\(\{/.test(api) && /if \(refusal\) return res\.status\(400\)/.test(api));
+
+// ── 3b. whichever_first — BOTH LEGS, AND THE EARLIER ONE BINDS ─────────────────────────────────
+console.log('\n— "due in 10k miles or 11/2025" is one basis, not two —');
+const WF = { description: 'Oil service', dueBasis: 'whichever_first', customerResponse: 'not_raised' };
+check('accepts when BOTH legs are given',
+  refuseDueItem({ ...WF, dueDate: new Date('2025-11-01'), dueMileage: 10000 }) === null);
+check('refuses a missing DATE leg', refuseDueItem({ ...WF, dueMileage: 10000 })?.code === 'no_date',
+  'one leg alone is a different basis and loses the trigger that would have fired first');
+check('refuses a missing MILEAGE leg', refuseDueItem({ ...WF, dueDate: new Date('2025-11-01') })?.code === 'no_mileage');
+check('the label states both legs and needs NO rate',
+  dueLabel({ dueBasis: 'whichever_first', dueDate: '2025-11-01', dueMileage: 10000 })
+    === 'due at 10,000 miles or by 2025-11-01, whichever comes first');
+
+console.log('\n— the projection picks the earlier leg, in both directions —');
+const at = (iso) => new Date(`${iso}T00:00:00.000Z`);
+const item = { dueBasis: 'whichever_first', dueDate: at('2027-06-01'), dueMileage: 130000 };
+// A HIGH-MILEAGE car reaches the mileage first → the mileage binds, and the date would have been LATE.
+const hi = effectiveDueDate(item, { currentMiles: 120000, project: () => at('2026-12-01') });
+check('a high-mileage car is bound by the MILEAGE', hi.ok && hi.binding === 'mileage' && hi.date.toISOString().slice(0, 10) === '2026-12-01',
+  'choosing `date` for this item would have reminded six months late');
+// A LOW-MILEAGE car reaches the date first → the date binds, and mileage alone would NEVER have fired.
+const lo = effectiveDueDate(item, { currentMiles: 120000, project: () => at('2031-01-01') });
+check('a low-mileage car is bound by the DATE', lo.ok && lo.binding === 'date',
+  'choosing `mileage` for this item would never have reminded at all');
+// NO RATE: the date still BOUNDS it. Not "no answer" — a ceiling, flagged as one.
+const nr = effectiveDueDate(item, { currentMiles: null, project: () => null });
+check('with no rate the DATE still bounds it, flagged as unevaluated',
+  nr.ok && nr.binding === 'date' && nr.mileageLegUnevaluated === true,
+  'surfacing a ceiling beats surfacing nothing; the caller is told the mileage leg went unchecked');
+check('  …and a mileage-ONLY item with no rate has no date at all',
+  effectiveDueDate({ dueBasis: 'mileage', dueDate: null, dueMileage: 130000 }, { currentMiles: 1, project: () => null }).reason === 'no_rate');
+check('next_service is not a clock, and says so',
+  effectiveDueDate({ dueBasis: 'next_service', dueDate: null, dueMileage: null }, { currentMiles: null, project: () => null }).reason === 'next_service');
+
+// ── 3c. MOT IS NOT A FINDING ───────────────────────────────────────────────────────────────────
+console.log('\n— the MOT motive is removed, not policed —');
+const ui2 = readFileSync('components/jobcard/DueItems.tsx', 'utf8');
+check('the panel shows the DVSA MOT expiry read-only', /data-testid="due-items-mot"/.test(ui2));
+check('  …labelled as DVSA-sourced, so there is no reason to retype it',
+  /dueItems\.motSource/.test(ui2) && /from DVSA, no need to record it/.test(readFileSync('public/locales/en-GB/jobcard.json', 'utf8')));
+check('the description field is still freeform — blocking the string would be theatre',
+  /maxLength=\{500\}/.test(ui2) && !/MOT/i.test(ui2.split('data-testid="due-item-desc"')[0].split('placeholder')[1] ?? ''),
+  'the fix is removing the motive, not policing the input');
+
+// ── 3d. THE PANEL SITS WITH THE ESTIMATE ───────────────────────────────────────────────────────
+console.log('\n— findings inform the quote, so they live beside it —');
+const ws = readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8');
+const quotePane = ws.slice(ws.indexOf("active === 'quote' ?"), ws.indexOf("active === 'quote' ?") + 900);
+check('DueItems renders in the QUOTE pane', /<DueItems/.test(quotePane));
+const intakePane = ws.slice(ws.indexOf("{active === 'intake' &&"), ws.indexOf("{active === 'intake' &&") + 700);
+check('  …and NOT in the intake pane — moved, not duplicated', !/<DueItems/.test(intakePane),
+  'two copies of one list is two things to keep in step');
 
 // ── 4. THE CUSTOMER IS NOT ON THE RECORD ───────────────────────────────────────────────────────
 console.log('\n— who to remind is resolved later, never stored —');

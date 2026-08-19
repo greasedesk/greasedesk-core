@@ -18,18 +18,22 @@ import { useTranslation } from 'next-i18next';
 
 export type DueItemView = {
   id: string; description: string;
-  dueBasis: 'date' | 'mileage' | 'next_service';
+  dueBasis: 'date' | 'mileage' | 'next_service' | 'whichever_first';
   dueDate: string | null; dueMileage: number | null;
   customerResponse: 'not_raised' | 'declined' | 'agreed_later';
   createdAt?: string;
 };
 
-type Props = { jobCardId: string; items: DueItemView[]; canEdit: boolean };
+type Props = {
+  jobCardId: string; items: DueItemView[]; canEdit: boolean;
+  /** DVSA-sourced, READ-ONLY. Shown so nobody retypes it as a finding — see the note below. */
+  motExpiry?: string | null;
+};
 
-const BASES = ['date', 'mileage', 'next_service'] as const;
+const BASES = ['date', 'mileage', 'next_service', 'whichever_first'] as const;
 const RESPONSES = ['not_raised', 'declined', 'agreed_later'] as const;
 
-export default function DueItems({ jobCardId, items: seed, canEdit }: Props) {
+export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }: Props) {
   const { t } = useTranslation('jobcard');
   // SEEDED from the server render, then owned here. The card's generic refresh returns the pane's
   // own fields and never learned about findings; rather than widen that payload for one panel,
@@ -54,8 +58,10 @@ export default function DueItems({ jobCardId, items: seed, canEdit }: Props) {
 
   // Mirrors refuseDueItem's shape so the button is honest about why it is disabled; the SERVER
   // still decides — this only spares a round trip.
+  const needsDate = basis === 'date' || basis === 'whichever_first';
+  const needsMileage = basis === 'mileage' || basis === 'whichever_first';
   const ready = desc.trim() !== '' && basis !== null && response !== null
-    && (basis !== 'date' || date !== '') && (basis !== 'mileage' || mileage.trim() !== '');
+    && (!needsDate || date !== '') && (!needsMileage || mileage.trim() !== '');
 
   async function save() {
     setBusy(true); setErr(null);
@@ -93,6 +99,18 @@ export default function DueItems({ jobCardId, items: seed, canEdit }: Props) {
             className="text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2">{t('dueItems.add')}</button>
         )}
       </div>
+
+      {/* MOT EXPIRY IS ALREADY KNOWN — DVSA-sourced on the vehicle, and shown here READ-ONLY so
+          nobody records it as a finding. The description field is freeform and always will be, so
+          blocking the string would be theatre; removing the REASON to type it is what works. A
+          second, hand-typed copy would drift from the authoritative one the moment the car is
+          retested. */}
+      {motExpiry && (
+        <p className="text-xs text-muted mb-3 flex flex-wrap items-baseline gap-x-1.5" data-testid="due-items-mot">
+          <span className="font-medium text-ink">{t('dueItems.motExpiry', { date: motExpiry })}</span>
+          <span>{t('dueItems.motSource')}</span>
+        </p>
+      )}
 
       {items.length === 0 && !open && <p className="text-sm text-muted">{t('dueItems.empty')}</p>}
 
@@ -132,11 +150,11 @@ export default function DueItems({ jobCardId, items: seed, canEdit }: Props) {
                 </button>
               ))}
             </div>
-            {basis === 'date' && (
+            {needsDate && (
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="due-item-date"
-                className="mt-2 p-2.5 bg-surface border border-line rounded-lg text-ink text-sm" />
+                className="mt-2 mr-2 p-2.5 bg-surface border border-line rounded-lg text-ink text-sm" />
             )}
-            {basis === 'mileage' && (
+            {needsMileage && (
               <input inputMode="numeric" value={mileage} onChange={(e) => setMileage(e.target.value.replace(/[^\d]/g, ''))}
                 placeholder={t('dueItems.mileagePlaceholder')} data-testid="due-item-mileage"
                 className="mt-2 p-2.5 bg-surface border border-line rounded-lg text-ink text-sm max-w-[10rem]" />

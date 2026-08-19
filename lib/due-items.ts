@@ -18,7 +18,7 @@
  */
 import type { Prisma } from '@prisma/client';
 
-export type DueBasis = 'date' | 'mileage' | 'next_service';
+export type DueBasis = 'date' | 'mileage' | 'next_service' | 'whichever_first';
 export type DueItemResponse = 'not_raised' | 'declined' | 'agreed_later';
 
 export type DueItemRefusal = { code: string; message: string };
@@ -31,7 +31,7 @@ export type DueItemInput = {
   customerResponse: DueItemResponse | null | undefined;
 };
 
-const BASES: readonly DueBasis[] = ['date', 'mileage', 'next_service'];
+const BASES: readonly DueBasis[] = ['date', 'mileage', 'next_service', 'whichever_first'];
 const RESPONSES: readonly DueItemResponse[] = ['not_raised', 'declined', 'agreed_later'];
 
 /**
@@ -55,6 +55,17 @@ export function refuseDueItem(input: DueItemInput): DueItemRefusal | null {
   }
   if (input.dueBasis === 'mileage' && !(Number.isInteger(input.dueMileage) && (input.dueMileage as number) > 0)) {
     return { code: 'no_mileage', message: 'This is due by mileage, so give the mileage.' };
+  }
+  if (input.dueBasis === 'whichever_first') {
+    // BOTH legs are required — that is what makes it "whichever". One leg alone is a different
+    // basis and should be recorded as one, or the item silently loses the trigger that would
+    // actually have fired first.
+    if (!(input.dueDate instanceof Date)) {
+      return { code: 'no_date', message: 'This is due by a date OR a mileage, so give the date as well.' };
+    }
+    if (!(Number.isInteger(input.dueMileage) && (input.dueMileage as number) > 0)) {
+      return { code: 'no_mileage', message: 'This is due by a date OR a mileage, so give the mileage as well.' };
+    }
   }
   if (!input.customerResponse || !RESPONSES.includes(input.customerResponse)) {
     // THE ONE THAT PROTECTS THE MARKETING LIST. No default anywhere in the stack: the person
@@ -122,9 +133,54 @@ export async function openDueItemsForVehicle(
 
 /** One line of human text for a due item's timing — the same words on every surface. */
 export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage'>): string {
+  const miles = item.dueMileage != null ? `${item.dueMileage.toLocaleString('en-GB')} miles` : 'a mileage';
   switch (item.dueBasis) {
     case 'date': return item.dueDate ? `due by ${item.dueDate}` : 'due by a date';
-    case 'mileage': return item.dueMileage != null ? `due at ${item.dueMileage.toLocaleString('en-GB')} miles` : 'due at a mileage';
+    case 'mileage': return `due at ${miles}`;
     case 'next_service': return 'due at the next service';
+    // The label needs NO RATE — it states both legs, exactly as the garage wrote it. Only ORDERING
+    // needs a projection, and that is effectiveDueDate's job.
+    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ?? 'a date'}, whichever comes first`;
+  }
+}
+
+// ── ORDERING: WHEN IS THIS ACTUALLY DUE? ─────────────────────────────────────────────────────────
+export type DueProjection =
+  | { ok: true; date: Date; binding: 'date' | 'mileage'; mileageLegUnevaluated?: boolean }
+  | { ok: false; reason: 'next_service' | 'no_rate' | 'no_date' };
+
+/**
+ * The date an item should surface on, or a STATED reason there isn't one.
+ *
+ * `whichever_first` is the interesting case and the reason this function exists. With a rate, the
+ * earlier of (the date, the projected mileage date) binds — which is the whole meaning of the
+ * phrase. WITHOUT a rate the mileage leg cannot be evaluated, and the honest answer is not "no
+ * date": the written date still BOUNDS it, so it is returned with `mileageLegUnevaluated` set. A
+ * caller can then remind at the date (late if the mileage would have come first) while knowing the
+ * figure is a ceiling rather than the answer — which is better than surfacing nothing at all.
+ */
+export function effectiveDueDate(
+  item: { dueBasis: DueBasis; dueDate: Date | null; dueMileage: number | null },
+  ctx: { currentMiles: number | null; project: (targetMiles: number) => Date | null },
+): DueProjection {
+  switch (item.dueBasis) {
+    case 'next_service':
+      // Tied to a visit, not a clock. Not a failure — a different kind of trigger.
+      return { ok: false, reason: 'next_service' };
+    case 'date':
+      return item.dueDate ? { ok: true, date: item.dueDate, binding: 'date' } : { ok: false, reason: 'no_date' };
+    case 'mileage': {
+      if (item.dueMileage == null) return { ok: false, reason: 'no_date' };
+      const p = ctx.project(item.dueMileage);
+      return p ? { ok: true, date: p, binding: 'mileage' } : { ok: false, reason: 'no_rate' };
+    }
+    case 'whichever_first': {
+      if (!item.dueDate || item.dueMileage == null) return { ok: false, reason: 'no_date' };
+      const p = ctx.project(item.dueMileage);
+      if (!p) return { ok: true, date: item.dueDate, binding: 'date', mileageLegUnevaluated: true };
+      return p.getTime() < item.dueDate.getTime()
+        ? { ok: true, date: p, binding: 'mileage' }
+        : { ok: true, date: item.dueDate, binding: 'date' };
+    }
   }
 }

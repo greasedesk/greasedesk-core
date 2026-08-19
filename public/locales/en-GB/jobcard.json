@@ -418,12 +418,14 @@
     "basisOpt": {
       "date": "By a date",
       "mileage": "At a mileage",
-      "next_service": "Next service"
+      "next_service": "Next service",
+      "whichever_first": "Miles or date, whichever first"
     },
     "basis": {
       "date": "due by {{date}}",
       "mileage": "due at {{mileage}} miles",
-      "next_service": "due at the next service"
+      "next_service": "due at the next service",
+      "whichever_first": "due at {{mileage}} miles or by {{date}}, whichever comes first"
     },
     "responseLabel": "Has the customer been told?",
     "response": {
@@ -436,6 +438,8 @@
     "saving": "Saving…",
     "cancel": "Cancel",
     "close": "Mark done",
-    "saveError": "Could not record that."
+    "saveError": "Could not record that.",
+    "motExpiry": "MOT expires {{date}}",
+    "motSource": "— from DVSA, no need to record it"
   }
 }

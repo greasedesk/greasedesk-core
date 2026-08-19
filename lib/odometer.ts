@@ -92,6 +92,20 @@ export function normaliseOdometer(
   return null;
 }
 
+/**
+ * ── CARRIED FORWARD, FOR THE FIRST SURFACE THAT DISPLAYS A RATE ─────────────────────────────────
+ * A rate of 0 mi/yr must NOT be rendered as "0 miles/year". Say "hasn't moved between readings".
+ *
+ * "0 mi/yr" implies a measurement; the honest reading is that two odometer values were identical.
+ * That happens for a genuinely stationary car — and it also happens when a mechanic looks at last
+ * visit's mileage and types it again rather than reading the clock, which is a real workshop
+ * pattern and therefore probably NOT rare. TMBS already has one (LB14FJX, two identical readings
+ * 121 days apart) out of the first three rates the backfill produced.
+ *
+ * Nothing downstream is at risk today — projectMileageDate already returns null for a zero rate, so
+ * no date is ever invented from one. This is a WORDING obligation for whoever first puts a rate on
+ * a screen, recorded here rather than remembered separately.
+ */
 export type MileageRate =
   | { ok: true; milesPerYear: number; spanDays: number; readings: number; from: string; to: string }
   | { ok: false; reason: 'too_few' | 'span_too_short' | 'goes_backwards'; readings: number };
