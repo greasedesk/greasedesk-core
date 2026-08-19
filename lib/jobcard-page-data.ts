@@ -132,7 +132,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastReport, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -168,6 +168,14 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       where: { group_id: groupId, entity_id: cardId, action: 'intake.item_skipped' },
       orderBy: { created_at: 'desc' }, select: { diff_json: true },
     }) as Promise<Array<{ diff_json: unknown }>>,
+    // THIS CAR'S LAST TYRE TYPE — the prefill that makes the type control a confirmation rather
+    // than an entry. A car rarely changes tyre type between services.
+    (async () => {
+      const v = row?.vehicle?.id as string | undefined;
+      if (!v) return null;
+      const last = await prisma.tyreReading.findFirst({ where: { group_id: groupId, vehicle_id: v }, orderBy: { measured_at: 'desc' }, select: { type: true } });
+      return last?.type ?? null;
+    })(),
     // WHEN THE REPORT WAS LAST SENT — the only stored half of the derived report status.
     prisma.customerMagicLink.findFirst({
       where: { job_card_id: cardId, purpose: 'intake_report' },
@@ -438,6 +446,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     dueItems: dueItems.map((d) => ({ ...d, closureOffer: closureOffers.get(d.id) ?? { offer: false as const, reason: 'no_lines' as const } })),
     // The four intake prompts, already resolved to prompted/done/skipped server-side.
     intakeItems,
+    lastTyreType,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3
     // days" needs no scheduled job and cannot drift.
     reportStatus: reportStatus({

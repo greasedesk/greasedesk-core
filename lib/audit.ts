@@ -64,6 +64,7 @@ export type AuditAction =
   | 'intake.nothing_found_cleared'
   | 'intake.item_skipped'
   // The CUSTOMER's own tap on an intake report — attributed to the magic link, never to a user.
+  | 'tyres.recorded'
   | 'intake_report.sent'
   | 'due_item.customer_answered'
   | 'due_item.found'

@@ -21,6 +21,7 @@ import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import DueItems, { type DueItemView } from '@/components/jobcard/DueItems';
 import IntakeChecklist, { type IntakeItemView } from '@/components/jobcard/IntakeChecklist';
 import SendIntakeReport from '@/components/jobcard/SendIntakeReport';
+import TyreCapture from '@/components/jobcard/TyreCapture';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -83,6 +84,8 @@ type Props = {
   intakeItems?: IntakeItemView[];
   nothingFoundAt?: string | null;
   /** Derived report state (lib/due-items::reportStatus) — never a stored flag. */
+  /** This car's last recorded tyre type — the prefill that makes type zero taps. */
+  lastTyreType?: string | null;
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
@@ -882,6 +885,8 @@ export default function JobCardWorkspace(p: Props) {
         <IntakeChecklist jobCardId={p.jobCardId} items={eff.intakeItems}
           canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
+        <TyreCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
+          defaultType={(p.lastTyreType as never) ?? null} onSaved={refreshCard} />
         <SendIntakeReport jobCardId={p.jobCardId} canSend={p.canOperate && !inactive}
           findingCount={(p.dueItems ?? []).length}
           status={p.reportStatus ?? { state: 'not_sent' }} />

@@ -159,6 +159,23 @@ enum CustomerAnswer {
   call_me
 }
 
+/// Where on the car. Four corners, named as a mechanic names them.
+enum TyreCorner {
+  front_left
+  front_right
+  rear_left
+  rear_right
+}
+
+/// What is fitted. Run-flats matter because they cannot be repaired the same way and cost more to
+/// replace — a garage quoting a replacement needs to know before it phones the customer.
+enum TyreType {
+  summer_standard
+  summer_runflat
+  winter_standard
+  winter_runflat
+}
+
 enum ItemType {
   labour
   part
@@ -444,6 +461,7 @@ model Group {
   odometer_readings  VehicleOdometerReading[]
   due_item_answers   DueItemCustomerAnswer[]
   due_item_lines     DueItemLine[]
+  tyre_readings      TyreReading[]
 }
 
 /**
@@ -1615,6 +1633,51 @@ model DueItemLine {
   @@index([job_card_item_id])
 }
 
+/// ONE TYRE, MEASURED AT THREE POINTS ACROSS THE TREAD.
+///
+/// ── WHY THREE READINGS AND NOT ONE ──────────────────────────────────────────────────────────────
+/// THIS IS THE WHOLE REASON THIS TABLE EXISTS, and the thing someone will otherwise "simplify" to a
+/// single depth. A car worn on the INSIDE EDGES is a tracking job as well as a tyre job. One depth
+/// hides that completely: a tyre reading 6/3/2mm and a tyre reading 4/4/4mm average about the same
+/// and mean entirely different things — the first is a wheel alignment the garage would never have
+/// been asked to quote for.
+///
+/// So a measurement raises up to TWO advisories from one reading: a worn tyre (depth below the
+/// threshold) and, separately, worn alignment (asymmetry across the tread). The second is a
+/// different job to sell, and it is invisible to any model that stores one number.
+///
+/// A free-text VehicleDueItem cannot hold this. The structure IS the finding.
+model TyreReading {
+  id          String @id @default(uuid())
+  group_id    String
+  vehicle_id  String
+  /// The visit it was taken on. SetNull, like a due item's provenance: the reading is about the CAR
+  /// and must outlive the card it was captured on — the history is what produces a wear rate.
+  job_card_id String?
+
+  corner TyreCorner
+  type   TyreType
+
+  /// Tread depth in TENTHS of a millimetre, across the tread. Integers, because 1.6mm is a legal
+  /// threshold and floating point has no business near it.
+  /// outer = the shoulder nearest the kerb; inner = nearest the car's centreline.
+  depth_outer_tenths  Int
+  depth_centre_tenths Int
+  depth_inner_tenths  Int
+
+  measured_at DateTime @default(now())
+  measured_by String?
+
+  group    Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle  Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  job_card JobCard?       @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+
+  /// One reading per corner per visit — re-measuring a corner corrects it rather than stacking.
+  @@unique([job_card_id, corner])
+  /// The wear-rate read: this car's readings for one corner, oldest first.
+  @@index([group_id, vehicle_id, corner, measured_at])
+}
+
 model VehicleOdometerReading {
   id         String @id @default(uuid())
   group_id   String
@@ -1682,6 +1745,7 @@ model Vehicle {
   @@index([identity_id])
   @@index([group_id, vin_normalized])
   @@index([group_id, registration_normalized])
+  tyre_readings    TyreReading[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
@@ -1911,6 +1975,7 @@ model JobCard {
   /// keeps the history of both.
   intake_nothing_found_at DateTime?
   intake_nothing_found_by String?
+  tyre_readings      TyreReading[]
 }
 
 model JobCardPhoto {
