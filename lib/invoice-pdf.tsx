@@ -160,17 +160,6 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
           ) : null}
         </View>
 
-        {/* WHAT THE CAR ALSO NEEDED — above the line items, where TMBS have printed it by hand for
-            years. The customer gets this in writing on the document they keep; the garage's own
-            list is the follow-up copy, never a replacement for telling them. Frozen at mint. */}
-        {doc.dueItemsBlock ? (
-          <View style={{ marginBottom: 10 }}>
-            {doc.dueItemsBlock.split('\n').map((line, i) => (
-              <Text key={i} style={S.muted}>{line}</Text>
-            ))}
-          </View>
-        ) : null}
-
         <View style={S.tableHead}>
           <Text style={[S.th, S.cDesc]}>{t('cols.description')}</Text>
           <Text style={[S.th, S.cQty]}>{t('cols.qty')}</Text>
@@ -226,6 +215,33 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
             {pay ? <Text style={S.payInline}>{t('payOnline')}</Text> : null}
           </View>
         </View>
+
+        {/* ── ADVISORY, BELOW THE TOTAL ─────────────────────────────────────────────────────────
+            NOTHING ABOVE THE TOTAL EXCEPT WHAT IS BEING CHARGED FOR. This block used to sit above
+            the line items, where an advisory sits adjacent to priced rows and can read as one —
+            "front discs due at 60,000 miles" a few lines above a figure invites exactly the wrong
+            inference. Below the total, under a heading that says it is not charged for, it cannot.
+
+            ── AND WHY MOVING IT IS NOT A BREACH OF FREEZE-AT-ISSUE ────────────────────────────
+            FREEZE-AT-ISSUE GOVERNS CONTENT, NOT LAYOUT. What must never change is what the
+            customer was TOLD: the figures, the particulars, the advice itself — and none of that
+            moves here. `due_items_snapshot` is the frozen artefact and it is untouched; only where
+            the renderer puts it changes.
+
+            The retrospective effect is an IMPROVEMENT rather than a liberty: a reprint of an older
+            invoice now shows the same advice where it can no longer be mistaken for a charge. A
+            document that says the same thing more clearly has not lied about its past.
+
+            Deliberately NOT frozen as a layout version on the row. That column would accumulate
+            variants forever to protect something nobody is harmed by. */}
+        {doc.dueItemsBlock ? (
+          <View style={{ marginTop: 14 }}>
+            <Text style={[S.label, { marginBottom: 3 }]}>{t('advisory.heading')}</Text>
+            {doc.dueItemsBlock.split('\n').map((line, i) => (
+              <Text key={i} style={S.muted}>{line}</Text>
+            ))}
+          </View>
+        ) : null}
 
         {doc.footerText ? (
           // Payment terms / footer block (Invoicing tab) — multi-line, verbatim.

@@ -129,5 +129,8 @@
   "voidAmended": "Reason amended {{when}}. Originally recorded as: \"{{original}}\"",
   "amendedNotice": "This invoice was amended on {{when}} and replaces the version previously issued for {{from}}. It keeps the same invoice number.",
   "amendedCount": "Amended {{n}} times since it was first issued.",
-  "payOnline": "View and pay online"
+  "payOnline": "View and pay online",
+  "advisory": {
+    "heading": "Advisory — not charged for"
+  }
 }

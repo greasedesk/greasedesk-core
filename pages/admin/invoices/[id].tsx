@@ -621,13 +621,6 @@ export default function InvoicePage(props: PageProps) {
             )}
           </div>
 
-          {/* WHAT THE CAR ALSO NEEDED — the frozen block, above the lines, matching the PDF. */}
-          {props.dueItemsBlock && (
-            <div className="mb-4 text-sm text-muted whitespace-pre-line" data-testid="invoice-due-items">
-              {props.dueItemsBlock}
-            </div>
-          )}
-
           {/* Lines */}
           <div className="py-5 overflow-x-auto">
             <table className="w-full text-sm">
@@ -686,6 +679,17 @@ export default function InvoicePage(props: PageProps) {
               )}
             </div>
           </div>
+          {/* ADVISORY, BELOW THE TOTAL — matching the PDF. Nothing above the total but what is
+              being charged for; advice adjacent to priced rows can read as one of them. Moving it
+              is a LAYOUT change: freeze-at-issue governs CONTENT, and the frozen
+              due_items_snapshot is untouched. See lib/invoice-pdf for the full reasoning. */}
+          {props.dueItemsBlock && (
+            <div className="mt-6 border-t border-line pt-4" data-testid="invoice-due-items">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('advisory.heading')}</p>
+              <p className="text-sm text-muted whitespace-pre-line">{props.dueItemsBlock}</p>
+            </div>
+          )}
+
           {props.footerText && <p className="text-xs text-muted mt-6 whitespace-pre-line border-t border-line pt-4">{props.footerText}</p>}
 
           {!reg && props.series !== 'warranty' && <p className="text-xs text-muted mt-4">{t('notRegistered', { label: props.taxLabel })}</p>}

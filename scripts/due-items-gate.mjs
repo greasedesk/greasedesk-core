@@ -182,6 +182,37 @@ check('a deleted estimate line takes only the LINK', /job_card_item JobCardItem 
   && /The FINDING survives/.test(lineModel),
   'deleting a line is a pricing decision, not a statement that the car is fine');
 
+// ── 3g. THE ADVISORY SITS BELOW THE TOTAL ───────────────────────────────────────────────────────
+console.log('\n— nothing above the total but what is being charged for —');
+const pdf = readFileSync('lib/invoice-pdf.tsx', 'utf8');
+const screen = readFileSync('pages/admin/invoices/[id].tsx', 'utf8');
+// POSITION, asserted as an ORDER rather than a line number: the block must come AFTER the grand
+// total in the source, which is the order it renders in.
+const pdfTotal = pdf.indexOf("t('grandTotal')");
+const pdfBlock = pdf.indexOf('doc.dueItemsBlock ?');
+check('the PDF renders the advisory AFTER the grand total', pdfTotal > 0 && pdfBlock > pdfTotal,
+  'an advisory adjacent to priced rows can read as one of them');
+const scTotal = screen.indexOf("t('grandTotal')");
+const scBlock = screen.indexOf('props.dueItemsBlock &&');
+check('the screen does too', scTotal > 0 && scBlock > scTotal);
+check('both carry the "not charged for" heading', /advisory\.heading/.test(pdf) && /advisory\.heading/.test(screen));
+const i18nInv = JSON.parse(readFileSync('public/locales/en-GB/invoice.json', 'utf8'));
+check('  …and the heading says so in words', /not charged for/i.test(i18nInv.advisory?.heading ?? ''),
+  JSON.stringify(i18nInv.advisory?.heading));
+// The block is no longer anywhere above the line-item table.
+const pdfTableHead = pdf.indexOf('S.tableHead');
+check('the PDF has no advisory above the line items', pdfBlock > pdfTableHead);
+
+console.log('\n— and the CONTENT is still frozen —');
+check('the snapshot column is untouched by the move', /due_items_snapshot: dueItemsBlock,/.test(readFileSync('lib/invoice-issue.ts', 'utf8')));
+check('the document still reads the SNAPSHOT, not a live list',
+  /dueItemsBlock: inv\.due_items_snapshot \?\? null,/.test(readFileSync('lib/invoice-doc.ts', 'utf8')));
+check('the principle is stated where the next reader will be',
+  /FREEZE-AT-ISSUE GOVERNS CONTENT, NOT LAYOUT/.test(pdf),
+  'so nobody reads the move as a breach, and nobody freezes a layout version to "fix" it');
+check('no layout version was added to the row', !/layout_version|due_items_position/.test(readFileSync('prisma/schema.prisma', 'utf8')),
+  'a column that accumulates variants forever to protect something nobody is harmed by');
+
 // ── 4. THE CUSTOMER IS NOT ON THE RECORD ───────────────────────────────────────────────────────
 console.log('\n— who to remind is resolved later, never stored —');
 check('the model has no customer column', !/customer_id/.test(model),
