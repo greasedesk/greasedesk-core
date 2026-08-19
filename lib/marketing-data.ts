@@ -10,7 +10,7 @@ import { openDueItemsForVehicle } from '@/lib/due-items';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import {
   motBand, serviceDue, isUnactioned, contactRoute, noContactLabel,
-  estimateRevenue, estimateMotRevenue, WINDOW_DAYS,
+  estimateRevenue, estimateMotRevenue, WINDOW_DAYS, MOT_EXEMPT_YEARS,
   type MotBand, type ServiceBand, type ContactRecord, type RevenueEstimate,
 } from '@/lib/marketing-lists';
 
@@ -39,8 +39,17 @@ export type MarketingRow = {
 export type MotList = {
   expired: MarketingRow[];
   due: MarketingRow[];
-  /** Cars with no DVSA date at all. A list that silently omits them misrepresents itself. */
-  noMotDate: number;
+  /**
+   * Cars we SHOULD have a date for and do not — registered before the current MOT-exempt window,
+   * so an absent expiry is a gap rather than a fact. A list that silently omits them misrepresents
+   * itself; counting a two-year-old car among them misrepresents it the other way.
+   */
+  missingMotDate: number;
+  /** Cars whose age we do not know, so we cannot say whether the absence is a gap. Honest-null,
+   *  counted separately rather than folded into either side. */
+  unknownAge: number;
+  /** New enough that having no MOT is CORRECT. Not a gap, and not reported as one. */
+  tooNewForMot: number;
   fleet: number;
   revenue: RevenueEstimate;
   unactioned: number;
@@ -119,14 +128,18 @@ const shape = (
 };
 
 export async function buildMotList(groupId: string, now: Date): Promise<MotList> {
-  const [vehicles, fleet, noMotDate, contacts] = await Promise.all([
+  // A CAR UNDER THREE YEARS OLD HAS NO MOT BECAUSE IT NEEDS NONE. Counting those as a gap would
+  // overstate what is missing — the first version of this line said "95 cars have no MOT date" when
+  // 62 were genuine gaps, 6 were too new, and 27 had no year recorded at all. Three numbers, not one.
+  const firstMotYear = now.getUTCFullYear() - MOT_EXEMPT_YEARS;
+  const [vehicles, fleet, undated, contacts] = await Promise.all([
     prisma.vehicle.findMany({
       where: { group_id: groupId, mot_expiry: { not: null, lte: new Date(now.getTime() + WINDOW_DAYS * 86_400_000) } },
       select: { id: true, registration: true, make: true, model: true, mot_expiry: true },
       orderBy: { mot_expiry: 'asc' },
     }),
     prisma.vehicle.count({ where: { group_id: groupId } }),
-    prisma.vehicle.count({ where: { group_id: groupId, mot_expiry: null } }),
+    prisma.vehicle.findMany({ where: { group_id: groupId, mot_expiry: null }, select: { year: true } }),
     prisma.marketingContact.findMany({ where: { group_id: groupId, reason: 'mot' }, select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true } }),
   ]);
   const byVehicle = new Map(contacts.map((c) => [c.vehicle_id, c]));
@@ -144,7 +157,10 @@ export async function buildMotList(groupId: string, now: Date): Promise<MotList>
 
   const all = [...expired, ...due];
   return {
-    expired, due, noMotDate, fleet,
+    expired, due, fleet,
+    missingMotDate: undated.filter((v) => v.year != null && v.year < firstMotYear).length,
+    tooNewForMot: undated.filter((v) => v.year != null && v.year >= firstMotYear).length,
+    unknownAge: undated.filter((v) => v.year == null).length,
     // NO AVERAGE-INVOICE FIGURE HERE. An MOT is a fixed-price product, not an average job, and
     // multiplying the count by a £178 average would overstate this list threefold.
     revenue: estimateMotRevenue(all.length, await motPricePennies(groupId)),

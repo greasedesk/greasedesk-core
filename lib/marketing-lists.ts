@@ -31,6 +31,18 @@ export const WINDOW_DAYS = 30;
 /** A snooze with no end is a hide. */
 export const SNOOZE_DAYS = 30;
 
+/**
+ * A car needs no MOT until its third anniversary (GB). Used ONLY to split "no date" into "a gap"
+ * and "correctly has none" — never to infer a date, which would be exactly the fabricated constant
+ * this codebase keeps refusing.
+ *
+ * An approximation by design: the real rule runs from first registration, and we hold a YEAR. A car
+ * registered in December 2023 is counted as needing one from 2026, which is right within months.
+ * Precision here would need a registration date we do not store, and the number it feeds is a
+ * coverage line, not a reminder.
+ */
+export const MOT_EXEMPT_YEARS = 3;
+
 export type ContactRoute = { sms: boolean; email: boolean; phone: string | null };
 
 /**
@@ -120,25 +132,14 @@ export function serviceDue(
 
   const out: ServiceDue[] = [];
   for (const item of items) {
-    // ── ALREADY PAST THE TARGET IS OVERDUE, NOT UNPROJECTABLE ────────────────────────────────
-    // projectMileageDate returns null when `remaining <= 0`, and effectiveDueDate turns any null
-    // projection into `no_rate`. So a car that has already driven past "due at 60,000 miles" is
-    // reported as having no clock, when in fact its clock has already gone off. Caught here rather
-    // than in the shared chokepoint because effectiveDueDate also orders findings on the job card
-    // and the invoice, and changing what it returns is a wider question than this list — raised
-    // separately. The distinction matters most here, where an overdue car is the best call on the
-    // page and the trigger band would bury it.
-    const passed = item.dueMileage != null && ctx.currentMiles != null && ctx.currentMiles >= item.dueMileage;
-    if (passed && (item.dueBasis === 'mileage' || item.dueBasis === 'whichever_first')) {
-      out.push({ item, band: 'dated', date: ctx.now, triggerText: null, mileageLegUnevaluated: false });
-      continue;
-    }
     const p = effectiveDueDate(
       { dueBasis: item.dueBasis, dueDate: item.dueDate ? new Date(item.dueDate) : null, dueMileage: item.dueMileage },
-      { currentMiles: ctx.currentMiles, project },
+      { currentMiles: ctx.currentMiles, project, now: ctx.now },
     );
     if (p.ok) {
-      // Overdue counts as due: a service nobody booked last month is still work to win.
+      // Overdue counts as due: a service nobody booked last month is still work to win. A car past
+      // its mileage target arrives here with today's date and `alreadyPassed` — the chokepoint
+      // answers the question rather than making this file translate a failure code (it used to).
       if (p.date <= end) {
         out.push({ item, band: 'dated', date: p.date, triggerText: null, mileageLegUnevaluated: !!p.mileageLegUnevaluated });
       }

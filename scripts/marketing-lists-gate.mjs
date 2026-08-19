@@ -58,8 +58,14 @@ try {
   check('a car PAST its mileage target is overdue, not unprojectable',
     overdueMiles[0]?.band === 'dated' && overdueMiles[0]?.date?.getTime() === NOW.getTime(),
     'projectMileageDate returns null past the target and effectiveDueDate calls that "no_rate"');
-  check('  …and that quirk of the shared chokepoint is written down',
-    /reported as having no clock, when in fact its clock has already gone off/.test(prose(readFileSync('lib/marketing-lists.ts', 'utf8'))));
+  // THE WORKAROUND IS GONE, because the chokepoint answers the question now. This file used to
+  // detect a passed target itself and carry a comment explaining why it could not be fixed at the
+  // source — a justification that turned out to be false (effectiveDueDate had one caller: this
+  // one). Asserting the ABSENCE, so the workaround cannot quietly return alongside the fix.
+  const mlSrc = readFileSync('lib/marketing-lists.ts', 'utf8');
+  check('  …answered by the chokepoint, not worked around here',
+    !/currentMiles >= item\.dueMileage/.test(mlSrc) && /alreadyPassed/.test(mlSrc),
+    'one function, one answer — a caller should not translate a failure code into a fact');
 
   // ── 3. THE BADGE ─────────────────────────────────────────────────────────────────────────────
   console.log('\n— a count that never falls is one nobody sees —');
@@ -159,7 +165,24 @@ try {
   check('the opted-out customer still appears', /Marketing Fixture/.test(rowText));
   check('  …marked "No texts", not silenced entirely', /No texts/.test(rowText), rowText.replace(/\n/g, ' | '));
   check('  …with the phone number shown', /01384 111222/.test(rowText), 'no opt-out covers a phone call');
-  check('the fleet coverage is stated', /cars have no MOT date from DVSA/.test(await page.locator('[data-testid="marketing-no-mot-date"]').innerText()));
+  // THREE NUMBERS, because one overstated the gap. Asserted against the DATABASE rather than
+  // against the sentence, so the line cannot drift from what is actually true of the fleet.
+  const coverage = await page.locator('[data-testid="marketing-no-mot-date"]').innerText();
+  const undated = await prisma.vehicle.findMany({ where: { group_id: ZZ, mot_expiry: null }, select: { year: true } });
+  const firstMotYear = NOW.getUTCFullYear() - M.MOT_EXEMPT_YEARS;
+  const gaps = undated.filter((v) => v.year != null && v.year < firstMotYear).length;
+  const unknown = undated.filter((v) => v.year == null).length;
+  check('the coverage line states the GAP, not every undated car',
+    gaps === 0 ? !/have no MOT date from DVSA/.test(coverage) : coverage.includes(`${gaps} of your`),
+    `${coverage} — expected gap ${gaps}`);
+  check('  …and says separately how many it cannot judge',
+    unknown === 0 ? !/no year recorded/.test(coverage) : coverage.includes(`${unknown} car`), coverage);
+  check('  …with nothing said when there is nothing to say',
+    (gaps > 0 || unknown > 0) === (await page.locator('[data-testid="marketing-no-mot-date"]').count() === 1),
+    'a line reading "0 of your cars" is the badge mistake in sentence form');
+  check('  …because a car too new to need an MOT is not a gap',
+    /too new to need one/.test(coverage) || undated.every((v) => v.year == null || v.year < firstMotYear),
+    'counting those would overstate the gap on a screen a garage is asked to trust');
 
   const tile = await page.locator('[data-testid="marketing-revenue"]').innerText();
   check('the MOT tab shows no invented figure', /add an MOT to your products/.test(tile), tile.replace(/\n/g, ' | '));

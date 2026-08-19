@@ -144,9 +144,24 @@ export default function MarketingPage({ mot, service, currency }: PageProps) {
           <Band title="Expired" note="Off the road until it is done — the best call on this page." rows={mot.expired} reason="mot" onDone={reload} />
           <Band title="Due soon" rows={mot.due} reason="mot" onDone={reload} />
           {/* A LIST THAT SILENTLY OMITS 43% OF THE FLEET MISREPRESENTS ITSELF. */}
-          <p className="text-xs text-muted" data-testid="marketing-no-mot-date">
-            {mot.noMotDate} of your {mot.fleet} cars have no MOT date from DVSA, so they cannot appear here.
-          </p>
+          {/* THREE NUMBERS, NOT ONE, AND ONLY THE ONES THAT ARE NOT ZERO. "95 cars have no MOT
+              date" counted 6 too new to need one and 27 whose age we do not know — overstating the
+              gap on a screen a garage is being asked to trust. And a line reading "0 of your 101
+              cars have no MOT date" is the badge mistake in sentence form: nothing to report should
+              report nothing. */}
+          {(mot.missingMotDate > 0 || mot.unknownAge > 0) && (
+            <p className="text-xs text-muted" data-testid="marketing-no-mot-date">
+              {mot.missingMotDate > 0 && (
+                <>{mot.missingMotDate} of your {mot.fleet} cars have no MOT date from DVSA. </>
+              )}
+              {mot.unknownAge > 0 && (
+                <>{mot.unknownAge} {mot.unknownAge === 1 ? 'car has' : 'cars have'} no year recorded, so we can’t tell whether {mot.unknownAge === 1 ? 'it needs' : 'they need'} one. </>
+              )}
+              {mot.tooNewForMot > 0 && (
+                <>{mot.tooNewForMot} {mot.tooNewForMot === 1 ? 'is' : 'are'} too new to need one.</>
+              )}
+            </p>
+          )}
           {!mot.expired.length && !mot.due.length && (
             <p className="text-sm text-muted">Nothing due in the next {WINDOW_DAYS} days.</p>
           )}
