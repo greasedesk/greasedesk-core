@@ -8,10 +8,17 @@
  * Env: DVSA_MOT_CLIENT_ID, DVSA_MOT_CLIENT_SECRET, DVSA_MOT_API_KEY, DVSA_MOT_SCOPE_URL,
  *      DVSA_MOT_TOKEN_URL, optional DVSA_MOT_API_URL (defaults to the live trade endpoint).
  */
+import { normaliseOdometer } from '@/lib/odometer';
 export type DvsaVehicle = {
   make?: string; model?: string; colour?: string; fuel?: string; engineCc?: number; year?: number;
   // MOT reference (from the most recent test) — feeds the display + the banked reminder feature.
   motExpiry?: string; lastMotMileage?: number; lastMotDate?: string; // ISO dates + miles
+  /**
+   * EVERY test's odometer, normalised to miles (lib/odometer). Server-side only — the API route
+   * stores it and does NOT return it to the browser: a client-side copy of the same facts is a
+   * second source to keep in step. Unreadable odometers and unrecognised units are absent, never 0.
+   */
+  odometerHistory?: Array<{ date: string; miles: number }>;
 };
 
 const API_BASE = 'https://history.mot.api.gov.uk/v1/trade/vehicles/registration/';
@@ -94,6 +101,14 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
     const tests: any[] = Array.isArray(d.motTests) ? d.motTests : [];
     const withExpiry = tests.find((t) => t?.expiryDate);
     const withOdo = tests.find((t) => t?.odometerValue);
+    // THE WHOLE HISTORY, not just the newest. It is already in this response; keeping three scalars
+    // from a ten-test array was throwing away the only thing that can produce a mileage RATE, and a
+    // rate is what makes "due in 10k miles or 11/2025" orderable at all. Normalised through
+    // lib/odometer (unit-aware, refuses unreadable odometers) — a null reading is dropped, never
+    // stored as zero.
+    const odometerHistory = tests
+      .map((t) => ({ date: parseMotDate(t?.completedDate), miles: normaliseOdometer(t?.odometerValue, t?.odometerUnit, t?.odometerResultType) }))
+      .filter((r): r is { date: string; miles: number } => typeof r.date === 'string' && r.miles != null);
     // Year of manufacture — DVSA gives dates, not a bare year; take the first 4-digit year we find.
     const yearOf = (): number | undefined => {
       for (const f of [d.manufactureDate, d.firstUsedDate, d.registrationDate]) {
@@ -112,6 +127,7 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
       motExpiry: parseMotDate(withExpiry?.expiryDate),
       lastMotMileage: parseInt10(withOdo?.odometerValue),
       lastMotDate: parseMotDate(tests[0]?.completedDate),
+      odometerHistory,
     };
     console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc, year: out.year, motExpiry: out.motExpiry, lastMotMileage: out.lastMotMileage });
     return out;

@@ -24,7 +24,7 @@ type Vehicle = {
   make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
   motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
 };
-type Props = { jobCardId: string; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
+type Props = { jobCardId: string; vehicleId?: string | null; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
   // Country-shaped vehicle identity (ruling 2026-07-29); defaults keep every existing caller working.
   vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName;
   /**
@@ -50,7 +50,7 @@ function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boole
   return o.smsOptOut == null && o.emailOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
 }
 
-export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
+export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
@@ -99,7 +99,7 @@ export default function CustomerDetailsForm({ jobCardId, owner, vehicle, canEdit
   async function dvsaLookup() {
     setLookBusy(true); setMsg(null);
     // The record already exists → DVSA only (internal: false), through the ONE shared client path.
-    const r = await lookupVehicleByReg(registration, { internal: false });
+    const r = await lookupVehicleByReg(registration, { internal: false, vehicleId });
     setLookBusy(false);
     if (!r.ok) {
       if (r.reason === 'empty-reg') return;

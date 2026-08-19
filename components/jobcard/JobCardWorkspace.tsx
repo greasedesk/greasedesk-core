@@ -86,6 +86,8 @@ type Props = {
   messagesUnread?: number;
   reachability?: Reachability | null;
   vehicle: {
+    /** The vehicle's own id — the DVSA lookup needs it to keep the odometer history it fetches. */
+    id?: string | null;
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
     make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
     motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
@@ -530,6 +532,7 @@ export default function JobCardWorkspace(p: Props) {
           </div>
         )}
         <CustomerDetailsForm
+          vehicleId={eff.vehicle.id ?? null}
           vehicleIdLabel={p.vehicleIdLabel}
           vehicleLookupProvider={p.vehicleLookupProvider}
           jobCardId={p.jobCardId}

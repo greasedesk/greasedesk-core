@@ -406,8 +406,11 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     vatRegistered: vat.registered,
     owner,
     vehicle: {
+      // The vehicle's OWN id — the DVSA lookup needs it to store the MOT odometer history it
+      // fetches (lib/odometer); without it the readings have nothing to hang on.
       registration: row.vehicle?.registration ?? '—',
       vin: row.vehicle?.vin ?? null,
+      id: row.vehicle?.id ?? null,
       mileageIn: row.odometer_in ?? row.vehicle?.mileage_at_create ?? null,
       mileageOut: row.odometer_out ?? null,
       make: row.vehicle?.make ?? null,

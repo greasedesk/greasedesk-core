@@ -13,6 +13,7 @@
  * (non-blocking — resubmit with confirmReg:true). Reg has no unique constraint and a duplicate poisons
  * the find-or-create hot path, so we surface it to the person with context rather than accept it silently.
  */
+import { recordOdometerReadings } from '@/lib/odometer';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { getServerSession } from 'next-auth';
@@ -176,7 +177,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (vehicle.lastMotMileage !== undefined) setV('last_mot_mileage', vnum(vehicle.lastMotMileage), cv.last_mot_mileage ?? null, 'lastMotMileage');
         if (vehicle.lastMotDate !== undefined) { const nd = vdate(vehicle.lastMotDate); if (nd && curDate(cv.last_mot_date) !== nd.toISOString().slice(0, 10)) { vnext.last_mot_date = nd; vdiff.lastMotDate = { from: curDate(cv.last_mot_date), to: nd.toISOString().slice(0, 10) }; } }
         if (Object.keys(vnext).length) await tx.vehicle.update({ where: { id: card.vehicle_id }, data: vnext });
-        if (mileageVal !== undefined && mileageVal !== card.odometer_in) { await tx.jobCard.update({ where: { id: jobCardId }, data: { odometer_in: mileageVal } }); vdiff.mileageIn = { from: card.odometer_in, to: mileageVal }; }
+        if (mileageVal !== undefined && mileageVal !== card.odometer_in) {
+          await tx.jobCard.update({ where: { id: jobCardId }, data: { odometer_in: mileageVal } });
+          vdiff.mileageIn = { from: card.odometer_in, to: mileageVal };
+          // OUR OWN READING, kept beside the MOT history (lib/odometer). This is the denser stream
+          // for a regularly-serviced car — an MOT is annual, a service visit is not — and it grows
+          // more valuable as a garage's book matures. Dated TODAY: it is when we read it, not when
+          // the card was opened. Same upsert, so re-saving the form converges rather than piles up.
+          if (card.vehicle_id && Number.isInteger(mileageVal) && (mileageVal as number) > 0) {
+            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            await recordOdometerReadings(tx, {
+              groupId: user.group_id as string, vehicleId: card.vehicle_id as string,
+              source: 'visit', readings: [{ date: today, miles: mileageVal as number }],
+            });
+          }
+        }
         if (Object.keys(vdiff).length) await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'vehicle.edited', diff: { ...vdiff, via } });
       }
     });

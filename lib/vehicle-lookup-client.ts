@@ -42,7 +42,7 @@ const Snum = (v: unknown): string => (v == null ? '' : String(v));
  */
 export async function lookupVehicleByReg(
   rawReg: string,
-  opts: { internal?: boolean } = {},
+  opts: { internal?: boolean; vehicleId?: string | null } = {},
 ): Promise<VehicleLookupResult> {
   const reg = normalizeReg(rawReg) || '';
   if (!reg) return { ok: false, reg: '', reason: 'empty-reg' };
@@ -73,7 +73,10 @@ export async function lookupVehicleByReg(
     }
     // 2) New car → DVSA MOT History (make/model/colour/year/fuel/engine + MOT metadata). Best-effort:
     //    the endpoint always answers 200 with { found } so a lookup failure never blocks the form.
-    const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(reg)}`, { cache: 'no-store' });
+    // vehicleId, when the caller has one, lets the SERVER keep the MOT odometer history it just
+    // fetched (lib/odometer). Absent on a first lookup — the car has no record to hang it on yet.
+    const vq = opts.vehicleId ? `&vehicleId=${encodeURIComponent(opts.vehicleId)}` : '';
+    const sres = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(reg)}${vq}`, { cache: 'no-store' });
     const d = sres.ok ? await sres.json() : { found: false };
     if (d?.found) {
       return {

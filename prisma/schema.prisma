@@ -423,6 +423,7 @@ model Group {
   commissionRefusals  CommissionRefusal[]
   credit_notes CreditNote[]
   due_items          VehicleDueItem[]
+  odometer_readings  VehicleOdometerReading[]
 }
 
 /**
@@ -1477,6 +1478,39 @@ model VehicleDueItem {
   @@index([found_on_job_card_id])
 }
 
+/// EVERY ODOMETER READING WE HAVE FOR A CAR — the MOT history DVSA already sends us, plus our own.
+///
+/// Before this, lib/dvsa fetched the whole `motTests` array and kept three scalars from it: an
+/// eleven-year-old car arrived with ten readings and we stored one. No new API call is involved in
+/// keeping the rest — it is a storage decision on data already in the response.
+///
+/// `source` matters and is not cosmetic: a garage should be able to tell "DVSA says" from "we read
+/// it", and OUR readings are the denser stream for a regularly-serviced car — increasingly so as a
+/// book matures, because an MOT is annual and a service visit is not.
+///
+/// The unique key is what makes re-lookup safe: the DVSA lookup fires on every reg search, so the
+/// write is an idempotent upsert rather than an append that multiplies on each booking.
+model VehicleOdometerReading {
+  id         String @id @default(uuid())
+  group_id   String
+  vehicle_id String
+
+  /// 'mot' (DVSA test history) | 'visit' (odometer_in, read by us at the car).
+  source       String
+  reading_date DateTime @db.Date
+  /// MILES, normalised at the boundary. DVSA reports an odometerUnit of mi OR km; an unrecognised
+  /// unit stores NO reading rather than a guessed number (lib/odometer refuses it).
+  miles        Int
+
+  created_at DateTime @default(now())
+
+  group   Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+
+  @@unique([vehicle_id, source, reading_date])
+  @@index([group_id, vehicle_id, reading_date])
+}
+
 model Vehicle {
   id                      String    @id @default(uuid())
   group_id                String
@@ -1516,6 +1550,7 @@ model Vehicle {
   job_cards  JobCard[]
   threads    MessageThread[]
   due_items  VehicleDueItem[]
+  odometer_readings VehicleOdometerReading[]
 
   @@index([group_id, customer_id])
   @@index([registration])
