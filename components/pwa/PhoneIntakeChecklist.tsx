@@ -3,7 +3,7 @@
  * THE FOUR PROMPTS, ON THE PHONE — because an escalation must not name items nobody was asked for.
  *
  * The checklist existed only on the desktop, where the mechanic is not standing. That is worse than
- * it sounds: the escalation reports "prompted and not done", so it would have emailed a manager
+ * it sounds: the escalation (lib/intake-escalation) reports "prompted and not done", so it emails a manager
  * about a scan nobody was ever prompted to take. A false positive, and false positives are how the
  * whole escalation design dies — the same argument that made the "nothing found" affirmative
  * necessary, one level up.

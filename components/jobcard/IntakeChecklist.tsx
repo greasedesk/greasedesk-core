@@ -3,7 +3,8 @@
  * THE FOUR INTAKE PROMPTS on the Intake tab — asked, never enforced.
  *
  * Every control here lets the mechanic proceed. There is no disabled Next button, no blocked
- * stage: the only consequence of leaving something undone is that the escalation names it. A hard
+ * stage: the only consequence of leaving something undone is that the escalation names it
+ * (lib/intake-escalation). A hard
  * gate would be worked around within a week and the data would look captured when it wasn't.
  *
  * States come from the SERVER already resolved (lib/intake-items) — prompted, done, skipped — so

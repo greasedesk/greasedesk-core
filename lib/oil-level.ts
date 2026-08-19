@@ -10,7 +10,8 @@
  * item behaves differently is a list you can no longer trust at speed.
  *
  * So it is a CHECKLIST ITEM: prompted per site, switchable off by a garage that does not want it,
- * and satisfied by a recorded level. The escalation comes free.
+ * and satisfied by a recorded level, so it reaches the escalation (lib/intake-escalation) with
+ * no extra wiring.
  *
  * ── AND WHY IT IS NOT A TABLE, THOUGH TYRES AND BATTERY ARE ─────────────────────────────────────
  * Those earned tables on TRAJECTORY — a wear rate, a decline rate, series you can only get from

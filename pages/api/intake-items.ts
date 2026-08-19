@@ -9,7 +9,8 @@
  * OPERATIONAL authority: this is the person at the car.
  *
  * Neither action BLOCKS anything — there is nothing here that can refuse to let a job proceed. The
- * only consequence of a skip is that the escalation names it, which is the whole design.
+ * only consequence of a skip is that the escalation names it (lib/intake-escalation), which is
+ * the whole design.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';

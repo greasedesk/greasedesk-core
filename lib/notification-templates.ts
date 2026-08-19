@@ -170,6 +170,39 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  /**
+   * THE INTAKE ESCALATION — sent to the garage, not the customer, the moment somebody advances the
+   * intake stage with prompted items undone.
+   *
+   * ── WHY IT FIRES ON THE ADVANCE AND NOT OVERNIGHT ───────────────────────────────────────────
+   * The whole value is that the car is still on site. An email arriving that evening is a report,
+   * not an intervention, and nobody acts on a report about a car that has gone home.
+   *
+   * ── WHY IT SHOWS THE SKIP REASON ────────────────────────────────────────────────────────────
+   * "Skipped — scanner faulty" and silence are different conversations. The first tells a manager
+   * the scanner needs fixing; the second tells them somebody walked past it. Same email, different
+   * follow-up, and collapsing them loses the distinction that makes it worth reading.
+   */
+  intake_outstanding: {
+    label: 'Intake step missed (to the garage)',
+    email: (d) => ({
+      subject: `${d.registration ?? 'A car'} went in with ${d.count} intake item${Number(d.count) === 1 ? '' : 's'} not done`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">Intake was marked done with items outstanding</h2>
+        <p><strong>${esc(d.registration ?? 'A car')}</strong>${d.vehicleDesc ? ` — ${esc(d.vehicleDesc)}` : ''}
+           moved past intake${d.mechanic ? `, marked by ${esc(d.mechanic)}` : ''}.</p>
+        <ul style="margin:12px 0;padding-left:18px">${String(d.itemsHtml ?? '')}</ul>
+        ${d.link ? button(String(d.link), 'Open the job card') : ''}
+        <p style="font-size:13px;color:#475569">
+          Nothing was blocked — these are prompts, not gates. If the car is still with you there may
+          still be time.
+        </p>`),
+    }),
+    // NO SMS. This goes to whoever runs the workshop, about a car that is probably still on the
+    // ramp; an email they can act on beats a text they cannot open the card from. Adding one later
+    // is a template change, not a design change.
+  },
+
   job_card_link: {
     label: 'Job progress link',
     email: (d) => ({

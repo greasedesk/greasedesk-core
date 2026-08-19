@@ -19,6 +19,8 @@ import { canAccessSite } from '@/lib/admin-guard';
 import { isStageKey, STAGE_COLUMN, isSkippableStage, SKIP_COLUMN, JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, tabForStage, detailsMinDataMet } from '@/lib/jobcard-tabs';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
+import { INTAKE_PROMPT_SELECT, promptSwitches, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
+import { escalateOutstandingIntake } from '@/lib/intake-escalation';
 import { writeAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -114,6 +116,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return row;
   });
+
+  // ── THE ESCALATION, AFTER THE COMMIT ────────────────────────────────────────────────────────
+  // Only when INTAKE is the stage being MARKED DONE — not on a skip of the whole stage, not on an
+  // undo, and not on the other three stages. The moment a human says intake is finished is the
+  // moment they have decided, which is the moment worth questioning, and the car is still on site.
+  //
+  // OUTSIDE the transaction, deliberately: an email is not part of the card's state, and a provider
+  // wobble must never roll back a mechanic's advance. Failures are swallowed for the same reason —
+  // sendNotification has already written its own NotificationLog row, so the send is recorded
+  // whatever happened to it, and the mechanic's action is not held hostage to the mail.
+  if (stage === 'intake' && done === true && !skip) {
+    try {
+      const full = await prisma.jobCard.findUnique({
+        where: { id: jobCardId },
+        select: {
+          odometer_in: true, intake_nothing_found_at: true,
+          vehicle: { select: { vin: true, registration: true, make: true, model: true } },
+          site: { select: INTAKE_PROMPT_SELECT },
+        },
+      }) as any;
+      const [dueItemCount, media, skipRows] = await Promise.all([
+        prisma.vehicleDueItem.count({ where: { found_on_job_card_id: jobCardId } }),
+        prisma.jobCardPhoto.findMany({ where: { job_card_id: jobCardId, stage: 'intake' }, select: { media_type: true, slot: true } }),
+        prisma.auditLog.findMany({
+          where: { group_id: user.group_id as string, entity_id: jobCardId, action: 'intake.item_skipped' },
+          orderBy: { created_at: 'desc' }, select: { diff_json: true },
+        }),
+      ]);
+      const oilRow = await prisma.auditLog.findFirst({
+        where: { group_id: user.group_id as string, entity_id: jobCardId, action: 'intake.oil_level' },
+        orderBy: { created_at: 'desc' }, select: { created_at: true },
+      });
+      const skipsByItem: Partial<Record<string, { reason: string | null }>> = {};
+      for (const r of skipRows) {
+        const d = (r.diff_json ?? {}) as { item?: string; reason?: string | null };
+        if (d.item && !(d.item in skipsByItem)) skipsByItem[d.item] = { reason: d.reason ?? null };
+      }
+      const states = intakeItemStates(
+        {
+          dueItemCount,
+          nothingFoundAt: full?.intake_nothing_found_at ?? null,
+          odometerIn: full?.odometer_in ?? null,
+          vin: full?.vehicle?.vin ?? null,
+          hasIntakeVideo: media.some((m: { media_type: string | null }) => m.media_type === 'video'),
+          hasDiagScanPhoto: media.some((m: { slot: string | null }) => m.slot === DIAG_SCAN_SLOT),
+          oilLevelAt: oilRow?.created_at ?? null,
+        },
+        promptSwitches(full?.site as Record<string, unknown> | null),
+        skipsByItem as never,
+      );
+      const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https';
+      const host = req.headers.host;
+      await escalateOutstandingIntake(prisma, {
+        groupId: user.group_id as string,
+        jobCardId,
+        states,
+        registration: full?.vehicle?.registration ?? null,
+        vehicleDesc: [full?.vehicle?.make, full?.vehicle?.model].filter(Boolean).join(' ') || null,
+        mechanic: (user.name as string) ?? null,
+        baseUrl: host ? `${proto}://${host}` : undefined,
+      });
+    } catch (e) {
+      console.error('[intake-escalation] send failed', e);
+    }
+  }
 
   return res.status(200).json({
     message: 'Stage updated.',

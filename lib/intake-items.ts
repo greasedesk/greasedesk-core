@@ -6,8 +6,12 @@
  * ── PROMPT, NEVER GATE ──────────────────────────────────────────────────────────────────────────
  * Every item here is a question, not a lock. A mechanic may proceed with any of them undone. A hard
  * gate gets worked around — a photo of the floor, a typed-in zero — and the data ends up LOOKING
- * captured when it isn't, which is worse than an honest gap. The pressure is the escalation, and
- * the escalation only works if it is believed.
+ * captured when it isn't, which is worse than an honest gap. The pressure is the escalation
+ * (lib/intake-escalation, fired from pages/api/jobcard-stage when intake is marked done), and it
+ * only works if it is believed.
+ *
+ * That sentence was in this file for a fortnight before any sender existed. It read as a
+ * description and was an intention — see the note on stating intent at the foot of this header.
  *
  * ── EVERY DONE-STATE IS DERIVED FROM THE ARTEFACT ───────────────────────────────────────────────
  * Not a per-item flag. A flag needs a writer on every path that could satisfy the item — including
@@ -21,6 +25,18 @@
  * false escalation. An admin who gets those stops reading, and once the email is ignored the whole
  * design is dead. So ABSENCE OF FINDINGS IS NOT ABSENCE OF LOOKING: the affirmative is its own
  * record, with an actor and a timestamp, and it satisfies the item exactly as a finding does.
+ *
+ * ── STATING INTENT: SAY "NOT BUILT", IN THOSE WORDS ─────────────────────────────────────────────
+ * Five files in this feature described the escalation in the present tense — "the pressure is the
+ * escalation", "the escalation comes free" — while `intakeOutstanding` had zero callers and no
+ * template, cron or sender existed anywhere. Each was written in good faith while building toward
+ * the thing it anticipated, and together they were convincing enough that the gap was nearly
+ * written into a customer-facing offer as a promise, sourced from these comments rather than code.
+ *
+ * THE RULE: a comment saying what the system DOES must be distinguishable from one saying what it
+ * is FOR. Intent is written as `NOT BUILT —` followed by what would have to be true, and never in
+ * the present tense. A description names the file that makes it true, so a reader can follow it and
+ * check. See lib/intake-escalation's note on the deferred sweep for the shape.
  */
 
 export const INTAKE_ITEMS = ['findings', 'mileage_vin', 'walkaround', 'diag_scan', 'oil_level'] as const;
@@ -110,7 +126,7 @@ export function intakeItemDone(item: IntakeItem, f: IntakeFacts): boolean {
 }
 
 /**
- * The four items as the screen and the escalation both see them.
+ * The items as the screen and the escalation (lib/intake-escalation) both see them.
  *
  * `skipped` is DERIVED AGAINST DONE, deliberately: skip the scan at 09:30 and do it at 10:00 and
  * the item is simply done — a spent skip must not follow the card around. The escalation reports
