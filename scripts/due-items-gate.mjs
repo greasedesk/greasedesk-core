@@ -7,7 +7,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock } = await import('../lib/due-items.ts');
+const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock, closureOffer, closureOffersForCard } = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -147,6 +147,40 @@ const goldens = readFileSync('scripts/goldens-june.mjs', 'utf8');
 check('due_items_snapshot is NOT in INVOICE_FIELDS — June cannot move',
   !/due_items_snapshot/.test(goldens),
   'the hash moves only on an explicit allow-list addition, and June has nothing to snapshot');
+
+// ── 3f. CLOSURE: OFFERED, NEVER AUTOMATIC ───────────────────────────────────────────────────────
+console.log('\n— discs today, pads next month —');
+check('a finding with no lines is not offered for closing', closureOffer([]).reason === 'no_lines');
+// THE CASE THAT DECIDES THE WHOLE DESIGN. Two lines, one invoiced. Auto-closing on invoice would
+// clear this finding and lose work the customer has already agreed to buy.
+const partial = closureOffer([{ invoiceIssued: true }, { invoiceIssued: false }]);
+check('ONE line invoiced of two → NO offer', partial.offer === false && partial.reason === 'work_outstanding',
+  'the discs are on an invoice; the pads are next month, and the finding is not finished');
+const done = closureOffer([{ invoiceIssued: true }, { invoiceIssued: true }]);
+check('every line invoiced → the offer appears', done.offer === true && done.invoicedLines === 2);
+check('  …and it is an OFFER, not a closure — nothing here writes', typeof closureOffer === 'function'
+  && !/prisma|update|closed_at/.test(closureOffer.toString()),
+  'a pure function cannot close anything; a person confirms');
+
+const ui3 = readFileSync('components/jobcard/DueItems.tsx', 'utf8');
+check('the card PROMPTS when the offer is on', /due-closure-offer-/.test(ui3) && /closurePrompt/.test(ui3));
+check('  …and the prompt is a button a human presses', /due-closure-confirm/.test(ui3) && /onClick=\{\(\) => close\(it\.id\)\}/.test(ui3));
+// NOTHING in the invoice path may close a finding.
+const issue = readFileSync('lib/invoice-issue.ts', 'utf8');
+check('the MINT never closes a finding', !/closed_at/.test(issue),
+  'invoicing is not a statement that the car is fine');
+const statusApi = readFileSync('pages/api/jobcard-status.ts', 'utf8');
+check('  …and neither does the invoiced transition', !/closed_at|DueItem/.test(statusApi));
+
+// The link itself: one finding may become several lines.
+console.log('\n— one finding, several lines —');
+const schema2 = readFileSync('prisma/schema.prisma', 'utf8');
+const lineModel = schema2.slice(schema2.indexOf('model DueItemLine'), schema2.indexOf('model VehicleOdometerReading'));
+check('the link is a JOIN, not a column on either side', /@@unique\(\[due_item_id, job_card_item_id\]\)/.test(lineModel),
+  'one finding can become discs, pads AND the labour to fit them');
+check('a deleted estimate line takes only the LINK', /job_card_item JobCardItem @relation[\s\S]*?onDelete: Cascade/.test(lineModel)
+  && /The FINDING survives/.test(lineModel),
+  'deleting a line is a pricing decision, not a statement that the car is fine');
 
 // ── 4. THE CUSTOMER IS NOT ON THE RECORD ───────────────────────────────────────────────────────
 console.log('\n— who to remind is resolved later, never stored —');

@@ -443,6 +443,7 @@ model Group {
   due_items          VehicleDueItem[]
   odometer_readings  VehicleOdometerReading[]
   due_item_answers   DueItemCustomerAnswer[]
+  due_item_lines     DueItemLine[]
 }
 
 /**
@@ -1510,6 +1511,7 @@ model VehicleDueItem {
   /// The customer's OWN answers, token-authenticated. See DueItemCustomerAnswer for why these are
   /// kept apart from `customer_response` above.
   customer_answers DueItemCustomerAnswer[]
+  lines            DueItemLine[]
 }
 
 /// EVERY ODOMETER READING WE HAVE FOR A CAR — the MOT history DVSA already sends us, plus our own.
@@ -1571,6 +1573,46 @@ model DueItemCustomerAnswer {
   /// APPEND-ONLY: a customer who changes their mind on the same report leaves two rows, in order.
   @@index([due_item_id, answered_at])
   @@index([group_id])
+}
+
+/// A FINDING THAT BECAME A PRICED LINE — the link between what the car needed and what was sold.
+///
+/// ── WHY THIS IS NOT A COLUMN ON EITHER SIDE ─────────────────────────────────────────────────────
+/// One finding can become SEVERAL lines (discs, pads, and the labour to fit them), and a line can
+/// legitimately serve one finding only. A join table says both; a foreign key on JobCardItem would
+/// say the second and lie about the first.
+///
+/// ── AND WHY INVOICING DOES NOT CLOSE THE FINDING ────────────────────────────────────────────────
+/// THE CASE THAT DECIDES IT: a customer says yes to discs AND pads. The garage fits the discs
+/// today and the pads next month. One invoice, one finding genuinely finished, one still open.
+/// Auto-closing on invoice would clear BOTH — silently, and in the direction that loses work the
+/// customer has already agreed to buy.
+///
+/// So closure is DERIVED AND OFFERED, never automatic: when every line linked to a finding sits on
+/// an issued invoice, the card offers "mark done" pre-ticked and a human confirms in one tap. That
+/// keeps the marketing list clean without a rule that quietly clears things nobody checked.
+model DueItemLine {
+  id          String @id @default(uuid())
+  group_id    String
+  due_item_id String
+  /// The estimate line this finding turned into.
+  job_card_item_id String
+
+  /// Who linked them, and when. A link is a judgement — "this line is that finding" — not a fact
+  /// the system derived, so it carries an author.
+  linked_by String?
+  created_at DateTime @default(now())
+
+  group     Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  due_item  VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
+  /// Cascade: a deleted estimate line takes its link with it. The FINDING survives — it is about
+  /// the car, and deleting a line is a pricing decision, not a statement that the car is fine.
+  job_card_item JobCardItem @relation(fields: [job_card_item_id], references: [id], onDelete: Cascade)
+
+  /// One line serves one finding. Re-linking the same pair is a no-op, not a duplicate.
+  @@unique([due_item_id, job_card_item_id])
+  @@index([group_id, due_item_id])
+  @@index([job_card_item_id])
 }
 
 model VehicleOdometerReading {
@@ -1934,6 +1976,7 @@ model JobCardItem {
 
   @@index([job_card_id])
   @@index([catalogue_item_id])
+  due_item_links   DueItemLine[]
 }
 
 // Lightweight labelled diary entry — NOT a job card (no customer/vehicle/quote). A note may be

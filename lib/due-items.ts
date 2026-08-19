@@ -344,3 +344,50 @@ export function reportStatus(args: {
   const shape = args.answeredFindings > 0 ? 'partial' : 'awaiting';
   return { state: shape, sentAt, days, answered: args.answeredFindings, total: args.totalFindings };
 }
+
+// ── CLOSURE: DERIVED AND OFFERED, NEVER AUTOMATIC ────────────────────────────────────────────────
+export type ClosureOffer =
+  | { offer: false; reason: 'no_lines' | 'work_outstanding' }
+  | { offer: true; invoicedLines: number };
+
+/**
+ * Should the card OFFER to close this finding?
+ *
+ * ── THE CASE THIS EXISTS FOR ────────────────────────────────────────────────────────────────────
+ * A customer says yes to discs and pads. The garage fits the discs today and the pads next month.
+ * One invoice is issued, one finding is genuinely finished, one is not. A rule that closed findings
+ * on invoice would clear both — silently, and in the direction that loses agreed work.
+ *
+ * So: every linked line must sit on an ISSUED invoice before the offer appears, and even then it is
+ * an OFFER. A person confirms. The prompt does the remembering; the judgement stays human.
+ *
+ * PURE, so the rule is provable without issuing anything.
+ */
+export function closureOffer(lines: Array<{ invoiceIssued: boolean }>): ClosureOffer {
+  if (!lines.length) return { offer: false, reason: 'no_lines' };
+  const invoiced = lines.filter((l) => l.invoiceIssued).length;
+  // PARTIAL IS NOT DONE. This single comparison is the discs-and-pads case.
+  if (invoiced < lines.length) return { offer: false, reason: 'work_outstanding' };
+  return { offer: true, invoicedLines: invoiced };
+}
+
+/** Findings on a card with their linked lines' invoice state — the closure prompt's input. */
+export async function closureOffersForCard(
+  db: Prisma.TransactionClient | { dueItemLine: { findMany: (a: unknown) => Promise<unknown> } },
+  groupId: string,
+  dueItemIds: string[],
+): Promise<Map<string, ClosureOffer>> {
+  const out = new Map<string, ClosureOffer>();
+  if (!dueItemIds.length) return out;
+  const rows = (await (db as { dueItemLine: { findMany: (a: unknown) => Promise<unknown> } }).dueItemLine.findMany({
+    where: { group_id: groupId, due_item_id: { in: dueItemIds } },
+    select: { due_item_id: true, job_card_item: { select: { job_card: { select: { invoice: { select: { issued_at: true } } } } } } },
+  })) as Array<{ due_item_id: string; job_card_item: { job_card: { invoice: { issued_at: Date | null } | null } } }>;
+  const byItem = new Map<string, Array<{ invoiceIssued: boolean }>>();
+  for (const r of rows) {
+    const issued = !!r.job_card_item?.job_card?.invoice?.issued_at;
+    byItem.set(r.due_item_id, [...(byItem.get(r.due_item_id) ?? []), { invoiceIssued: issued }]);
+  }
+  for (const id of dueItemIds) out.set(id, closureOffer(byItem.get(id) ?? []));
+  return out;
+}

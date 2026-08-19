@@ -20,11 +20,11 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
-import { refuseDueItem, responseAtFor, openDueItemsForVehicle, type DueBasis, type DueItemResponse } from '@/lib/due-items';
+import { refuseDueItem, responseAtFor, openDueItemsForVehicle, closureOffersForCard, type DueBasis, type DueItemResponse } from '@/lib/due-items';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'GET') {
-    res.setHeader('Allow', 'GET, POST, PATCH');
+  if (req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'GET' && req.method !== 'PUT') {
+    res.setHeader('Allow', 'GET, POST, PATCH, PUT');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
   const session = await getServerSession(req, res, authOptions);
@@ -41,7 +41,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const v = await getVisibility(user.id as string);
     if (!canAccessSite(v, c.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
     // THE SAME chokepoint the page render uses, so the panel and the server cannot disagree.
-    return res.status(200).json({ items: await openDueItemsForVehicle(prisma, groupId, c.vehicle_id) });
+    const items = await openDueItemsForVehicle(prisma, groupId, c.vehicle_id);
+    const offers = await closureOffersForCard(prisma, groupId, items.map((i) => i.id));
+    return res.status(200).json({
+      items: items.map((i) => ({ ...i, closureOffer: offers.get(i.id) ?? { offer: false, reason: 'no_lines' } })),
+    });
+  }
+
+  // ── LINK A FINDING TO AN ESTIMATE LINE ────────────────────────────────────────────────────────
+  // The customer said yes; someone priced it. This records WHICH line answers WHICH finding, so the
+  // card can later offer to close the finding — and so that "invoiced" never silently means "done".
+  if (req.method === 'PUT') {
+    const { dueItemId, jobCardItemId, unlink } = (req.body || {}) as { dueItemId?: string; jobCardItemId?: string; unlink?: boolean };
+    if (!dueItemId || !jobCardItemId) return res.status(400).json({ message: 'An item and a line are required.' });
+    // BOTH SIDES tenant-checked, and the line's card must be one the caller can reach.
+    const line = await prisma.jobCardItem.findFirst({
+      where: { id: jobCardItemId, job_card: { group_id: groupId } },
+      select: { id: true, job_card: { select: { site_id: true } } },
+    });
+    const found = await prisma.vehicleDueItem.findFirst({ where: { id: dueItemId, group_id: groupId }, select: { id: true } });
+    if (!line || !found) return res.status(404).json({ message: 'Not found.' });
+    const v2 = await getVisibility(user.id as string);
+    if (!canAccessSite(v2, line.job_card.site_id)) return res.status(403).json({ message: 'You do not have access to that job card’s location.' });
+
+    if (unlink) {
+      await prisma.dueItemLine.deleteMany({ where: { due_item_id: dueItemId, job_card_item_id: jobCardItemId } });
+      return res.status(200).json({ ok: true, linked: false });
+    }
+    // Idempotent: the unique pair makes a second link a no-op rather than a duplicate.
+    await prisma.dueItemLine.upsert({
+      where: { due_item_id_job_card_item_id: { due_item_id: dueItemId, job_card_item_id: jobCardItemId } },
+      create: { group_id: groupId, due_item_id: dueItemId, job_card_item_id: jobCardItemId, linked_by: user.id as string },
+      update: {},
+    });
+    return res.status(200).json({ ok: true, linked: true });
   }
 
   // ── CLOSE ─────────────────────────────────────────────────────────────────────────────────────

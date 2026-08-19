@@ -10,7 +10,7 @@
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
 import { intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
-import { openDueItemsForVehicle, reportStatus } from '@/lib/due-items';
+import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
 import { getVisibility } from '@/lib/site-visibility';
@@ -370,6 +370,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     skipsByItem as never,
   );
 
+  const closureOffers = await closureOffersForCard(prisma, groupId, dueItems.map((d) => d.id));
+
   const tabsState = computeTabs({
     status: row.status as JobStatus,
     stages,
@@ -431,8 +433,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     reachability,
     registration: row.vehicle?.registration ?? '—',
     // What this CAR still needs — open findings from this visit or any earlier one. The upsell
-    // list, in front of whoever has the car today.
-    dueItems,
+    // list, in front of whoever has the car today. Each carries its CLOSURE OFFER: derived from
+    // whether every linked estimate line is invoiced, and offered rather than applied.
+    dueItems: dueItems.map((d) => ({ ...d, closureOffer: closureOffers.get(d.id) ?? { offer: false as const, reason: 'no_lines' as const } })),
     // The four intake prompts, already resolved to prompted/done/skipped server-side.
     intakeItems,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3

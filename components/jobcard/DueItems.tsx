@@ -20,8 +20,10 @@ export type DueItemView = {
   id: string; description: string;
   dueBasis: 'date' | 'mileage' | 'next_service' | 'whichever_first';
   dueDate: string | null; dueMileage: number | null;
-  customerResponse: 'not_raised' | 'declined' | 'agreed_later';
+  customerResponse: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call';
   createdAt?: string;
+  /** Derived (lib/due-items::closureOffer) — offered, never applied automatically. */
+  closureOffer?: { offer: false; reason: 'no_lines' | 'work_outstanding' } | { offer: true; invoicedLines: number };
 };
 
 type Props = {
@@ -130,6 +132,19 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
               {canEdit && (
                 <button type="button" disabled={busy} onClick={() => close(it.id)}
                   className="ml-auto text-xs text-muted hover:text-ink underline">{t('dueItems.close')}</button>
+              )}
+              {/* THE PROMPT, not the rule. Every line linked to this finding is on an issued
+                  invoice, so the work is very likely finished — but "very likely" is not a reason
+                  to close it silently. Discs fitted today and pads next month is one invoice and
+                  two different answers, so a person confirms. */}
+              {canEdit && it.closureOffer?.offer && (
+                <div className="w-full mt-2 flex flex-wrap items-center gap-2 bg-ok-soft rounded-lg px-3 py-2"
+                  data-testid={`due-closure-offer-${it.id}`}>
+                  <span className="text-xs text-ok flex-1">{t('dueItems.closurePrompt')}</span>
+                  <button type="button" disabled={busy} onClick={() => close(it.id)}
+                    data-testid="due-closure-confirm"
+                    className="text-xs font-semibold bg-ok text-white rounded-lg px-3 py-1.5">{t('dueItems.closureConfirm')}</button>
+                </div>
               )}
             </li>
           ))}

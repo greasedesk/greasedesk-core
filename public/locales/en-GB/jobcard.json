@@ -431,7 +431,8 @@
     "response": {
       "not_raised": "Not raised yet",
       "declined": "They declined",
-      "agreed_later": "Wants it later"
+      "agreed_later": "Wants it later",
+      "wants_call": "Wants a call"
     },
     "mileagePlaceholder": "e.g. 60000",
     "save": "Record it",
@@ -440,7 +441,9 @@
     "close": "Mark done",
     "saveError": "Could not record that.",
     "motExpiry": "MOT expires {{date}}",
-    "motSource": "— from DVSA, no need to record it"
+    "motSource": "— from DVSA, no need to record it",
+    "closurePrompt": "This has been invoiced — mark it done?",
+    "closureConfirm": "Mark done"
   },
   "intake": {
     "title": "Before the car goes in",
