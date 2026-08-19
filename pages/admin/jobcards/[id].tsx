@@ -39,6 +39,8 @@ type PageProps = {
   /** The four intake prompts, resolved server-side. */
   intakeItems?: IntakeItemView[];
   nothingFoundAt?: string | null;
+  /** Derived report state — never stored. */
+  reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   // READ-ONLY message history for this card's (customer, vehicle) thread.
   conversation: import('@/components/messages/ConversationView').ConversationMessage[];
   threadId: string | null;
@@ -164,6 +166,7 @@ export default function JobCardDetailPage(props: PageProps) {
         dueItems={props.dueItems}
         intakeItems={props.intakeItems}
         nothingFoundAt={props.nothingFoundAt}
+        reportStatus={props.reportStatus}
         conversation={props.conversation}
         threadId={props.threadId}
         messagesUnread={props.messagesUnread}

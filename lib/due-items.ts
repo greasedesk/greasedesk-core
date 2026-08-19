@@ -312,3 +312,35 @@ export async function latestCustomerAnswers(
   for (const r of rows) out.set(r.due_item_id, { answer: r.answer, answeredAt: r.answered_at });
   return out;
 }
+
+// ── "AWAITING RESPONSE" — DERIVED, NEVER AN EVENT ────────────────────────────────────────────────
+export type ReportStatus =
+  | { state: 'not_sent' }
+  | { state: 'awaiting'; sentAt: string; days: number; answered: number; total: number }
+  | { state: 'partial'; sentAt: string; days: number; answered: number; total: number }
+  | { state: 'all_answered'; sentAt: string; answered: number };
+
+/**
+ * Where a card's intake report stands.
+ *
+ * NO RESPONSE IS NOT AN EVENT. Nothing happened, so nothing can fire — building it as a
+ * notification would mean inventing an event from an absence and then deciding how often to nag.
+ * It is derived from two facts the system already holds: when a report link was last minted, and
+ * how many findings carry a customer answer. A card shows "sent 3 days ago, no reply" without any
+ * scheduled job, and the figure cannot drift because nothing stores it.
+ */
+export function reportStatus(args: {
+  lastSentAt: Date | null;
+  totalFindings: number;
+  answeredFindings: number;
+  now: Date;
+}): ReportStatus {
+  if (!args.lastSentAt) return { state: 'not_sent' };
+  const sentAt = args.lastSentAt.toISOString();
+  const days = Math.floor((args.now.getTime() - args.lastSentAt.getTime()) / 86_400_000);
+  if (args.totalFindings > 0 && args.answeredFindings >= args.totalFindings) {
+    return { state: 'all_answered', sentAt, answered: args.answeredFindings };
+  }
+  const shape = args.answeredFindings > 0 ? 'partial' : 'awaiting';
+  return { state: shape, sentAt, days, answered: args.answeredFindings, total: args.totalFindings };
+}

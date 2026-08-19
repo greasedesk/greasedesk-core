@@ -143,6 +143,33 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  /**
+   * THE INTAKE REPORT. A service message about a car currently in the garage's possession, sent in
+   * response to work the customer commissioned — NOT marketing, and NOT `security`. It respects the
+   * contact opt-out: a customer who has opted out of texts gets the email, or nothing with the
+   * reason visible on the card. `security` exists for phone codes and password resets, and a report
+   * must not claim that exemption to get itself delivered.
+   */
+  intake_report: {
+    label: 'Intake report (what we found at the car)',
+    email: (d) => ({
+      subject: `We've checked over your ${d.registration ?? 'car'} — ${d.garageName ?? 'your garage'}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">We've had a look at your car</h2>
+        <p>${esc(d.garageName)} checked over${d.registration ? ` <strong>${esc(d.registration)}</strong>` : ' your car'} when it arrived.
+           ${d.findingCount ? `We found <strong>${esc(d.findingCount)}</strong> thing${Number(d.findingCount) === 1 ? '' : 's'} worth telling you about.` : 'Here is what we saw.'}</p>
+        ${button(String(d.link ?? ''), 'See your check-in')}
+        <p style="font-size:13px;color:#475569">
+          There are no prices on this page — tell us what you'd like quoted and we'll send you a price to decide on.
+        </p>
+        <p style="font-size:13px;color:#475569">This link works for ${esc(d.expiryDays ?? 14)} days. Anyone with the link can view it, so please don't forward it.</p>`),
+    }),
+    sms: (d) => ({
+      // One segment where possible: the link and the reply route already cost most of the budget.
+      text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: we've checked over your ${d.registration ?? 'car'}. See what we found: ${d.link}`),
+    }),
+  },
+
   job_card_link: {
     label: 'Job progress link',
     email: (d) => ({

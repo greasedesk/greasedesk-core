@@ -20,6 +20,7 @@ import JobCardNotes from '@/components/jobcard/JobCardNotes';
 import CustomerDetailsForm from '@/components/jobcard/CustomerDetailsForm';
 import DueItems, { type DueItemView } from '@/components/jobcard/DueItems';
 import IntakeChecklist, { type IntakeItemView } from '@/components/jobcard/IntakeChecklist';
+import SendIntakeReport from '@/components/jobcard/SendIntakeReport';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -81,6 +82,8 @@ type Props = {
   /** The four intake prompts, resolved server-side (lib/intake-items). */
   intakeItems?: IntakeItemView[];
   nothingFoundAt?: string | null;
+  /** Derived report state (lib/due-items::reportStatus) — never a stored flag. */
+  reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
     noShowDates?: string[] };
@@ -879,6 +882,9 @@ export default function JobCardWorkspace(p: Props) {
         <IntakeChecklist jobCardId={p.jobCardId} items={eff.intakeItems}
           canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
+        <SendIntakeReport jobCardId={p.jobCardId} canSend={p.canOperate && !inactive}
+          findingCount={(p.dueItems ?? []).length}
+          status={p.reportStatus ?? { state: 'not_sent' }} />
         <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
           <div className="flex justify-end"><StageComplete stage="intake" label={t('tab.intake')} /></div>
         </div>

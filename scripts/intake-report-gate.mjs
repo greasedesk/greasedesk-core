@@ -11,6 +11,8 @@ import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { buildIntakeReport } = await import('../lib/intake-report.ts');
+const { reportStatus } = await import('../lib/due-items.ts');
+const { NOTIFICATION_TEMPLATES: TEMPLATES } = await import('../lib/notification-templates.ts');
 const { readFileSync } = await import('node:fs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -58,6 +60,54 @@ check('the media route is scoped to the link\'s card and the intake stage',
   /job_card_id: resolved\.link\.jobCardId/.test(media) && /stage: 'intake'/.test(media));
 check('the customer answer is audited with NO userId — a customer is not a user',
   /userId: null,/.test(respond) && /due_item\.customer_answered/.test(respond));
+
+// ── 3b. CONSENT: A SERVICE MESSAGE, NOT A SECURITY ONE ──────────────────────────────────────────
+console.log('\n— the report respects the opt-out —');
+const tpl = TEMPLATES.intake_report;
+check('the template exists', !!tpl);
+check('it is NOT marked security', tpl.security !== true,
+  'security bypasses contact preferences and exists for phone codes and password resets; a report must not claim that exemption');
+check('  …the check is discriminating — phone_verify IS security', TEMPLATES.phone_verify?.security === true);
+check('it renders on both channels', typeof tpl.email === 'function' && typeof tpl.sms === 'function');
+const html = tpl.email({ garageName: 'G', registration: 'AB12 CDE', findingCount: 2, link: 'https://x', expiryDays: 14 }).html;
+check('the email carries NO price', !/£/.test(html) && !/total/i.test(html));
+check('  …and says so, so a customer knows what a "yes" means', /no prices on this page/i.test(html));
+check('the email warns the link is shareable', /Anyone with the link/i.test(html));
+
+// ── 3c. THE THREE SILENCES, ON THE SEND PATH ────────────────────────────────────────────────────
+console.log('\n— why a report did not go —');
+const send = readFileSync('pages/api/intake-report-send.ts', 'utf8');
+check('the send path uses the shared mapping', /describeSendFailure\(/.test(send));
+check('  …and NO ADDRESS is handled separately from a failed send', /no_recipient/.test(send)
+  && /nothing was attempted/i.test(send), 'nothing was attempted, so it must not read as a failure');
+check('the link is returned whatever happened', /url: link\.url/.test(send),
+  'a refusal is not a dead end — the garage can hand the link over');
+const sendCode = send.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+check('re-sending does NOT revoke the old link', !/revokeMagicLinks/.test(sendCode),
+  'unlike a quote: a stale price must die, a nudge must not kill the first message');
+
+// ── 3d. "NO RESPONSE" IS DERIVED ────────────────────────────────────────────────────────────────
+console.log('\n— an absence is not an event —');
+const now = new Date('2026-08-19T12:00:00Z');
+check('never sent → not_sent', reportStatus({ lastSentAt: null, totalFindings: 2, answeredFindings: 0, now }).state === 'not_sent');
+const aw = reportStatus({ lastSentAt: new Date('2026-08-16T12:00:00Z'), totalFindings: 2, answeredFindings: 0, now });
+check('sent, nothing answered → awaiting, with the age', aw.state === 'awaiting' && aw.days === 3);
+check('some answered → partial', reportStatus({ lastSentAt: new Date('2026-08-18T12:00:00Z'), totalFindings: 3, answeredFindings: 1, now }).state === 'partial');
+check('all answered → all_answered', reportStatus({ lastSentAt: new Date('2026-08-18T12:00:00Z'), totalFindings: 2, answeredFindings: 2, now }).state === 'all_answered');
+const dueLib = readFileSync('lib/due-items.ts', 'utf8');
+check('nothing schedules or notifies for a non-response',
+  !/setTimeout|cron|scheduleq/i.test(dueLib) && !/sendNotification/.test(dueLib),
+  'building it as a notification means inventing an event from an absence and then deciding how often to nag');
+
+// ── 3e. THE SHAREABLE-LINK WARNING IS WHERE THE DECISION IS ─────────────────────────────────────
+console.log('\n— the garage is told before pressing send —');
+const panel = readFileSync('components/jobcard/SendIntakeReport.tsx', 'utf8');
+const panelCode = panel.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+check('the warning names the VIDEO, not just "a link"', /video and photos of the customer’s car/.test(panelCode));
+check('  …and says forwarding passes it on', /whoever receives it can see it too/.test(panelCode));
+check('it sits with the send buttons, not behind a link to Terms', /report-share-warning/.test(panelCode) && !/terms/i.test(panelCode));
+check('it is NOT a checkbox', !/type="checkbox"/.test(panelCode),
+  'consent theatre for a routine action trains people to click past it');
 
 // ── 4. LIVE: THE REPORT A CUSTOMER WOULD SEE ────────────────────────────────────────────────────
 console.log('\n— on ZZ —');
