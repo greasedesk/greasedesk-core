@@ -92,6 +92,13 @@ export type InvoiceDoc = {
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
+  /**
+   * What the car also needed, AS PRINTED — the frozen block from the mint. Read from the snapshot
+   * unconditionally: unlike reg/VIN/mileage, this does NOT stay live while issued. Those are
+   * identity corrections a garage wants flowing through; this is advice given on a date, and a
+   * customer's copy must not disagree with a reprint.
+   */
+  dueItemsBlock: string | null;
   lines: InvoiceDocLine[];
   totals: InvoiceTotals;
   currency: string;
@@ -108,6 +115,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
+      due_items_snapshot: true,
       payment_method_snapshot: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
@@ -210,6 +218,8 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
           mileage: inv.job_card?.odometer_in ?? inv.job_card?.vehicle?.mileage_at_create ?? null,
         }
       : { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
+    // FROZEN, always — no live branch. See the type above for why this differs from reg/VIN.
+    dueItemsBlock: inv.due_items_snapshot ?? null,
     lines,
     totals,
     currency: inv.site?.currency_code ?? 'GBP',

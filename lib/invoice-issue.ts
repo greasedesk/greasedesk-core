@@ -18,6 +18,7 @@
  * were classified 2026-07-12 and every writer here sets it; tighten the column to NOT NULL in a
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
+import { printedDueItemsBlock, openDueItemsForVehicle } from '@/lib/due-items';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
@@ -31,7 +32,8 @@ const CARD_SELECT = {
   group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true, account_terms_days: true } },
-  vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
+  // mot_expiry rides along because it PRINTS on the due-items block and must freeze with it.
+  vehicle: { select: { id: true, registration: true, make: true, model: true, vin: true, mileage_at_create: true, mot_expiry: true } },
 } as const;
 
 async function createInvoiceRow(
@@ -61,6 +63,13 @@ async function createInvoiceRow(
     seq,
   );
   const vehicleDesc = [card.vehicle?.make, card.vehicle?.model].filter(Boolean).join(' ') || null;
+  // Built BEFORE the row is created, from what is true at this instant — the open findings on this
+  // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
+  // moment from the rest of the document.
+  const dueItemsBlock = printedDueItemsBlock({
+    motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
+    items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
+  });
 
   const invoice = await tx.invoice.create({
     data: {
@@ -82,6 +91,10 @@ async function createInvoiceRow(
       // FROZEN AT ISSUE, like every other snapshot on this row. A rebrand must not rewrite the name
       // on documents already in customers' hands.
       company_trading_name_snapshot: identity.tradingName ?? null,
+      // WHAT THE CAR ALSO NEEDED, as printed. Frozen here with every other particular: the findings
+      // list changes as items are closed, and the MOT expiry moves when the car is retested, so a
+      // live read would make a reprint disagree with the page the customer was handed.
+      due_items_snapshot: dueItemsBlock,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,
       customer_name_snapshot: card.customer?.name ?? '',

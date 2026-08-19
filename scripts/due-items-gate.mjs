@@ -7,7 +7,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate } = await import('../lib/due-items.ts');
+const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock } = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -110,6 +110,44 @@ const intakePane = ws.slice(ws.indexOf("{active === 'intake' &&"), ws.indexOf("{
 check('  …and NOT in the intake pane — moved, not duplicated', !/<DueItems/.test(intakePane),
   'two copies of one list is two things to keep in step');
 
+// ── 3e. THE PRINTED BLOCK, AND ITS FREEZE ──────────────────────────────────────────────────────
+console.log('\n— the block a customer keeps —');
+const block = printedDueItemsBlock({
+  motExpiry: new Date('2024-09-22T00:00:00Z'),
+  items: [
+    { description: 'Oil service', dueBasis: 'whichever_first', dueDate: '2025-11-01', dueMileage: 10000 },
+    { description: 'Front brake pads', dueBasis: 'mileage', dueDate: null, dueMileage: 25000 },
+  ],
+});
+check('the MOT leads, numbered, as the garage writes it by hand',
+  block.split('\n')[0] === '(1) MOT Expiry 22 September 2024', JSON.stringify(block.split('\n')[0]));
+check('findings follow, each with its own timing', /\(2\) Oil service due at 10,000 miles or by 2025-11-01, whichever comes first/.test(block));
+check('nothing to say → NULL, not an empty block',
+  printedDueItemsBlock({ motExpiry: null, items: [] }) === null,
+  'an empty string and "nothing captured" must be distinguishable in the column');
+
+console.log('\n— frozen at mint: BOTH halves move afterwards —');
+const mintSrc = readFileSync('lib/invoice-issue.ts', 'utf8');
+check('the mint writes the block into the row', /due_items_snapshot: dueItemsBlock,/.test(mintSrc));
+check('  …built in the SAME tx, from openDueItemsForVehicle(tx, …)', /openDueItemsForVehicle\(tx, groupId/.test(mintSrc));
+check('  …and the MOT expiry is selected for it', /mot_expiry: true/.test(mintSrc),
+  'DVSA-sourced and it MOVES on retest — a live read prints next year\'s date on last year\'s invoice');
+const docSrc = readFileSync('lib/invoice-doc.ts', 'utf8');
+check('the document reads the SNAPSHOT unconditionally — no live branch',
+  /dueItemsBlock: inv\.due_items_snapshot \?\? null,/.test(docSrc));
+// DISCRIMINATING: reg/VIN/mileage DO have a live branch while issued, so "no live branch" is a real
+// property of this field and not something every field here happens to have.
+check('  …the check is discriminating — reg/VIN DO stay live while issued',
+  /inv\.status === 'issued'/.test(docSrc) && /job_card\?\.vehicle\?\.registration/.test(docSrc));
+check('both renderers print it', /doc\.dueItemsBlock/.test(readFileSync('lib/invoice-pdf.tsx', 'utf8'))
+  && /props\.dueItemsBlock/.test(readFileSync('pages/admin/invoices/[id].tsx', 'utf8')));
+// THE GOLDENS MUST NOT MOVE. The banked rule: the hash moves only when a column joins the explicit
+// allow-list. June's invoices predate this feature and have nothing to snapshot.
+const goldens = readFileSync('scripts/goldens-june.mjs', 'utf8');
+check('due_items_snapshot is NOT in INVOICE_FIELDS — June cannot move',
+  !/due_items_snapshot/.test(goldens),
+  'the hash moves only on an explicit allow-list addition, and June has nothing to snapshot');
+
 // ── 4. THE CUSTOMER IS NOT ON THE RECORD ───────────────────────────────────────────────────────
 console.log('\n— who to remind is resolved later, never stored —');
 check('the model has no customer column', !/customer_id/.test(model),
@@ -156,12 +194,57 @@ try {
   check('a closed item stops surfacing', (await openDueItemsForVehicle(prisma, ZZ, veh.id)).length === 0);
   check('the check is discriminating — the row is still THERE, just closed',
     (await prisma.vehicleDueItem.count({ where: { id: item.id } })) === 1, 'history is kept; only the surface changes');
+  // ── 6. THE FREEZE, PROVEN BY MOVING BOTH FACTS ────────────────────────────────────────────────
+  // Static checks show the code reads a snapshot; only a mint proves the document does not change
+  // when the world does. This burns one number from ZZ's own warranty sequence — deliberate, and
+  // the reason the warranty series is used rather than the chargeable one.
+  console.log('\n— mint, then move both facts —');
+  const site2 = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const veh2 = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ88 FRZ', registration_normalized: 'ZZ88FRZ', mot_expiry: new Date('2027-09-22T00:00:00Z') }, select: { id: true } });
+  const cust2 = await prisma.customer.create({ data: { group_id: ZZ, site_id: site2.id, name: 'Freeze Fixture' }, select: { id: true } });
+  const card2 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site2.id, customer_id: cust2.id, vehicle_id: veh2.id, status: 'in_progress', is_comeback: true }, select: { id: true } });
+  fix.cardId2 = card2.id; fix.vehId2 = veh2.id; fix.custId2 = cust2.id;
+  await prisma.jobCardItem.create({ data: { job_card_id: card2.id, item_type: 'labour', description: 'gate: freeze', qty: 1, unit_price: 0, vat_rate: 0 } });
+  const keeper = await prisma.vehicleDueItem.create({
+    data: { group_id: ZZ, vehicle_id: veh2.id, found_on_job_card_id: card2.id, description: 'gate: rear pads',
+            due_basis: 'mileage', due_mileage: 25000, customer_response: 'declined', response_at: new Date() },
+    select: { id: true },
+  });
+  fix.itemIds.push(keeper.id);
+
+  const { issueWarrantyInvoiceForCard } = await import('../lib/invoice-issue.ts');
+  const invId = await prisma.$transaction((tx) => issueWarrantyInvoiceForCard(tx, card2.id, ZZ, { goodwill: 'Goodwill', noCharge: 'No charge' }));
+  fix.invoiceId = invId;
+  const minted = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true } });
+  check('the mint froze a block naming both facts',
+    /MOT Expiry 22 September 2027/.test(minted.due_items_snapshot ?? '') && /rear pads due at 25,000 miles/.test(minted.due_items_snapshot ?? ''),
+    JSON.stringify(minted.due_items_snapshot));
+
+  // NOW MOVE THE WORLD. Close the finding, and retest the car.
+  await prisma.vehicleDueItem.update({ where: { id: keeper.id }, data: { closed_at: new Date() } });
+  await prisma.vehicle.update({ where: { id: veh2.id }, data: { mot_expiry: new Date('2028-09-22T00:00:00Z') } });
+  check('the car now has NO open findings', (await openDueItemsForVehicle(prisma, ZZ, veh2.id)).length === 0);
+  check('  …and a new MOT expiry', (await prisma.vehicle.findUnique({ where: { id: veh2.id }, select: { mot_expiry: true } })).mot_expiry.getUTCFullYear() === 2028);
+
+  const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');
+  const doc = await buildInvoiceDoc(invId, ZZ);
+  check('THE DOCUMENT IS UNCHANGED — still 2027, still the closed finding',
+    doc.dueItemsBlock === minted.due_items_snapshot,
+    'a reprint must show what the customer received, not what the list says today');
+  check('  …specifically, it does NOT show the new MOT date', !/2028/.test(doc.dueItemsBlock ?? ''),
+    'the subtler half: MOT expiry moves on retest and a live read would print next year\'s on last year\'s invoice');
+
 } catch (e) {
   check('fixture run completed', false, String(e?.message ?? e).slice(0, 300));
 } finally {
   if (fix) {
+    if (fix.invoiceId) {
+      await prisma.invoiceLine.deleteMany({ where: { invoice_id: fix.invoiceId } }).catch(() => {});
+      await prisma.invoice.delete({ where: { id: fix.invoiceId } }).catch(() => {});
+    }
     await prisma.vehicleDueItem.deleteMany({ where: { id: { in: fix.itemIds } } });
     if (fix.cardId) await prisma.jobCard.delete({ where: { id: fix.cardId } }).catch(() => {});
+    if (fix.cardId2) await prisma.jobCard.delete({ where: { id: fix.cardId2 } }).catch(() => {});
     await prisma.vehicle.delete({ where: { id: fix.vehId } }).catch(() => {});
     const left = await prisma.vehicleDueItem.count({ where: { id: { in: fix.itemIds } } })
       + await prisma.vehicle.count({ where: { id: fix.vehId } });

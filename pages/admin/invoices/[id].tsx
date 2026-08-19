@@ -78,6 +78,8 @@ type PageProps = {
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
+  /** The frozen due-items block, as printed at mint (lib/due-items::printedDueItemsBlock). */
+  dueItemsBlock: string | null;
   lines: Line[];
   totals: Totals;
   currency: string;
@@ -619,6 +621,13 @@ export default function InvoicePage(props: PageProps) {
             )}
           </div>
 
+          {/* WHAT THE CAR ALSO NEEDED — the frozen block, above the lines, matching the PDF. */}
+          {props.dueItemsBlock && (
+            <div className="mb-4 text-sm text-muted whitespace-pre-line" data-testid="invoice-due-items">
+              {props.dueItemsBlock}
+            </div>
+          )}
+
           {/* Lines */}
           <div className="py-5 overflow-x-auto">
             <table className="w-full text-sm">
@@ -829,6 +838,7 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       company: doc.company,
       customer: doc.customer,
       vehicle: doc.vehicle,
+      dueItemsBlock: doc.dueItemsBlock ?? null,
       lines: doc.lines.map(({ description, qty, unitPricePennies, vatRate, netPennies }) => ({ description, qty, unitPricePennies, vatRate, netPennies })),
       totals: doc.totals,
       currency: doc.currency,

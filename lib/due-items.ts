@@ -184,3 +184,34 @@ export function effectiveDueDate(
     }
   }
 }
+
+// ── THE PRINTED BLOCK ────────────────────────────────────────────────────────────────────────────
+/**
+ * The lines that go on the invoice — and, frozen, into Invoice.due_items_snapshot at mint.
+ *
+ * ── WHY THE MOT EXPIRY IS IN HERE ───────────────────────────────────────────────────────────────
+ * Because the garage prints it, and because it is the one line nobody should have to type: it is
+ * DVSA-sourced on the vehicle. It leads the block, as it does on the real invoices this replaces.
+ *
+ * ── AND WHY IT MUST BE FROZEN WITH THE REST ─────────────────────────────────────────────────────
+ * The MOT expiry MOVES the moment the car is retested. Rendering it live would print next year's
+ * date against last year's invoice — quieter than a changing findings list and just as wrong. A
+ * customer holding June's invoice must be able to hold it up against a reprint and see the same
+ * page.
+ *
+ * Numbered, one per line, exactly as a garage writes them by hand.
+ */
+export function printedDueItemsBlock(args: {
+  motExpiry: Date | null;
+  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage'>>;
+}): string | null {
+  const lines: string[] = [];
+  if (args.motExpiry) {
+    lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
+  }
+  for (const it of args.items) lines.push(`${it.description} ${dueLabel(it)}`);
+  // NULL, not an empty string: nothing to say is not the same as a block that printed empty, and a
+  // reader of the column can tell them apart.
+  if (!lines.length) return null;
+  return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
+}

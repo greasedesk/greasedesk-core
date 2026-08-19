@@ -2060,6 +2060,21 @@ model Invoice {
   @@index([group_id])
   @@index([site_id])
   credit_notes CreditNote[]
+
+  /// ── WHAT THE CAR ALSO NEEDED, AS PRINTED ──────────────────────────────────────────────────────
+  /// A frozen TEXT BLOCK, not a relation, and frozen for the same reason every other snapshot here
+  /// is: an invoice is a record of what the customer RECEIVED. Closing a due item in October must
+  /// not alter June's invoice, and a reprint must reproduce the page that was handed over.
+  ///
+  /// It merges two kinds of fact and BOTH have to freeze:
+  ///   • captured findings — a live relation would change as items are closed or added;
+  ///   • the MOT EXPIRY, which is DVSA-sourced and MOVES the moment the car is retested. Reading it
+  ///     live would print next year's MOT date against last year's invoice — the subtler of the two
+  ///     and the reason this is a text block rather than a join.
+  ///
+  /// NULL on every invoice minted before this existed, and on any card whose vehicle had nothing to
+  /// say. Honest-null: no block was captured, as distinct from a block that was empty.
+  due_items_snapshot String?
 }
 
 model InvoiceLine {

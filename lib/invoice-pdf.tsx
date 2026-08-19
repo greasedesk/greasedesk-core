@@ -160,6 +160,17 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
           ) : null}
         </View>
 
+        {/* WHAT THE CAR ALSO NEEDED — above the line items, where TMBS have printed it by hand for
+            years. The customer gets this in writing on the document they keep; the garage's own
+            list is the follow-up copy, never a replacement for telling them. Frozen at mint. */}
+        {doc.dueItemsBlock ? (
+          <View style={{ marginBottom: 10 }}>
+            {doc.dueItemsBlock.split('\n').map((line, i) => (
+              <Text key={i} style={S.muted}>{line}</Text>
+            ))}
+          </View>
+        ) : null}
+
         <View style={S.tableHead}>
           <Text style={[S.th, S.cDesc]}>{t('cols.description')}</Text>
           <Text style={[S.th, S.cQty]}>{t('cols.qty')}</Text>
