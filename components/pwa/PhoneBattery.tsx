@@ -21,14 +21,18 @@
 import React, { useState } from 'react';
 import { enqueueBattery } from '@/lib/pwa-outbox';
 import { MIN_RATED_CCA, MAX_RATED_CCA } from '@/lib/battery';
+import { BatterySummary } from '@/components/jobcard/ConditionSummary';
+import type { BatteryCondition } from '@/lib/vehicle-condition';
 
 const STANDARDS = ['EN', 'SAE', 'DIN', 'JIS', 'IEC'] as const;
 const num = (s: string) => (s.trim() === '' ? null : Number(s));
 
-export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard, onQueued }: {
+export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard, recorded = null, onQueued }: {
   jobCardId: string;
   lastRatedCca?: number | null;
   lastCcaStandard?: string | null;
+  /** What the car ALREADY says — see PhoneTyres for why this was missing. */
+  recorded?: BatteryCondition | null;
   onQueued?: () => void;
 }) {
   const [voltage, setVoltage] = useState('');
@@ -67,6 +71,7 @@ export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard,
   return (
     <section className="bg-surface border border-line rounded-xl p-4" data-testid="phone-battery">
       <h2 className="text-sm font-semibold text-ink mb-1">Battery test</h2>
+      <BatterySummary battery={recorded} />
       <p className="text-xs text-muted mb-3">Straight off the tester, in the order it shows them.</p>
 
       <div className="grid grid-cols-3 gap-2">

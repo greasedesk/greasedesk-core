@@ -21,6 +21,8 @@
  */
 import React, { useRef, useState } from 'react';
 import { resizeImage } from '@/lib/image-resize';
+import { TyreSummary } from '@/components/jobcard/ConditionSummary';
+import type { TyreCondition } from '@/lib/vehicle-condition';
 
 export type TyreCorner = 'front_left' | 'front_right' | 'rear_left' | 'rear_right';
 export type TyreType = 'summer_standard' | 'summer_runflat' | 'winter_standard' | 'winter_runflat';
@@ -40,11 +42,16 @@ const mm = (t: number) => (t / 10).toFixed(1);
 type Corner = { type: TyreType; even: number | null; outer: number | null; centre: number | null; inner: number | null; uneven: boolean };
 const blank = (type: TyreType): Corner => ({ type, even: null, outer: null, centre: null, inner: null, uneven: false });
 
-type Props = { jobCardId: string; canEdit: boolean; defaultType?: TyreType | null; onSaved: () => void };
+type Props = {
+  jobCardId: string; canEdit: boolean; defaultType?: TyreType | null;
+  /** What the car ALREADY says (lib/vehicle-condition). The form used to be write-only. */
+  recorded?: TyreCondition[];
+  onSaved: () => void;
+};
 
 const tyreSlot = (c: TyreCorner) => `tyre_${c}`;
 
-export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }: Props) {
+export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded = [], onSaved }: Props) {
   const seedType = defaultType ?? 'summer_standard';
   const [state, setState] = useState<Record<TyreCorner, Corner>>({
     front_left: blank(seedType), front_right: blank(seedType), rear_left: blank(seedType), rear_right: blank(seedType),
@@ -113,6 +120,8 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, onSaved }
         <h3 className="text-sm font-semibold text-ink">Tyres</h3>
         <span className="text-xs text-muted" data-testid="tyre-progress">{filled} of 4</span>
       </div>
+      {/* WHAT IS ALREADY RECORDED, above the form that records it. */}
+      <TyreSummary tyres={recorded} />
       <p className="text-xs text-muted mb-3">Tap the tread depth. Only open a tyre up if it’s worn unevenly.</p>
 
       {/* One input, retargeted. capture="environment" opens the rear camera on a phone. */}

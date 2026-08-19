@@ -56,6 +56,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // This garage's own observation usage, so the tap-list orders itself. Cached with the rest of
     // the payload, so it survives offline — degrading to the cold-start order, never to no list.
     observationCounts: p.observationCounts ?? {},
+    // WHAT THE CAR ALREADY SAYS — from lib/vehicle-condition, the same reader the desktop card and
+    // the customer report use. The phone's capture forms were write-only too, so a mechanic in the
+    // bay could not see the reading they had just taken. Still NO money on this surface.
+    tyreCondition: p.tyreCondition ?? [],
+    batteryCondition: p.batteryCondition ?? null,
     // The four prompts, already resolved server-side. On the phone because an escalation firing
     // for items nobody was ever prompted about is worse than no escalation — the false-positive
     // problem again, one level up.

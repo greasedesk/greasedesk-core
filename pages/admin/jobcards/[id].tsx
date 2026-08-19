@@ -42,6 +42,8 @@ type PageProps = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  tyreCondition?: unknown[];
+  batteryCondition?: unknown;
   /** Derived report state — never stored. */
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   // READ-ONLY message history for this card's (customer, vehicle) thread.
@@ -173,6 +175,8 @@ export default function JobCardDetailPage(props: PageProps) {
         lastTyreType={props.lastTyreType}
         lastBattery={props.lastBattery}
         observationCounts={props.observationCounts}
+        tyreCondition={props.tyreCondition as never}
+        batteryCondition={props.batteryCondition as never}
         conversation={props.conversation}
         threadId={props.threadId}
         messagesUnread={props.messagesUnread}

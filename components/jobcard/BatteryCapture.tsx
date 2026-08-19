@@ -17,6 +17,8 @@
  */
 import React, { useRef, useState } from 'react';
 import { resizeImage } from '@/lib/image-resize';
+import { BatterySummary } from '@/components/jobcard/ConditionSummary';
+import type { BatteryCondition } from '@/lib/vehicle-condition';
 import { CCA_STANDARDS, MIN_RATED_CCA, MAX_RATED_CCA, BATTERY_SLOTS, BATTERY_SLOT_LABEL, type BatterySlot, type CcaStandard } from '@/lib/battery';
 
 type Props = {
@@ -25,12 +27,14 @@ type Props = {
   /** This car's last test, so the rating is a confirmation rather than a lookup. */
   lastRatedCca?: number | null;
   lastCcaStandard?: string | null;
+  /** What the car ALREADY says (lib/vehicle-condition). The form used to be write-only. */
+  recorded?: BatteryCondition | null;
   onSaved: () => void;
 };
 
 const num = (s: string) => (s.trim() === '' ? null : Number(s));
 
-export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastCcaStandard, onSaved }: Props) {
+export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastCcaStandard, recorded = null, onSaved }: Props) {
   const [voltage, setVoltage] = useState('');
   const [soc, setSoc] = useState('');
   const [soh, setSoh] = useState('');
@@ -108,6 +112,8 @@ export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastC
   return (
     <section className="bg-surface border border-line rounded-xl p-4" data-testid="battery-capture">
       <h2 className="text-sm font-semibold text-ink mb-1">Battery test</h2>
+      {/* WHAT IS ALREADY RECORDED, above the form that records it. */}
+      <BatterySummary battery={recorded} />
       <p className="text-xs text-muted mb-3">
         All three off the tester. Charge and health mean different things — a flat battery reads low
         on health whether or not it is failing.

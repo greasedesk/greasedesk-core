@@ -31,6 +31,7 @@ import PhoneFindings from '@/components/pwa/PhoneFindings';
 import PhoneTyres from '@/components/pwa/PhoneTyres';
 import PhoneBattery from '@/components/pwa/PhoneBattery';
 import PhoneObservations from '@/components/pwa/PhoneObservations';
+import type { TyreCondition, BatteryCondition } from '@/lib/vehicle-condition';
 import PhoneIntakeChecklist from '@/components/pwa/PhoneIntakeChecklist';
 import PhoneSendReport from '@/components/pwa/PhoneSendReport';
 
@@ -47,6 +48,8 @@ type JobData = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  tyreCondition?: TyreCondition[];
+  batteryCondition?: BatteryCondition | null;
   intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
   nothingFoundAt?: string | null;
   currency: string; locale: string;
@@ -528,7 +531,8 @@ export default function MobileJobCard() {
                   motExpiry={job.motExpiry ?? null} onQueued={refreshPhotos} />
               )}
               {job && (
-                <PhoneTyres jobCardId={job.id} defaultType={job.lastTyreType ?? null} onQueued={refreshPhotos} />
+                <PhoneTyres jobCardId={job.id} defaultType={job.lastTyreType ?? null}
+                  recorded={job.tyreCondition ?? []} onQueued={refreshPhotos} />
               )}
               {/* BATTERY after the tyres, matching the desktop order and the order a mechanic walks
                   the car: the wheels are what you reach first, the bonnet is what you open next. */}
@@ -536,7 +540,7 @@ export default function MobileJobCard() {
                 <PhoneBattery jobCardId={job.id}
                   lastRatedCca={job.lastBattery?.ratedCca ?? null}
                   lastCcaStandard={job.lastBattery?.ccaStandard ?? null}
-                  onQueued={refreshPhotos} />
+                  recorded={job.batteryCondition ?? null} onQueued={refreshPhotos} />
               )}
 
               {STAGES.map((stage) => {

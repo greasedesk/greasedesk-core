@@ -9,6 +9,7 @@
  * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
+import { latestTyres, latestBattery } from '@/lib/vehicle-condition';
 import { intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
@@ -132,7 +133,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, observationCounts, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -201,6 +202,13 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       for (const r of rows) if (r.observation_key) counts[r.observation_key] = r._count._all;
       return counts;
     })(),
+    // WHAT THE CAR'S TYRES AND BATTERY CURRENTLY SAY — through lib/vehicle-condition, the SAME
+    // reader the customer report uses. The card had no reader at all: capture forms initialised
+    // blank, healthy readings raised no finding, and a customer could see four corners the garage
+    // could not. Sharing the reader is what makes the two agree by construction rather than by
+    // two people maintaining the same query twice.
+    latestTyres(prisma, groupId, row?.vehicle?.id as string | undefined),
+    latestBattery(prisma, groupId, row?.vehicle?.id as string | undefined),
     // WHEN THE REPORT WAS LAST SENT — the only stored half of the derived report status.
     prisma.customerMagicLink.findFirst({
       where: { job_card_id: cardId, purpose: 'intake_report' },
@@ -476,6 +484,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastBattery,
     /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
     observationCounts,
+    /** The car's CURRENT tyre and battery condition — the same values the customer report shows. */
+    tyreCondition,
+    batteryCondition,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3
     // days" needs no scheduled job and cannot drift.
     reportStatus: reportStatus({

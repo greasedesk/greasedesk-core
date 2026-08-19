@@ -16,9 +16,10 @@
  */
 import { prisma } from '@/lib/db';
 import { presignGet } from '@/lib/r2';
-import { openDueItemsForVehicle, dueLabel, latestCustomerAnswers, type CustomerAnswer, type OpenDueItem } from '@/lib/due-items';
+import { openDueItemsForVehicle, dueLabel, showsDueLabel, latestCustomerAnswers, type CustomerAnswer, type OpenDueItem } from '@/lib/due-items';
 import { slotOwnedBySection } from '@/lib/photo-slots';
-import { batteryState, batteryAdvisory, volts, BATTERY_SLOTS, type BatteryState, type CcaStandard } from '@/lib/battery';
+import { BATTERY_SLOTS, type BatteryState } from '@/lib/battery';
+import { latestTyres, latestBattery, type TyreCondition, type BatteryCondition } from '@/lib/vehicle-condition';
 import { tyreSlot, minDepth, shoulderSpread, CORNER_LABEL, TYRE_TYPE_LABEL, LEGAL_MIN_TENTHS, ADVISE_BELOW_TENTHS, ALIGNMENT_SPREAD_TENTHS, type TyreCorner, type TyreType } from '@/lib/tyres';
 
 export type ReportMedia = {
@@ -40,36 +41,11 @@ export type ReportFinding = {
   answered: CustomerAnswer | null;
 };
 
-export type ReportTyre = {
-  corner: TyreCorner;
-  label: string;
-  type: string;
-  /** Millimetres, one decimal — the customer's units, not our storage tenths. */
-  outer: string; centre: string; inner: string;
-  /** The lowest of the three, which is what the law and the advisory both care about. */
-  lowest: string;
-  /** 'ok' | 'advise' | 'illegal' — a band, so the page colours without re-deriving thresholds. */
-  band: 'ok' | 'advise' | 'illegal';
-  /** Worn across its width, and which way. NULL when the tread is even. */
-  unevenEdge: 'inside' | 'outside' | null;
-  photos: ReportMedia[];
-};
+/** The shared condition (lib/vehicle-condition) plus the photographs this surface presigns. The
+ *  fields are NOT restated here: a second copy of the shape is a second thing to drift. */
+export type ReportTyre = TyreCondition & { photos: ReportMedia[] };
 
-export type ReportBattery = {
-  /** Volts, two decimals — how the tester displays it, so the customer can match the photo. */
-  voltage: string;
-  socPct: number;
-  sohPct: number;
-  /** The denominator the health figure was measured against. NULL when nobody recorded it, and
-   *  shown as such rather than omitted: a percentage against an unknown rating is worth less. */
-  ratedCca: number | null;
-  ccaStandard: string | null;
-  /** The state in lib/battery's words, so the page colours without re-deriving any threshold. */
-  state: BatteryState;
-  /** What we are actually telling them. NULL when the test came back clean. */
-  advisory: string | null;
-  photos: ReportMedia[];
-};
+export type ReportBattery = BatteryCondition & { photos: ReportMedia[] };
 
 export type IntakeReport = {
   garageName: string;
@@ -134,67 +110,30 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
   // of this test named one section and would have double-shown the battery photos.
   const stills = media.filter((m) => m.media_type !== 'video' && !slotOwnedBySection(m.slot));
 
-  // ── TYRES: the latest reading per corner, with the photo that proves it ────────────────────
-  // Latest per corner across the car's whole history, not just this visit: a customer looking at
-  // their check-in wants the current state of the car, and a corner not re-measured today is still
-  // the truth about that corner.
-  const tyreRows = (await prisma.tyreReading.findMany({
-    where: { group_id: groupId, vehicle_id: card.vehicle_id },
-    orderBy: { measured_at: 'desc' },
-    select: { corner: true, type: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
-  })) as Array<{ corner: TyreCorner; type: TyreType; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>;
-  const latestByCorner = new Map<TyreCorner, typeof tyreRows[number]>();
-  for (const r of tyreRows) if (!latestByCorner.has(r.corner)) latestByCorner.set(r.corner, r);
-
+  // ── TYRES AND BATTERY: read through the SHARED chokepoint ──────────────────────────────────
+  // lib/vehicle-condition, so this page and the job card cannot disagree about what the car says.
+  // They used to: the card had no reader at all, and a customer could see four healthy corners the
+  // garage could not. Each surface attaches its OWN media afterwards — this one needs presigned
+  // URLs, the card does not — but the numbers and the bands come from one place.
+  const tyreConditions = await latestTyres(prisma, groupId, card.vehicle_id);
   const tyres: ReportTyre[] = [];
-  for (const [corner, r] of latestByCorner) {
-    const d = { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths };
-    const low = minDepth(d);
-    const spread = shoulderSpread(d);
-    tyres.push({
-      corner, label: CORNER_LABEL[corner], type: TYRE_TYPE_LABEL[r.type],
-      outer: (d.outer / 10).toFixed(1), centre: (d.centre / 10).toFixed(1), inner: (d.inner / 10).toFixed(1),
-      lowest: (low / 10).toFixed(1),
-      band: low < LEGAL_MIN_TENTHS ? 'illegal' : low < ADVISE_BELOW_TENTHS ? 'advise' : 'ok',
-      unevenEdge: spread >= ALIGNMENT_SPREAD_TENTHS ? (d.inner < d.outer ? 'inside' : 'outside') : null,
-      photos: await Promise.all(media.filter((m) => m.slot === tyreSlot(corner)).map(shape)),
-    });
+  for (const t of tyreConditions) {
+    tyres.push({ ...t, photos: await Promise.all(media.filter((m) => m.slot === tyreSlot(t.corner)).map(shape)) });
   }
-  // The car's own layout: fronts first, left then right.
-  const ORDER: TyreCorner[] = ['front_left', 'front_right', 'rear_left', 'rear_right'];
-  tyres.sort((a, b) => ORDER.indexOf(a.corner) - ORDER.indexOf(b.corner));
 
-  // ── BATTERY: the latest test, with the photographs of the tester ───────────────────────────
-  // Latest for the CAR, like the tyres, and for the same reason: a customer wants the current
-  // state of their car, not only what happened to be measured today.
-  const bRow = (await prisma.batteryReading.findFirst({
-    where: { group_id: groupId, vehicle_id: card.vehicle_id },
-    orderBy: { measured_at: 'desc' },
-    select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true, measured_at: true },
-  })) as { voltage_mv: number; soc_pct: number; soh_pct: number; rated_cca: number | null; cca_standard: string | null; measured_at: Date } | null;
-
-  let battery: ReportBattery | null = null;
-  if (bRow) {
-    const n = {
-      voltageMv: bRow.voltage_mv, socPct: bRow.soc_pct, sohPct: bRow.soh_pct,
-      ratedCca: bRow.rated_cca, ccaStandard: bRow.cca_standard as CcaStandard | null,
-    };
-    battery = {
-      voltage: volts(bRow.voltage_mv), socPct: bRow.soc_pct, sohPct: bRow.soh_pct,
-      ratedCca: bRow.rated_cca, ccaStandard: bRow.cca_standard,
-      state: batteryState(n),
-      advisory: batteryAdvisory(n, bRow.measured_at)?.description ?? null,
-      photos: await Promise.all(media.filter((m) => BATTERY_SLOTS.includes(m.slot)).map(shape)),
-    };
-  }
+  const bCond = await latestBattery(prisma, groupId, card.vehicle_id);
+  const battery: ReportBattery | null = bCond
+    ? { ...bCond, photos: await Promise.all(media.filter((m) => BATTERY_SLOTS.includes(m.slot)).map(shape)) }
+    : null;
 
   const items = await openDueItemsForVehicle(prisma, groupId, card.vehicle_id);
   const answers = await latestCustomerAnswers(prisma, items.map((i: OpenDueItem) => i.id));
-
   const findings: ReportFinding[] = items.map((i: OpenDueItem) => ({
     id: i.id,
     description: i.description,
-    timing: dueLabel(i),
+    // EMPTY when the description already says when — the same rule as the invoice block, asked
+    // through the same predicate rather than re-derived here.
+    timing: showsDueLabel(i) ? dueLabel(i) : '',
     answered: answers.get(i.id)?.answer ?? null,
   }));
 

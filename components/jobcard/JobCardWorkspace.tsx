@@ -25,6 +25,7 @@ import SendIntakeReport from '@/components/jobcard/SendIntakeReport';
 import TyreCapture from '@/components/jobcard/TyreCapture';
 import BatteryCapture from '@/components/jobcard/BatteryCapture';
 import ObservationTaps from '@/components/jobcard/ObservationTaps';
+import type { TyreCondition, BatteryCondition } from '@/lib/vehicle-condition';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -91,6 +92,8 @@ type Props = {
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
+  tyreCondition?: TyreCondition[];
+  batteryCondition?: BatteryCondition | null;
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
@@ -901,12 +904,12 @@ export default function JobCardWorkspace(p: Props) {
           canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
         <TyreCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
-          defaultType={(p.lastTyreType as never) ?? null} onSaved={refreshCard} />
+          defaultType={(p.lastTyreType as never) ?? null} recorded={p.tyreCondition ?? []} onSaved={refreshCard} />
         {/* BATTERY after the tyres: both are measurements taken at the car, and the tyres are the
             ones a mechanic reaches first walking round it. */}
         <BatteryCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
           lastRatedCca={p.lastBattery?.ratedCca ?? null} lastCcaStandard={p.lastBattery?.ccaStandard ?? null}
-          onSaved={refreshCard} />
+          recorded={p.batteryCondition ?? null} onSaved={refreshCard} />
         <PhotoStage jobCardId={p.jobCardId} stage="intake" canEdit={p.canOperate && !inactive} locked={eff.stages.intake} locale={p.locale} />
         {/* SEND LAST: the report carries the walkaround and the photos, so it goes out once the
             capture is done rather than sitting above the things it describes. */}

@@ -13,6 +13,8 @@
  */
 import React, { useState } from 'react';
 import { enqueueTyres } from '@/lib/pwa-outbox';
+import { TyreSummary } from '@/components/jobcard/ConditionSummary';
+import type { TyreCondition } from '@/lib/vehicle-condition';
 
 type Corner = 'front_left' | 'front_right' | 'rear_left' | 'rear_right';
 type TType = 'summer_standard' | 'summer_runflat' | 'winter_standard' | 'winter_runflat';
@@ -31,8 +33,12 @@ const mm = (t: number) => (t / 10).toFixed(1);
 type C = { type: TType; even: number | null; outer: number | null; centre: number | null; inner: number | null; uneven: boolean };
 const blank = (t: TType): C => ({ type: t, even: null, outer: null, centre: null, inner: null, uneven: false });
 
-export default function PhoneTyres({ jobCardId, defaultType, onQueued }: {
-  jobCardId: string; defaultType?: string | null; onQueued?: () => void;
+export default function PhoneTyres({ jobCardId, defaultType, recorded = [], onQueued }: {
+  jobCardId: string; defaultType?: string | null;
+  /** What the car ALREADY says. This form used to be write-only, so a mechanic in a bay had no way
+   *  to see the reading they had just taken — and the customer's report showed it. */
+  recorded?: TyreCondition[];
+  onQueued?: () => void;
 }) {
   const seed = (defaultType as TType) ?? 'summer_standard';
   const [s, setS] = useState<Record<Corner, C>>({
@@ -64,6 +70,7 @@ export default function PhoneTyres({ jobCardId, defaultType, onQueued }: {
         <h2 className="text-sm font-semibold text-ink">Tyres</h2>
         <span className="text-xs text-muted" data-testid="phone-tyre-progress">{filled} of 4</span>
       </div>
+      <TyreSummary tyres={recorded} />
       <p className="text-xs text-muted mb-3">Tap the tread depth. Only open a tyre up if it’s worn unevenly.</p>
 
       <div className="space-y-3">
