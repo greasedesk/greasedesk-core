@@ -75,6 +75,36 @@ check('the label states both legs and needs NO rate',
 check('  …in the same date format the MOT line has always used',
   dueLabel({ dueBasis: 'date', dueDate: '2025-11-01', dueMileage: null }) === 'due by 1 November 2025');
 
+// ── AN ALREADY-PASSED MILEAGE TARGET IS AN ANSWER, NOT A FAILURE ───────────────────────────────
+// projectMileageDate returns null once the car is past the target, and reading every null as
+// `no_rate` said "we cannot work out when this is due" about a trigger that had ALREADY FIRED.
+// Opposite meanings from one code. Now it answers with today.
+console.log('\n— past the target is today, not "no rate" —');
+const AT = new Date('2026-08-19T00:00:00Z');
+const passed = dueLabelCtxPassed();
+function dueLabelCtxPassed() {
+  return effectiveDueDate(
+    { dueBasis: 'mileage', dueDate: null, dueMileage: 45000 },
+    { currentMiles: 50000, project: () => null, now: AT },
+  );
+}
+check('a car past its mileage target is due TODAY', passed.ok && passed.date.getTime() === AT.getTime(), JSON.stringify(passed));
+check('  …and says so, so a caller can word it as overdue', passed.ok && passed.alreadyPassed === true);
+check('  …while a target still ahead with no rate is still a refusal',
+  effectiveDueDate({ dueBasis: 'mileage', dueDate: null, dueMileage: 90000 },
+    { currentMiles: 50000, project: () => null, now: AT }).reason === 'no_rate',
+  'the two were indistinguishable before, which is the defect');
+check('whichever_first takes the passed mileage leg over a future date',
+  (() => {
+    const r = effectiveDueDate({ dueBasis: 'whichever_first', dueDate: new Date('2027-01-01'), dueMileage: 45000 },
+      { currentMiles: 50000, project: () => null, now: AT });
+    return r.ok && r.alreadyPassed === true && r.binding === 'mileage';
+  })(), 'a leg that has already fired is the earlier one whatever the date says');
+check('  …and no currentMiles means no claim either way',
+  effectiveDueDate({ dueBasis: 'mileage', dueDate: null, dueMileage: 45000 },
+    { currentMiles: null, project: () => null, now: AT }).reason === 'no_rate',
+  'honest-null: not knowing the mileage is not the same as being past it');
+
 console.log('\n— the projection picks the earlier leg, in both directions —');
 const at = (iso) => new Date(`${iso}T00:00:00.000Z`);
 const item = { dueBasis: 'whichever_first', dueDate: at('2027-06-01'), dueMileage: 130000 };

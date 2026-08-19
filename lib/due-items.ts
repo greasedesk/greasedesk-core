@@ -218,7 +218,9 @@ export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMi
 
 // ── ORDERING: WHEN IS THIS ACTUALLY DUE? ─────────────────────────────────────────────────────────
 export type DueProjection =
-  | { ok: true; date: Date; binding: 'date' | 'mileage'; mileageLegUnevaluated?: boolean }
+  | { ok: true; date: Date; binding: 'date' | 'mileage'; mileageLegUnevaluated?: boolean;
+      /** The mileage target is already behind this car — the date is "now", not a projection. */
+      alreadyPassed?: boolean }
   | { ok: false; reason: 'next_service' | 'no_rate' | 'no_date' };
 
 /**
@@ -233,7 +235,13 @@ export type DueProjection =
  */
 export function effectiveDueDate(
   item: { dueBasis: DueBasis; dueDate: Date | null; dueMileage: number | null },
-  ctx: { currentMiles: number | null; project: (targetMiles: number) => Date | null },
+  ctx: {
+    currentMiles: number | null;
+    project: (targetMiles: number) => Date | null;
+    /** Passed in rather than read from the clock, so an already-passed target is testable at a
+     *  fixed date. Optional for the callers that never meet one. */
+    now?: Date;
+  },
 ): DueProjection {
   switch (item.dueBasis) {
     case 'next_service':
@@ -243,11 +251,23 @@ export function effectiveDueDate(
       return item.dueDate ? { ok: true, date: item.dueDate, binding: 'date' } : { ok: false, reason: 'no_date' };
     case 'mileage': {
       if (item.dueMileage == null) return { ok: false, reason: 'no_date' };
+      // ── ALREADY PAST THE TARGET IS AN ANSWER, NOT A FAILURE ───────────────────────────────
+      // projectMileageDate returns null once `remaining <= 0`, and reading every null as `no_rate`
+      // said "we cannot work out when this is due" about a car whose trigger had ALREADY FIRED.
+      // Those are opposites. A caller asking "when is this due" gets today, which is true and needs
+      // no translation from a failure code into a fact.
+      if (ctx.currentMiles != null && ctx.currentMiles >= item.dueMileage) {
+        return { ok: true, date: ctx.now ?? new Date(), binding: 'mileage', alreadyPassed: true };
+      }
       const p = ctx.project(item.dueMileage);
       return p ? { ok: true, date: p, binding: 'mileage' } : { ok: false, reason: 'no_rate' };
     }
     case 'whichever_first': {
       if (!item.dueDate || item.dueMileage == null) return { ok: false, reason: 'no_date' };
+      // The mileage leg has already fired, so it is the earlier of the two whatever the date says.
+      if (ctx.currentMiles != null && ctx.currentMiles >= item.dueMileage) {
+        return { ok: true, date: ctx.now ?? new Date(), binding: 'mileage', alreadyPassed: true };
+      }
       const p = ctx.project(item.dueMileage);
       if (!p) return { ok: true, date: item.dueDate, binding: 'date', mileageLegUnevaluated: true };
       return p.getTime() < item.dueDate.getTime()
