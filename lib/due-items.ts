@@ -19,7 +19,7 @@
 import type { Prisma } from '@prisma/client';
 
 export type DueBasis = 'date' | 'mileage' | 'next_service' | 'whichever_first';
-export type DueItemResponse = 'not_raised' | 'declined' | 'agreed_later';
+export type DueItemResponse = 'not_raised' | 'declined' | 'agreed_later' | 'wants_call';
 
 export type DueItemRefusal = { code: string; message: string };
 
@@ -32,7 +32,7 @@ export type DueItemInput = {
 };
 
 const BASES: readonly DueBasis[] = ['date', 'mileage', 'next_service', 'whichever_first'];
-const RESPONSES: readonly DueItemResponse[] = ['not_raised', 'declined', 'agreed_later'];
+const RESPONSES: readonly DueItemResponse[] = ['not_raised', 'declined', 'agreed_later', 'wants_call'];
 
 /**
  * May this finding be recorded? PURE, so every refusal is provable without writing a row.
@@ -214,4 +214,101 @@ export function printedDueItemsBlock(args: {
   // reader of the column can tell them apart.
   if (!lines.length) return null;
   return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
+}
+
+// ── THE CUSTOMER'S OWN ANSWER ────────────────────────────────────────────────────────────────────
+export type CustomerAnswer = 'yes' | 'no' | 'call_me';
+
+/**
+ * How a customer's tap lands on the GARAGE's field.
+ *
+ * "Yes" is INTEREST, NOT ACCEPTANCE — the report carries no prices, so a yes means "quote me for
+ * this", and the estimate still goes out and comes back through acceptQuote like any other. That is
+ * why yes maps to `agreed_later` and never to anything that reads as agreement to a figure.
+ */
+export const GARAGE_VIEW_OF: Record<CustomerAnswer, 'declined' | 'agreed_later' | 'wants_call'> = {
+  yes: 'agreed_later',
+  no: 'declined',
+  call_me: 'wants_call',
+};
+
+export type AnswerDivergence = {
+  /** What the customer themselves last tapped. */
+  customer: CustomerAnswer;
+  customerAt: string;
+  /** What the garage will act on — may be newer, set by someone who took a phone call. */
+  garage: DueItemResponse;
+  /** True when the garage has since recorded something the customer did not say. */
+  diverged: boolean;
+};
+
+/**
+ * Do the two records disagree, and how?
+ *
+ * PURE, and deliberately NOT an error: a divergence is the normal shape of "they tapped no, then
+ * rang and changed their mind". It exists to be SHOWN — inline beside the field when someone is
+ * about to override, and permanently on the finding afterwards — never to fire an alert. The person
+ * who creates a divergence is the person doing it deliberately, and notifying them about their own
+ * action is the noise that stops escalations being read.
+ */
+export function answerDivergence(
+  latest: { answer: CustomerAnswer; answeredAt: Date } | null,
+  garage: DueItemResponse,
+): AnswerDivergence | null {
+  if (!latest) return null;
+  return {
+    customer: latest.answer,
+    customerAt: latest.answeredAt.toISOString(),
+    garage,
+    diverged: GARAGE_VIEW_OF[latest.answer] !== garage,
+  };
+}
+
+/**
+ * RECORD A CUSTOMER'S ANSWER — the one writer, so the two records can never be written apart.
+ *
+ * Two writes, one transaction:
+ *   1. APPEND to DueItemCustomerAnswer. Never updated: a customer who changes their mind on the
+ *      same report leaves two rows in order, and the history of what they actually tapped survives.
+ *   2. WRITE THROUGH to the garage's field, because the office needs one field to read. A later
+ *      staff edit overrides it — last write wins on the garage side only.
+ *
+ * `response_at` is stamped here for the same reason it is stamped anywhere: an ANSWER is an event.
+ * (`not_raised` is the only value that leaves it null, and a customer answer can never produce it.)
+ */
+export async function recordCustomerAnswer(
+  tx: Prisma.TransactionClient,
+  args: { groupId: string; dueItemId: string; answer: CustomerAnswer; magicLinkId: string | null; at: Date },
+): Promise<{ garageResponse: DueItemResponse }> {
+  const garageResponse = GARAGE_VIEW_OF[args.answer];
+  await (tx as Prisma.TransactionClient).dueItemCustomerAnswer.create({
+    data: {
+      group_id: args.groupId,
+      due_item_id: args.dueItemId,
+      answer: args.answer,
+      answered_at: args.at,
+      magic_link_id: args.magicLinkId,
+    },
+  });
+  await (tx as Prisma.TransactionClient).vehicleDueItem.update({
+    where: { id: args.dueItemId },
+    data: { customer_response: garageResponse, response_at: args.at },
+  });
+  return { garageResponse };
+}
+
+/** The customer's LATEST tap per finding — what the divergence check and the screens read. */
+export async function latestCustomerAnswers(
+  db: Prisma.TransactionClient | { dueItemCustomerAnswer: { findMany: (a: unknown) => Promise<unknown> } },
+  dueItemIds: string[],
+): Promise<Map<string, { answer: CustomerAnswer; answeredAt: Date }>> {
+  if (!dueItemIds.length) return new Map();
+  const rows = (await (db as { dueItemCustomerAnswer: { findMany: (a: unknown) => Promise<unknown> } }).dueItemCustomerAnswer.findMany({
+    where: { due_item_id: { in: dueItemIds } },
+    orderBy: { answered_at: 'asc' },   // ascending, so the last write into the map is the newest
+    select: { due_item_id: true, answer: true, answered_at: true },
+  })) as Array<{ due_item_id: string; answer: CustomerAnswer; answered_at: Date }>;
+  const out = new Map<string, { answer: CustomerAnswer; answeredAt: Date }>();
+  for (const r of rows) out.set(r.due_item_id, { answer: r.answer, answeredAt: r.answered_at });
+  return out;
 }

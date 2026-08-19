@@ -185,3 +185,33 @@ export const SKIP_COLUMN: Record<SkippableStage, 'stage_intake_skipped' | 'stage
 export function isSkippableStage(v: unknown): v is SkippableStage {
   return typeof v === 'string' && (SKIPPABLE_STAGES as readonly string[]).includes(v);
 }
+
+/**
+ * WHICH STAGES STILL BLOCK THE INVOICE — the `all_stages_done` gate, as a value.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
+ * The rule used to live twice: as an inline conjunction in pages/api/jobcard-status (which
+ * REFUSES) and as a hand-maintained array in JobCardWorkspace (which tells the mechanic what is
+ * left). Two copies of one rule, and the divergence fails SILENTLY in the worst direction — the
+ * screen says "ready to invoice" and the server returns 409, or worse the screen lists a stage the
+ * server no longer cares about and someone does work that was not needed.
+ *
+ * Now both read this. The client's guidance cannot drift from the server's refusal because there
+ * is nothing left to drift from.
+ *
+ * ── AND WHY Record<StageKey, boolean> ───────────────────────────────────────────────────────────
+ * Adding a stage fails to compile HERE, at the rule, rather than compiling fine at two call sites
+ * that each forgot it. Same guarantee statusSubset gives the membership lists.
+ *
+ * SOFT GATES: a photo stage counts as advanced when completed OR skipped (a skip is an audited
+ * first-class event). Details is done-only — it is a data gate and never skippable.
+ */
+export function stagesRemaining(
+  done: Record<StageKey, boolean>,
+  skipped: Partial<Record<SkippableStage, boolean>>,
+): StageKey[] {
+  return STAGE_KEYS.filter((k) => {
+    if (done[k]) return false;
+    return !(isSkippableStage(k) && skipped[k]);
+  });
+}

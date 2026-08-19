@@ -145,6 +145,18 @@ enum DueItemResponse {
   not_raised
   declined
   agreed_later
+  /// They answered, and what they answered was "ring me about it". A real, distinct, actionable
+  /// state: not `not_raised` (they WERE asked), not `declined` (they have not said no), and not
+  /// `agreed_later` (they have not said yes). Added 2026-08-19 with the customer-facing report,
+  /// because mapping a call request onto any of the other three silently loses it.
+  wants_call
+}
+
+/// WHAT THE CUSTOMER THEMSELVES TAPPED, on the intake report.
+enum CustomerAnswer {
+  yes
+  no
+  call_me
 }
 
 enum ItemType {
@@ -430,6 +442,7 @@ model Group {
   credit_notes CreditNote[]
   due_items          VehicleDueItem[]
   odometer_readings  VehicleOdometerReading[]
+  due_item_answers   DueItemCustomerAnswer[]
 }
 
 /**
@@ -1494,6 +1507,9 @@ model VehicleDueItem {
   /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
   @@index([group_id, vehicle_id, closed_at])
   @@index([found_on_job_card_id])
+  /// The customer's OWN answers, token-authenticated. See DueItemCustomerAnswer for why these are
+  /// kept apart from `customer_response` above.
+  customer_answers DueItemCustomerAnswer[]
 }
 
 /// EVERY ODOMETER READING WE HAVE FOR A CAR — the MOT history DVSA already sends us, plus our own.
@@ -1508,6 +1524,55 @@ model VehicleDueItem {
 ///
 /// The unique key is what makes re-lookup safe: the DVSA lookup fires on every reg search, so the
 /// write is an idempotent upsert rather than an append that multiplies on each booking.
+/// THE CUSTOMER'S OWN ANSWER to one finding on an intake report — token-authenticated, timestamped,
+/// attributable.
+///
+/// ── TWO RECORDS, AND WHY THEY MUST NOT BE MERGED ────────────────────────────────────────────────
+/// This is NOT the same fact as VehicleDueItem.customer_response, and the day someone "simplifies"
+/// it into one field the product loses something it cannot get back:
+///
+///   THE CUSTOMER'S RECORD (here) is authoritative about WHAT THE CUSTOMER SAID.
+///   THE GARAGE'S FIELD (VehicleDueItem.customer_response) is authoritative about WHAT THE GARAGE
+///   WILL ACT ON.
+///
+/// They usually agree. When they disagree, someone has learned something new by phone — and that
+/// disagreement must be LEGIBLE RATHER THAN IMPOSSIBLE. Merged into one column you cannot show
+/// "they tapped no on the report, then rang and said yes"; a staff edit silently overwrites what
+/// the customer actually did; and the evidential value of a token-authenticated answer — the whole
+/// reason the link is a credential — is gone.
+///
+/// ── WHICH ONE THE ESTIMATE BUILDS FROM ──────────────────────────────────────────────────────────
+/// The GARAGE field, always. That is the definition of that field, and a staff member who has just
+/// taken a phone call holds newer information than a tap from this morning. A customer's answer
+/// WRITES THROUGH to it (the office needs one field to read); a later staff edit overrides it. Last
+/// write wins on the garage side; this table is append-only truth about the customer's own taps.
+///
+/// ── AND WHY NO ALERT FIRES ON A DISAGREEMENT ────────────────────────────────────────────────────
+/// A divergence is created by a person doing something deliberate — recording what a customer just
+/// told them. Notifying that person about their own action is noise, and noise is how an
+/// escalation stops being read. The right moment is BEFORE: the customer's answer is shown inline
+/// beside the field being changed, so the override is informed rather than announced afterwards.
+/// The divergence then stays visible on the finding, permanently.
+model DueItemCustomerAnswer {
+  id           String @id @default(uuid())
+  group_id     String
+  due_item_id  String
+
+  answer      CustomerAnswer
+  answered_at DateTime       @default(now())
+
+  /// The link the answer arrived through — what makes it attributable. NULLABLE only for an answer
+  /// recorded by another route later; today every row has one.
+  magic_link_id String?
+
+  group     Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  due_item  VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
+
+  /// APPEND-ONLY: a customer who changes their mind on the same report leaves two rows, in order.
+  @@index([due_item_id, answered_at])
+  @@index([group_id])
+}
+
 model VehicleOdometerReading {
   id         String @id @default(uuid())
   group_id   String

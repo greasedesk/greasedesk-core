@@ -14,7 +14,7 @@ import { applyCardTransition } from '@/lib/jobcard-transition';
 import { canAccessSite, canManageSite, requireCanWrite, requireTenantApi } from '@/lib/admin-guard';
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
-import { findTransition, JobStatus, isBookedCard } from '@/lib/jobcard-status';
+import { findTransition, JobStatus, isBookedCard, stagesRemaining } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
@@ -85,13 +85,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ message: 'This job has no booking, so it can’t be a no-show. Cancel it instead.' });
   }
   if (tr.gate === 'all_stages_done') {
-    // Soft gates: a photo stage counts when completed OR skipped (a skip is an audited first-class
-    // event). Details is done-only — it's a data gate, never skippable.
-    const allDone = card.stage_details_done
-      && (card.stage_intake_done || card.stage_intake_skipped)
-      && (card.stage_injob_done || card.stage_injob_skipped)
-      && (card.stage_complete_done || card.stage_complete_skipped);
-    if (!allDone) return res.status(409).json({ message: 'Complete (or skip) all four stages first.' });
+    // THE SHARED RULE (lib/jobcard-status::stagesRemaining). This was an inline conjunction and the
+    // client kept its own copy to tell the mechanic what was left; two copies of one rule that fail
+    // silently when they diverge. One function now, read by both.
+    const remaining = stagesRemaining(
+      { details: !!card.stage_details_done, intake: !!card.stage_intake_done, injob: !!card.stage_injob_done, complete: !!card.stage_complete_done },
+      { intake: !!card.stage_intake_skipped, injob: !!card.stage_injob_skipped, complete: !!card.stage_complete_skipped },
+    );
+    if (remaining.length) return res.status(409).json({ message: 'Complete (or skip) all four stages first.' });
   }
 
   // BILLING GATE: issuing an invoice mints NEW financial work → blocked for a lapsed tenant. Marking

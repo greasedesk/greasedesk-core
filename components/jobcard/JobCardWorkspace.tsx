@@ -26,7 +26,8 @@ import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import { RefundPanel } from '@/components/refund/RefundPanel';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
-import { TAB_KEYS, TabKey, TabState, computeTabs } from '@/lib/jobcard-tabs';
+import { TAB_KEYS, TabKey, TabState, computeTabs, tabForStage } from '@/lib/jobcard-tabs';
+import { stagesRemaining } from '@/lib/jobcard-status';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
@@ -573,14 +574,11 @@ export default function JobCardWorkspace(p: Props) {
   // nested component's identity changes each render and REMOUNTS the pane — losing input focus on
   // every keystroke. An IIFE evaluates to plain JSX with stable child types: no remount, focus holds.
   const invoicePane = (() => {
-    // Which stages still block the all_stages_done gate (done OR skipped advances; Details is
-    // done-only). Same inputs computeTabs reads — guidance can't drift from the server's refusal.
-    const remaining = [
-      !eff.stages.details && ('details' as const),
-      !eff.stages.intake && !eff.skipped.intake && ('intake' as const),
-      !eff.stages.injob && !eff.skipped.injob && ('injob' as const),
-      !eff.stages.complete && !eff.skipped.complete && ('completion' as const),
-    ].filter(Boolean) as Array<'details' | 'intake' | 'injob' | 'completion'>;
+    // THE SERVER'S OWN RULE, called — not a copy of it. This was four hand-maintained lines that
+    // had to be kept in step with the conjunction in pages/api/jobcard-status; a divergence would
+    // have failed silently, telling a mechanic the card was ready while the mint refused it.
+    // stagesRemaining is the one definition and both sides read it.
+    const remaining = stagesRemaining(eff.stages, eff.skipped);
     const allAdvanced = remaining.length === 0;
     const preInvoice = ['draft', 'quoted', 'declined', 'accepted', 'in_progress'].includes(eff.status);
 
@@ -595,7 +593,7 @@ export default function JobCardWorkspace(p: Props) {
       </>
     );
     const stagesRemainingMsg = !allAdvanced && preInvoice && !inactive && (
-      <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${k}`)).join(', ') })}</p>
+      <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${tabForStage(k)}`)).join(', ') })}</p>
     );
     // THE AGREED-VERSION CORRECTION, wherever the invoice link renders (normal + comeback). Absent
     // unless the server shaped a real mismatch for an admin — no client-side eligibility logic.

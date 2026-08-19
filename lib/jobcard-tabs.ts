@@ -9,7 +9,9 @@
  * Gating is mixed-mechanism (not uniform prior-flag):
  *   Customer Details — ALWAYS reachable; complete = details stage flag (settable only with min data).
  *   Quote           — reachable once Details complete; complete = status reached `accepted` (QUOTE_DONE).
- *   Intake / In-Job / Completion — reachable once the prior is complete; complete = that stage flag.
+ *   Intake         — reachable once DETAILS is complete (NOT the quote: findings inform the quote).
+ *   In-Job         — reachable once Intake is complete AND the quote is accepted (the work-order rule).
+ *   Completion     — reachable once In-Job is complete; complete = that stage flag.
  *   Invoice         — reachable once Completion complete; complete = status `invoiced`+ (INVOICE_DONE).
  *
  * Branch-honest: `declined` leaves Quote incomplete → everything downstream stays locked. `cancelled`
@@ -78,8 +80,21 @@ export function computeTabs(s: CardGateState): Record<TabKey, TabState> {
     // Quote still gates on DETAILS, not on the tab before it in the list. Reading the order as the
     // dependency chain is the mistake this comment exists to stop.
     quote: { reachable: detailsComplete, complete: quoteComplete },
-    intake: { reachable: quoteComplete, complete: intakeComplete, skipped: skippedOf('intake') },
-    injob: { reachable: intakeComplete, complete: injobComplete, skipped: skippedOf('injob') },
+    // INTAKE IS NOT GATED ON THE QUOTE (changed 2026-08-19). It was, and that inverted the
+    // workshop: a car arrives, you look at it, and what you find INFORMS the quote — but the tab
+    // holding that work could not be opened until a quote existed. The gate was also already
+    // permeable: pages/api/photos checks only canAccessSite, and the PWA renders every stage
+    // unconditionally, so the artefacts were always capturable before a quote. It locked the
+    // desktop and nothing else.
+    //
+    // It never protected work-order either — that is the STATUS table's job (in_progress is
+    // reachable only from accepted). The rule now lands explicitly on the edge where it means
+    // something, below.
+    intake: { reachable: detailsComplete, complete: intakeComplete, skipped: skippedOf('intake') },
+    // WORK MAY NOT START ON A CARD NOBODY HAS AGREED TO PAY FOR. Stated here rather than inherited
+    // from intake's gate: it used to hold only as a side-effect of intake being gated on the quote,
+    // which is why removing that gate required saying it out loud.
+    injob: { reachable: intakeComplete && quoteComplete, complete: injobComplete, skipped: skippedOf('injob') },
     completion: { reachable: injobComplete, complete: completionComplete, skipped: skippedOf('complete') },
     invoice: { reachable: completionComplete, complete: invoiceComplete },
     // ALWAYS REACHABLE, NEVER COMPLETABLE — like Messages, and for a related reason: a refund is

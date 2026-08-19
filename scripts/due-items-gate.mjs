@@ -152,7 +152,13 @@ check('due_items_snapshot is NOT in INVOICE_FIELDS — June cannot move',
 console.log('\n— who to remind is resolved later, never stored —');
 check('the model has no customer column', !/customer_id/.test(model),
   'the car may change hands between the finding and the reminder');
-check('  …and no customer relation either', !/Customer/.test(model));
+// TIGHTENED: the first version tested for the STRING "Customer" and broke the day a
+// `customer_answers DueItemCustomerAnswer[]` relation arrived — which is not a link to the Customer
+// MODEL at all. The rule is that this table never joins the person; assert the field TYPE.
+const customerTypedField = /^\s+\w+\s+Customer(\?|\[\])?\s/m.test(model);
+check('  …and no field is typed Customer — it never joins the person', customerTypedField === false);
+check('  …the check is discriminating — Vehicle IS joined that way',
+  /^\s+vehicle\s+Vehicle\s/m.test(model), 'so the pattern finds a real relation when there is one');
 check('the reasoning is recorded where the next reader will be', /never stored, never joined|NEVER STORED HERE|not part of the record/i.test(readFileSync('lib/due-items.ts', 'utf8') + model));
 
 // ── 5. LIVE ON ZZ: it outlives the card ────────────────────────────────────────────────────────
