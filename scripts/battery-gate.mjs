@@ -200,6 +200,67 @@ try {
   } catch { refused = true; }
   check('a rating without its standard is refused by the DATABASE, not just the form', refused,
     'EN, SAE and DIN rate the same battery differently — the pair is the unit of meaning');
+  // ── 9b. ON THE SERVED DESKTOP PAGE ───────────────────────────────────────────────────────────
+  // The phone form is proven in scripts/phone-capture-timing and the customer report below. This is
+  // the third surface, and it was flagged unproven twice before being closed — the pure rules can
+  // be perfect while the panel never renders, and reading the JSX proves only that the file has it.
+  console.log('\n— the battery form, on the page a service advisor uses —');
+  browser = await chromium.launch({ channel: 'chrome' });
+  const dPage = await (await browser.newContext()).newPage();
+  await dPage.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await dPage.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await dPage.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([dPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), dPage.click('button[type="submit"]')]);
+
+  // Its own car: the fixture above has been tested three times already, and the prefill would make
+  // "the rating was typed" untestable.
+  const dVeh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76DBT', make: 'Desk', model: 'Battery' }, select: { id: true } });
+  // stage_details_done, because Intake is GATED behind Details (lib/jobcard-tabs). Fixture setup for
+  // a state a real card reaches; the gating has its own gate and is not re-proven here.
+  const dCard = await prisma.jobCard.create({
+    data: { group_id: ZZ, site_id: site.id, vehicle_id: dVeh.id, status: 'in_progress', stage_details_done: true },
+    select: { id: true },
+  });
+  fix.deskVeh = dVeh.id; fix.cards.push(dCard.id);
+
+  await dPage.goto(`${BASE}/admin/jobcards/${dCard.id}`, { waitUntil: 'domcontentloaded' });
+  await dPage.getByRole('button', { name: 'Intake', exact: false }).first().click();
+  await dPage.waitForSelector('[data-testid="battery-capture"]', { timeout: 25000 });
+  check('the battery form renders on the served Intake tab', true);
+
+  // ALL THREE OR NOTHING, on the page rather than in the predicate.
+  check('Save is refused before anything is entered', await dPage.locator('[data-testid="battery-save"]').isDisabled());
+  await dPage.fill('[data-testid="battery-voltage"]', '11.98');
+  await dPage.fill('[data-testid="battery-soc"]', '0');
+  check('  …and still refused with two of the three numbers',
+    await dPage.locator('[data-testid="battery-save"]').isDisabled(),
+    'a test missing one number would silently change which state it lands in');
+  await dPage.fill('[data-testid="battery-soh"]', '17');
+
+  // BOTH OR NEITHER, on the page: a rating without its standard must not be sendable.
+  await dPage.fill('[data-testid="battery-rated-cca"]', '700');
+  check('a rating without its standard is refused before the request',
+    await dPage.locator('[data-testid="battery-save"]').isDisabled(),
+    'the database refuses it too, but a mechanic should get a disabled button, not a constraint');
+  await dPage.locator('[data-testid="battery-std-EN"]').click();
+  check('  …and accepted once the pair is complete', await dPage.locator('[data-testid="battery-save"]').isEnabled());
+
+  await dPage.locator('[data-testid="battery-save"]').click();
+  await dPage.waitForSelector('[data-testid="battery-saved"]', { timeout: 20000 });
+  const saidBack = await dPage.locator('[data-testid="battery-saved"]').innerText();
+  check('the mechanic is told what the reading MEANT, not just that it saved',
+    /advisory was raised/i.test(saidBack), saidBack);
+
+  const deskRow = await prisma.batteryReading.findFirst({
+    where: { job_card_id: dCard.id }, select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true },
+  });
+  check('  …and the reading landed as typed', deskRow?.voltage_mv === 11980 && deskRow?.soc_pct === 0 && deskRow?.soh_pct === 17
+    && deskRow?.rated_cca === 700 && deskRow?.cca_standard === 'EN', JSON.stringify(deskRow));
+  const deskItem = await prisma.vehicleDueItem.findFirst({ where: { vehicle_id: dVeh.id }, select: { description: true, observation_key: true } });
+  check('  …raising the RETEST advisory, not a replacement',
+    deskItem?.observation_key === 'battery' && !/replace/i.test(deskItem?.description ?? 'replace'),
+    deskItem?.description ?? 'no advisory');
+
   // ── 10. ON THE SERVED CUSTOMER REPORT ────────────────────────────────────────────────────────
   // The screen a prospect looks at during a demo. Asserted on the PAGE, not on buildIntakeReport's
   // return value: a shape that is right in a function and absent in the markup is a shape nobody
@@ -224,7 +285,6 @@ try {
   const link = await createMagicLink({
     groupId: ZZ, jobCardId: rCard.id, purpose: 'intake_report', recipient: 'gate@example.invalid',
   });
-  browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();
   await page.goto(`${BASE}/c/${link.rawToken}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="report-battery"]', { timeout: 30000 });
@@ -246,7 +306,7 @@ try {
   if (fix) {
     const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
     // AuditLog is append-only. Its rows for these cards stay, correctly.
-    const vehIds = [fix.veh, fix.reportVeh].filter(Boolean);
+    const vehIds = [fix.veh, fix.reportVeh, fix.deskVeh].filter(Boolean);
     await step('link', () => prisma.customerMagicLink.deleteMany({ where: { job_card_id: { in: fix.cards } } }));
     await step('readings', () => prisma.batteryReading.deleteMany({ where: { vehicle_id: { in: vehIds } } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: { in: vehIds } } }));

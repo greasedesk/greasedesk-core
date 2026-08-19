@@ -102,6 +102,18 @@ async function sendItem(item) {
     if (!res.ok) throw Object.assign(new Error('tyres:' + res.status), { status: res.status });
     return;
   }
+  // ONE TAPPED OBSERVATION. No id: (group, vehicle, observation_key) is unique while open, so a
+  // replay finds the finding that already exists and the server reports success rather than 409 —
+  // a 409 would look like a failure and the outbox would retry it forever.
+  if (item.kind === 'observation') {
+    const p = item.payload || {};
+    const res = await fetch('/api/observations', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ jobCardId: item.jobCardId, key: p.observationKey, customerResponse: p.customerResponse }),
+    });
+    if (!res.ok) throw Object.assign(new Error('observation:' + res.status), { status: res.status });
+    return;
+  }
   // ONE BATTERY TEST. Sends NO id, deliberately: BatteryReading is unique on job_card_id, so a
   // redelivered envelope upserts. Contrast the due_item sender above, which MUST send item.id
   // because a finding has no natural key and a replay would give the garage two of them.

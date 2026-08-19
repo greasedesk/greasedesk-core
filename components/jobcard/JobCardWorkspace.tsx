@@ -24,6 +24,7 @@ import IntakeChecklist, { type IntakeItemView } from '@/components/jobcard/Intak
 import SendIntakeReport from '@/components/jobcard/SendIntakeReport';
 import TyreCapture from '@/components/jobcard/TyreCapture';
 import BatteryCapture from '@/components/jobcard/BatteryCapture';
+import ObservationTaps from '@/components/jobcard/ObservationTaps';
 import ConversationView, { type ConversationMessage, type Reachability } from '@/components/messages/ConversationView';
 import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
@@ -89,6 +90,7 @@ type Props = {
   /** This car's last recorded tyre type — the prefill that makes type zero taps. */
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
+  observationCounts?: Record<string, number>;
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
     /** Missed bookings, most recent first (ISO dates). Derived server-side; [] = clean history. */
@@ -889,6 +891,12 @@ export default function JobCardWorkspace(p: Props) {
             that evidence them. */}
         <DueItems jobCardId={p.jobCardId} items={p.dueItems ?? []} canEdit={p.canOperate && !inactive}
           motExpiry={eff.vehicle.motExpiry ?? null} />
+        {/* THE TAP-LIST sits directly under the findings it writes into — it is a faster way to say
+            the same thing, not a separate feature, and putting it elsewhere would read as one. */}
+        <ObservationTaps jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
+          counts={p.observationCounts ?? {}}
+          openKeys={(p.dueItems ?? []).map((d) => d.observationKey).filter(Boolean) as string[]}
+          onSaved={refreshCard} />
         <IntakeChecklist jobCardId={p.jobCardId} items={eff.intakeItems}
           canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />

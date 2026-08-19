@@ -12,7 +12,7 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery'; jobCardId: string;
+  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery' | 'observation'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
@@ -30,6 +30,13 @@ export type OutboxItem = {
     // job_card_id (a natural key), so a replayed envelope upserts. ratedCca and ccaStandard travel
     // together or not at all — a rating without its standard is not comparable to another rating.
     voltage?: number; socPct?: number; sohPct?: number; ratedCca?: number | null; ccaStandard?: string | null;
+    // kind:'observation' — one tapped observation. NO id, and the reason completes the pattern:
+    // (group, vehicle, observation_key) is unique WHILE OPEN, enforced by a partial index, so a
+    // replayed envelope finds the row that already says what the caller wanted to say. Only the
+    // FREE-TEXT finding has no natural key, and only it carries a client-supplied id.
+    // customerResponse is shared with the due_item kind above — the same field meaning the same
+    // thing, so it is declared once rather than shadowed.
+    observationKey?: string;
   };
   durationSeconds?: number | null;                                     // kind:'video'
   // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
@@ -148,6 +155,22 @@ export async function enqueueTyres(args: {
 }): Promise<string> {
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'tyres', jobCardId: args.jobCardId, payload: { corners: args.corners },
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
+  triggerDrain();
+  return item.id;
+}
+
+/** ONE TAPPED OBSERVATION — the cheapest kind on the queue, and the most common one. Replay-safe
+ *  with no id: the partial unique index on (group, vehicle, observation_key) WHERE closed_at IS
+ *  NULL means a redelivered envelope cannot give a garage two of the same finding on one car. */
+export async function enqueueObservation(args: {
+  jobCardId: string; observationKey: string; customerResponse: string;
+}): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'observation', jobCardId: args.jobCardId,
+    payload: { observationKey: args.observationKey, customerResponse: args.customerResponse },
     createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item));

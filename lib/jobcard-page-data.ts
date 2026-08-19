@@ -132,7 +132,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, observationCounts, lastReport, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -187,6 +187,19 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         orderBy: { measured_at: 'desc' }, select: { rated_cca: true, cca_standard: true },
       });
       return last ? { ratedCca: last.rated_cca, ccaStandard: last.cca_standard as string | null } : null;
+    })(),
+    // THIS TENANT'S OWN OBSERVATION USAGE, so the tap-list puts their most-used first. Seventeen
+    // chips in authored order is a visual search, which is slower than typing — the ordering is
+    // what makes the feature faster than the thing it replaces, not a later refinement.
+    (async () => {
+      const rows = await prisma.vehicleDueItem.groupBy({
+        by: ['observation_key'],
+        where: { group_id: groupId, observation_key: { not: null } },
+        _count: { _all: true },
+      });
+      const counts: Record<string, number> = {};
+      for (const r of rows) if (r.observation_key) counts[r.observation_key] = r._count._all;
+      return counts;
     })(),
     // WHEN THE REPORT WAS LAST SENT — the only stored half of the derived report status.
     prisma.customerMagicLink.findFirst({
@@ -461,6 +474,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastTyreType,
     /** This car's last recorded battery rating, so the denominator prefills. NULL = never tested. */
     lastBattery,
+    /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
+    observationCounts,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3
     // days" needs no scheduled job and cannot drift.
     reportStatus: reportStatus({

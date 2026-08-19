@@ -30,6 +30,7 @@ import MediaGallery from '@/components/media/MediaGallery';
 import PhoneFindings from '@/components/pwa/PhoneFindings';
 import PhoneTyres from '@/components/pwa/PhoneTyres';
 import PhoneBattery from '@/components/pwa/PhoneBattery';
+import PhoneObservations from '@/components/pwa/PhoneObservations';
 import PhoneIntakeChecklist from '@/components/pwa/PhoneIntakeChecklist';
 import PhoneSendReport from '@/components/pwa/PhoneSendReport';
 
@@ -45,6 +46,7 @@ type JobData = {
   motExpiry?: string | null;
   lastTyreType?: string | null;
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
+  observationCounts?: Record<string, number>;
   intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
   nothingFoundAt?: string | null;
   currency: string; locale: string;
@@ -513,6 +515,13 @@ export default function MobileJobCard() {
               {job && (job.intakeItems?.length ?? 0) > 0 && (
                 <PhoneIntakeChecklist jobCardId={job.id} items={job.intakeItems!}
                   nothingFoundAt={job.nothingFoundAt ?? null} onChanged={refreshPhotos} />
+              )}
+              {/* THE TAP-LIST BEFORE THE TYPING. Most findings are not novel, and the one that is
+                  should be reached past the eighteen that are — not the other way round. */}
+              {job && (
+                <PhoneObservations jobCardId={job.id} counts={job.observationCounts ?? {}}
+                  openKeys={(job.dueItems ?? []).map((d) => (d as { observationKey?: string | null }).observationKey).filter(Boolean) as string[]}
+                  onQueued={refreshPhotos} />
               )}
               {job && (
                 <PhoneFindings jobCardId={job.id} existing={job.dueItems ?? []}

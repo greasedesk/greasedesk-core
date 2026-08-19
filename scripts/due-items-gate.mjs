@@ -110,8 +110,17 @@ console.log('\n— the form at the car, the information at the desk —');
 const ws = readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8');
 const quoteAt = ws.indexOf("active === 'quote' ?");
 const intakeAt = ws.indexOf("{active === 'intake' &&");
-const quotePane = ws.slice(quoteAt, quoteAt + 900);
-const intakePane = ws.slice(intakeAt, intakeAt + 1800);
+// SLICED TO THE NEXT PANE, not to a byte count. These were fixed windows — 900 and 1800 characters
+// — which is a guess at how long a pane is, and the guess expired: adding two panels pushed
+// <SendIntakeReport past the 1800th character, indexOf returned -1, and -1 sorts EARLIEST, so the
+// order check failed for a reason that had nothing to do with the order. The same window could as
+// easily have produced a false PASS by truncating a component that was genuinely out of place.
+const paneEnd = (from) => {
+  const next = ws.indexOf("{active === '", from + 1);
+  return next === -1 ? ws.length : next;
+};
+const quotePane = ws.slice(quoteAt, paneEnd(quoteAt));
+const intakePane = ws.slice(intakeAt, paneEnd(intakeAt));
 check('the CAPTURE panel renders on INTAKE', /<DueItems/.test(intakePane));
 check('  …and not on Quote — one form, one home', !/<DueItems\s/.test(quotePane),
   'the form in the estimator\'s way is what made the first arrangement fail');
@@ -120,10 +129,17 @@ check('the READ-ONLY strip renders on Quote', /<DueItemsStrip/.test(quotePane),
 check('  …and the strip is genuinely read-only', !/onChange|button/.test(readFileSync('components/jobcard/DueItemsStrip.tsx', 'utf8')),
   'a finding is captured where the car is');
 // ORDER on the intake tab: findings, then tyres, then the photos that evidence them, then send.
-const pos = (needle) => intakePane.indexOf(needle);
-check('intake order is findings → tyres → photos → send',
-  pos('<DueItems') < pos('<TyreCapture') && pos('<TyreCapture') < pos('<PhotoStage') && pos('<PhotoStage') < pos('<SendIntakeReport'),
-  'the report carries the photos, so it goes out after them');
+// REFUSES -1. A missing component is a different failure from a mis-ordered one, and silently
+// treating "absent" as "position -1, therefore first" is how the two get confused.
+const pos = (needle) => {
+  const i = intakePane.indexOf(needle);
+  if (i === -1) throw new Error(`${needle} is not on the intake pane at all`);
+  return i;
+};
+check('intake order is findings → spotted-it → tyres → battery → photos → send', (() => {
+  const order = ['<DueItems', '<ObservationTaps', '<TyreCapture', '<BatteryCapture', '<PhotoStage', '<SendIntakeReport'].map(pos);
+  return order.every((v, i) => i === 0 || v > order[i - 1]);
+})(), 'the report carries the photos, so it goes out after them');
 const i18nJc = JSON.parse(readFileSync('public/locales/en-GB/jobcard.json', 'utf8'));
 check('the tab is called "Intake", not "Intake Photos"', i18nJc.tab.intake === 'Intake',
   'photos are one part of it — findings, tyres and mileage/VIN live there too');

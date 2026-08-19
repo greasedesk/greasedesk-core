@@ -88,7 +88,7 @@ for (const [f, src] of [['PhoneFindings', pf], ['PhoneTyres', pt], ['PhoneIntake
 // ── 8. THE BATTERY, ON THE PHONE ────────────────────────────────────────────────────────────────
 console.log('\n— the third measurement kind —');
 const pb = readFileSync('components/pwa/PhoneBattery.tsx', 'utf8');
-check("the envelope carries 'battery'", /\| 'battery';/.test(outbox));
+check("the envelope carries 'battery'", /kind:[^;]*'battery'/.test(outbox));
 check('the service worker has a sender for it', /item\.kind === 'battery'/.test(sw));
 check('  …which sends NO id, because job_card_id IS the natural key',
   !/battery-readings'[\s\S]{0,400}?id: item\.id/.test(sw)
@@ -125,6 +125,28 @@ check('  …and the general grid still owns everything else',
   !PS.slotOwnedBySection('damage') && !PS.slotOwnedBySection('vin') && !PS.slotOwnedBySection('freeform')
   && !PS.slotOwnedBySection(null));
 check('the reason it is positive is written down', /negative filter that names one section/.test(prose(slots)));
+
+// ── 10. THE TAP-LIST, ON THE PHONE ──────────────────────────────────────────────────────────────
+console.log('\n— the fourth kind, and the cheapest —');
+const po = readFileSync('components/pwa/PhoneObservations.tsx', 'utf8');
+// MEMBERSHIP, not position in the union: the battery assertion above was anchored on the trailing
+// semicolon and broke the moment a fifth kind was added after it. An assertion should not depend on
+// being last.
+check("the envelope carries 'observation'", /kind:[^;]*'observation'/.test(outbox));
+check('the service worker has a sender for it', /item\.kind === 'observation'/.test(sw));
+check('  …sending NO id, because the open row IS the natural key',
+  !/observations'[\s\S]{0,300}?id: item\.id/.test(sw)
+  && /unique while open/.test(prose(sw)));
+check('the phone renders it', /<PhoneObservations/.test(page));
+check('  …BEFORE the typing, because most findings are not novel',
+  page.indexOf('<PhoneObservations') < page.indexOf('<PhoneFindings'));
+check('  …fed by this garage’s own usage', /observationCounts: p\.observationCounts/.test(api));
+check('the save parks durably before any network', /enqueueObservation/.test(po) && !/fetch\(/.test(po));
+check('the answer is still a required tap on this surface too',
+  /phone-observation-answer-/.test(po) && !/not_raised'\s*\)/.test(po.replace(/ANSWERS[\s\S]{0,200}/, '')),
+  'the tap-list is where defaulting it would be most tempting');
+check('touch targets stay at 44px or more', /min-h-\[44px\]/.test(po) && /min-h-\[48px\]/.test(po));
+check('PhoneObservations shows no money', !/unitPrice|unit_cost|formatMoney|£/.test(po));
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

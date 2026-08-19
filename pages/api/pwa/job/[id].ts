@@ -53,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // The battery's rated CCA and standard from this car's last test — so the denominator prefills
     // and a second visit is zero input. STILL no money on this surface.
     lastBattery: p.lastBattery ?? null,
+    // This garage's own observation usage, so the tap-list orders itself. Cached with the rest of
+    // the payload, so it survives offline — degrading to the cold-start order, never to no list.
+    observationCounts: p.observationCounts ?? {},
     // The four prompts, already resolved server-side. On the phone because an escalation firing
     // for items nobody was ever prompted about is worse than no escalation — the false-positive
     // problem again, one level up.

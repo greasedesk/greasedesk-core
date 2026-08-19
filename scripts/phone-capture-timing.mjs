@@ -101,7 +101,7 @@ try {
   console.log('\n— the phone page, top to bottom —');
   await page.goto(`${B}/m/job/${fix.card}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="phone-tyres"]', { timeout: 30000 });
-  const order = await page.evaluate(() => ['phone-checklist', 'phone-findings', 'phone-tyres', 'phone-battery', 'phone-send-report']
+  const order = await page.evaluate(() => ['phone-checklist', 'phone-observations', 'phone-findings', 'phone-tyres', 'phone-battery', 'phone-send-report']
     .map((t) => { const e = document.querySelector(`[data-testid="${t}"]`); return e ? { t, y: e.getBoundingClientRect().top + window.scrollY } : { t, y: null }; }));
   check('every intake section renders on the phone', order.every((o) => o.y !== null),
     order.filter((o) => o.y === null).map((o) => o.t).join(', ') || 'all present');
@@ -109,7 +109,7 @@ try {
   check('  …and the checklist shows the TWO prompts this site switched on, not four', promptCount === 2,
     `${promptCount} items — an unprompted item must never appear, or the escalation names it later`);
   const ys = order.map((o) => o.y);
-  check('  …checklist → findings → tyres → battery → send, in that order',
+  check('  …checklist → spotted-it → findings → tyres → battery → send, in that order',
     ys.every((y, i) => i === 0 || (y !== null && ys[i - 1] !== null && y > ys[i - 1])),
     order.map((o) => `${o.t}@${o.y === null ? '—' : Math.round(o.y)}`).join(' · '));
   const mot = await page.locator('[data-testid="phone-mot"]').count();
@@ -136,6 +136,45 @@ try {
     await tap('phone-tyre-save');
     await page.waitForSelector('[data-testid="phone-tyres-queued"]', { timeout: 15000 });
   });
+
+  // ── OBSERVATIONS ────────────────────────────────────────────────────────────────────────────
+  // The prediction, recorded before the measurement: 3 controls / 1.8s for a wiper blade and
+  // 4 / 2.4s for a bulb, against ~6 controls plus ~40 keystrokes for the same finding typed. Not
+  // "under a second" — the answer tap cannot be defaulted away, and that is the boundary of the
+  // speed argument rather than an oversight.
+  console.log('\n— spotted it: tapped, not typed —');
+  await run('OB1. wiper blade', async () => {
+    await tap('phone-observation-wipers_smearing');
+    await tap('phone-observation-answer-declined');
+    await page.waitForSelector('[data-testid="phone-observations-queued"]', { timeout: 15000 });
+  });
+  await run('OB2. bulb (two-step)', async () => {
+    await tap('phone-observation-bulb-group');
+    await tap('phone-observation-bulb_ns_headlight');
+    await tap('phone-observation-answer-agreed_later');
+    await page.waitForSelector('[data-testid="phone-observations-queued"]', { timeout: 15000 });
+  });
+  // WAIT FOR THE TWO KEYS, not for a count. "observation_key is not null" also matches the tyre
+  // advisories raised by the runs above, so a count-based wait was satisfied before either tap had
+  // landed — and then asserted against rows it had not been waiting for. The same under-specified
+  // wait that reported a stale battery reading earlier; scoped to the subject this time.
+  const WANT = ['wipers_smearing', 'bulb_ns_headlight'];
+  let obs = [];
+  for (let i = 0; i < 40; i++) {
+    obs = await prisma.vehicleDueItem.findMany({
+      where: { vehicle_id: fix.veh, observation_key: { in: WANT } },
+      select: { observation_key: true, description: true, customer_response: true },
+    });
+    if (obs.length === WANT.length) break;
+    await page.waitForTimeout(500);
+  }
+  check('both taps reached the database through the queue', obs.length === 2,
+    obs.map((o) => o.observation_key).join(', ') || 'neither landed');
+  check('  …with the catalogue’s words and no typing at all',
+    obs.some((o) => o.description === 'Wiper blades smearing') && obs.some((o) => o.description === 'N/S headlight not working'));
+  check('  …and the answer the mechanic actually chose, not a default',
+    new Set(obs.map((o) => o.customer_response)).size === 2,
+    obs.map((o) => o.customer_response).join(', '));
 
   // ── BATTERY ─────────────────────────────────────────────────────────────────────────────────
   // Three numbers typed, because a voltage cannot be chipped. Two runs: the first visit, which pays
@@ -229,6 +268,15 @@ try {
   check('the whole capture stays under a minute', worst < 60,
     `${worst.toFixed(1)}s at ${PACE}ms per control and ${KEY_MS}ms per keystroke`);
   const typed = row('B. worst realistic');
+  // THE COMPARISON THAT MATTERS: the same kind of finding, tapped versus typed.
+  const wiper = row('OB1. wiper blade');
+  check('a tapped observation is a fraction of a typed one',
+    wiper.secs * 5 < typed.secs,
+    `${wiper.secs.toFixed(1)}s tapped vs ${typed.secs.toFixed(1)}s for the typed worst case`);
+  check('  …and it costs no keystrokes at all', wiper.keys === 0);
+  check('  …but is NOT under a second, because the answer cannot be defaulted',
+    wiper.taps === 2 && wiper.secs > 1,
+    'two taps: the observation and whether it was raised — the boundary of the speed argument');
   check('  …and the honest reason it is not faster is the keyboard, not the app',
     typed.keys * (KEY_MS / 1000) > typed.taps * (PACE / 1000),
     `${typed.keys} keystrokes cost ${(typed.keys * KEY_MS / 1000).toFixed(1)}s vs ${(typed.taps * PACE / 1000).toFixed(1)}s of tapping — a description is the slow part of a finding`);

@@ -95,6 +95,8 @@ export type OpenDueItem = {
   customerResponse: DueItemResponse;
   foundOnJobCardId: string | null;
   createdAt: string;
+  /** Which tapped observation this is, or NULL when a human typed it. See lib/observation-keys. */
+  observationKey?: string | null;
 };
 
 /**
@@ -113,11 +115,12 @@ export async function openDueItemsForVehicle(
     orderBy: { created_at: 'desc' },
     select: {
       id: true, description: true, due_basis: true, due_date: true, due_mileage: true,
-      customer_response: true, found_on_job_card_id: true, created_at: true,
+      customer_response: true, found_on_job_card_id: true, created_at: true, observation_key: true,
     },
   })) as Array<{
     id: string; description: string; due_basis: DueBasis; due_date: Date | null; due_mileage: number | null;
     customer_response: DueItemResponse; found_on_job_card_id: string | null; created_at: Date;
+    observation_key: string | null;
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -128,6 +131,9 @@ export async function openDueItemsForVehicle(
     customerResponse: r.customer_response,
     foundOnJobCardId: r.found_on_job_card_id,
     createdAt: r.created_at.toISOString().slice(0, 10),
+    // Carried so a tap-list can show an observation already recorded as done rather than offering
+    // a tap that would be a no-op. NULL for a hand-typed finding, which is the whole point of it.
+    observationKey: r.observation_key,
   }));
 }
 

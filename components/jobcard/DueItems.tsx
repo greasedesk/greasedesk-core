@@ -22,6 +22,9 @@ export type DueItemView = {
   dueDate: string | null; dueMileage: number | null;
   customerResponse: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call';
   createdAt?: string;
+  /** Which tapped observation this is, NULL when a human typed it — so the tap-list can show one
+   *  already recorded rather than offering a tap that would be a no-op. */
+  observationKey?: string | null;
   /** Derived (lib/due-items::closureOffer) — offered, never applied automatically. */
   closureOffer?: { offer: false; reason: 'no_lines' | 'work_outstanding' } | { offer: true; invoicedLines: number };
 };
