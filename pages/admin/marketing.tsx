@@ -23,7 +23,6 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { buildMotList, buildServiceList, type MarketingRow, type MotList, type ServiceList } from '@/lib/marketing-data';
 import { WINDOW_DAYS } from '@/lib/marketing-lists';
-import AdminLayout from '@/components/layout/AdminLayout';
 
 type PageProps = { mot: MotList; service: ServiceList; currency: string };
 
@@ -94,8 +93,12 @@ export default function MarketingPage({ mot, service, currency }: PageProps) {
   const reload = () => window.location.reload();
   const list = tab === 'mot' ? mot : service;
 
+  // NO AdminLayout HERE. _app wraps every /admin route in it, mounted ONCE and kept mounted across
+  // navigations so the locations bar does not refetch and the shell does not tear down. Wrapping
+  // again nested a second sidebar inside the first and broke the layout — and it also cost the
+  // persistence the shell exists for, remounting the whole thing on every visit to this page.
   return (
-    <AdminLayout>
+    <>
       <Head><title>Marketing — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Marketing</h1>
       <p className="text-sm text-muted mb-4">
@@ -177,7 +180,7 @@ export default function MarketingPage({ mot, service, currency }: PageProps) {
           )}
         </>
       )}
-    </AdminLayout>
+    </>
   );
 }
 
