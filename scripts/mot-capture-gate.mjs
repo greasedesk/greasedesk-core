@@ -98,8 +98,15 @@ try {
     /fixes NONE of the three that matter/.test(od) && /replaced instrument cluster/.test(od));
   check('the honest alternative is marked NOT BUILT', /NOT BUILT — THE HONEST ALTERNATIVE/.test(od),
     'surfacing the conflict is a feature with a screen, not a constant');
-  check('and the stale backfill claim is corrected in place',
-    /CORRECTED 2026-08-19/.test(od) && /65 of 221 cars carry an identical consecutive pair/.test(od));
+  // THE RULE, NOT THE WORDING. This matched a literal sentence fragment and broke the moment I
+  // reworded "65 of 221" to "65 of TMBS's 221" — an assertion pinned to prose rather than to what
+  // the prose has to contain. What the rule requires is a COUNT and a DATE, so that is what it asks
+  // for: a data claim that ages visibly, versus a guess wearing a number's clothes.
+  check('and the stale backfill claim is corrected in place', /CORRECTED 2026-08-19/.test(od));
+  check('  …with the count it replaced the guess with', /65 of [^.]*221 cars/.test(od));
+  check('  …and a date on it, so it ages visibly',
+    /65 of[\s\S]{0,200}?(19 Aug 2026|2026-08-19)/.test(od),
+    'an undated number cannot be told from a guess by whoever finds it next');
 
   // ── 1. BOTH SURFACES ASK, AND THE REVERSAL IS VISIBLE ────────────────────────────────────────
   console.log('\n— the diary no longer throws it away —');
