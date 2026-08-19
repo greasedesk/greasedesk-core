@@ -58,7 +58,9 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
           <span className="text-xs font-medium text-warn" data-testid="marketing-no-contact">{row.noContact}</span>
         )}
         <span className="ml-auto text-xs text-muted">
-          {row.dueDate ?? row.triggerText}
+          {/* THROUGH dueLabel, never the raw column. This showed "2026-11-01" to a garage, and once
+              schedule rows carry month precision the raw value would also imply a day nobody chose. */}
+          {row.dueLabel ?? row.triggerText}
           {row.mileageLegUnevaluated && <em className="not-italic"> · mileage leg not projected</em>}
         </span>
       </div>

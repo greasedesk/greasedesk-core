@@ -27,19 +27,62 @@ const prose = (t) => t.replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ');
 let fix = null, browser = null;
 
 try {
-  // ── 1. A DATE, A MILEAGE, OR BOTH ────────────────────────────────────────────────────────────
-  console.log('\n— the basis comes from which legs are filled —');
-  check('a date alone is due by a date', S.basisFor({ dueDate: '2027-03-01', dueMileage: null }) === 'date');
-  check('a mileage alone is due at a mileage', S.basisFor({ dueDate: null, dueMileage: 60000 }) === 'mileage');
-  check('both is whichever comes first', S.basisFor({ dueDate: '2027-03-01', dueMileage: 60000 }) === 'whichever_first',
-    'exactly what the garage’s own proforma meant by printing two');
-  check('neither is a blank row, not an error', S.basisFor({ dueDate: null, dueMileage: null }) === null && S.isBlank({ dueDate: null, dueMileage: null }),
+  // ── 1. EACH ITEM DECLARES ITS OWN CLOCK ──────────────────────────────────────────────────────
+  // The basis used to be inferred from which fields somebody filled — the one deviation this file
+  // had from refuseDueItem's refusal to guess. Declaring it removes the guess and decides which
+  // fields the row even shows.
+  console.log('\n— the item says what it is scheduled by —');
+  const by = (k) => S.scheduleByKey(k).basis;
+  check('an oil service is genuinely both', by('schedule_oil_service') === 'whichever_first',
+    'manufacturers specify "12 months or 10,000 miles"');
+  check('brake fluid is a date', by('schedule_brake_fluid') === 'date', 'moisture with time, not use');
+  check('both pad rows are mileage', by('schedule_pads_front') === 'mileage' && by('schedule_pads_rear') === 'mileage',
+    'you cannot predict by date when pads run out');
+  check('a vehicle check is a date', by('schedule_vehicle_check') === 'date',
+    'a touchpoint books by date — and it is the row that projects with no mileage rate');
+  // NON-EMPTY AND NOT ALL THE SAME. The first version demanded 20 characters, which failed on
+  // "same as the fronts" — a perfectly good reason, and a length threshold is not what makes a
+  // reason a reason.
+  check('every item carries WHY, for whoever changes it',
+    S.SCHEDULE_ITEMS.every((i) => typeof i.why === 'string' && i.why.trim().length > 0)
+    && new Set(S.SCHEDULE_ITEMS.map((i) => i.why)).size >= 4,
+    S.SCHEDULE_ITEMS.map((i) => `${i.key}:${i.basis}`).join(' '));
+  check('nothing infers a basis any more', !/basisFor/.test(readFileSync('lib/service-schedule.ts', 'utf8'))
+    && !/basisFor/.test(readFileSync('pages/api/service-schedule.ts', 'utf8'))
+    && !/basisFor/.test(readFileSync('components/jobcard/ServiceSchedule.tsx', 'utf8')),
+    'the function that read the filled fields and picked a basis is gone');
+
+  console.log('\n— which legs a row shows —');
+  check('a date item shows only a month', JSON.stringify(S.legsFor('date')) === JSON.stringify({ date: true, mileage: false }));
+  check('a mileage item shows only miles', JSON.stringify(S.legsFor('mileage')) === JSON.stringify({ date: false, mileage: true }));
+  check('whichever_first shows both', JSON.stringify(S.legsFor('whichever_first')) === JSON.stringify({ date: true, mileage: true }));
+
+  console.log('\n— a month, not a day —');
+  check('a month becomes the FIRST of it', S.monthToStoredDate('2026-11')?.toISOString().slice(0, 10) === '2026-11-01');
+  check('  …and the reason it is the 1st and not the last is recorded',
+    /2 OCTOBER/.test(prose(readFileSync('lib/service-schedule.ts', 'utf8'))),
+    'a real instant, AND it puts a November item in the 30-day window from early October');
+  check('a day-shaped value is refused', S.monthToStoredDate('2026-11-01') === null && S.monthToStoredDate('2026-13') === null);
+  check('the stored instant reads back as a month', S.storedDateToMonth(new Date('2026-11-01T00:00:00Z')) === '2026-11');
+
+  console.log('\n— blank rows, and half-filled ones —');
+  const it = (k) => S.scheduleByKey(k);
+  const entry = (k, o) => ({ key: k, dueMonth: null, dueMileage: null, item: it(k), ...o });
+  check('a row with neither leg is blank, not an error',
+    S.isBlank(it('schedule_oil_service'), { dueMonth: null, dueMileage: null })
+    && S.refuseSchedule([entry('schedule_oil_service')]).length === 0,
     'most cars leave most rows empty');
-  check('  …and a blank row is never refused', S.refuseSchedule([{ key: 'schedule_oil_service', dueDate: null, dueMileage: null }]).length === 0);
-  check('a nonsense mileage IS refused', S.refuseSchedule([{ key: 'schedule_pads_front', dueDate: null, dueMileage: -5 }])[0]?.code === 'bad_mileage');
-  check('the inference here is explained against refuseDueItem’s refusal',
-    /has no such ambiguity/.test(prose(readFileSync('lib/service-schedule.ts', 'utf8'))),
-    'one guesses safely and one must not, and the difference has to be readable');
+  check('a pads row with a mileage is complete', S.refuseSchedule([entry('schedule_pads_front', { dueMileage: 45000 })]).length === 0);
+  check('a brake-fluid row with a month is complete', S.refuseSchedule([entry('schedule_brake_fluid', { dueMonth: '2027-01' })]).length === 0);
+  const half = S.refuseSchedule([entry('schedule_oil_service', { dueMileage: 10000 })]);
+  check('a HALF-FILLED oil service is refused', half[0]?.code === 'incomplete', JSON.stringify(half[0]));
+  check('  …and the message says which leg is missing', /give the month as well/.test(half[0]?.message ?? ''), half[0]?.message);
+  check('  …and the other way round too',
+    /give the mileage as well/.test(S.refuseSchedule([entry('schedule_oil_service', { dueMonth: '2027-03' })])[0]?.message ?? ''));
+  check('  …and the cost of that strictness is recorded',
+    /recording half a rule and projecting from it is the worse failure/.test(prose(readFileSync('lib/service-schedule.ts', 'utf8'))));
+  check('a nonsense mileage is still refused', S.refuseSchedule([entry('schedule_pads_front', { dueMileage: -5 })])[0]?.code === 'bad_mileage');
+  check('a nonsense month is refused', S.refuseSchedule([entry('schedule_brake_fluid', { dueMonth: '2027-99' })])[0]?.code === 'bad_month');
 
   // ── 2. THE MOT IS NOT A ROW ──────────────────────────────────────────────────────────────────
   console.log('\n— shown, never stored —');
@@ -86,10 +129,10 @@ try {
   }, { jobCardId: card.id, entries });
 
   const r1 = await post([
-    { key: 'schedule_oil_service', dueDate: '2027-03-01', dueMileage: 60000 },
-    { key: 'schedule_pads_front', dueDate: null, dueMileage: 45000 },
-    { key: 'schedule_vehicle_check', dueDate: '2027-08-01', dueMileage: null },
-    { key: 'schedule_brake_fluid', dueDate: null, dueMileage: null },
+    { key: 'schedule_oil_service', dueMonth: '2027-03', dueMileage: 60000 },
+    { key: 'schedule_pads_front', dueMonth: null, dueMileage: 45000 },
+    { key: 'schedule_vehicle_check', dueMonth: '2027-08', dueMileage: null },
+    { key: 'schedule_brake_fluid', dueMonth: null, dueMileage: null },
   ]);
   check('the schedule saves', r1.status === 200 && r1.body.written === 3, JSON.stringify(r1.body));
   const items = await prisma.vehicleDueItem.findMany({
@@ -106,13 +149,13 @@ try {
   check('  …and the response is not_raised, by design', items.every((i) => i.customer_response === 'not_raised'));
 
   // RE-TRANSCRIBING CORRECTS. A schedule is a current state, not a log.
-  const r2 = await post([{ key: 'schedule_pads_front', dueDate: null, dueMileage: 48000 }]);
+  const r2 = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: 48000 }]);
   const pads = await prisma.vehicleDueItem.findMany({ where: { vehicle_id: veh.id, observation_key: 'schedule_pads_front' } });
   check('re-recording corrects rather than stacks', r2.status === 200 && pads.length === 1 && pads[0].due_mileage === 48000,
     `${pads.length} row(s), ${pads[0]?.due_mileage} miles`);
 
   // EMPTYING A ROW RETRACTS IT.
-  const r3 = await post([{ key: 'schedule_pads_front', dueDate: null, dueMileage: null }]);
+  const r3 = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null }]);
   const padsAfter = await prisma.vehicleDueItem.findFirst({ where: { vehicle_id: veh.id, observation_key: 'schedule_pads_front' }, select: { closed_at: true, closed_reason: true } });
   check('emptying a row CLOSES it rather than leaving it', r3.body.cleared === 1 && padsAfter?.closed_at != null,
     'otherwise a wrong date is impossible to retract, and people type 1970 into the field instead');
@@ -122,7 +165,9 @@ try {
   const open = await D.openDueItemsForVehicle(prisma, ZZ, veh.id);
   const block = D.printedDueItemsBlock({ motExpiry: new Date('2026-08-21T00:00:00Z'), items: open });
   check('it reaches the invoice block with no new plumbing',
-    /Next oil service due at 60,000 miles or by 1 March 2027, whichever comes first/.test(block ?? ''), block);
+    /Next oil service due at 60,000 miles or by March 2027, whichever comes first/.test(block ?? ''), block);
+  check('  …saying the MONTH, never a day nobody chose', !/1 March 2027/.test(block ?? ''),
+    'the 1st is stored so the row can be ordered; it is not a fact about the car');
   check('  …and the MOT appears exactly ONCE', (block.match(/MOT Expiry/g) ?? []).length === 1,
     'the whole reason there is no MOT row');
 
@@ -140,10 +185,24 @@ try {
   check('  …above the findings panel', order.schedule != null && order.findings != null && order.schedule < order.findings,
     `schedule@${Math.round(order.schedule)} findings@${Math.round(order.findings)}`);
   check('  …opening on what is already recorded',
-    (await page.locator('[data-testid="schedule-date-schedule_oil_service"]').inputValue()) === '2027-03-01',
-    'a schedule is a current state, so the form shows it');
-  check('  …saying which basis each row recorded',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2027-03',
+    'a schedule is a current state, so the form shows it — as a month, which is what was recorded');
+  check('  …saying the basis the ITEM declares', 
     (await page.locator('[data-testid="schedule-basis-schedule_oil_service"]').innerText()).includes('whichever comes first'));
+  // EACH ROW SHOWS ONLY ITS OWN CLOCK. This is the change: a pads row has no month field to fill in
+  // wrongly, and a brake-fluid row has no mileage field.
+  check('a pads row offers a mileage and NO month',
+    (await page.locator('[data-testid="schedule-miles-schedule_pads_front"]').count()) === 1
+    && (await page.locator('[data-testid="schedule-month-schedule_pads_front"]').count()) === 0);
+  check('a brake-fluid row offers a month and NO mileage',
+    (await page.locator('[data-testid="schedule-month-schedule_brake_fluid"]').count()) === 1
+    && (await page.locator('[data-testid="schedule-miles-schedule_brake_fluid"]').count()) === 0);
+  check('an oil service offers both',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').count()) === 1
+    && (await page.locator('[data-testid="schedule-miles-schedule_oil_service"]').count()) === 1);
+  check('  …and the month input asks for a month, not a day',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').getAttribute('type')) === 'month',
+    'a dd/mm/yyyy picker forces a day nobody has');
   check('the MOT is shown and has no input', (await page.locator('[data-testid="schedule-mot"]').count()) === 1
     && (await page.locator('[data-testid="schedule-mot"] input').count()) === 0);
 } catch (e) {

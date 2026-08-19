@@ -62,6 +62,10 @@ export function refuseDueItem(input: DueItemInput): DueItemRefusal | null {
     // demo_expires_at defect — one column quietly answering two questions.
     return { code: 'no_basis', message: 'Choose what makes this due: a date, a mileage, or the next service.' };
   }
+  // PRECISION IS ABOUT RENDERING, NOT VALIDITY. A month-precision row is correctly
+  // indistinguishable from a day one here: both carry a real instant, and "which day did they
+  // mean" is a question for dueLabel, not for whether the row may exist. Nothing below should
+  // learn about due_date_precision.
   if (input.dueBasis === 'date' && !(input.dueDate instanceof Date) ) {
     return { code: 'no_date', message: 'This is due by a date, so give the date.' };
   }
@@ -111,6 +115,8 @@ export type OpenDueItem = {
   observationKey?: string | null;
   /** The description already says WHEN — so no surface appends a second answer. */
   timingInDescription?: boolean;
+  /** `month` = only the month and year were known; the stored 1st was never meant. Default `day`. */
+  dueDatePrecision?: 'day' | 'month';
 };
 
 /**
@@ -130,12 +136,13 @@ export async function openDueItemsForVehicle(
     select: {
       id: true, description: true, due_basis: true, due_date: true, due_mileage: true,
       customer_response: true, found_on_job_card_id: true, created_at: true, observation_key: true,
-      timing_in_description: true,
+      timing_in_description: true, due_date_precision: true,
     },
   })) as Array<{
     id: string; description: string; due_basis: DueBasis; due_date: Date | null; due_mileage: number | null;
     customer_response: DueItemResponse; found_on_job_card_id: string | null; created_at: Date;
     observation_key: string | null; timing_in_description: boolean;
+    due_date_precision: 'day' | 'month';
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -150,6 +157,7 @@ export async function openDueItemsForVehicle(
     // a tap that would be a no-op. NULL for a hand-typed finding, which is the whole point of it.
     observationKey: r.observation_key,
     timingInDescription: r.timing_in_description,
+    dueDatePrecision: r.due_date_precision,
   }));
 }
 
@@ -178,6 +186,19 @@ export const showsDueLabel = (item: Pick<OpenDueItem, 'timingInDescription'>): b
  * Parsed as UTC: these are calendar dates, not instants, and a local-time parse moves them a day
  * either side of midnight in the wrong direction depending on the season.
  */
+/**
+ * A month and year, for a date whose day was never known.
+ *
+ * "November 2026" is what a service computer said. "1 November 2026" is a day we invented to fit a
+ * DateTime column, and printing it on an invoice a customer keeps would be the fabricated-constant
+ * failure this codebase refuses everywhere else.
+ */
+function britishMonth(iso: string): string {
+  const [y, m] = iso.split('-').map(Number);
+  if (!y || !m) return iso;
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
 function britishDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   if (!y || !m || !d) return iso; // unparseable: show what we have rather than inventing a date
@@ -204,15 +225,18 @@ function britishDate(iso: string): string {
  *
  * One line of human text for a due item's timing — the same words on every surface.
  */
-export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage'>): string {
+export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision'>): string {
   const miles = item.dueMileage != null ? `${item.dueMileage.toLocaleString('en-GB')} miles` : 'a mileage';
+  // ONE PLACE DECIDES HOW A DUE DATE READS, so the invoice block, the customer report and the
+  // marketing list cannot disagree — and none of them can print a day that was never known.
+  const when = (iso: string) => (item.dueDatePrecision === 'month' ? britishMonth(iso) : britishDate(iso));
   switch (item.dueBasis) {
-    case 'date': return item.dueDate ? `due by ${britishDate(item.dueDate)}` : 'due by a date';
+    case 'date': return item.dueDate ? `due by ${when(item.dueDate)}` : 'due by a date';
     case 'mileage': return `due at ${miles}`;
     case 'next_service': return 'due at the next service';
     // The label needs NO RATE — it states both legs, exactly as the garage wrote it. Only ORDERING
     // needs a projection, and that is effectiveDueDate's job.
-    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ? britishDate(item.dueDate) : 'a date'}, whichever comes first`;
+    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ? when(item.dueDate) : 'a date'}, whichever comes first`;
   }
 }
 
@@ -295,7 +319,7 @@ export function effectiveDueDate(
  */
 export function printedDueItemsBlock(args: {
   motExpiry: Date | null;
-  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription'>>;
+  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
   /** Pre-rendered tyre lines (lib/tyres::printedTyreLines). TEXT, so they freeze like the rest. */
   tyreLines?: string[];
   /** The battery test (lib/battery::printedBatteryLine), same argument. NULL when none was taken —

@@ -191,8 +191,20 @@ const block = printedDueItemsBlock({
 check('the MOT leads, numbered, as the garage writes it by hand',
   block.split('\n')[0] === '(1) MOT Expiry 22 September 2024', JSON.stringify(block.split('\n')[0]));
 check('findings follow, each with its own timing', /\(2\) Oil service due at 10,000 miles or by 1 November 2025, whichever comes first/.test(block));
-check('  …and one block never carries two date formats',
+// ── ABOUT ISO SPECIFICALLY, NOT ABOUT PRECISION ────────────────────────────────────────────────
+// This forbids a raw `2026-11-01` leaking into a block that also says "22 September 2024". It does
+// NOT forbid two PRECISIONS: a block may legitimately carry "MOT Expiry 21 August 2026" beside
+// "due by November 2026", because the MOT genuinely is a day from DVSA and a manufacturer's service
+// interval genuinely is not. Restated because the old wording read as forbidding both.
+check('  …and no raw ISO date leaks into a block',
   !/\d{4}-\d{2}-\d{2}/.test(block), block.replace(/\n/g, ' | '));
+check('  …while two PRECISIONS in one block are fine', (() => {
+  const mixed = printedDueItemsBlock({
+    motExpiry: new Date('2026-08-21T00:00:00Z'),
+    items: [{ description: 'Next oil service', dueBasis: 'date', dueDate: '2026-11-01', dueMileage: null, timingInDescription: false, dueDatePrecision: 'month' }],
+  });
+  return /MOT Expiry 21 August 2026/.test(mixed) && /due by November 2026/.test(mixed) && !/1 November/.test(mixed);
+})(), 'one is a day DVSA recorded; the other is a month a manufacturer specified');
 check('nothing to say → NULL, not an empty block',
   printedDueItemsBlock({ motExpiry: null, items: [] }) === null,
   'an empty string and "nothing captured" must be distinguishable in the column');

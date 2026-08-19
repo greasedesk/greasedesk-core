@@ -6,7 +6,7 @@
  * provable without a database and the badge cannot drift from the list it counts.
  */
 import { prisma } from '@/lib/db';
-import { openDueItemsForVehicle } from '@/lib/due-items';
+import { openDueItemsForVehicle, dueLabel } from '@/lib/due-items';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import {
   motBand, serviceDue, isUnactioned, contactRoute, noContactLabel,
@@ -25,8 +25,13 @@ export type MarketingRow = {
   canEmail: boolean;
   /** "No texts" / "No email" / "No electronic contact", or null when nothing is refused. */
   noContact: string | null;
-  /** ISO date the thing is due, or null on the trigger band. */
+  /** ISO date the thing is due, or null on the trigger band. Machine-readable — used as the
+   *  contact record's `for_date`. NEVER rendered raw; see `dueLabel` below. */
   dueDate: string | null;
+  /** The same fact in words, through lib/due-items::dueLabel — so a month-precision service
+   *  interval reads "due by November 2026" and an MOT expiry reads "due by 21 August 2026". The
+   *  page rendered `dueDate` directly and showed a garage "2026-11-01". */
+  dueLabel: string | null;
   /** What to show when there is no date — the item's own words. */
   triggerText: string | null;
   /** The whichever_first item showing on its date leg because no rate exists. */
@@ -101,7 +106,13 @@ async function ownerOf(vehicleId: string): Promise<CustomerBits | null> {
 const shape = (
   v: { id: string; registration: string; make: string | null; model: string | null },
   c: CustomerBits | null,
-  due: { dueDate: Date | null; triggerText: string | null; mileageLegUnevaluated: boolean },
+  due: {
+    dueDate: Date | null; triggerText: string | null; mileageLegUnevaluated: boolean;
+    /** Carried so the row's words come from dueLabel rather than being re-derived here. */
+    basis?: 'date' | 'mileage' | 'next_service' | 'whichever_first';
+    dueMileage?: number | null;
+    precision?: 'day' | 'month';
+  },
   rec: { state: string; forDate: Date; snoozeUntil: Date | null; createdAt: Date } | null,
   now: Date,
 ): MarketingRow => {
@@ -116,6 +127,14 @@ const shape = (
     canEmail: route.email,
     noContact: c ? noContactLabel(c) : null,
     dueDate: due.dueDate ? due.dueDate.toISOString().slice(0, 10) : null,
+    dueLabel: due.dueDate
+      ? dueLabel({
+          dueBasis: due.basis ?? 'date',
+          dueDate: due.dueDate.toISOString().slice(0, 10),
+          dueMileage: due.dueMileage ?? null,
+          dueDatePrecision: due.precision ?? 'day',
+        })
+      : null,
     triggerText: due.triggerText,
     mileageLegUnevaluated: due.mileageLegUnevaluated,
     state: rec?.state ?? null,
@@ -150,7 +169,8 @@ export async function buildMotList(groupId: string, now: Date): Promise<MotList>
     if (!band) continue;
     const rec = byVehicle.get(v.id);
     const row = shape(v, await ownerOf(v.id),
-      { dueDate: v.mot_expiry, triggerText: null, mileageLegUnevaluated: false },
+      // A DVSA expiry is a real calendar day, so `day` is honest here and the label shows it.
+      { dueDate: v.mot_expiry, triggerText: null, mileageLegUnevaluated: false, basis: 'date', precision: 'day' },
       rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at } : null, now);
     (band === 'expired' ? expired : due).push(row);
   }
@@ -202,6 +222,9 @@ export async function buildServiceList(groupId: string, now: Date): Promise<Serv
       dueDate: pick.date,
       triggerText: pick.band === 'trigger' ? pick.item.description : null,
       mileageLegUnevaluated: pick.mileageLegUnevaluated,
+      basis: pick.item.dueBasis,
+      dueMileage: pick.item.dueMileage,
+      precision: pick.item.dueDatePrecision ?? 'day',
     }, rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at } : null, now);
     (pick.band === 'dated' ? dated : trigger).push(row);
   }

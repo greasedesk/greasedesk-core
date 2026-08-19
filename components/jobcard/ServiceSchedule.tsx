@@ -11,18 +11,22 @@
  * loses the clock, and a reminder cannot be built from a sentence — which is the whole reason this
  * is a form at all rather than one more free-text finding.
  *
- * ── AND THE BASIS IS SHOWN, NOT INFERRED SILENTLY ───────────────────────────────────────────────
- * Fill a date and it is due by a date; a mileage and it is due at a mileage; both and it is due at
- * whichever comes first. That inference is safe HERE — a service computer prints what it prints —
- * but the row still says which it recorded, because refuseDueItem refuses to guess a basis for a
- * finding and a form that quietly guessed would teach the opposite habit.
+ * ── EACH ROW SHOWS ITS OWN CLOCK, AND NOTHING IS INFERRED ───────────────────────────────────────
+ * The basis is DECLARED per item in lib/service-schedule, so a row offers only the fields its clock
+ * needs: pads take a mileage, brake fluid and the vehicle check take a month, an oil service takes
+ * both. Offering two fields on every row showed what the model permits rather than what the item
+ * is, invited a wrong answer, and left the form guessing at the basis afterwards.
+ *
+ * ── AND A DATE LEG IS A MONTH, NOT A DAY ────────────────────────────────────────────────────────
+ * A service computer says "11/2025". A dd/mm/yyyy picker forces a day nobody has, and that day then
+ * prints on a frozen invoice as though somebody chose it. `type="month"` asks for what is known.
  *
  * ── THE MOT IS SHOWN AND NOT EDITABLE ───────────────────────────────────────────────────────────
  * It comes from DVSA and already prints as the first line of every invoice advisory block. A row
  * here would print it twice. So it is confirmation that we have it, and it stores nothing.
  */
 import React, { useState } from 'react';
-import { SCHEDULE_ITEMS, basisFor, type ScheduleKey } from '@/lib/service-schedule';
+import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
 
 export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null };
 
@@ -36,24 +40,26 @@ type Props = {
   onSaved: () => void;
 };
 
+/** What the row records, said on the row. Fixed by the item, so it never changes as you type. */
 const BASIS_LABEL: Record<string, string> = {
-  date: 'by that date',
+  date: 'by that month',
   mileage: 'at that mileage',
   whichever_first: 'whichever comes first',
 };
 
 export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], motExpiry = null, onSaved }: Props) {
-  const seed: Record<string, { date: string; miles: string }> = {};
+  const seed: Record<string, { month: string; miles: string }> = {};
   for (const s of SCHEDULE_ITEMS) {
     const r = recorded.find((x) => x.key === s.key);
-    seed[s.key] = { date: r?.dueDate ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+    // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
+    seed[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
   }
   const [rows, setRows] = useState(seed);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const set = (k: string, patch: Partial<{ date: string; miles: string }>) =>
+  const set = (k: string, patch: Partial<{ month: string; miles: string }>) =>
     setRows((r) => ({ ...r, [k]: { ...r[k], ...patch } }));
 
   async function save() {
@@ -61,7 +67,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
     try {
       const entries = SCHEDULE_ITEMS.map((s) => ({
         key: s.key,
-        dueDate: rows[s.key].date.trim() || null,
+        dueMonth: rows[s.key].month.trim() || null,
         dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
       }));
       const r = await fetch('/api/service-schedule', {
@@ -82,7 +88,8 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
     <div className="bg-surface border border-line rounded-xl p-5" data-testid="service-schedule">
       <h3 className="text-sm font-semibold text-ink mb-1">Service schedule</h3>
       <p className="text-xs text-muted mb-3">
-        Off the service computer. A date, a mileage, or both — leave a row blank if it isn’t scheduled.
+        Off the service computer. Each row asks for what that item is actually scheduled by — leave a
+        row blank if it isn’t scheduled.
       </p>
 
       {/* DVSA, READ-ONLY. Shown so nobody retypes it as a row, which would print it on the invoice
@@ -96,20 +103,25 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
       <div className="space-y-2">
         {SCHEDULE_ITEMS.map((s) => {
           const row = rows[s.key];
-          const basis = basisFor({ dueDate: row.date || null, dueMileage: row.miles ? Number(row.miles) : null });
+          // ONLY THE LEGS THIS ITEM'S CLOCK NEEDS. A pad row has no month field to fill in wrongly.
+          const legs = legsFor(s.basis);
           return (
             <div key={s.key} className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2 items-center"
               data-testid={`schedule-row-${s.key}`}>
               <span className="text-sm text-ink">{s.label}</span>
-              <input type="date" value={row.date} disabled={!canEdit}
-                onChange={(e) => set(s.key, { date: e.target.value })}
-                data-testid={`schedule-date-${s.key}`} className={field} />
-              <input inputMode="numeric" value={row.miles} disabled={!canEdit} placeholder="miles"
-                onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
-                data-testid={`schedule-miles-${s.key}`} className={`${field} w-24`} />
-              {/* SAID, not inferred silently — see the header. */}
+              {legs.date ? (
+                <input type="month" value={row.month} disabled={!canEdit}
+                  onChange={(e) => set(s.key, { month: e.target.value })}
+                  data-testid={`schedule-month-${s.key}`} className={field} />
+              ) : <span />}
+              {legs.mileage ? (
+                <input inputMode="numeric" value={row.miles} disabled={!canEdit} placeholder="miles"
+                  onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
+                  data-testid={`schedule-miles-${s.key}`} className={`${field} w-24`} />
+              ) : <span />}
+              {/* DECLARED by the item, so it reads the same before and after anything is typed. */}
               <span className="text-xs text-muted min-w-[9rem]" data-testid={`schedule-basis-${s.key}`}>
-                {basis ? BASIS_LABEL[basis] : ''}
+                {BASIS_LABEL[s.basis]}
               </span>
             </div>
           );

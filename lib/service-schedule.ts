@@ -44,21 +44,64 @@ export type ScheduleKey =
   | 'schedule_oil_service' | 'schedule_brake_fluid'
   | 'schedule_pads_front' | 'schedule_pads_rear' | 'schedule_vehicle_check';
 
+/**
+ * THE BASIS IS DECLARED PER ITEM, not inferred from which fields somebody filled.
+ *
+ * Each of these has a natural clock and the form should show that clock rather than everything the
+ * model permits. Pads cannot be predicted by date; brake fluid cannot be predicted by mileage; an
+ * oil service is genuinely both. Offering two fields on every row invited a wrong answer and made
+ * the form guess at the basis afterwards — the one deviation this file had from refuseDueItem's
+ * refusal to infer. Declaring it removes the guess entirely.
+ */
+export type ScheduleBasis = 'date' | 'mileage' | 'whichever_first';
+
 export type ScheduleItem = {
   key: ScheduleKey;
   /** The row label, as the service computer names it. */
   label: string;
   /** What lands on the finding, and therefore on the report and the invoice block. */
   description: string;
+  /** Declared, never inferred. Decides which fields the row even shows. */
+  basis: ScheduleBasis;
+  /** Why this clock and not another — shown nowhere, read by whoever changes it. */
+  why: string;
 };
 
 export const SCHEDULE_ITEMS: readonly ScheduleItem[] = [
-  { key: 'schedule_oil_service', label: 'Next oil service', description: 'Next oil service' },
-  { key: 'schedule_brake_fluid', label: 'Next brake fluid change', description: 'Next brake fluid change' },
-  { key: 'schedule_pads_front', label: 'Front brake pads', description: 'Front brake pads' },
-  { key: 'schedule_pads_rear', label: 'Rear brake pads', description: 'Rear brake pads' },
-  { key: 'schedule_vehicle_check', label: 'Vehicle check', description: 'Vehicle check' },
+  { key: 'schedule_oil_service', label: 'Next oil service', description: 'Next oil service',
+    basis: 'whichever_first', why: 'manufacturers specify "12 months or 10,000 miles" — genuinely both' },
+  { key: 'schedule_brake_fluid', label: 'Next brake fluid change', description: 'Next brake fluid change',
+    basis: 'date', why: 'a two-year interval; fluid absorbs moisture with time, not use' },
+  { key: 'schedule_pads_front', label: 'Front brake pads', description: 'Front brake pads',
+    basis: 'mileage', why: 'wear is use — you cannot predict by date when pads run out' },
+  { key: 'schedule_pads_rear', label: 'Rear brake pads', description: 'Rear brake pads',
+    basis: 'mileage', why: 'same as the fronts' },
+  { key: 'schedule_vehicle_check', label: 'Vehicle check', description: 'Vehicle check',
+    basis: 'date', why: 'a touchpoint, not a wear item — appointments book by date. It is also the row that projects with no mileage rate, and only 192 of 221 cars have one (19 Aug 2026)' },
 ];
+
+/**
+ * A DATE LEG ON A SCHEDULE ROW IS A MONTH, NEVER A DAY.
+ *
+ * A service computer prints "11/2025". A dd/mm/yyyy input forces a day nobody has, and the day then
+ * prints on a frozen invoice as though somebody chose it. Every date leg here is month-precision;
+ * the stored instant is the 1st (see STORED_DAY_OF_MONTH) and due_date_precision records that the
+ * day was never meant.
+ */
+export const SCHEDULE_DATE_IS_MONTH = true;
+
+/**
+ * THE DAY STORED FOR A MONTH-PRECISION DATE, and why the 1st rather than the last.
+ *
+ * Two reasons, and the second is the one that is not obvious — the last-day alternative looks
+ * equally arbitrary and is not:
+ *
+ *   1. It is a real instant, so ordering and effectiveDueDate need no special case.
+ *   2. It puts a November item into the 30-day marketing window from 2 OCTOBER. Contacting a
+ *      customer before the thing is due is the entire point of the list; storing the last day would
+ *      delay every reminder by up to four weeks and surface the car only once it was already late.
+ */
+export const STORED_DAY_OF_MONTH = 1;
 
 const BY_KEY = new Map(SCHEDULE_ITEMS.map((s) => [s.key, s]));
 export const scheduleByKey = (k: string): ScheduleItem | null => BY_KEY.get(k as ScheduleKey) ?? null;
@@ -84,48 +127,71 @@ export const OTHER_IS_FREE_TEXT = true;
 
 export type ScheduleEntry = {
   key: ScheduleKey;
-  /** ISO date, or null. */
-  dueDate: string | null;
+  /** `YYYY-MM` — a month, not a day. See SCHEDULE_DATE_IS_MONTH. Null when the row has no date leg
+   *  or the garage did not record one. */
+  dueMonth: string | null;
   dueMileage: number | null;
 };
 
-export type ScheduleRefusal = { key: ScheduleKey; code: 'no_clock' | 'bad_mileage' | 'bad_date'; message: string };
-
-/**
- * WHAT BASIS AN ENTRY HAS, from which legs are filled. Returns null when it has neither.
- *
- * The INFERENCE here is deliberate and is NOT the inference refuseDueItem refuses. That rule exists
- * because a finding's basis must be stated: "by March or 60k" has both legs present and only one
- * binds, so letting the data choose would silently drop the trigger that fires first. A schedule
- * row has no such ambiguity — a service computer prints a date, a mileage, or both, and "both"
- * means whichever comes first, which is exactly what the garage's own proforma meant.
- */
-export function basisFor(e: Pick<ScheduleEntry, 'dueDate' | 'dueMileage'>): 'date' | 'mileage' | 'whichever_first' | null {
-  const d = !!e.dueDate, m = e.dueMileage != null;
-  if (d && m) return 'whichever_first';
-  if (d) return 'date';
-  if (m) return 'mileage';
-  return null;
+/** `YYYY-MM` → the stored instant. Returns null for anything that is not a month. */
+export function monthToStoredDate(month: string | null | undefined): Date | null {
+  if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, STORED_DAY_OF_MONTH));
 }
 
-/** An entry with neither leg is not "empty", it is not submitted at all — see refuseSchedule. */
-export const isBlank = (e: Pick<ScheduleEntry, 'dueDate' | 'dueMileage'>): boolean => basisFor(e) === null;
+/** The stored instant → `YYYY-MM`, for putting a recorded row back into the form. */
+export const storedDateToMonth = (d: Date | string | null | undefined): string | null =>
+  d ? new Date(d).toISOString().slice(0, 7) : null;
+
+export type ScheduleRefusal = { key: ScheduleKey; code: 'incomplete' | 'bad_mileage' | 'bad_month'; message: string };
+
+/** Which legs a row must carry, from its declared basis. */
+export const legsFor = (basis: ScheduleBasis): { date: boolean; mileage: boolean } => ({
+  date: basis === 'date' || basis === 'whichever_first',
+  mileage: basis === 'mileage' || basis === 'whichever_first',
+});
+
+/**
+ * A row is BLANK when none of the legs its basis needs is filled. Blank is not an error — most cars
+ * leave most rows empty, and a schedule the garage does not have is not a mistake.
+ */
+export function isBlank(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 'dueMileage'>): boolean {
+  const legs = legsFor(item.basis);
+  return !(legs.date && e.dueMonth) && !(legs.mileage && e.dueMileage != null);
+}
 
 /**
  * Refuse what cannot be stored. PURE, so every rule is provable without a row.
  *
- * A BLANK ROW IS NOT AN ERROR — it is a line the garage's schedule did not have, and most cars will
- * leave most rows empty. Only a row with something wrong IN it is refused.
+ * ── A HALF-FILLED whichever_first IS REFUSED, WITH THE REASON ───────────────────────────────────
+ * refuseDueItem already refuses it: "one leg alone is a different basis and loses the trigger that
+ * would have fired first." An oil service recorded as miles-only, then projected from, is a rule
+ * half-recorded and confidently applied — worse than not recording it. The message says which leg
+ * is missing rather than saying the row is invalid, because the mechanic can read the other one off
+ * the service sticker.
+ *
+ * The cost, accepted knowingly: a service computer that prints only a mileage leaves that row
+ * blank. If that turns out to be common it is evidence to revisit on, not a thing to design around
+ * now — recording half a rule and projecting from it is the worse failure.
  */
-export function refuseSchedule(entries: ScheduleEntry[]): ScheduleRefusal[] {
+export function refuseSchedule(entries: Array<ScheduleEntry & { item: ScheduleItem }>): ScheduleRefusal[] {
   const out: ScheduleRefusal[] = [];
   for (const e of entries) {
-    if (isBlank(e)) continue;
-    if (e.dueMileage != null && (!Number.isInteger(e.dueMileage) || e.dueMileage <= 0 || e.dueMileage > 2_000_000)) {
+    const legs = legsFor(e.item.basis);
+    if (isBlank(e.item, e)) continue;
+
+    if (legs.mileage && e.dueMileage != null && (!Number.isInteger(e.dueMileage) || e.dueMileage <= 0 || e.dueMileage > 2_000_000)) {
       out.push({ key: e.key, code: 'bad_mileage', message: 'That mileage does not look right.' });
+      continue;
     }
-    if (e.dueDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(e.dueDate)) {
-      out.push({ key: e.key, code: 'bad_date', message: 'That date does not look right.' });
+    if (legs.date && e.dueMonth != null && monthToStoredDate(e.dueMonth) === null) {
+      out.push({ key: e.key, code: 'bad_month', message: 'That month does not look right.' });
+      continue;
+    }
+    if (legs.date && legs.mileage) {
+      if (!e.dueMonth) out.push({ key: e.key, code: 'incomplete', message: `${e.item.label} is due at a mileage OR by a month, whichever comes first — give the month as well.` });
+      else if (e.dueMileage == null) out.push({ key: e.key, code: 'incomplete', message: `${e.item.label} is due at a mileage OR by a month, whichever comes first — give the mileage as well.` });
     }
   }
   return out;

@@ -125,6 +125,13 @@ enum BillingStatus {
 /// filled. A date and a mileage can BOTH be present ("by March, or 60k, whichever first" is a real
 /// thing a mechanic says) and only one is binding; letting the presence of a value carry the
 /// decision is the demo_expires_at lesson — one column answering two questions.
+/// How precise a due date is. A manufacturer's interval is a MONTH ("11/2025"); an MOT expiry is a
+/// day. Both are honest and they must not be printed the same way.
+enum DueDatePrecision {
+  day
+  month
+}
+
 enum DueBasis {
   date
   mileage
@@ -1550,6 +1557,10 @@ model VehicleDueItem {
   due_basis   DueBasis
   /// The non-binding one may still be recorded as context; only the basis decides.
   due_date    DateTime?
+  /// WHAT THE DATE KNOWS. `day` is a real calendar day; `month` means only the month and year were
+  /// ever known and the stored day (always the 1st) was never meant — see lib/due-items::dueLabel,
+  /// which is what stops an invented day reaching a customer's invoice.
+  due_date_precision DueDatePrecision @default(day)
   due_mileage Int?
 
   /// THREE-STATE, and there is NO default: the capture surface must make someone choose, or a

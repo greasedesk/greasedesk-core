@@ -23,7 +23,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
-import { scheduleByKey, refuseSchedule, basisFor, isBlank, type ScheduleEntry, type ScheduleKey } from '@/lib/service-schedule';
+import { scheduleByKey, refuseSchedule, isBlank, monthToStoredDate, legsFor, type ScheduleEntry, type ScheduleItem } from '@/lib/service-schedule';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
@@ -37,7 +37,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   for (const e of entries) {
     if (!scheduleByKey(String(e?.key))) return res.status(400).json({ message: 'Unknown schedule item.' });
   }
-  const refusals = refuseSchedule(entries);
+  // Paired with their catalogue entry, because the DECLARED basis is what decides which legs a row
+  // needs — the payload no longer implies it.
+  const paired = entries.map((e) => ({ ...e, item: scheduleByKey(String(e.key)) as ScheduleItem }));
+  const refusals = refuseSchedule(paired);
   if (refusals.length) return res.status(400).json({ message: refusals[0].message, refusals });
 
   const card = await prisma.jobCard.findFirst({
@@ -50,14 +53,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     let written = 0, cleared = 0;
-    for (const e of entries) {
-      const item = scheduleByKey(String(e.key)) as { key: ScheduleKey; description: string };
+    for (const e of paired) {
+      const item = e.item;
       const open = await tx.vehicleDueItem.findFirst({
         where: { group_id: groupId, vehicle_id: card.vehicle_id, closed_at: null, observation_key: item.key },
         select: { id: true },
       });
 
-      if (isBlank(e)) {
+      if (isBlank(item, e)) {
         // CLEARED, not ignored — see the header. A garage emptying a row is retracting it.
         if (open) {
           await tx.vehicleDueItem.update({
@@ -69,12 +72,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
+      const legs = legsFor(item.basis);
       const data = {
         observation_key: item.key,
         description: item.description,
-        due_basis: basisFor(e) as 'date' | 'mileage' | 'whichever_first',
-        due_date: e.dueDate ? new Date(`${e.dueDate}T00:00:00.000Z`) : null,
-        due_mileage: e.dueMileage ?? null,
+        // DECLARED by the catalogue, not read off which fields arrived. Nothing here infers.
+        due_basis: item.basis,
+        // The 1st of the month, with the precision recorded so no renderer prints the day —
+        // see lib/service-schedule::STORED_DAY_OF_MONTH for why the 1st and not the last.
+        due_date: legs.date ? monthToStoredDate(e.dueMonth) : null,
+        due_date_precision: 'month' as const,
+        due_mileage: legs.mileage ? (e.dueMileage ?? null) : null,
         // The description says WHAT and the basis says WHEN — no timing in the words.
         timing_in_description: false,
       };
@@ -97,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await writeAudit(tx, {
       groupId, userId: user.id as string, jobCardId,
       action: 'service_schedule.recorded',
-      diff: { written, cleared, entries: entries.filter((e) => !isBlank(e)).map((e) => ({ key: e.key, dueDate: e.dueDate ?? null, dueMileage: e.dueMileage ?? null })) },
+      diff: { written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
     });
     return { written, cleared };
   });
