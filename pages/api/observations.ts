@@ -80,6 +80,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // AUTHORED in lib/observations, per entry — not a default applied here. If this line ever
         // starts choosing a basis, the distinction has been lost.
         due_basis: obs.basis,
+        // Authored in the catalogue beside the description, never inferred from it.
+        timing_in_description: obs.carriesOwnTiming,
         customer_response: customerResponse as never,
         response_at: customerResponse === 'not_raised' ? null : new Date(),
         created_by: user.id as string,

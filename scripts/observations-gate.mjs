@@ -142,10 +142,12 @@ try {
   check('the same observation cannot be recorded twice while it is open', refused,
     'which is what makes the phone’s queue replay-safe with no client id');
 
-  const rows = await prisma.vehicleDueItem.findMany({ where: { vehicle_id: veh.id }, select: { description: true, observation_key: true, due_basis: true } });
+  const rows = await prisma.vehicleDueItem.findMany({ where: { vehicle_id: veh.id }, select: { description: true, observation_key: true, due_basis: true, timing_in_description: true } });
   check('one tap, one finding', rows.length === 1 && rows[0].observation_key === 'wipers_smearing');
   check('  …carrying the catalogue’s own words', rows[0].description === 'Wiper blades smearing');
   check('  …and the basis the entry authored', rows[0].due_basis === wipers.basis);
+  check('  …with the timing left to the basis, not the words', rows[0].timing_in_description === false,
+    'every catalogue entry is a plain noun phrase today');
 
   // It reaches the printed block for free — the whole argument for reusing VehicleDueItem.
   const { printedDueItemsBlock, openDueItemsForVehicle } = await import('../lib/due-items.ts');

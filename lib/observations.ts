@@ -56,6 +56,16 @@ export type Observation = {
   /** What lands on the finding, and therefore on the customer report and the invoice block. */
   description: string;
   basis: ObservationBasis;
+  /**
+   * TRUE when the description already says WHEN, so no surface should append a timing to it.
+   *
+   * Required, not optional, for the same reason `basis` is: adding an observation forces whoever
+   * adds it to decide. Every entry below is FALSE today — they are plain noun phrases, "Wiper
+   * blades smearing", and the basis is what says when — but an entry like "Bulb out, illegal to
+   * drive after dark" would be true, and the type is what makes that a decision rather than an
+   * oversight.
+   */
+  carriesOwnTiming: boolean;
   /** Members of a two-step group are hidden from the top level and reached through their parent. */
   group?: ObservationGroup;
 };
@@ -77,36 +87,36 @@ export const BULB_GROUP_LABEL = 'Bulb out';
  * ordering puts their own most-used first (see orderObservations).
  */
 export const OBSERVATIONS: readonly Observation[] = [
-  { key: 'wipers_smearing', label: 'Wipers smearing', description: 'Wiper blades smearing', basis: 'next_service' },
-  { key: 'screenwash_empty', label: 'Screenwash empty', description: 'Screenwash empty', basis: 'next_service' },
-  { key: 'tyre_pressures_low', label: 'Pressures low', description: 'Tyre pressures low', basis: 'next_service' },
-  { key: 'air_filter_dirty', label: 'Air filter dirty', description: 'Air filter dirty', basis: 'next_service' },
-  { key: 'pollen_filter_dirty', label: 'Pollen filter dirty', description: 'Pollen filter dirty', basis: 'next_service' },
-  { key: 'wipers_split', label: 'Wiper split', description: 'Wiper blade split', basis: 'next_service' },
-  { key: 'brake_fluid_discoloured', label: 'Brake fluid dark', description: 'Brake fluid is discoloured', basis: 'next_service' },
-  { key: 'coolant_low', label: 'Coolant low', description: 'Coolant below the minimum mark', basis: 'next_service' },
-  { key: 'aux_belt_squealing', label: 'Belt squealing', description: 'Auxiliary belt squealing', basis: 'next_service' },
+  { key: 'wipers_smearing', label: 'Wipers smearing', description: 'Wiper blades smearing', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'screenwash_empty', label: 'Screenwash empty', description: 'Screenwash empty', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'tyre_pressures_low', label: 'Pressures low', description: 'Tyre pressures low', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'air_filter_dirty', label: 'Air filter dirty', description: 'Air filter dirty', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'pollen_filter_dirty', label: 'Pollen filter dirty', description: 'Pollen filter dirty', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'wipers_split', label: 'Wiper split', description: 'Wiper blade split', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'brake_fluid_discoloured', label: 'Brake fluid dark', description: 'Brake fluid is discoloured', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'coolant_low', label: 'Coolant low', description: 'Coolant below the minimum mark', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'aux_belt_squealing', label: 'Belt squealing', description: 'Auxiliary belt squealing', basis: 'next_service', carriesOwnTiming: false },
   // TWO KEYS, NOT ONE WITH A VALUE. A high biting point usually leads to a clutch replacement and a
   // low one often to hydraulics — a master cylinder, a slave, or air in the line. Different jobs at
   // very different money, so one shared key would make the count meaningless by mixing them.
-  { key: 'clutch_biting_high', label: 'Biting point high', description: 'Clutch biting point is high', basis: 'next_service' },
-  { key: 'clutch_biting_low', label: 'Biting point low', description: 'Clutch biting point is low', basis: 'next_service' },
-  { key: 'exhaust_blowing', label: 'Exhaust blowing', description: 'Exhaust blowing', basis: 'next_service' },
-  { key: 'number_plate_faded', label: 'Number plate faded', description: 'Number plate faded or cracked', basis: 'next_service' },
-  { key: 'handbrake_travel', label: 'Handbrake travel', description: 'Handbrake travel is excessive', basis: 'next_service' },
-  { key: 'suspension_knock', label: 'Suspension knock', description: 'Knock from the suspension', basis: 'next_service' },
-  { key: 'oil_leak_engine', label: 'Oil leak, engine', description: 'Oil leak from the engine', basis: 'next_service' },
-  { key: 'oil_leak_gearbox', label: 'Oil leak, gearbox', description: 'Oil leak from the gearbox', basis: 'next_service' },
+  { key: 'clutch_biting_high', label: 'Biting point high', description: 'Clutch biting point is high', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'clutch_biting_low', label: 'Biting point low', description: 'Clutch biting point is low', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'exhaust_blowing', label: 'Exhaust blowing', description: 'Exhaust blowing', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'number_plate_faded', label: 'Number plate faded', description: 'Number plate faded or cracked', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'handbrake_travel', label: 'Handbrake travel', description: 'Handbrake travel is excessive', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'suspension_knock', label: 'Suspension knock', description: 'Knock from the suspension', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'oil_leak_engine', label: 'Oil leak, engine', description: 'Oil leak from the engine', basis: 'next_service', carriesOwnTiming: false },
+  { key: 'oil_leak_gearbox', label: 'Oil leak, gearbox', description: 'Oil leak from the gearbox', basis: 'next_service', carriesOwnTiming: false },
 
   // ── THE BULB GROUP ────────────────────────────────────────────────────────────────────────────
-  { key: 'bulb_ns_headlight', label: 'N/S headlight', description: 'N/S headlight not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_os_headlight', label: 'O/S headlight', description: 'O/S headlight not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_ns_front_indicator', label: 'N/S front indicator', description: 'N/S front indicator not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_os_front_indicator', label: 'O/S front indicator', description: 'O/S front indicator not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_ns_rear_light', label: 'N/S rear light', description: 'N/S rear light not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_os_rear_light', label: 'O/S rear light', description: 'O/S rear light not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_brake_light', label: 'Brake light', description: 'Brake light not working', basis: 'next_service', group: 'bulb' },
-  { key: 'bulb_number_plate', label: 'Number plate light', description: 'Number plate light not working', basis: 'next_service', group: 'bulb' },
+  { key: 'bulb_ns_headlight', label: 'N/S headlight', description: 'N/S headlight not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_os_headlight', label: 'O/S headlight', description: 'O/S headlight not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_ns_front_indicator', label: 'N/S front indicator', description: 'N/S front indicator not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_os_front_indicator', label: 'O/S front indicator', description: 'O/S front indicator not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_ns_rear_light', label: 'N/S rear light', description: 'N/S rear light not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_os_rear_light', label: 'O/S rear light', description: 'O/S rear light not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_brake_light', label: 'Brake light', description: 'Brake light not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
+  { key: 'bulb_number_plate', label: 'Number plate light', description: 'Number plate light not working', basis: 'next_service', carriesOwnTiming: false, group: 'bulb' },
 ];
 
 const BY_KEY: ReadonlyMap<string, Observation> = new Map(OBSERVATIONS.map((o) => [o.key, o]));

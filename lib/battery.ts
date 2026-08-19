@@ -140,6 +140,17 @@ export type BatteryAdvisory = {
   description: string;
   /** Acting on this cannot wait for the next service. Drives emphasis, never a fabricated date. */
   urgent: boolean;
+  /**
+   * The description already says WHEN, so appending dueLabel() would contradict it.
+   *
+   * ── DELIBERATELY NOT `urgent` ───────────────────────────────────────────────────────────────
+   * They line up on two of five states and mean different things. A RETEST is not urgent — a flat
+   * battery can be charged whenever — but it absolutely carries its own timing ("until it is
+   * charged and retested"), and appending "due at the next service" to that is the same
+   * contradiction. Reusing a nearby boolean because it happens to match on some cases is how a
+   * flag quietly starts meaning something else.
+   */
+  carriesOwnTiming: boolean;
 };
 
 const ratedSuffix = (n: BatteryNumbers): string =>
@@ -155,22 +166,26 @@ export function batteryAdvisory(n: BatteryNumbers, measuredAt: Date): BatteryAdv
   const v = volts(n.voltageMv);
   switch (state) {
     case 'dead_cell':
-      return { state, urgent: true, description: `Battery — ${v}V resting, a cell has failed. Replace.` };
+      // The one case with a TRUE date — see recordBatteryReading. Its own timing is the date the
+      // writer attaches, so the label is welcome here and says the same thing twice on purpose.
+      return { state, urgent: true, carriesOwnTiming: false, description: `Battery — ${v}V resting, a cell has failed. Replace` };
     case 'replace':
-      return { state, urgent: true, description: `Battery — ${n.sohPct}% health${ratedSuffix(n)}, ${seasonalUrgency(measuredAt)}.` };
+      return { state, urgent: true, carriesOwnTiming: true, description: `Battery — ${n.sohPct}% health${ratedSuffix(n)}, ${seasonalUrgency(measuredAt)}` };
     case 'monitor':
-      return { state, urgent: false, description: `Battery — ${n.sohPct}% health${ratedSuffix(n)}. Worth watching; no action yet.` };
+      // NO trailing full stop: this one KEEPS its label, and a description that ends a sentence
+      // then has "due at the next service" appended reads as two fragments.
+      return { state, urgent: false, carriesOwnTiming: false, description: `Battery — ${n.sohPct}% health${ratedSuffix(n)}, worth watching` };
     case 'charging_fault':
       // NOT a battery sale. Said in the words a customer can act on, because the temptation to sell
       // the part in front of you is exactly what this state exists to resist.
       return {
-        state, urgent: false,
-        description: `Battery holding only ${n.socPct}% charge but ${n.sohPct}% health — check the charging system and for a drain. The battery itself is sound.`,
+        state, urgent: false, carriesOwnTiming: true,
+        description: `Battery holding only ${n.socPct}% charge but ${n.sohPct}% health — check the charging system and for a drain now, the battery itself is sound`,
       };
     case 'retest':
       return {
-        state, urgent: false,
-        description: `Battery was at ${n.socPct}% charge when tested (${v}V) — its health cannot be judged until it is charged and retested.`,
+        state, urgent: false, carriesOwnTiming: true,
+        description: `Battery was at ${n.socPct}% charge when tested (${v}V) — its health cannot be judged until it is charged and retested`,
       };
     default:
       return null;
@@ -336,11 +351,19 @@ export async function recordBatteryReading(
   // and a retest are about something other than a countdown to failure.
   const projected = advisory.state === 'monitor' ? projectedReplaceDate(n.sohPct, at, decline) : null;
 
+  // ── A FAILED CELL IS DUE TODAY, AND THE ROW SHOULD SAY SO ─────────────────────────────────────
+  // Suppressing the label on the document while storing `next_service` would fix the sentence and
+  // leave the ORDERING wrong: effectiveDueDate would sort a dead battery behind a tyre due at
+  // 60,000 miles. The measurement date is a true date — not a fabricated deadline like a November
+  // "before winter" would be — so this case needs no suppression at all. Saying "due by 19 August"
+  // beside "a cell has failed" is a restatement, not a contradiction.
+  const dueDate = advisory.state === 'dead_cell' ? at : projected;
   const data = {
     observation_key: BATTERY_KEY,
     description: advisory.description,
-    due_basis: (projected ? 'date' : 'next_service') as 'date' | 'next_service',
-    due_date: projected,
+    due_basis: (dueDate ? 'date' : 'next_service') as 'date' | 'next_service',
+    due_date: dueDate,
+    timing_in_description: advisory.carriesOwnTiming,
   };
 
   if (existing) {

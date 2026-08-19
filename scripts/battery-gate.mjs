@@ -56,7 +56,7 @@ try {
     return t !== '«no advisory raised»' && !/replace/i.test(t);
   })());
   check('the charging-fault advisory says the battery itself is sound',
-    /The battery itself is sound/.test(say(R(12.1, 32, 88), SEPT)),
+    /the battery itself is sound/i.test(say(R(12.1, 32, 88), SEPT)),
     'the temptation is to sell the part in front of you');
 
   // ── 2. THE BAND NOBODY NAMES ────────────────────────────────────────────────────────────────

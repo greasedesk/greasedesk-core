@@ -68,7 +68,12 @@ check('refuses a missing DATE leg', refuseDueItem({ ...WF, dueMileage: 10000 })?
 check('refuses a missing MILEAGE leg', refuseDueItem({ ...WF, dueDate: new Date('2025-11-01') })?.code === 'no_mileage');
 check('the label states both legs and needs NO rate',
   dueLabel({ dueBasis: 'whichever_first', dueDate: '2025-11-01', dueMileage: 10000 })
-    === 'due at 10,000 miles or by 2025-11-01, whichever comes first');
+    === 'due at 10,000 miles or by 1 November 2025, whichever comes first');
+// BOTH date-bearing bases, because the fix had to reach both. This gate previously pinned the raw
+// ISO string — and the block assertion below pinned "MOT Expiry 22 September 2024" beside
+// "by 2025-11-01", so it was asserting the inconsistency rather than catching it.
+check('  …in the same date format the MOT line has always used',
+  dueLabel({ dueBasis: 'date', dueDate: '2025-11-01', dueMileage: null }) === 'due by 1 November 2025');
 
 console.log('\n— the projection picks the earlier leg, in both directions —');
 const at = (iso) => new Date(`${iso}T00:00:00.000Z`);
@@ -155,7 +160,9 @@ const block = printedDueItemsBlock({
 });
 check('the MOT leads, numbered, as the garage writes it by hand',
   block.split('\n')[0] === '(1) MOT Expiry 22 September 2024', JSON.stringify(block.split('\n')[0]));
-check('findings follow, each with its own timing', /\(2\) Oil service due at 10,000 miles or by 2025-11-01, whichever comes first/.test(block));
+check('findings follow, each with its own timing', /\(2\) Oil service due at 10,000 miles or by 1 November 2025, whichever comes first/.test(block));
+check('  …and one block never carries two date formats',
+  !/\d{4}-\d{2}-\d{2}/.test(block), block.replace(/\n/g, ' | '));
 check('nothing to say → NULL, not an empty block',
   printedDueItemsBlock({ motExpiry: null, items: [] }) === null,
   'an empty string and "nothing captured" must be distinguishable in the column');

@@ -97,6 +97,8 @@ export type OpenDueItem = {
   createdAt: string;
   /** Which tapped observation this is, or NULL when a human typed it. See lib/observation-keys. */
   observationKey?: string | null;
+  /** The description already says WHEN — so no surface appends a second answer. */
+  timingInDescription?: boolean;
 };
 
 /**
@@ -116,11 +118,12 @@ export async function openDueItemsForVehicle(
     select: {
       id: true, description: true, due_basis: true, due_date: true, due_mileage: true,
       customer_response: true, found_on_job_card_id: true, created_at: true, observation_key: true,
+      timing_in_description: true,
     },
   })) as Array<{
     id: string; description: string; due_basis: DueBasis; due_date: Date | null; due_mileage: number | null;
     customer_response: DueItemResponse; found_on_job_card_id: string | null; created_at: Date;
-    observation_key: string | null;
+    observation_key: string | null; timing_in_description: boolean;
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -134,19 +137,70 @@ export async function openDueItemsForVehicle(
     // Carried so a tap-list can show an observation already recorded as done rather than offering
     // a tap that would be a no-op. NULL for a hand-typed finding, which is the whole point of it.
     observationKey: r.observation_key,
+    timingInDescription: r.timing_in_description,
   }));
 }
 
-/** One line of human text for a due item's timing — the same words on every surface. */
+/**
+ * WHETHER TO APPEND A TIMING AT ALL — one rule, and every surface asks it rather than deciding.
+ *
+ * A finding normally says WHAT and the basis says WHEN, and joining them is right. But some
+ * descriptions carry their own timing, and appending a second answer produced this on a real
+ * customer's invoice: "…a cell has failed. Replace. due at the next service". Two answers to one
+ * question, the second one wrong about the car.
+ *
+ * The flag is AUTHORED where the description is written, never inferred from the string — deriving
+ * meaning from description text is exactly the mistake observation_key exists to undo.
+ */
+export const showsDueLabel = (item: Pick<OpenDueItem, 'timingInDescription'>): boolean =>
+  item.timingInDescription !== true;
+
+/**
+ * A stored ISO date, said the way a customer reads it.
+ *
+ * The MOT line in printedDueItemsBlock has always used this format; the basis label printed the raw
+ * `2026-09-15` instead, so one block could carry both. It went unnoticed while no finding used a
+ * `date` basis — and then a failed battery cell started getting a real date, which is a line that
+ * will actually print. Fixed rather than shipped, because the exposure is mine.
+ *
+ * Parsed as UTC: these are calendar dates, not instants, and a local-time parse moves them a day
+ * either side of midnight in the wrong direction depending on the season.
+ */
+function britishDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso; // unparseable: show what we have rather than inventing a date
+  return new Date(Date.UTC(y, m - 1, d))
+    .toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/**
+ * ── WHAT THIS FUNCTION CANNOT SAY, AND THE OPTION IF IT EVER MUST ───────────────────────────────
+ * There is no output here for "this finding has no clock". A battery advised for replacement before
+ * winter is not due at the next service, not due on a defensible date (a November deadline would be
+ * a policy dressed as a measurement), and not due at a mileage — so it stores `next_service` and
+ * `timing_in_description` keeps that off the customer's document. The untruth is still in the row,
+ * where the surfacing read and effectiveDueDate can see it.
+ *
+ * THE STATED OPTION, if a third such finding appears: make `due_basis` NULLABLE — honest-null,
+ * "this has no clock" — rather than adding a fifth enum value, which would only move the problem.
+ * Every reader would then have to handle the absence, which is the point rather than the cost.
+ *
+ * NOT done speculatively: refuseDueItem deliberately requires a basis ("NOT inferred from which
+ * value is filled"), and reversing a deliberate decision deserves its own report rather than a
+ * quiet ride on somebody's slice. Recorded here so the next person finds the reasoning instead of
+ * rediscovering the tension.
+ *
+ * One line of human text for a due item's timing — the same words on every surface.
+ */
 export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage'>): string {
   const miles = item.dueMileage != null ? `${item.dueMileage.toLocaleString('en-GB')} miles` : 'a mileage';
   switch (item.dueBasis) {
-    case 'date': return item.dueDate ? `due by ${item.dueDate}` : 'due by a date';
+    case 'date': return item.dueDate ? `due by ${britishDate(item.dueDate)}` : 'due by a date';
     case 'mileage': return `due at ${miles}`;
     case 'next_service': return 'due at the next service';
     // The label needs NO RATE — it states both legs, exactly as the garage wrote it. Only ORDERING
     // needs a projection, and that is effectiveDueDate's job.
-    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ?? 'a date'}, whichever comes first`;
+    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ? britishDate(item.dueDate) : 'a date'}, whichever comes first`;
   }
 }
 
@@ -209,7 +263,7 @@ export function effectiveDueDate(
  */
 export function printedDueItemsBlock(args: {
   motExpiry: Date | null;
-  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage'>>;
+  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription'>>;
   /** Pre-rendered tyre lines (lib/tyres::printedTyreLines). TEXT, so they freeze like the rest. */
   tyreLines?: string[];
   /** The battery test (lib/battery::printedBatteryLine), same argument. NULL when none was taken —
@@ -221,7 +275,7 @@ export function printedDueItemsBlock(args: {
   if (args.motExpiry) {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
-  for (const it of args.items) lines.push(`${it.description} ${dueLabel(it)}`);
+  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it)}` : it.description);
   // TYRES AS TEXT, deliberately — a four-corner table would print prettier and freeze worse. The
   // invoice is a document and what matters is that it reprints identically (the B(iii) argument).
   for (const t of args.tyreLines ?? []) lines.push(t);

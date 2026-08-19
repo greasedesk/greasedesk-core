@@ -1510,7 +1510,30 @@ model VehicleDueItem {
   /// entry can be retired (lib/catalogue-retire) and the finding must survive that.
   service_catalogue_id String?
 
+  /// TRUE when the description already says WHEN, so appending dueLabel() would contradict it.
+  ///
+  /// Set by whoever AUTHORED the description — a catalogue field for a tapped observation, a
+  /// property of the advisory for a measurement. NOT derived from observation_key: one `battery`
+  /// key covers five states and only some carry timing, and splitting the key per state would
+  /// break both re-testing-corrects-in-place and the partial unique index. NOT derived from the
+  /// description text either — that is the mistake observation_key exists to undo.
+  timing_in_description Boolean @default(false)
+
   /// WHICH CLOCK BINDS. Stated, never inferred — see DueBasis.
+  ///
+  /// ── A RESIDUAL UNTRUTH, RECORDED RATHER THAN PAPERED OVER ─────────────────────────────────
+  /// Some findings have no clock at all. A battery advised for replacement before winter is not
+  /// due at the next service, is not due on a defensible date (a November deadline would be a
+  /// policy dressed as a measurement), and is not due at a mileage. It currently stores
+  /// `next_service` because this column cannot say "no clock", and `timing_in_description` keeps
+  /// that untruth off the customer's document — but it is still in the row, where the surfacing
+  /// read and effectiveDueDate can see it.
+  ///
+  /// THE STATED OPTION, if a third such finding appears: make this NULLABLE — honest-null, "this
+  /// has no clock" — rather than adding a fifth enum value. A nullable basis is the truthful model
+  /// and every reader would have to handle it, which is the point. It is NOT done here because
+  /// refuseDueItem deliberately requires a basis ("NOT inferred from which value is filled") and
+  /// reversing a deliberate decision deserves its own report, not a quiet ride on someone's slice.
   due_basis   DueBasis
   /// The non-binding one may still be recorded as context; only the basis decides.
   due_date    DateTime?

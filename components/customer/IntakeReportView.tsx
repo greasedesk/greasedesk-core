@@ -265,7 +265,9 @@ export default function IntakeReportView(p: Props) {
             {findings.map((f) => (
               <li key={f.id} className="bg-surface border border-line rounded-xl p-4" data-testid={`report-finding-${f.id}`}>
                 <p className="text-sm font-medium text-ink">{f.description}</p>
-                <p className="text-xs text-muted mt-0.5">{f.timing}</p>
+                {/* Absent, not empty: a finding whose description carries its own timing would
+                    otherwise render a blank line with margin under it. */}
+                {f.timing && <p className="text-xs text-muted mt-0.5">{f.timing}</p>}
                 <div className="flex flex-wrap gap-2 mt-3">
                   {ANSWERS.map((a) => {
                     const on = f.answered === a.key;
