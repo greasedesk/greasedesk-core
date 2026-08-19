@@ -231,6 +231,26 @@ check('the principle is stated where the next reader will be',
 check('no layout version was added to the row', !/layout_version|due_items_position/.test(readFileSync('prisma/schema.prisma', 'utf8')),
   'a column that accumulates variants forever to protect something nobody is harmed by');
 
+// ── 3h. IDEMPOTENCY, BECAUSE THE PHONE REPLAYS ──────────────────────────────────────────────────
+console.log('\n— a replayed envelope must not become a second finding —');
+const api2 = readFileSync('pages/api/due-items.ts', 'utf8');
+check('the POST accepts a capture-time id', /id must be a UUID/.test(api2));
+check('  …validated as a UUID, never trusted into a key', /\[0-9a-f\]\{8\}-/.test(api2));
+check('an existing id is treated as a REPLAY, not an error', /replayed: true/.test(api2)
+  && !/status\(409\)[\s\S]{0,120}already exists/i.test(api2),
+  'a 409 would make the outbox retry forever');
+check('  …and tenant-checked before it is treated as ours', /existing\.group_id !== groupId/.test(api2));
+check('the desktop path is unchanged when no id is sent', /clientId \? \{ id: clientId \} : \{\}/.test(api2));
+
+// WHY THE TYRE ENDPOINT NEEDED NO FIX — stated, because the constraint that makes it safe looks
+// like tidiness and someone will otherwise drop it.
+const schema3 = readFileSync('prisma/schema.prisma', 'utf8');
+const tyreModel = schema3.slice(schema3.indexOf('model TyreReading'), schema3.indexOf('model VehicleOdometerReading'));
+check('TyreReading has a NATURAL key on (card, corner)', /@@unique\(\[job_card_id, corner\]\)/.test(tyreModel),
+  'one car has one front-left tyre per visit, so a replay upserts the same row by construction');
+check('  …and the reason it is load-bearing is written down', /natural key/i.test(api2) && /no natural key/i.test(api2),
+  'a due item has none: two genuine findings on one card can legitimately read the same');
+
 // ── 4. THE CUSTOMER IS NOT ON THE RECORD ───────────────────────────────────────────────────────
 console.log('\n— who to remind is resolved later, never stored —');
 check('the model has no customer column', !/customer_id/.test(model),

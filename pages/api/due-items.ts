@@ -110,6 +110,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const b = (req.body || {}) as {
     jobCardId?: string; description?: string; dueBasis?: DueBasis;
     dueDate?: string; dueMileage?: number | string; customerResponse?: DueItemResponse;
+    /** Capture-time id from the phone's outbox — see the idempotency note below. */
+    id?: string;
   };
   if (!b.jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
 
@@ -135,10 +137,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (refusal) return res.status(400).json({ code: refusal.code, message: refusal.message });
 
+  // ── IDEMPOTENCY: A CAPTURE-TIME ID, BECAUSE THE PHONE REPLAYS ─────────────────────────────────
+  // The PWA outbox retries anything that failed transiently, and a POST that already SUCCEEDED but
+  // whose response was lost looks identical to one that never arrived. Without a stable id, a
+  // mechanic in a dead-signal bay records one finding and the garage gets two.
+  //
+  // So the client may mint the id AT CAPTURE and the write becomes an upsert on it — exactly the
+  // hinge pages/api/photos/presign already uses for photoId. A UUID or nothing; never trusted into
+  // a key unvalidated.
+  //
+  // WHY /api/tyre-readings NEEDED NO SUCH FIX, and why nobody should "simplify" it away:
+  // TyreReading is unique on (job_card_id, corner) — a NATURAL key. One car has one front-left
+  // tyre per visit, so a replayed envelope upserts the same row by construction and a second
+  // delivery is a no-op without anyone passing an id. A due item has no natural key: two genuine
+  // findings on one card can legitimately read the same, so nothing about the data distinguishes a
+  // duplicate from a real pair. That is the whole difference, and it is why the tyre unique
+  // constraint is load-bearing rather than tidiness.
+  if (b.id !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(b.id))) {
+    return res.status(400).json({ message: 'id must be a UUID.' });
+  }
+  const clientId = b.id ? String(b.id).toLowerCase() : null;
+
   const now = new Date();
   const row = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    // Upsert when the client named the row; plain create otherwise (the desktop path, unchanged).
+    if (clientId) {
+      const existing = await tx.vehicleDueItem.findUnique({ where: { id: clientId }, select: { id: true, group_id: true } });
+      if (existing) {
+        // A REPLAY, not a second finding. Tenant-checked before it is treated as ours.
+        if (existing.group_id !== groupId) return { id: existing.id, replayed: true as const, foreign: true as const };
+        return { id: existing.id, replayed: true as const };
+      }
+    }
     const created = await tx.vehicleDueItem.create({
       data: {
+        ...(clientId ? { id: clientId } : {}),
         group_id: groupId,
         vehicle_id: card.vehicle_id,            // FROM THE CARD, never the client
         found_on_job_card_id: card.id,
@@ -162,7 +195,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       action: 'due_item.found',
       diff: { description: b.description, dueBasis: b.dueBasis, dueDate: b.dueDate ?? null, dueMileage, customerResponse: b.customerResponse },
     });
-    return created;
+    return { id: created.id, replayed: false as const };
   });
-  return res.status(200).json({ ok: true, id: row.id });
+  // A replay reports success: the finding exists, which is what the caller wanted. Never a 409 —
+  // the outbox would treat that as a failure and retry forever.
+  if ('foreign' in row && row.foreign) return res.status(409).json({ message: 'That id belongs to another tenant.' });
+  return res.status(200).json({ ok: true, id: row.id, replayed: row.replayed });
 }
