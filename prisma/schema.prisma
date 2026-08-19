@@ -3205,6 +3205,10 @@ enum MagicLinkPurpose {
   quote_view // view + approve/decline a quote for one job card
   portal_view // customer portal view of one job card — NO ROUTE YET, deliberately dark
   invoice_pay // view ONE frozen invoice and (later) pay it — see CustomerMagicLink.invoice_id
+  /// The intake report: the walkaround, the damage photos, and the findings, with a per-item
+  /// answer. Read-and-answer, not read-only — but it carries NO PRICES, so a "yes" is
+  /// "quote me for this" and acceptance still happens on a quote link.
+  intake_report
 }
 
 model CustomerMagicLink {

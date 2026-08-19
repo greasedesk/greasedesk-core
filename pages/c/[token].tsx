@@ -26,6 +26,8 @@
  * Expired / revoked / unknown links EXPLAIN THEMSELVES rather than 404ing — a 404 reads as "the
  * garage's system is broken"; the truth is "your link aged out, ask for a new one".
  */
+import IntakeReportView from '@/components/customer/IntakeReportView';
+import { buildIntakeReport, type IntakeReport } from '@/lib/intake-report';
 import React from 'react';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
@@ -47,6 +49,7 @@ type Denied =
 type Props =
   | { state: 'quote'; doc: SerializedDoc; token: string }
   | { state: 'invoice'; doc: SerializedInvoiceDoc; token: string; canPay: boolean; returningFromPayment: boolean }
+  | { state: 'intake_report'; report: IntakeReport; token: string }
   | { state: 'denied'; reason: Denied; revokedReason?: string | null; purpose?: MagicPurpose | null; garagePhone: string | null };
 
 type SerializedDoc = Omit<QuoteDoc, 'sentAt' | 'expiresAt'> & { sentAt: string; expiresAt: string };
@@ -158,6 +161,17 @@ const shellCls = 'min-h-screen bg-surface-muted py-6 px-4';
 const cardCls = 'bg-surface border border-line rounded-2xl shadow-sm max-w-2xl mx-auto p-5 sm:p-8';
 
 export default function CustomerLinkPage(props: Props) {
+  // THE INTAKE REPORT. Its own card, like the invoice — the walkaround wants the width and the
+  // findings want room to be tapped.
+  if (props.state === 'intake_report') {
+    return (
+      <main className="min-h-screen bg-surface-muted py-6 px-4">
+        <div className={cardCls}>
+          <IntakeReportView token={props.token} {...props.report} />
+        </div>
+      </main>
+    );
+  }
   if (props.state === 'invoice') {
     return (
       <CustomerInvoice
@@ -433,6 +447,17 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   }
 
   // ── PORTAL: DELIBERATELY DARK ──────────────────────────────────────────────────────────────
+  // ── INTAKE REPORT ──────────────────────────────────────────────────────────────────────────
+  // The walkaround, the damage photos, and what the car needs — with a per-item answer. Carries NO
+  // prices: a "yes" here is "quote me for this", and acceptance still happens on a quote link.
+  if (res.link.purpose === 'intake_report') {
+    const report = await buildIntakeReport(res.link.jobCardId, res.link.groupId);
+    if (!report) {
+      return { props: { state: 'denied', reason: 'not_found', garagePhone: null } };
+    }
+    return { props: { state: 'intake_report', report, token: String(ctx.params?.token ?? '') } };
+  }
+
   // A valid purpose with no destination. Refused in words. The day the portal is built this arm
   // becomes a render; until then it must not pretend to be one.
   if (res.link.purpose === 'portal_view') {

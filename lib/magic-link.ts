@@ -111,7 +111,7 @@ export function invoicePayExpiry(
  * dispatcher is not the same as wiring every branch, and a switch arm that renders a blank page is
  * worse than one that says "not available".
  */
-export type MagicPurpose = 'quote_view' | 'portal_view' | 'invoice_pay';
+export type MagicPurpose = 'quote_view' | 'portal_view' | 'invoice_pay' | 'intake_report';
 
 /** Verification rate limits — the token space is 2^256, but a limiter also blunts a leaked-link
  *  replay storm and keeps the log honest. Per-IP is the real axis (a token is a secret already). */
