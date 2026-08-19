@@ -6,13 +6,14 @@
  * Two write-path defects, both now closed, left every existing car short:
  *
  *   1. The diary quick-book never captured motExpiry / lastMotMileage / lastMotDate. A deliberate
- *      scope decision ("a booking stays off the MOT hot path"), whose measured price was 96 of 221
- *      TMBS cars with no MOT date and coverage falling 83% → 60% → 47% by creation month.
+ *      scope decision ("a booking stays off the MOT hot path"), whose price was 96 of 221 TMBS cars
+ *      with no MOT date and coverage falling 83% → 60% → 47% by creation month — measured
+ *      19 Aug 2026, before this sweep ran.
  *
  *   2. NO creating surface ever backfilled the DVSA odometer history. /api/dvsa-lookup keeps it only
  *      when told which vehicle it belongs to, and at first lookup the vehicle does not exist yet;
  *      it deferred to "the next lookup", which only the job card's manual button performs. Result:
- *      ZERO MOT-sourced readings for any car, ever, and only 30 of 221 with the two readings a
+ *      ZERO MOT-sourced readings for any car, ever (19 Aug 2026), and only 30 of 221 with the two readings a
  *      mileage rate needs.
  *
  * A sweep run BEFORE those fixes would have been a treadmill — the numbers would decay again within

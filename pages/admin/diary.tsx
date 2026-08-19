@@ -1207,8 +1207,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     // cost one — the lookup already runs and already returns the MOT fields, so keeping three of
     // them was never work this path had to do.
     //
-    // The price of it was measured on 221 real cars: only 125 had an MOT expiry, and coverage by
-    // creation month ran 83% → 60% → 47%. The job card's "explicit action" is a look-up button on
+    // The price of it was measured 19 Aug 2026 on TMBS's 221 cars: only 125 had an MOT expiry, and
+    // coverage by creation month ran 83% → 60% → 47%. (Creation-path attribution is INFERRED, not
+    // measured — no audit distinguishes the diary from the other entry point. The 47% is measured;
+    // "because the diary dominates" is the most plausible reading of it, not an established one.) The job card's "explicit action" is a look-up button on
     // the Customer Details form, and a garage that books through the diary never presses it. So the
     // other path was not a fallback; for these cars it was nothing at all.
     //

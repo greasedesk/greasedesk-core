@@ -136,7 +136,8 @@ export async function lookupVehicleByVin(rawVin: string): Promise<VinLookupResul
  * They never did. The only caller that passed a vehicleId was the job card's manual look-up button,
  * which a garage that books through the diary never presses. Measured 2026-08-19 on 221 real cars:
  * ZERO MOT-sourced odometer readings, for any vehicle, ever. Every reading in the database was a
- * mileage typed at a visit, and only 30 cars of 221 had the two readings a mileage rate needs.
+ * mileage typed at a visit, and only 30 of TMBS's 221 cars had the two readings a rate needs.
+ * (Both figures are from BEFORE the backfill; after it, 192 of 221 carry a rate.)
  *
  * That is not a small gap. The rate feeds the servicing list's dated band, the tyre wear rate and
  * the battery decline projection — all three were running on 14% of the fleet.

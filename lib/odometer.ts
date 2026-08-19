@@ -104,8 +104,10 @@ export function normaliseOdometer(
  * two identical readings 121 days apart) out of the first three rates the backfill produced" — an
  * accurate observation about a real car, framed as a finding from a backfill that had not been run.
  * It has now run. LB14FJX is real: 115,964 on 21 April and again on 20 August, both visit readings.
- * And "probably not rare" understated it — 65 of 221 cars carry an identical consecutive pair, 81
- * pairs in all. Nearly a third of the fleet.
+ * And "probably not rare" understated it — 65 of TMBS's 221 cars carry an identical consecutive
+ * pair, 81 pairs in all, measured 19 Aug 2026 against STORED readings after the backfill. Nearly a
+ * third of the fleet. A dated count ages visibly; "probably not rare" was a guess wearing a
+ * number's clothes.
  *
  * Nothing downstream is at risk today — projectMileageDate already returns null for a zero rate, so
  * no date is ever invented from one. This is a WORDING obligation for whoever first puts a rate on
@@ -132,8 +134,11 @@ export function mileageRate(readings: OdometerReading[]): MileageRate {
   // mis-keyed value in the middle is harmless, and the same value at either end silently moves the
   // answer — while still looking like a measurement.
   //
-  // Measured on 221 real cars after the DVSA backfill: 22 carry a backward step and 11 of those sit
-  // at an endpoint. Three of them move the rate by 14.8%, 17.7% and 21.5%, and all three end in a
+  // Measured 19 Aug 2026 against STORED readings on TMBS's 221 cars, after the DVSA backfill: 22
+  // carry a backward step and 11 of those sit at an endpoint. (The first pass said 48 and 12 — it
+  // counted same-day retests that collapse on storage and never reach the database. A measurement
+  // against the wrong population still reads as a measurement.)
+  // Three of the eleven move the rate by 14.8%, 17.7% and 21.5%, and all three end in a
   // ROUNDED visit mileage — 45,000, 110,000, 165,000 — a mechanic writing a round number rather
   // than reading the clock. On a car doing 8,000 a year that is months of error in a projected date.
   //
