@@ -206,6 +206,10 @@ export function printedDueItemsBlock(args: {
   items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage'>>;
   /** Pre-rendered tyre lines (lib/tyres::printedTyreLines). TEXT, so they freeze like the rest. */
   tyreLines?: string[];
+  /** The battery test (lib/battery::printedBatteryLine), same argument. NULL when none was taken —
+   *  and null rather than an empty string, so "not tested" is distinguishable from "tested, nothing
+   *  to say". A battery advisory arrives separately, via `items`, like every other finding. */
+  batteryLine?: string | null;
 }): string | null {
   const lines: string[] = [];
   if (args.motExpiry) {
@@ -215,6 +219,9 @@ export function printedDueItemsBlock(args: {
   // TYRES AS TEXT, deliberately — a four-corner table would print prettier and freeze worse. The
   // invoice is a document and what matters is that it reprints identically (the B(iii) argument).
   for (const t of args.tyreLines ?? []) lines.push(t);
+  // The MEASUREMENT, after the tyres. Its ADVISORY, if it raised one, is already above among the
+  // findings — this line is the evidence, printed once, where a customer can check it.
+  if (args.batteryLine) lines.push(args.batteryLine);
   // NULL, not an empty string: nothing to say is not the same as a block that printed empty, and a
   // reader of the column can tell them apart.
   if (!lines.length) return null;

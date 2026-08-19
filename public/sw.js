@@ -102,6 +102,21 @@ async function sendItem(item) {
     if (!res.ok) throw Object.assign(new Error('tyres:' + res.status), { status: res.status });
     return;
   }
+  // ONE BATTERY TEST. Sends NO id, deliberately: BatteryReading is unique on job_card_id, so a
+  // redelivered envelope upserts. Contrast the due_item sender above, which MUST send item.id
+  // because a finding has no natural key and a replay would give the garage two of them.
+  if (item.kind === 'battery') {
+    const p = item.payload || {};
+    const res = await fetch('/api/battery-readings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({
+        jobCardId: item.jobCardId, voltage: p.voltage, socPct: p.socPct, sohPct: p.sohPct,
+        ratedCca: p.ratedCca ?? null, ccaStandard: p.ccaStandard ?? null,
+      }),
+    });
+    if (!res.ok) throw Object.assign(new Error('battery:' + res.status), { status: res.status });
+    return;
+  }
   if (item.kind !== 'photo') throw Object.assign(new Error('unknown-kind'), { terminal: true }); // future kinds add a sender here
   const pres = await fetch('/api/photos/presign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',

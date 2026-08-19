@@ -9,6 +9,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
+const PS = await import('../lib/photo-slots.ts');
 const { readFileSync } = await import('node:fs');
 const out = [];
 /* Prose assertions have been bitten repeatedly by line wrapping: a sentence that reads as one line
@@ -83,6 +84,47 @@ console.log('\n— the standing rule for the phone —');
 for (const [f, src] of [['PhoneFindings', pf], ['PhoneTyres', pt], ['PhoneIntakeChecklist', cl], ['PhoneSendReport', ps]]) {
   check(`${f} shows no money`, !/unitPrice|unit_cost|formatMoney|£/.test(src));
 }
+
+// ── 8. THE BATTERY, ON THE PHONE ────────────────────────────────────────────────────────────────
+console.log('\n— the third measurement kind —');
+const pb = readFileSync('components/pwa/PhoneBattery.tsx', 'utf8');
+check("the envelope carries 'battery'", /\| 'battery';/.test(outbox));
+check('the service worker has a sender for it', /item\.kind === 'battery'/.test(sw));
+check('  …which sends NO id, because job_card_id IS the natural key',
+  !/battery-readings'[\s\S]{0,400}?id: item\.id/.test(sw)
+  && /BatteryReading is unique on job_card_id/.test(prose(sw)),
+  'the same argument as tyres, and the opposite of a due item');
+check('the phone renders it', /<PhoneBattery/.test(page));
+check('  …after the tyres, matching the desktop', page.indexOf('<PhoneBattery') > page.indexOf('<PhoneTyres'));
+check('  …fed by the prefilled rating', /lastBattery: p\.lastBattery/.test(api));
+check('the save parks durably before any network', /enqueueBattery/.test(pb) && !/fetch\(/.test(pb));
+check('all three numbers are required together', /ok\(v, 0\.1, 30\) && ok\(sc, 0, 100\) && ok\(sh, 0, 100\)/.test(pb),
+  'a test missing one number silently changes which state it lands in');
+check('the rating is both-or-neither on the phone too',
+  /ratedCca\.trim\(\) === '' && std === ''/.test(pb));
+check('numeric keypads, not the alphabet', /inputMode="decimal"/.test(pb) && (pb.match(/inputMode="numeric"/g) || []).length >= 3);
+check('no chips on a voltage', !/CHIPS/.test(pb) && /cannot be chipped/.test(prose(pb)),
+  'chips would round away the precision that makes the reading evidence');
+check('touch targets stay at 48px', (pb.match(/min-h-\[48px\]/g) || []).length >= 3);
+check('PhoneBattery shows no money', !/unitPrice|unit_cost|formatMoney|£/.test(pb));
+
+// ── 9. THE SLOT CHOKEPOINT ──────────────────────────────────────────────────────────────────────
+console.log('\n— asked positively, so the next section is free —');
+const slots = readFileSync('lib/photo-slots.ts', 'utf8');
+const rep = readFileSync('lib/intake-report.ts', 'utf8');
+check('the report asks whether a section owns the slot', /!slotOwnedBySection\(m\.slot\)/.test(rep));
+check('  …and no longer names one section negatively', !/!cornerFromSlot\(m\.slot\)/.test(rep),
+  'that version would have double-shown the battery photos');
+// BEHAVIOURALLY, not by grepping for the name. The first version of this checked that the source
+// mentioned BATTERY_SLOTS — which the IMPORT line satisfies, so deleting the registration itself
+// left the assertion green. A registry has to be asked the question, not read.
+check('both tyre corners and battery slots are registered',
+  PS.slotOwnedBySection('tyre_front_left') && PS.slotOwnedBySection('battery_result')
+  && PS.slotOwnedBySection('battery_voltage'));
+check('  …and the general grid still owns everything else',
+  !PS.slotOwnedBySection('damage') && !PS.slotOwnedBySection('vin') && !PS.slotOwnedBySection('freeform')
+  && !PS.slotOwnedBySection(null));
+check('the reason it is positive is written down', /negative filter that names one section/.test(prose(slots)));
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

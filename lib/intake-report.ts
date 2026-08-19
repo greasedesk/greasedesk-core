@@ -17,7 +17,9 @@
 import { prisma } from '@/lib/db';
 import { presignGet } from '@/lib/r2';
 import { openDueItemsForVehicle, dueLabel, latestCustomerAnswers, type CustomerAnswer, type OpenDueItem } from '@/lib/due-items';
-import { tyreSlot, cornerFromSlot, minDepth, shoulderSpread, CORNER_LABEL, TYRE_TYPE_LABEL, LEGAL_MIN_TENTHS, ADVISE_BELOW_TENTHS, ALIGNMENT_SPREAD_TENTHS, type TyreCorner, type TyreType } from '@/lib/tyres';
+import { slotOwnedBySection } from '@/lib/photo-slots';
+import { batteryState, batteryAdvisory, volts, BATTERY_SLOTS, type BatteryState, type CcaStandard } from '@/lib/battery';
+import { tyreSlot, minDepth, shoulderSpread, CORNER_LABEL, TYRE_TYPE_LABEL, LEGAL_MIN_TENTHS, ADVISE_BELOW_TENTHS, ALIGNMENT_SPREAD_TENTHS, type TyreCorner, type TyreType } from '@/lib/tyres';
 
 export type ReportMedia = {
   id: string;
@@ -53,6 +55,22 @@ export type ReportTyre = {
   photos: ReportMedia[];
 };
 
+export type ReportBattery = {
+  /** Volts, two decimals — how the tester displays it, so the customer can match the photo. */
+  voltage: string;
+  socPct: number;
+  sohPct: number;
+  /** The denominator the health figure was measured against. NULL when nobody recorded it, and
+   *  shown as such rather than omitted: a percentage against an unknown rating is worth less. */
+  ratedCca: number | null;
+  ccaStandard: string | null;
+  /** The state in lib/battery's words, so the page colours without re-deriving any threshold. */
+  state: BatteryState;
+  /** What we are actually telling them. NULL when the test came back clean. */
+  advisory: string | null;
+  photos: ReportMedia[];
+};
+
 export type IntakeReport = {
   garageName: string;
   garagePhone: string | null;
@@ -65,6 +83,9 @@ export type IntakeReport = {
   findings: ReportFinding[];
   /** Four corners, in the car's own layout. A MEASUREMENT — never given yes/no buttons. */
   tyres: ReportTyre[];
+  /** The battery test, with the photos of the tester screen. NULL when the car was not tested —
+   *  and null, not an empty object, because "not tested" is not "tested and fine". */
+  battery: ReportBattery | null;
   /** True once every finding has an answer — the page then thanks them rather than nagging. */
   allAnswered: boolean;
 };
@@ -108,8 +129,10 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
   });
 
   const videos = media.filter((m) => m.media_type === 'video');
-  // Tyre photos are shown WITH their corner, so they must not also appear in the general grid.
-  const stills = media.filter((m) => m.media_type !== 'video' && !cornerFromSlot(m.slot));
+  // Photos that a section renders itself — a tyre corner, a battery tester screen — must not also
+  // appear in the general grid. Asked POSITIVELY via lib/photo-slots, because the negative version
+  // of this test named one section and would have double-shown the battery photos.
+  const stills = media.filter((m) => m.media_type !== 'video' && !slotOwnedBySection(m.slot));
 
   // ── TYRES: the latest reading per corner, with the photo that proves it ────────────────────
   // Latest per corner across the car's whole history, not just this visit: a customer looking at
@@ -141,6 +164,30 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
   const ORDER: TyreCorner[] = ['front_left', 'front_right', 'rear_left', 'rear_right'];
   tyres.sort((a, b) => ORDER.indexOf(a.corner) - ORDER.indexOf(b.corner));
 
+  // ── BATTERY: the latest test, with the photographs of the tester ───────────────────────────
+  // Latest for the CAR, like the tyres, and for the same reason: a customer wants the current
+  // state of their car, not only what happened to be measured today.
+  const bRow = (await prisma.batteryReading.findFirst({
+    where: { group_id: groupId, vehicle_id: card.vehicle_id },
+    orderBy: { measured_at: 'desc' },
+    select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true, measured_at: true },
+  })) as { voltage_mv: number; soc_pct: number; soh_pct: number; rated_cca: number | null; cca_standard: string | null; measured_at: Date } | null;
+
+  let battery: ReportBattery | null = null;
+  if (bRow) {
+    const n = {
+      voltageMv: bRow.voltage_mv, socPct: bRow.soc_pct, sohPct: bRow.soh_pct,
+      ratedCca: bRow.rated_cca, ccaStandard: bRow.cca_standard as CcaStandard | null,
+    };
+    battery = {
+      voltage: volts(bRow.voltage_mv), socPct: bRow.soc_pct, sohPct: bRow.soh_pct,
+      ratedCca: bRow.rated_cca, ccaStandard: bRow.cca_standard,
+      state: batteryState(n),
+      advisory: batteryAdvisory(n, bRow.measured_at)?.description ?? null,
+      photos: await Promise.all(media.filter((m) => BATTERY_SLOTS.includes(m.slot)).map(shape)),
+    };
+  }
+
   const items = await openDueItemsForVehicle(prisma, groupId, card.vehicle_id);
   const answers = await latestCustomerAnswers(prisma, items.map((i: OpenDueItem) => i.id));
 
@@ -162,6 +209,7 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
     photos: await Promise.all(stills.map(shape)),
     findings,
     tyres,
+    battery,
     allAnswered: findings.length > 0 && findings.every((f) => f.answered !== null),
   };
 }

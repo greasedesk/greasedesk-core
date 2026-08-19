@@ -50,6 +50,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     dueItems: (p.dueItems ?? []).map((d: { id: string; description: string }) => ({ id: d.id, description: d.description })),
     motExpiry: p.vehicle.motExpiry ?? null,
     lastTyreType: p.lastTyreType ?? null,
+    // The battery's rated CCA and standard from this car's last test — so the denominator prefills
+    // and a second visit is zero input. STILL no money on this surface.
+    lastBattery: p.lastBattery ?? null,
     // The four prompts, already resolved server-side. On the phone because an escalation firing
     // for items nobody was ever prompted about is worse than no escalation — the false-positive
     // problem again, one level up.

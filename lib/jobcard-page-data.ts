@@ -132,7 +132,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, lastTyreType, lastBattery, lastReport, dueItems, labourRateRow] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -175,6 +175,18 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       if (!v) return null;
       const last = await prisma.tyreReading.findFirst({ where: { group_id: groupId, vehicle_id: v }, orderBy: { measured_at: 'desc' }, select: { type: true } });
       return last?.type ?? null;
+    })(),
+    // THE BATTERY'S RATED CCA AND STANDARD, from this car's last test — the same trick as the tyre
+    // type, and for a stronger reason: the health percentage is measured against this rating, so
+    // asking a mechanic to look it up every visit is how it ends up wrong or blank.
+    (async () => {
+      const v = row?.vehicle?.id as string | undefined;
+      if (!v) return null;
+      const last = await prisma.batteryReading.findFirst({
+        where: { group_id: groupId, vehicle_id: v, rated_cca: { not: null } },
+        orderBy: { measured_at: 'desc' }, select: { rated_cca: true, cca_standard: true },
+      });
+      return last ? { ratedCca: last.rated_cca, ccaStandard: last.cca_standard as string | null } : null;
     })(),
     // WHEN THE REPORT WAS LAST SENT — the only stored half of the derived report status.
     prisma.customerMagicLink.findFirst({
@@ -447,6 +459,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // The four intake prompts, already resolved to prompted/done/skipped server-side.
     intakeItems,
     lastTyreType,
+    /** This car's last recorded battery rating, so the denominator prefills. NULL = never tested. */
+    lastBattery,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3
     // days" needs no scheduled job and cannot drift.
     reportStatus: reportStatus({

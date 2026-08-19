@@ -40,6 +40,7 @@ type PageProps = {
   intakeItems?: IntakeItemView[];
   nothingFoundAt?: string | null;
   lastTyreType?: string | null;
+  lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   /** Derived report state — never stored. */
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   // READ-ONLY message history for this card's (customer, vehicle) thread.
@@ -169,6 +170,7 @@ export default function JobCardDetailPage(props: PageProps) {
         nothingFoundAt={props.nothingFoundAt}
         reportStatus={props.reportStatus}
         lastTyreType={props.lastTyreType}
+        lastBattery={props.lastBattery}
         conversation={props.conversation}
         threadId={props.threadId}
         messagesUnread={props.messagesUnread}

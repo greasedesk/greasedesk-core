@@ -462,6 +462,7 @@ model Group {
   due_item_answers   DueItemCustomerAnswer[]
   due_item_lines     DueItemLine[]
   tyre_readings      TyreReading[]
+  battery_readings   BatteryReading[]
 }
 
 /**
@@ -1678,6 +1679,78 @@ model TyreReading {
   @@index([group_id, vehicle_id, corner, measured_at])
 }
 
+/// How a battery's cold-cranking rating was measured. EN, SAE, DIN and JIS give DIFFERENT numbers
+/// for the same battery, so a rated CCA without its standard is not comparable to another rated
+/// CCA — and the health percentage is computed against it. Stored beside the rating, never apart.
+enum CcaStandard {
+  EN
+  SAE
+  DIN
+  JIS
+  IEC
+}
+
+/// A BATTERY TEST — three numbers off the tester, and the denominator the third was computed from.
+///
+/// ── WHY THIS IS A TABLE AND NOT COLUMNS ON THE FINDING ──────────────────────────────────────────
+/// The reasoning is NOT the tyre reasoning, and copying that would produce the wrong key. Tyres
+/// earned a table on cardinality and internal structure: four corners, and a spread ACROSS one
+/// tread that is a second finding. A battery has neither — one component, and three quantities
+/// that do not relate to each other spatially.
+///
+/// What earns it here is EVIDENCE vs CONCLUSION, and TRAJECTORY. A VehicleDueItem is what the car
+/// needs; this is what was measured. The conclusion can be wrong (see lib/battery's RETEST state),
+/// so the evidence has to survive independently of it. And 62% -> 41% -> 17% across three visits is
+/// a decline rate — the only thing that makes "it will not start in November" an earned claim
+/// rather than a scare. Hanging these columns on VehicleDueItem would also leave them null on
+/// substantially every finding, where null would mean "does not apply" rather than "unknown".
+///
+/// ── ONE PER VISIT ───────────────────────────────────────────────────────────────────────────────
+/// Unique on job_card_id ALONE. There is no corner here and inventing one would be cargo-culting
+/// the tyre key. Some vans and diesels do carry two batteries; nobody has hit that yet, and the fix
+/// when someone does is an additive `position` column with a default plus widening this unique to
+/// (job_card_id, position). Recorded so the next reader finds the reasoning rather than the limit.
+///
+/// Replay-safe by construction, like TyreReading and unlike a due item: a redelivered outbox
+/// envelope upserts on the natural key, so the phone sends no client-supplied id.
+model BatteryReading {
+  id         String @id @default(uuid())
+  group_id   String
+  vehicle_id String
+
+  /// The visit it was taken on. SetNull for the same reason as a tyre reading: the measurement is
+  /// about the CAR and must outlive the card, because the history is what produces a decline rate.
+  job_card_id String?
+
+  /// Resting voltage in MILLIVOLTS. Integers, because 10.5V is a threshold and floating point has
+  /// no business near a threshold — the same argument as tread depth in tenths.
+  voltage_mv Int
+  /// State of charge, whole percent. How full it is NOW — says nothing about condition on its own.
+  soc_pct Int
+  /// State of health, whole percent, against the rated CCA below. What the tester thinks the
+  /// battery has left relative to new. UNRELIABLE at low charge — lib/battery refuses to act on it.
+  soh_pct Int
+
+  /// THE DENOMINATOR the health figure was computed against — typed into the tester by hand, so a
+  /// wrong entry makes a plausible and completely wrong health reading. NULL is honest (nobody
+  /// recorded what it was set to); it cannot be retrofitted, which is why it is captured at all.
+  /// Both this and its standard are set together or neither is — enforced by a CHECK constraint.
+  rated_cca     Int?
+  cca_standard  CcaStandard?
+
+  measured_at DateTime @default(now())
+  measured_by String?
+
+  group    Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle  Vehicle  @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+
+  /// One test per visit — retesting the same car on the same visit corrects it rather than stacking.
+  @@unique([job_card_id])
+  /// The decline-rate read: this car's tests, oldest first.
+  @@index([group_id, vehicle_id, measured_at])
+}
+
 model VehicleOdometerReading {
   id         String @id @default(uuid())
   group_id   String
@@ -1746,6 +1819,7 @@ model Vehicle {
   @@index([group_id, vin_normalized])
   @@index([group_id, registration_normalized])
   tyre_readings    TyreReading[]
+  battery_readings BatteryReading[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
@@ -1976,6 +2050,7 @@ model JobCard {
   intake_nothing_found_at DateTime?
   intake_nothing_found_by String?
   tyre_readings      TyreReading[]
+  battery_readings   BatteryReading[]
 }
 
 model JobCardPhoto {

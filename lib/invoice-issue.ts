@@ -20,6 +20,7 @@
  */
 import { printedDueItemsBlock, openDueItemsForVehicle } from '@/lib/due-items';
 import { printedTyreLines } from '@/lib/tyres';
+import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
@@ -82,10 +83,26 @@ async function createInvoiceRow(
       latestTyre.set(r.corner, { corner: r.corner as never, depths: { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths } });
     }
   }
+  // THE LATEST BATTERY TEST for this car, frozen the same way and for the same reason: a test taken
+  // after this invoice must not change what it printed.
+  const batteryRow = card.vehicle?.id
+    ? await (tx as Prisma.TransactionClient).batteryReading.findFirst({
+        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
+        orderBy: { measured_at: 'desc' },
+        select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true },
+      })
+    : null;
+
   const dueItemsBlock = printedDueItemsBlock({
     motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
     items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
     tyreLines: printedTyreLines([...latestTyre.values()]),
+    batteryLine: batteryRow
+      ? printedBatteryLine({
+          voltageMv: batteryRow.voltage_mv, socPct: batteryRow.soc_pct, sohPct: batteryRow.soh_pct,
+          ratedCca: batteryRow.rated_cca, ccaStandard: batteryRow.cca_standard as CcaStandard | null,
+        })
+      : null,
   });
 
   const invoice = await tx.invoice.create({

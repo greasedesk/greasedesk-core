@@ -26,6 +26,14 @@ type Tyre = {
   photos: Media[];
 };
 
+type Battery = {
+  voltage: string; socPct: number; sohPct: number;
+  ratedCca: number | null; ccaStandard: string | null;
+  state: 'ok' | 'monitor' | 'replace' | 'dead_cell' | 'charging_fault' | 'retest';
+  advisory: string | null;
+  photos: Media[];
+};
+
 type Props = {
   token: string;
   garageName: string;
@@ -36,6 +44,7 @@ type Props = {
   photos: Media[];
   findings: Finding[];
   tyres?: Tyre[];
+  battery?: Battery | null;
 };
 
 /**
@@ -173,6 +182,69 @@ export default function IntakeReportView(p: Props) {
             })}
           </div>
           <p className="text-xs text-muted mt-2">The legal minimum is 1.6mm. We advise replacing below 3mm.</p>
+        </section>
+      )}
+
+      {/* ── THE BATTERY ────────────────────────────────────────────────────────────────────────
+          Three numbers and the photograph of the screen they came off. The photograph is the point:
+          "your battery is getting on" is arguable and a picture of a tester reading 17% is not.
+
+          The three are shown TOGETHER and never just the health figure, because they mean different
+          things — and in the charging-fault and retest states the honest headline is explicitly NOT
+          the battery. The wording comes from lib/battery so this page cannot drift from the rule. */}
+      {p.battery && (
+        <section data-testid="report-battery">
+          <h2 className="text-sm font-semibold text-ink mb-2">Your battery</h2>
+          {(() => {
+            const b = p.battery!;
+            const bad = b.state === 'replace' || b.state === 'dead_cell';
+            const warn = b.state === 'monitor' || b.state === 'charging_fault' || b.state === 'retest';
+            const tone = bad ? 'border-danger bg-danger-soft' : warn ? 'border-warn bg-warn-soft' : 'border-line bg-surface';
+            // The health figure is the headline ONLY when it can be trusted. In the retest state it
+            // is shown greyed with the reason beside it, because leading with "17%" there would be
+            // the exact wrong sale.
+            const trusted = b.state !== 'retest';
+            return (
+              <div className={`rounded-xl border p-3 ${tone}`}>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className={`text-2xl font-bold tabular-nums ${trusted ? 'text-ink' : 'text-muted'}`} data-testid="report-battery-soh">
+                      {b.sohPct}<span className="text-sm font-medium">%</span>
+                    </p>
+                    <p className="text-[11px] text-muted">health</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{b.socPct}<span className="text-sm font-medium">%</span></p>
+                    <p className="text-[11px] text-muted">charge</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums text-ink">{b.voltage}<span className="text-sm font-medium">V</span></p>
+                    <p className="text-[11px] text-muted">voltage</p>
+                  </div>
+                </div>
+                {b.advisory && (
+                  <p className={`text-sm mt-3 ${bad ? 'text-danger font-medium' : 'text-ink'}`} data-testid="report-battery-advisory">
+                    {b.advisory}
+                  </p>
+                )}
+                {b.photos.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    {b.photos.map((ph) => ph.url && (
+                      <img key={ph.id} src={ph.url} alt={ph.label ?? 'Battery test'} loading="lazy"
+                        className="w-full aspect-[4/3] object-cover rounded-lg" />
+                    ))}
+                  </div>
+                )}
+                {/* The denominator, said plainly. A health percentage against an unknown rating is
+                    worth less, and a customer comparing two garages deserves to see which it was. */}
+                <p className="text-[11px] text-muted mt-2">
+                  {b.ratedCca && b.ccaStandard
+                    ? `Health measured against a ${b.ratedCca} CCA ${b.ccaStandard} rating.`
+                    : 'The battery’s rated capacity wasn’t recorded, so the health figure is indicative.'}
+                </p>
+              </div>
+            );
+          })()}
         </section>
       )}
 

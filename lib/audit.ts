@@ -63,9 +63,13 @@ export type AuditAction =
   | 'intake.nothing_found'
   | 'intake.nothing_found_cleared'
   | 'intake.item_skipped'
-  // The CUSTOMER's own tap on an intake report — attributed to the magic link, never to a user.
+  // MEASUREMENTS taken in the bay. Recorded as their own actions rather than folded into
+  // due_item.found: the finding is a conclusion and these are the evidence it was drawn from, so
+  // "what did the tester actually say" stays answerable after somebody edits the description.
   | 'tyres.recorded'
+  | 'battery.recorded'
   | 'intake_report.sent'
+  // The CUSTOMER's own tap on an intake report — attributed to the magic link, never to a user.
   | 'due_item.customer_answered'
   | 'due_item.found'
   | 'due_item.closed'

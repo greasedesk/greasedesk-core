@@ -12,7 +12,7 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres'; jobCardId: string;
+  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
@@ -26,6 +26,10 @@ export type OutboxItem = {
     // unique on (job_card_id, corner), so a replayed envelope upserts the same rows by
     // construction. Load-bearing, not tidiness.
     corners?: Array<{ corner: string; type: string; depths: { outer: number; centre: number; inner: number } }>;
+    // kind:'battery' — one test. NO id, same argument as tyres: BatteryReading is unique on
+    // job_card_id (a natural key), so a replayed envelope upserts. ratedCca and ccaStandard travel
+    // together or not at all — a rating without its standard is not comparable to another rating.
+    voltage?: number; socPct?: number; sohPct?: number; ratedCca?: number | null; ccaStandard?: string | null;
   };
   durationSeconds?: number | null;                                     // kind:'video'
   // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
@@ -144,6 +148,29 @@ export async function enqueueTyres(args: {
 }): Promise<string> {
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'tyres', jobCardId: args.jobCardId, payload: { corners: args.corners },
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
+  triggerDrain();
+  return item.id;
+}
+
+/** ONE BATTERY TEST — three numbers and the denominator the third was measured against.
+ *  Replay-safe without an id for the same reason as tyres and NOT for the reason due items need
+ *  one: BatteryReading is unique on job_card_id, a NATURAL key, so a redelivered envelope upserts
+ *  the same row. A due item has no natural key at all, which is why /api/due-items takes a
+ *  client-supplied id and this does not. Do not "tidy" that unique constraint away. */
+export async function enqueueBattery(args: {
+  jobCardId: string;
+  voltage: number; socPct: number; sohPct: number;
+  ratedCca?: number | null; ccaStandard?: string | null;
+}): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'battery', jobCardId: args.jobCardId,
+    payload: {
+      voltage: args.voltage, socPct: args.socPct, sohPct: args.sohPct,
+      ratedCca: args.ratedCca ?? null, ccaStandard: args.ccaStandard ?? null,
+    },
     createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item));

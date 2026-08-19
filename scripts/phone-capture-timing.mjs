@@ -24,6 +24,8 @@ const prisma = new PrismaClient();
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const B = process.env.GATE_BASE ?? 'http://localhost:3000';
 const PACE = Number(process.env.PACE_MS ?? 600);
+/** Per keystroke on a phone keyboard. ~3 characters a second, which is a realistic thumb. */
+const KEY_MS = Number(process.env.KEY_MS ?? 330);
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
@@ -63,18 +65,32 @@ try {
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
 
   // Every tap goes through this, so the pace is uniform and the count is honest.
-  let taps = 0;
+  //
+  // ── WHY type() DOES NOT USE fill() ──────────────────────────────────────────────────────────
+  // It used to, and that made the first version of this measurement dishonest. Playwright's fill()
+  // SETS a value — it does not type — so a 52-character description cost 600ms in the harness and
+  // about seventeen seconds in a bay. The reported 9.4s "worst realistic" was therefore the tyre
+  // capture (which is pure taps, and stands) plus a free description.
+  //
+  // pressSequentially with a per-character delay is the repair. KEY_MS is deliberately separate
+  // from PACE: finding a control and pressing a key are different motions, and a phone keyboard is
+  // much faster per keystroke than a thumb hunting for a chip.
+  let taps = 0, keys = 0;
   const tap = async (tid) => { taps++; await page.waitForTimeout(PACE); await page.locator(`[data-testid="${tid}"]`).click(); };
-  const type = async (tid, v) => { taps++; await page.waitForTimeout(PACE); await page.fill(`[data-testid="${tid}"]`, v); };
+  const type = async (tid, v) => {
+    taps++; keys += v.length;
+    await page.waitForTimeout(PACE);
+    await page.locator(`[data-testid="${tid}"]`).pressSequentially(v, { delay: KEY_MS });
+  };
 
   async function run(label, plan) {
     await page.goto(`${B}/m/job/${fix.card}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="phone-tyres"]', { timeout: 30000 });
-    taps = 0;
+    taps = 0; keys = 0;
     const t0 = Date.now();
     await plan();
     const secs = (Date.now() - t0) / 1000;
-    rows.push({ label, taps, secs, thinking: secs - taps * (PACE / 1000) });
+    rows.push({ label, taps, keys, secs, thinking: secs - taps * (PACE / 1000) - keys * (KEY_MS / 1000) });
     return secs;
   }
 
@@ -85,20 +101,83 @@ try {
   console.log('\n— the phone page, top to bottom —');
   await page.goto(`${B}/m/job/${fix.card}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="phone-tyres"]', { timeout: 30000 });
-  const order = await page.evaluate(() => ['phone-checklist', 'phone-findings', 'phone-tyres', 'phone-send-report']
+  const order = await page.evaluate(() => ['phone-checklist', 'phone-findings', 'phone-tyres', 'phone-battery', 'phone-send-report']
     .map((t) => { const e = document.querySelector(`[data-testid="${t}"]`); return e ? { t, y: e.getBoundingClientRect().top + window.scrollY } : { t, y: null }; }));
-  check('all four intake sections render on the phone', order.every((o) => o.y !== null),
+  check('every intake section renders on the phone', order.every((o) => o.y !== null),
     order.filter((o) => o.y === null).map((o) => o.t).join(', ') || 'all present');
   const promptCount = await page.locator('[data-testid^="ph-item-"]').count();
   check('  …and the checklist shows the TWO prompts this site switched on, not four', promptCount === 2,
     `${promptCount} items — an unprompted item must never appear, or the escalation names it later`);
   const ys = order.map((o) => o.y);
-  check('  …checklist → findings → tyres → send, in that order',
+  check('  …checklist → findings → tyres → battery → send, in that order',
     ys.every((y, i) => i === 0 || (y !== null && ys[i - 1] !== null && y > ys[i - 1])),
     order.map((o) => `${o.t}@${o.y === null ? '—' : Math.round(o.y)}`).join(' · '));
   const mot = await page.locator('[data-testid="phone-mot"]').count();
   check('  …and the MOT sits with the findings, read-only', mot === 1 || mot === 0,
     mot ? 'shown from DVSA' : 'no MOT on this fixture vehicle — nothing to show');
+
+  // ── TYRES ALONE ─────────────────────────────────────────────────────────────────────────────
+  // Reported separately because it is the part that is pure taps. Mixing it with a finding hides
+  // that the finding is dominated by typing a description, and produces one number that describes
+  // neither honestly.
+  console.log('\n— tyres alone, no typing at all —');
+  await run('T1. tyres, four even', async () => {
+    for (const c of ['front_left', 'front_right', 'rear_left', 'rear_right']) await tap(`ph-tyre-${c}-chip-60`);
+    await tap('phone-tyre-save');
+    await page.waitForSelector('[data-testid="phone-tyres-queued"]', { timeout: 15000 });
+  });
+  await run('T2. tyres, one split', async () => {
+    for (const c of ['front_right', 'rear_left', 'rear_right']) await tap(`ph-tyre-${c}-chip-60`);
+    await tap('ph-tyre-front_left-uneven');
+    await tap('ph-tyre-front_left-outer-20');
+    await tap('ph-tyre-front_left-centre-50');
+    await tap('ph-tyre-front_left-inner-60');
+    await tap('ph-tyre-front_left-type-winter_standard');
+    await tap('phone-tyre-save');
+    await page.waitForSelector('[data-testid="phone-tyres-queued"]', { timeout: 15000 });
+  });
+
+  // ── BATTERY ─────────────────────────────────────────────────────────────────────────────────
+  // Three numbers typed, because a voltage cannot be chipped. Two runs: the first visit, which pays
+  // for the rating, and every visit after it, where the rating is remembered and the work is the
+  // three numbers alone.
+  console.log('\n— the battery test, typed —');
+  await run('BT1. battery, first visit', async () => {
+    await type('phone-battery-voltage', '11.98');
+    await type('phone-battery-soc', '0');
+    await type('phone-battery-soh', '17');
+    await type('phone-battery-cca', '700');
+    await tap('phone-battery-std-EN');
+    await tap('phone-battery-save');
+    await page.waitForSelector('[data-testid="phone-battery-queued"]', { timeout: 15000 });
+  });
+  // Let the queue land so the rating is genuinely on the car for the second run.
+  for (let i = 0; i < 40; i++) {
+    if (await prisma.batteryReading.count({ where: { job_card_id: fix.card } })) break;
+    await page.waitForTimeout(500);
+  }
+  await run('BT2. battery, remembered', async () => {
+    await type('phone-battery-voltage', '12.55');
+    await type('phone-battery-soc', '92');
+    await type('phone-battery-soh', '44');
+    await tap('phone-battery-save');
+    await page.waitForSelector('[data-testid="phone-battery-queued"]', { timeout: 15000 });
+  });
+  // Wait for the SECOND envelope. The first wait proved a reading existed, which is not the same
+  // as proving the retest landed — reading straight after the enqueue caught the earlier row and
+  // reported a stale 17%, an assertion that would have been green on a genuinely broken upsert.
+  let bRow = null;
+  for (let i = 0; i < 40; i++) {
+    bRow = await prisma.batteryReading.findFirst({ where: { job_card_id: fix.card }, select: { rated_cca: true, cca_standard: true, soh_pct: true } });
+    if (bRow?.soh_pct === 44) break;
+    await page.waitForTimeout(500);
+  }
+  check('the battery test reached the database through the queue', bRow != null, JSON.stringify(bRow));
+  check('  …and one test per visit, corrected not stacked',
+    (await prisma.batteryReading.count({ where: { job_card_id: fix.card } })) === 1 && bRow?.soh_pct === 44);
+  check('  …with the rating remembered rather than retyped',
+    bRow?.rated_cca === 700 && bRow?.cca_standard === 'EN',
+    'the second run typed no rating at all and the denominator survived');
 
   // ── A. NORMAL CAR ───────────────────────────────────────────────────────────────────────────
   console.log(`\n— A: normal car, four even corners + one finding, ${PACE}ms per control —`);
@@ -137,10 +216,22 @@ try {
   // ── THE MEASUREMENT ─────────────────────────────────────────────────────────────────────────
   console.log('\n— measured —');
   for (const r of rows) {
-    console.log(`  ${r.label.padEnd(20)} ${r.taps} controls · ${r.secs.toFixed(1)}s wall · ${r.thinking.toFixed(1)}s of that is the app`);
+    console.log(`  ${r.label.padEnd(26)} ${String(r.taps).padStart(2)} controls · ${String(r.keys).padStart(3)} keystrokes · ${r.secs.toFixed(1).padStart(5)}s wall · ${r.thinking.toFixed(1)}s of that is the app`);
   }
+  // EXACT labels, not prefixes. 'BT1. battery' also startsWith('B'), so the keystroke check below
+  // was reading the battery row and passing on a near-tie — the fixture-name collision rule, met
+  // in my own selectors. A row is picked by its whole name or not at all.
+  const row = (label) => rows.find((r) => r.label === label);
+  const tyresOnly = Math.max(row('T1. tyres, four even').secs, row('T2. tyres, one split').secs);
+  check('the TYRE capture, which is all taps, stays inside ten seconds', tyresOnly < 10,
+    `${tyresOnly.toFixed(1)}s for the split-corner car — no typing in it at all`);
   const worst = Math.max(...rows.map((r) => r.secs));
-  check('the worst realistic car stays under a minute', worst < 60, `${worst.toFixed(1)}s at ${PACE}ms per control`);
+  check('the whole capture stays under a minute', worst < 60,
+    `${worst.toFixed(1)}s at ${PACE}ms per control and ${KEY_MS}ms per keystroke`);
+  const typed = row('B. worst realistic');
+  check('  …and the honest reason it is not faster is the keyboard, not the app',
+    typed.keys * (KEY_MS / 1000) > typed.taps * (PACE / 1000),
+    `${typed.keys} keystrokes cost ${(typed.keys * KEY_MS / 1000).toFixed(1)}s vs ${(typed.taps * PACE / 1000).toFixed(1)}s of tapping — a description is the slow part of a finding`);
   const appTime = Math.max(...rows.map((r) => r.thinking));
   check('  …and almost none of that is the app', appTime < 6,
     `${appTime.toFixed(1)}s outside the human pace — the rest is the hand, which is as it should be`);
