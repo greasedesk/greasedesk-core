@@ -38,3 +38,4 @@ public/pdfjs/
 
 # throwaway gate/verify scripts (run from repo dir for node_modules resolution)
 _*.mjs
+.vercel

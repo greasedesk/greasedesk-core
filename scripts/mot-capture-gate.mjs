@@ -36,6 +36,32 @@ const prose = (t) => t.replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ');
 let fix = null, browser = null;
 
 try {
+  // ── 0. THE DATE PARSE — THE REASON 221 CARS HAD NO READINGS ──────────────────────────────────
+  // DVSA sends two shapes. `expiryDate` is a bare day (2027-08-02) and `completedDate` is a full
+  // ISO timestamp (2026-07-31T09:58:48.000Z). A dot-replacement meant for the LEGACY dotted form
+  // (2016.07.31) was applied unconditionally, turning ".000Z" into "-000Z" and making every
+  // completedDate unparseable. The history was then filtered away entirely — while motExpiry, which
+  // has no dots, kept working. A lookup that looked healthy and dropped seventeen readings per car.
+  console.log('\n— two date shapes, and one used to destroy the other —');
+  const D = await import('../lib/dvsa.ts');
+  const pd = D.__parseMotDateForTest;
+  check('an ISO timestamp survives intact', pd('2026-07-31T09:58:48.000Z') === '2026-07-31',
+    'this is what completedDate looks like today, and what used to parse as undefined');
+  check('a LEGACY dotted date still parses', pd('2016.07.31') === '2016-07-31',
+    'the replacement is not dead code — deleting it loses every pre-2018 test');
+  check('  …including the dotted form with a time', pd('2016.07.31 09:58:48') === '2016-07-31');
+  check('a bare day is untouched', pd('2027-08-02') === '2027-08-02', 'expiryDate — why the fault stayed invisible');
+  check('nothing parses to a date', pd('') === undefined && pd(null) === undefined);
+  // THE OLD BEHAVIOUR, PROVEN RED HERE rather than described. If a future edit makes the
+  // replacement unconditional again, the assertion above fails — and this shows what it would do.
+  const unconditional = (v) => { const t = Date.parse(String(v).replace(/\./g, '-')); return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : undefined; };
+  check('  …and the unconditional version demonstrably breaks the ISO one',
+    unconditional('2026-07-31T09:58:48.000Z') === undefined && unconditional('2016.07.31') === '2016-07-31',
+    'both halves: it broke the new shape and it did fix the old one, which is why it was there');
+  check('the legacy shape is documented with an example',
+    /2016\.07\.31/.test(prose(readFileSync('lib/dvsa.ts', 'utf8'))),
+    'the reason for the replacement is otherwise invisible and somebody deletes it');
+
   // ── 1. BOTH SURFACES ASK, AND THE REVERSAL IS VISIBLE ────────────────────────────────────────
   console.log('\n— the diary no longer throws it away —');
   const diary = readFileSync('pages/admin/diary.tsx', 'utf8');

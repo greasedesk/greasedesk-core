@@ -33,10 +33,16 @@
  * nothing and never stops the run. Paced, because this is somebody else's API.
  */
 import './_gate-preflight.mjs';
+// ── LOAD .env EXPLICITLY ────────────────────────────────────────────────────────────────────────
+// prisma.config.ts exists, which stops Prisma auto-loading .env, and it imports dotenv only for
+// itself — so a plain script gets its DATABASE_URL through Prisma's own config and `process.env`
+// is never populated with anything else. Without this, correct DVSA credentials sitting in .env
+// still read as absent, and the refusal below would look like the secrets being wrong.
+import 'dotenv/config';
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { dvsaLookup, dvsaConfigured } = await import('../lib/dvsa.ts');
-const { recordOdometerReadings } = await import('../lib/odometer.ts');
+const { recordOdometerReadings, mileageRate } = await import('../lib/odometer.ts');
 const prisma = new PrismaClient();
 
 const args = process.argv.slice(2);
@@ -68,6 +74,17 @@ const vehicles = await prisma.vehicle.findMany({
 console.log(`\n  ${WRITE ? 'WRITING' : 'DRY RUN'} — ${group.group_name}, ${vehicles.length} vehicles, ${PACE_MS}ms apart\n`);
 
 let looked = 0, missed = 0, gotExpiry = 0, gotReadings = 0, readingRows = 0, errors = 0;
+const perCar = [];
+let rateAfter = 0;
+const rateRefused = {};
+// What each car ALREADY has, so the projection is "after the sweep", not "from DVSA alone".
+const existingReadings = new Map();
+for (const v of vehicles) {
+  const rows = await prisma.vehicleOdometerReading.findMany({
+    where: { group_id: GROUP, vehicle_id: v.id }, select: { reading_date: true, miles: true },
+  });
+  existingReadings.set(v.id, rows.map((r) => ({ date: r.reading_date, miles: r.miles })));
+}
 const before = await prisma.vehicleOdometerReading.count({ where: { group_id: GROUP, source: 'mot' } });
 
 for (const v of vehicles) {
@@ -75,7 +92,14 @@ for (const v of vehicles) {
   let data = null;
   try { data = await dvsaLookup(v.registration); } catch { errors += 1; continue; }
   looked += 1;
-  if (!data) { missed += 1; continue; }
+  if (!data) {
+    missed += 1;
+    // A MISS IS NOT AN ERROR AND NOT AN EMPTY HISTORY. dvsaLookup returns null for an unknown reg
+    // (404) and for a transport failure alike — the two are indistinguishable to a caller, which is
+    // worth saying rather than reporting them together as "no history".
+    perCar.push({ reg: v.registration, readings: null, expiry: null, note: 'no DVSA record or lookup failed' });
+    continue;
+  }
 
   if (data.motExpiry && !v.mot_expiry) {
     gotExpiry += 1;
@@ -90,6 +114,24 @@ for (const v of vehicles) {
       });
     }
   }
+  // PER-CAR, because a mean hides the shape. A fleet of nines and a fleet of twos-and-fifteens
+  // average the same and mean completely different things for a rate.
+  // WOULD THIS CAR ACTUALLY GET A RATE? Two readings is the floor, not the rule: mileageRate also
+  // needs a 90-day span and readings that do not go backwards. A count alone would overstate the
+  // yield, and the whole point of a dry run is to find that out before writing anything.
+  const merged = [
+    ...(existingReadings.get(v.id) ?? []),
+    ...(data.odometerHistory ?? []).map((r) => ({ date: new Date(`${r.date}T00:00:00.000Z`), miles: r.miles })),
+  ];
+  const rate = mileageRate(merged);
+  if (rate.ok) rateAfter += 1; else rateRefused[rate.reason] = (rateRefused[rate.reason] ?? 0) + 1;
+  perCar.push({
+    reg: v.registration,
+    readings: data.odometerHistory?.length ?? 0,
+    expiry: data.motExpiry ?? null,
+    rate: rate.ok ? `${Math.round(rate.milesPerYear)} mi/yr over ${rate.spanDays}d` : `no rate (${rate.reason})`,
+    note: (data.odometerHistory?.length ?? 0) === 0 ? 'found, but no test history' : '',
+  });
   if (data.odometerHistory?.length) {
     gotReadings += 1;
     readingRows += data.odometerHistory.length;
@@ -101,12 +143,22 @@ for (const v of vehicles) {
 
 const after = WRITE ? await prisma.vehicleOdometerReading.count({ where: { group_id: GROUP, source: 'mot' } }) : before;
 const rateCapable = async () => {
-  const g = await prisma.vehicleOdometerReading.groupBy({
-    by: ['vehicle_id'], where: { group_id: GROUP }, _count: { _all: true },
-    having: { vehicle_id: { _count: { gte: 2 } } },
-  });
-  return g.length;
+  // SCOPED TO THE SAMPLE. The first version counted the whole tenant and printed it against the
+  // sampled total — "30 of 10", which is not a ratio of anything.
+  const ids = vehicles.map((v) => v.id);
+  let n = 0;
+  for (const id of ids) if (mileageRate(existingReadings.get(id) ?? []).ok) n += 1;
+  return n;
 };
+
+console.log('\n  per vehicle');
+for (const c of perCar) {
+  const r = c.readings === null ? '  —' : String(c.readings).padStart(3);
+  console.log(`    ${c.reg.padEnd(9)} ${r} readings   ${(c.expiry ? `MOT ${c.expiry}` : '(no MOT date)').padEnd(16)} ${(c.rate ?? '').padEnd(26)} ${c.note}`);
+}
+const counts = perCar.filter((c) => c.readings !== null).map((c) => c.readings).sort((a, b) => a - b);
+console.log(`\n  distribution       [${counts.join(', ')}]`);
+console.log(`  zero readings      ${counts.filter((n) => n === 0).length} found-but-empty, ${perCar.filter((c) => c.readings === null).length} miss/failure`);
 
 console.log(`\n  looked up          ${looked}`);
 console.log(`  no DVSA record     ${missed}`);
@@ -115,7 +167,9 @@ console.log(`  MOT dates to gain  ${gotExpiry}`);
 console.log(`  cars with history  ${gotReadings}`);
 console.log(`  readings to store  ${readingRows}  (${gotReadings ? (readingRows / gotReadings).toFixed(1) : 0} per car)`);
 console.log(`  mot readings       ${before} → ${after}`);
-console.log(`  rate-capable cars  ${await rateCapable()} of ${vehicles.length}`);
+// MEASURED, not counted: the real mileageRate over the real readings, existing plus incoming.
+console.log(`\n  rate-capable NOW   ${await rateCapable()} of ${vehicles.length} sampled`);
+console.log(`  rate-capable AFTER ${rateAfter} of ${vehicles.length} sampled${Object.keys(rateRefused).length ? `  (refused: ${Object.entries(rateRefused).map(([k, n]) => `${k}×${n}`).join(', ')})` : ''}`);
 if (!WRITE) console.log('\n  DRY RUN — nothing was written. Re-run with --write.\n');
 
 await prisma.$disconnect();

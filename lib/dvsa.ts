@@ -67,12 +67,36 @@ const parseInt10 = (v: any): number | undefined => {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 };
 // MOT dates come dotted ("2024.05.20") or ISO — parse defensively; null on any doubt (nice-to-have field).
+/**
+ * A DVSA date, as an ISO day. Two shapes arrive and one of them used to destroy the other.
+ *
+ * ── THE LEGACY SHAPE, AND WHY THE REPLACEMENT EXISTS ────────────────────────────────────────────
+ * Older records carry dotted dates — `2016.07.31`, sometimes `2016.07.31 09:58:48` — which
+ * Date.parse will not take. Swapping the dots for hyphens fixes them. That is the ONLY reason this
+ * replacement is here, and without this note somebody deletes it as noise and quietly loses every
+ * pre-2018 test.
+ *
+ * ── WHY IT IS NOW CONDITIONAL ───────────────────────────────────────────────────────────────────
+ * Current records carry a full ISO timestamp — `2026-07-31T09:58:48.000Z` — and replacing dots
+ * UNCONDITIONALLY turned that into `2026-07-31T09:58:48-000Z`, which Date.parse rejects. Every
+ * completedDate parsed as undefined and the whole odometer history was filtered away.
+ *
+ * That is why 221 real cars had ZERO MOT-sourced readings between them. `expiryDate` is date-only
+ * (`2027-08-02`, no dots), so motExpiry always worked — which is exactly what made the fault
+ * invisible: the lookup looked healthy and returned a date, while silently dropping seventeen
+ * odometer readings per car.
+ */
 const parseMotDate = (v: any): string | undefined => {
   const s = String(v ?? '').trim();
   if (!s) return undefined;
-  const t = Date.parse(s.replace(/\./g, '-'));
+  // Only the legacy dotted DAY leads the string. An ISO timestamp is left exactly as it is.
+  const normalised = /^\d{4}\.\d{2}\.\d{2}/.test(s) ? s.replace(/\./g, '-') : s;
+  const t = Date.parse(normalised);
   return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : undefined;
 };
+
+/** Exported for the gate: the parse is the difference between a rate and no rate. */
+export const __parseMotDateForTest = parseMotDate;
 
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
