@@ -98,9 +98,14 @@ export function normaliseOdometer(
  *
  * "0 mi/yr" implies a measurement; the honest reading is that two odometer values were identical.
  * That happens for a genuinely stationary car — and it also happens when a mechanic looks at last
- * visit's mileage and types it again rather than reading the clock, which is a real workshop
- * pattern and therefore probably NOT rare. TMBS already has one (LB14FJX, two identical readings
- * 121 days apart) out of the first three rates the backfill produced.
+ * visit's mileage and types it again rather than reading the clock.
+ *
+ * CORRECTED 2026-08-19, and worth saying why. This previously read "TMBS already has one (LB14FJX,
+ * two identical readings 121 days apart) out of the first three rates the backfill produced" — an
+ * accurate observation about a real car, framed as a finding from a backfill that had not been run.
+ * It has now run. LB14FJX is real: 115,964 on 21 April and again on 20 August, both visit readings.
+ * And "probably not rare" understated it — 65 of 221 cars carry an identical consecutive pair, 81
+ * pairs in all. Nearly a third of the fleet.
  *
  * Nothing downstream is at risk today — projectMileageDate already returns null for a zero rate, so
  * no date is ever invented from one. This is a WORDING obligation for whoever first puts a rate on
@@ -108,7 +113,7 @@ export function normaliseOdometer(
  */
 export type MileageRate =
   | { ok: true; milesPerYear: number; spanDays: number; readings: number; from: string; to: string }
-  | { ok: false; reason: 'too_few' | 'span_too_short' | 'goes_backwards'; readings: number };
+  | { ok: false; reason: 'too_few' | 'span_too_short' | 'goes_backwards' | 'endpoints_disagree'; readings: number };
 
 /**
  * Miles per year for a car, or a STATED reason why we cannot say.
@@ -122,8 +127,48 @@ export function mileageRate(readings: OdometerReading[]): MileageRate {
   const first = sorted[0], last = sorted[sorted.length - 1];
   const spanDays = Math.round((last.date.getTime() - first.date.getTime()) / 86_400_000);
   if (spanDays < MIN_SPAN_DAYS) return { ok: false, reason: 'span_too_short', readings: sorted.length };
+  // ── AN ENDPOINT THAT ARGUES WITH ITS NEIGHBOUR IS NOT A RATE ──────────────────────────────────
+  // Only the FIRST and LAST readings set the rate; everything between is never consulted. So a
+  // mis-keyed value in the middle is harmless, and the same value at either end silently moves the
+  // answer — while still looking like a measurement.
+  //
+  // Measured on 221 real cars after the DVSA backfill: 22 carry a backward step and 11 of those sit
+  // at an endpoint. Three of them move the rate by 14.8%, 17.7% and 21.5%, and all three end in a
+  // ROUNDED visit mileage — 45,000, 110,000, 165,000 — a mechanic writing a round number rather
+  // than reading the clock. On a car doing 8,000 a year that is months of error in a projected date.
+  //
+  // ── WHY IT REFUSES RATHER THAN REPAIRS ────────────────────────────────────────────────────────
+  // Two repairs were considered and both fail. Preferring an MOT reading over a nearby visit one
+  // fixes NONE of the three that matter: they have no MOT reading nearby, so the bad visit value
+  // genuinely is the most recent thing known. Dropping trailing non-monotonic readings fixes all
+  // three and breaks the honest case — NA13ODW drops 270,022 miles and VO14OYG 82,875, which is a
+  // replaced instrument cluster, and discarding everything after it computes a rate from
+  // pre-replacement data with no signal at all.
+  //
+  // And the two cannot be told apart by size: 3,864 and 4,912 are roundings, 6,318 and 8,619 are
+  // mid-history noise, 82,875 is a replacement. Any threshold would be a constant fitted to eleven
+  // cars, which is the fabricated-constant failure this file already refuses elsewhere.
+  //
+  // So: no threshold, no repair, a stated reason — the same family as `too_few` and
+  // `span_too_short`. It costs nothing a garage notices: a car with no rate falls into the
+  // servicing list's TRIGGER band (lib/marketing-lists) and is still on the call list, just without
+  // a projected date it should never have had.
+  //
+  // NOT BUILT — THE HONEST ALTERNATIVE, if those eleven cars ever matter: surface the conflict to
+  // the garage rather than resolve it. "These two readings disagree — 110,000 on 22 July and
+  // 113,864 in May. Which is right?" is a question a human can answer in two seconds and we cannot
+  // answer at all. That is a feature with a screen and a write path, and it belongs in its own
+  // slice; it is emphatically not a constant.
+  if (sorted.length >= 3) {
+    const firstSuspect = sorted[1].miles < sorted[0].miles;
+    const lastSuspect = sorted[sorted.length - 1].miles < sorted[sorted.length - 2].miles;
+    if (firstSuspect || lastSuspect) return { ok: false, reason: 'endpoints_disagree', readings: sorted.length };
+  }
+
   const delta = last.miles - first.miles;
-  // Clocking, a replacement cluster, or a keying error. No rate, and the caller can say so.
+  // Clocking, a replacement cluster, or a keying error. No rate, and the caller can say so. With
+  // exactly two readings this is the only shape a disagreement can take, which is why the check
+  // above needs three.
   if (delta < 0) return { ok: false, reason: 'goes_backwards', readings: sorted.length };
   return {
     ok: true,

@@ -62,6 +62,45 @@ try {
     /2016\.07\.31/.test(prose(readFileSync('lib/dvsa.ts', 'utf8'))),
     'the reason for the replacement is otherwise invisible and somebody deletes it');
 
+  // ── 0b. AN ENDPOINT THAT ARGUES WITH ITS NEIGHBOUR IS NOT A RATE ─────────────────────────────
+  console.log('\n— only the ends set the rate, so only the ends can lie —');
+  const O2 = await import('../lib/odometer.ts');
+  const d = (iso, miles) => ({ date: new Date(`${iso}T00:00:00.000Z`), miles });
+  const clean = [d('2020-01-01', 10000), d('2022-01-01', 30000), d('2024-01-01', 50000)];
+  check('a clean history gives a rate', O2.mileageRate(clean).ok);
+  // FOUR readings, because with three the middle touches BOTH ends and there is no interior.
+  check('a genuinely interior stumble is IGNORED, as it always was',
+    O2.mileageRate([d('2019-01-01', 10000), d('2021-01-01', 30000), d('2022-01-01', 20000), d('2024-01-01', 50000)]).ok === true,
+    'the middle is never consulted — the rate was always first-to-last');
+  // AND THE CONSEQUENCE OF THAT, pinned rather than discovered later: with exactly three readings
+  // every backward step is adjacent to an endpoint, so it refuses. That is the conservative answer
+  // and the correct one — either the endpoint is wrong (the rate is distorted) or its neighbour is
+  // (the rate is fine), and there is nothing in the data that says which.
+  check('  …but with only three readings, any stumble touches an end and refuses',
+    O2.mileageRate([d('2020-01-01', 10000), d('2022-01-01', 5000), d('2024-01-01', 50000)]).reason === 'endpoints_disagree',
+    'no interior exists at length three; refusing is the conservative reading and we cannot tell which value is wrong');
+  check('a LAST reading below its neighbour refuses',
+    O2.mileageRate([d('2020-01-01', 10000), d('2023-01-01', 50000), d('2024-01-01', 45000)]).reason === 'endpoints_disagree',
+    'the rounded-visit-mileage case: 45,000 typed instead of 45,912');
+  check('a FIRST reading above its neighbour refuses',
+    O2.mileageRate([d('2020-01-01', 20000), d('2021-01-01', 10000), d('2024-01-01', 50000)]).reason === 'endpoints_disagree');
+  check('  …and it is a REFUSAL, never a repaired number',
+    O2.mileageRate([d('2020-01-01', 10000), d('2023-01-01', 50000), d('2024-01-01', 45000)]).ok === false,
+    'a wrong rate is indistinguishable from a right one; a refusal is not');
+  check('two readings that go backwards are still goes_backwards',
+    O2.mileageRate([d('2020-01-01', 50000), d('2024-01-01', 10000)]).reason === 'goes_backwards',
+    'with only two there is no neighbour to disagree with');
+  check('no threshold appears anywhere in the rule',
+    !/endpoints_disagree[\s\S]{0,400}?[<>]=?\s*\d{3,}/.test(readFileSync('lib/odometer.ts', 'utf8')),
+    'any margin would be a constant fitted to eleven cars');
+  const od = prose(readFileSync('lib/odometer.ts', 'utf8'));
+  check('both rejected repairs are recorded with why they fail',
+    /fixes NONE of the three that matter/.test(od) && /replaced instrument cluster/.test(od));
+  check('the honest alternative is marked NOT BUILT', /NOT BUILT — THE HONEST ALTERNATIVE/.test(od),
+    'surfacing the conflict is a feature with a screen, not a constant');
+  check('and the stale backfill claim is corrected in place',
+    /CORRECTED 2026-08-19/.test(od) && /65 of 221 cars carry an identical consecutive pair/.test(od));
+
   // ── 1. BOTH SURFACES ASK, AND THE REVERSAL IS VISIBLE ────────────────────────────────────────
   console.log('\n— the diary no longer throws it away —');
   const diary = readFileSync('pages/admin/diary.tsx', 'utf8');

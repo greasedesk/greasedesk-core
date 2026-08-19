@@ -77,6 +77,7 @@ let looked = 0, missed = 0, gotExpiry = 0, gotReadings = 0, readingRows = 0, err
 const perCar = [];
 let rateAfter = 0;
 const rateRefused = {};
+const anomalies = [];
 // What each car ALREADY has, so the projection is "after the sweep", not "from DVSA alone".
 const existingReadings = new Map();
 for (const v of vehicles) {
@@ -123,6 +124,30 @@ for (const v of vehicles) {
     ...(existingReadings.get(v.id) ?? []),
     ...(data.odometerHistory ?? []).map((r) => ({ date: new Date(`${r.date}T00:00:00.000Z`), miles: r.miles })),
   ];
+  // ── WHERE A MIS-KEYED READING SITS DECIDES WHETHER IT MATTERS ────────────────────────────────
+  // mileageRate consults ONLY the first and last reading by date; everything between is ignored
+  // entirely. So a bad value in the middle is invisible and harmless, and the same value at either
+  // end silently moves the rate — or trips `goes_backwards`, which at least refuses rather than
+  // inventing. BD12BVV in the first sample carried 83,672 followed by 53,672 two days apart, which
+  // is plainly a keying error in the MOT record; it happened to be in the middle. This counts how
+  // often that luck holds.
+  // COLLAPSED BY DATE FIRST, because storage is unique on (vehicle, source, date): two MOT tests on
+  // one day — a morning fail and an afternoon pass — become one row, and the pair between them is a
+  // backward step that never exists in the database. Counting them inflated the first report from
+  // 22 cars to 48. Analyse what will actually be stored, not what the API returned.
+  const byDate = new Map();
+  for (const r of [...merged].sort((a, b) => a.date.getTime() - b.date.getTime())) {
+    byDate.set(r.date.toISOString().slice(0, 10), r);
+  }
+  const chron = [...byDate.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const backSteps = chron.filter((r, i) => i > 0 && r.miles < chron[i - 1].miles).length;
+  if (backSteps > 0) {
+    anomalies.push({
+      reg: v.registration, steps: backSteps,
+      // An anomaly at an ENDPOINT is the one that can distort a rate that still looks plausible.
+      atEnd: chron.length > 2 && (chron[1].miles < chron[0].miles || chron[chron.length - 1].miles < chron[chron.length - 2].miles),
+    });
+  }
   const rate = mileageRate(merged);
   if (rate.ok) rateAfter += 1; else rateRefused[rate.reason] = (rateRefused[rate.reason] ?? 0) + 1;
   perCar.push({
@@ -168,6 +193,12 @@ console.log(`  cars with history  ${gotReadings}`);
 console.log(`  readings to store  ${readingRows}  (${gotReadings ? (readingRows / gotReadings).toFixed(1) : 0} per car)`);
 console.log(`  mot readings       ${before} → ${after}`);
 // MEASURED, not counted: the real mileageRate over the real readings, existing plus incoming.
+if (anomalies.length) {
+  console.log(`\n  backwards readings ${anomalies.length} of ${perCar.length} cars`);
+  for (const a of anomalies) {
+    console.log(`    ${a.reg.padEnd(9)} ${String(a.steps).padStart(2)} backward step(s)  ${a.atEnd ? 'AT AN ENDPOINT — can move the rate' : 'mid-history — never consulted'}`);
+  }
+}
 console.log(`\n  rate-capable NOW   ${await rateCapable()} of ${vehicles.length} sampled`);
 console.log(`  rate-capable AFTER ${rateAfter} of ${vehicles.length} sampled${Object.keys(rateRefused).length ? `  (refused: ${Object.entries(rateRefused).map(([k, n]) => `${k}×${n}`).join(', ')})` : ''}`);
 if (!WRITE) console.log('\n  DRY RUN — nothing was written. Re-run with --write.\n');
