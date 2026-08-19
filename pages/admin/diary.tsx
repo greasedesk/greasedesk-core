@@ -41,7 +41,7 @@ import { formatMoney } from '@/lib/format-money';
 import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -1151,6 +1151,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // job fields — Registration + Customer anchor the card; the rest are OPTIONAL (capture-if-available so
   // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
+  // DVSA's MOT facts from the lookup. Held, not shown: this is a booking form, and these are the
+  // car's record rather than anything the person booking should be editing. See the reversal note
+  // in the lookup handler for why they are kept at all.
+  const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
   const [vin, setVin] = useState(''); const [phone, setPhone] = useState(''); const [email, setEmail] = useState('');
   // Vehicle data — make/colour/year/fuel/engine auto-fill from DVLA VES on a new reg; model is manual.
   const [make, setMake] = useState(''); const [model, setModel] = useState(''); const [vColour, setVColour] = useState('');
@@ -1195,8 +1199,20 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   async function lookupVehicle() {
     setLookBusy(true); setLookMsg(null);
     // ONE shared client path (lib/vehicle-lookup-client): OUR records first (returning car → owner +
-    // full vehicle), else DVSA MOT History. MOT metadata is NOT applied here — a booking stays off the
-    // MOT hot path (the job card captures MOT as its own explicit action).
+    // full vehicle), else DVSA MOT History.
+    //
+    // ── REVERSED 2026-08-19: MOT METADATA *IS* APPLIED HERE NOW ─────────────────────────────────
+    // This used to read: "MOT metadata is NOT applied here — a booking stays off the MOT hot path
+    // (the job card captures MOT as its own explicit action)." That was a scope decision, not a
+    // cost one — the lookup already runs and already returns the MOT fields, so keeping three of
+    // them was never work this path had to do.
+    //
+    // The price of it was measured on 221 real cars: only 125 had an MOT expiry, and coverage by
+    // creation month ran 83% → 60% → 47%. The job card's "explicit action" is a look-up button on
+    // the Customer Details form, and a garage that books through the diary never presses it. So the
+    // other path was not a fallback; for these cars it was nothing at all.
+    //
+    // Kept as a rewrite rather than a deletion so the reversal is visible with its reason.
     const r = await lookupVehicleByReg(reg);
     setLookBusy(false);
     setNoShows(r.ok ? (r.noShows ?? null) : null);
@@ -1217,6 +1233,9 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     if (!fuel.trim() && r.vehicle.fuel) setFuel(r.vehicle.fuel);
     if (!year.trim() && r.vehicle.year) setYear(r.vehicle.year);
     if (!engineCc.trim() && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    // DVSA's own facts, held for the create below. Not editable on this form — it is a booking, not
+    // the MOT record — but no longer thrown away.
+    if (r.mot) setMot(r.mot);
     setLookMsg({ text: t(r.source === 'records' ? 'create.lookupRecord' : 'create.lookupDvsa'), ok: true });
   }
   // Start: seeded from the clicked cell, or user-picked (pickWhen). End is naive start + hours (the
@@ -1245,11 +1264,18 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
           vin: normalizeVin(vin) || undefined, phone: normalizePhone(phone) || undefined, email: email.trim() || undefined,
           make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
           fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
+          // From the lookup that already ran — see the note on the reversal above.
+          motExpiry: mot.motExpiry ?? undefined,
+          lastMotMileage: mot.lastMotMileage ?? undefined,
+          lastMotDate: mot.lastMotDate ?? undefined,
           siteId, resourceId: liftId, startAt, endAt,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(data?.message || t('create.err.generic')); return; }
+      // THE CAR EXISTS NOW, so DVSA's odometer history finally has something to attach to. Fire and
+      // forget: a booking must never wait on it, and a car with no history stores nothing.
+      backfillMotHistory(regCanon, data?.vehicleId);
       onDone();
     } catch { setErr(t('create.err.generic')); }
     finally { setBusy(false); } // network throw must never strand the busy flag

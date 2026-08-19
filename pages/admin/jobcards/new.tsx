@@ -24,7 +24,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
@@ -159,6 +159,10 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || 'Failed to create job card.');
+      // THE CAR EXISTS NOW, so DVSA's odometer history has something to attach to. This path always
+      // sent the MOT fields and still never got the readings: /api/dvsa-lookup keeps them only when
+      // told which vehicle they belong to, and at lookup time there was no vehicle. Fire and forget.
+      backfillMotHistory(form.registration, data?.vehicleId);
       // ONE difference between the two entry points: where you land.
       const next = String(router.query.next ?? '');
       router.push(next === 'quote' ? `/admin/jobcards/${data.id}?tab=quote` : `/admin/jobcards/${data.id}`);

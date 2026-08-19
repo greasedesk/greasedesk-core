@@ -124,3 +124,30 @@ export async function lookupVehicleByVin(rawVin: string): Promise<VinLookupResul
     return { ok: false, vin, reason: 'error' };
   }
 }
+
+/**
+ * FETCH THE DVSA ODOMETER HISTORY FOR A CAR WE HAVE JUST CREATED.
+ *
+ * ── THE DEFERRAL THAT NEVER RESOLVED ────────────────────────────────────────────────────────────
+ * /api/dvsa-lookup keeps the MOT odometer history only when the caller names a vehicle we own —
+ * reasonably, since a first lookup on an unknown reg has nothing to attach it to. Its comment says
+ * "the readings land on the next lookup once the record exists".
+ *
+ * They never did. The only caller that passed a vehicleId was the job card's manual look-up button,
+ * which a garage that books through the diary never presses. Measured 2026-08-19 on 221 real cars:
+ * ZERO MOT-sourced odometer readings, for any vehicle, ever. Every reading in the database was a
+ * mileage typed at a visit, and only 30 cars of 221 had the two readings a mileage rate needs.
+ *
+ * That is not a small gap. The rate feeds the servicing list's dated band, the tyre wear rate and
+ * the battery decline projection — all three were running on 14% of the fleet.
+ *
+ * So the deferral is resolved HERE, by the creating surface, the moment the vehicle exists.
+ *
+ * BEST-EFFORT AND FIRE-AND-FORGET: it must never delay or fail a booking. A car with no DVSA
+ * history simply stores nothing, which is the same outcome as before.
+ */
+export function backfillMotHistory(registration: string, vehicleId: string | null | undefined): void {
+  if (!registration || !vehicleId) return;
+  void fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(registration)}&vehicleId=${encodeURIComponent(vehicleId)}`,
+    { cache: 'no-store' }).catch(() => {});
+}

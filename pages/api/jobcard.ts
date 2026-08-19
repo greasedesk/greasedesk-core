@@ -242,7 +242,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // never mark a stage done that isn't. `intent` is a hint; this check is the authority.
             ...(autoCompleteDetails ? { stage_details_done: true } : {}),
           },
-          select: { id: true },
+          // vehicle_id comes back so the caller can backfill the DVSA odometer history — see below.
+          select: { id: true, vehicle_id: true },
         });
         // Audited as a NORMAL stage completion, attributed to the creating user — the trail must not
         // distinguish "the system did it" from "someone ticked it"; a human's action caused it.
@@ -262,7 +263,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return created;
       });
 
-      return res.status(201).json({ id: card.id, message: scheduling ? 'Job card created and scheduled.' : 'Job card created.' });
+      // vehicleId RIDES BACK so the caller can fetch the DVSA odometer history for a car that did
+      // not exist when the lookup ran. /api/dvsa-lookup only keeps that history when it is told
+      // which vehicle it belongs to, and on a first booking there is nothing to tell it — see
+      // backfillMotHistory in lib/vehicle-lookup-client.
+      return res.status(201).json({ id: card.id, vehicleId: card.vehicle_id, message: scheduling ? 'Job card created and scheduled.' : 'Job card created.' });
     } catch (error: any) {
       const m = error?.message || '';
       if (m === 'FORBIDDEN_SITE') return res.status(403).json({ message: 'You do not have permission to use this site.' });
