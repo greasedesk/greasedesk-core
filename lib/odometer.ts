@@ -39,8 +39,32 @@
  * feature is broken.
  */
 
-/** Below this, two readings say nothing about a year's driving — see the retest reasoning above. */
-export const MIN_SPAN_DAYS = 180;
+/**
+ * THE FLOOR — below this we decline to infer an annual rate from two points.
+ *
+ * ── WHAT IT IS ACTUALLY DEFENDING AGAINST ───────────────────────────────────────────────────────
+ * Fail-and-retest pairs, which sit 1–14 days apart. That is the whole hazard. Note that the floor
+ * only does any work when the span IS the entire history: on a car with years of MOTs the
+ * whole-span rule above has already made a retest harmless, because a retest is never an endpoint.
+ *
+ * ── WHY 90 AND NOT THE ORIGINAL 180 ─────────────────────────────────────────────────────────────
+ * 180 was the first figure, chosen before there was any real data to test it against. On TMBS it
+ * excluded 100% of the repeat-visit pairs in the book — 30 vehicles, spans of at most 121 days,
+ * median 33 — and it excluded them because the tenant's card history was five months old, NOT
+ * because the pairs were unreliable. A 121-day pair is an order of magnitude past the retest gap
+ * it was written to catch: 4,000 miles over four months is a signal, not noise.
+ *
+ * ── WHAT 90 COSTS: SEASONALITY ──────────────────────────────────────────────────────────────────
+ * A quarter is short enough for the season to bias it. A car measured across a summer of touring
+ * over-projects against one that hibernates each winter — call it ±30% either way. That is
+ * ACCEPTABLE FOR WHAT THIS FEEDS: a reminder that says "your discs are due around March" is a
+ * prompt, not a booking, and being a month out costs nothing. It would NOT be acceptable for
+ * anything a customer is charged against, and this figure must not be reused for that without
+ * revisiting the trade.
+ *
+ * Same standing as the whole-history lag above: change it on EVIDENCE, and know what it costs.
+ */
+export const MIN_SPAN_DAYS = 90;
 
 export type OdometerReading = { date: Date; miles: number; source?: string };
 

@@ -64,6 +64,17 @@ check('no readings → no rate', mileageRate([]).reason === 'too_few');
 check(`a span under ${MIN_SPAN_DAYS} days → no rate`,
   mileageRate([{ date: D('2026-05-28'), miles: 110000 }, { date: D('2026-05-31'), miles: 110040 }]).reason === 'span_too_short',
   'a fail-and-retest pair is ALL the history some cars have');
+// THE FLOOR MOVED from 180 to 90 on real evidence (TMBS: 30 repeat-visit pairs, none over 121
+// days, excluded by a floor written before any data existed). Pin the RULE, not the number: a
+// four-month pair must be accepted, a fortnight must not.
+check('a 121-day pair IS accepted — the case the 180-day floor wrongly excluded',
+  mileageRate([{ date: D('2026-04-01'), miles: 100000 }, { date: D('2026-07-31'), miles: 104000 }]).ok === true,
+  'an order of magnitude past the retest gap the floor defends against');
+check('a 14-day pair is still refused — the retest gap itself',
+  mileageRate([{ date: D('2026-04-01'), miles: 100000 }, { date: D('2026-04-15'), miles: 100200 }]).reason === 'span_too_short');
+check('the seasonality cost of 90 days is written down, not just accepted',
+  /±30%/.test(readFileSync('lib/odometer.ts', 'utf8')) && /180 was the first figure/.test(readFileSync('lib/odometer.ts', 'utf8')),
+  'someone reading this in a year should find the reasoning, not just the number');
 check('an odometer that goes BACKWARDS → no rate',
   mileageRate([{ date: D('2020-01-01'), miles: 90000 }, { date: D('2026-01-01'), miles: 40000 }]).reason === 'goes_backwards',
   'clocking, a replacement cluster, or a keying error');
