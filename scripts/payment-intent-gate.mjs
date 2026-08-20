@@ -23,7 +23,11 @@ const { createMagicLink, invoicePayExpiry } = await import('../lib/magic-link.ts
 const { PAY_LIMITS } = await import('../pages/api/pay/intent.ts');
 
 const GATE_REF = 'GB-GD2141';
-const B = process.env.GATE_BASE ?? 'http://localhost:3111';
+// PORT 3000, the port `npm run dev` uses. This defaulted to 3111 — not a decision, just whatever
+// the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
+// on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
+// overrides, which is what a genuinely different server is for.
+const B = process.env.GATE_BASE ?? 'http://localhost:3000';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 

@@ -52,7 +52,10 @@ const SELF = 'gate-hygiene-gate.mjs';
 const files = readdirSync('scripts').filter((f) => f.endsWith('.mjs') && f !== SELF).sort();
 const read = (f) => readFileSync(`scripts/${f}`, 'utf8');
 // The helpers are imported BY gates; they are not gates and must not require their own preflight.
-const HELPERS = new Set(['_gate-preflight.mjs', '_ts.mjs', '_ts-hook.mjs', '_gate-retry.mjs']);
+// gates.mjs is the RUNNER, not a gate. It spawns each gate as its own process, and every one of
+// those imports the preflight for itself — the runner importing it too would run the freshness
+// check once for the suite and then again per gate, and Rule B would be enforcing a no-op.
+const HELPERS = new Set(['_gate-preflight.mjs', '_ts.mjs', '_ts-hook.mjs', '_gate-retry.mjs', 'gates.mjs']);
 const gates = files.filter((f) => f.includes('gate') && !HELPERS.has(f));
 
 console.log(`\n— scanning ${files.length} scripts (${gates.length} gates) —`);

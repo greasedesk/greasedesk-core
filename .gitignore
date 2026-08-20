@@ -39,3 +39,6 @@ public/pdfjs/
 # throwaway gate/verify scripts (run from repo dir for node_modules resolution)
 _*.mjs
 .vercel
+
+# The gate runner writes results here as it goes, so a run can resume. Local state.
+.gate-results.json

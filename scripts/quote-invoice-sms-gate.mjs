@@ -28,7 +28,11 @@ const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.t
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const B = process.env.GATE_BASE ?? 'http://localhost:3111';
+// PORT 3000, the port `npm run dev` uses. This defaulted to 3111 — not a decision, just whatever
+// the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
+// on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
+// overrides, which is what a genuinely different server is for.
+const B = process.env.GATE_BASE ?? 'http://localhost:3000';
 const MARK = 'qisgate_';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

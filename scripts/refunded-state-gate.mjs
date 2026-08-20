@@ -23,7 +23,9 @@ const D = (s) => new Date(s);
 
 let payId = null, invId = null, cacheBefore, cardBefore = null, cardId = null;
 let openId = null, openCacheBefore, pay2Id = null, linkId = null;
-const B = process.env.GATE_BASE ?? 'http://localhost:3111';
+// PORT 3000, the port `npm run dev` uses. This defaulted to 3111 — not a decision, just whatever
+// the author had running that afternoon. GATE_BASE still overrides.
+const B = process.env.GATE_BASE ?? 'http://localhost:3000';
 const madeRefunds = [];
 try {
   if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) throw new Error('REFUSING: leftovers');
