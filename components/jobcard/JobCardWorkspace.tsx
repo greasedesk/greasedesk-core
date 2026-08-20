@@ -1631,10 +1631,17 @@ function SendQuote({ jobCardId, disabled, beforeSend, revision, currency, locale
 // ---------- Completion mileage-out (advisories grain seed) ----------
 function MileageOut(props: { jobCardId: string; initial: number | null; canEdit: boolean; busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; t: (k: string, o?: any) => string; mileageIn: number | null; locale: string }) {
   const { t } = props;
-  // Unset mileage-out DEFAULTS to mileage-in (keeps the car's mileage timeline gapless for the
-  // future service-interval grain) but stays fully editable — road tests differ. Saved on the
-  // button as before; the default is a starting value, never a lock.
-  const [val, setVal] = useState(props.initial != null ? String(props.initial) : (props.mileageIn != null ? String(props.mileageIn) : ''));
+  // ── EMPTY, NOT PREFILLED WITH THE ARRIVAL FIGURE ─────────────────────────────────────────────
+  // It used to default to mileage-in "to keep the car's mileage timeline gapless". Saving the
+  // prefilled box stored arrival-equals-departure, which made "I read the dash and it hadn't
+  // moved" and "I pressed save without looking" the same record — a default indistinguishable
+  // from a confirmation, on a field whose only purpose is to be a measurement.
+  //
+  // Empty means NULL means nobody took it. The arrival figure is shown beside the box as context
+  // instead, the way the departure schedule panel shows the arrival reading. The gapless-timeline
+  // fallback moved to read time: lib/odometer::visitEndMileage, which returns the basis alongside
+  // the number so a consumer cannot mistake an assumption for a reading.
+  const [val, setVal] = useState(props.initial != null ? String(props.initial) : '');
   const delta = props.mileageIn != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) - props.mileageIn : null;
   async function save() {
     props.setBusy('mileage'); props.setErr(null);
@@ -1650,9 +1657,16 @@ function MileageOut(props: { jobCardId: string; initial: number | null; canEdit:
     <div className="bg-surface border border-line rounded-xl p-5">
       <h3 className="text-sm font-semibold text-ink mb-1">{t('completion.mileageOut')}</h3>
       <p className="text-xs text-muted mb-3">{t('completion.mileageHint')}</p>
+      {/* THE ARRIVAL FIGURE AS CONTEXT, never as a value in the box. A mechanic comparing against
+          it is doing the thing the field exists for; a mechanic accepting it is not. */}
+      {props.mileageIn != null && (
+        <p className="text-xs text-muted mb-2" data-testid="mileage-in-context">
+          Came in on <strong className="text-ink tabular-nums">{props.mileageIn.toLocaleString(props.locale)}</strong>
+        </p>
+      )}
       <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
         <div className="flex-1">
-          <input type="number" min="0" className={inputCls} value={val} disabled={!props.canEdit || props.busy !== null} onChange={(e) => setVal(e.target.value)} placeholder={t('completion.mileageOut')} />
+          <input type="number" min="0" className={inputCls} value={val} disabled={!props.canEdit || props.busy !== null} onChange={(e) => setVal(e.target.value)} placeholder={t('completion.mileageOut')} data-testid="mileage-out-input" />
           {delta != null && delta >= 0 && <p className="text-xs text-muted mt-1">{t('completion.delta', { miles: delta.toLocaleString(props.locale) })}</p>}
         </div>
         <button disabled={!props.canEdit || props.busy !== null} onClick={save} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('completion.saveMileage')}</button>

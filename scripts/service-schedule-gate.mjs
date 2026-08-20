@@ -139,7 +139,10 @@ try {
   // panel waiting on the far side saves anything. The fixture was manufacturing the state it then
   // verified, so the departure panel shipped having never once been driven.
   const card = await prisma.jobCard.create({
-    data: { group_id: ZZ, site_id: site.id, customer_id: cust.id, vehicle_id: veh.id, status: 'quoted' },
+    // odometer_in set, because the departure-mileage assertions below are about how the ARRIVAL
+    // figure is presented beside the empty box. A card with no arrival mileage shows no context
+    // line at all, which is correct and proves nothing about the presentation.
+    data: { group_id: ZZ, site_id: site.id, customer_id: cust.id, vehicle_id: veh.id, status: 'quoted', odometer_in: 60000 },
     select: { id: true },
   });
   await prisma.jobCardItem.create({
@@ -394,6 +397,41 @@ try {
     && /30 November 2026/.test(snap));
   check('  …and no arrival figure anywhere in it', !/60,000/.test(snap),
     'the arrival reading is a visit measurement and must never reach a customer document');
+  // ── 7b. THE DEPARTURE MILEAGE IS A MEASUREMENT, NOT A DEFAULT ────────────────────────────────
+  // The box beside this panel used to prefill with the arrival mileage. Saving it unchanged stored
+  // arrival-equals-departure, making "I read the dash and it hadn't moved" and "I pressed save
+  // without looking" the same row. On TMBS, 24 of the 31 stored departure mileages are that
+  // ambiguity and cannot be salvaged (measured 20 Aug 2026).
+  console.log('\n— mileage out: empty, with the arrival figure beside it —');
+  const O = await import('../lib/odometer.ts');
+  check('the box is empty on a card that has no departure reading',
+    (await page.locator('[data-testid="mileage-out-input"]').inputValue()) === '',
+    'a default indistinguishable from a confirmation, on a field whose only purpose is to be a measurement');
+  check('  …and the arrival figure is shown beside it, as context',
+    /Came in on/.test(await page.locator('[data-testid="mileage-in-context"]').innerText()),
+    'a mechanic comparing against it is doing the thing the field exists for; one accepting it is not');
+  check('  …and the source no longer prefills from mileage-in',
+    !/props\.mileageIn != null \? String\(props\.mileageIn\)/.test(readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8')));
+
+  // THE FALLBACK MOVED TO READ TIME, AND SAYS WHICH IT IS.
+  check('a taken reading is reported as measured',
+    O.visitEndMileage({ odometerIn: 60000, odometerOut: 60120 }).basis === 'measured');
+  check('  …an absent one falls back to arrival AND says it assumed',
+    O.visitEndMileage({ odometerIn: 60000, odometerOut: null }).basis === 'assumed_unchanged'
+    && O.visitEndMileage({ odometerIn: 60000, odometerOut: null }).miles === 60000,
+    'the number a consumer wanted, with the fact that nobody measured it attached');
+  check('  …and a car with neither is unknown, not zero',
+    O.visitEndMileage({ odometerIn: null, odometerOut: null }).miles === null,
+    'honest-null: no reading is not a reading of nothing');
+  check('  …and a departure reading EQUAL to arrival still reads as measured',
+    O.visitEndMileage({ odometerIn: 60000, odometerOut: 60000 }).basis === 'measured',
+    'the whole point of the empty box: equal-to-arrival is now a finding, not an artefact');
+  check('the permanent ambiguity is recorded with its date',
+    /PERMANENTLY AMBIGUOUS/.test(prose(readFileSync('lib/odometer.ts', 'utf8')))
+    && /20 August 2026/.test(prose(readFileSync('lib/odometer.ts', 'utf8')))
+    && /UPPER BOUND/.test(prose(readFileSync('lib/odometer.ts', 'utf8'))),
+    'rows written before that date inherit the bound; rows after it do not');
+
   // ── 8. THE ARRIVAL READING, IN THE BAY ───────────────────────────────────────────────────────
   // Reading a service computer is a bay job by definition — the screen is in the car — and until
   // now the mechanic standing at it was the one person who could not record what it said.

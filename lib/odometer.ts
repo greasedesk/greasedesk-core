@@ -232,6 +232,54 @@ type Db = { vehicleOdometerReading: {
  *
  * Returns how many rows were touched, so a caller can log what a lookup actually learned.
  */
+/**
+ * ── WHAT MILEAGE THE CAR LEFT ON, AND WHETHER ANYBODY LOOKED ────────────────────────────────────
+ *
+ * The departure mileage USED TO BE PREFILLED with the arrival mileage on the Completion form, on
+ * the argument that it "keeps the car's mileage timeline gapless". Saving the prefilled box stored
+ * arrival-equals-departure, and that made two different facts identical in the record:
+ *
+ *     "I read the dash and it hadn't moved"      — a measurement, and a normal one for a service
+ *     "I pressed save without looking"           — no measurement at all
+ *
+ * On a field whose only purpose is to be a measurement, a default indistinguishable from a
+ * confirmation is the honest-null rule broken in the other direction. The box now starts EMPTY
+ * with the arrival figure shown beside it as context, so NULL means "not taken", a value means
+ * somebody looked, and equal-to-arrival is a finding rather than an artefact.
+ *
+ * ── AND THE GAPLESS-TIMELINE FALLBACK LIVES HERE, WHERE IT IS VISIBLE ───────────────────────────
+ * This is that fallback, moved from a stored default to a read-time one. It returns the BASIS
+ * alongside the number, so a consumer can never mistake an assumption for a reading — which is
+ * exactly what the stored version made impossible.
+ *
+ * Nothing consumes it yet: on 2026-08-20 `odometer_out` had precisely one reader (the form that
+ * writes it) and never reached VehicleOdometerReading at all — only arrival mileages do, via
+ * pages/api/jobcard-details. So the stored default was smoothing a timeline that nothing read.
+ *
+ * ── A PERMANENT LIMIT ON ANY ANALYSIS OF DEPARTURE MILEAGE ──────────────────────────────────────
+ * Measured on TMBS, 20 August 2026: 31 of 214 completed cards carried an `odometer_out` at all,
+ * and 24 of those 31 equalled the arrival figure. Because the prefill made an accepted default
+ * identical to a typed confirmation, and there is no audit row or timestamp on the column, THOSE
+ * 24 ROWS ARE PERMANENTLY AMBIGUOUS and cannot be salvaged as evidence of anything. The 4 that
+ * differ are the only unambiguous departure mileages in the data, and by construction they are the
+ * cars that moved — so they cannot tell you how often the reading is genuinely taken either.
+ *
+ * "31 of 214" is therefore an UPPER BOUND on how often anyone looked, not a capture rate. Any
+ * figure computed from rows created before this date inherits that bound; rows created after it
+ * do not.
+ */
+export type VisitEndMileage =
+  | { miles: number; basis: 'measured' }
+  /** No departure reading taken. The arrival figure, offered as the best available — SAY SO. */
+  | { miles: number; basis: 'assumed_unchanged' }
+  | { miles: null; basis: 'unknown' };
+
+export function visitEndMileage(card: { odometerIn: number | null; odometerOut: number | null }): VisitEndMileage {
+  if (card.odometerOut != null) return { miles: card.odometerOut, basis: 'measured' };
+  if (card.odometerIn != null) return { miles: card.odometerIn, basis: 'assumed_unchanged' };
+  return { miles: null, basis: 'unknown' };
+}
+
 export async function recordOdometerReadings(
   db: Prisma.TransactionClient | Db,
   args: { groupId: string; vehicleId: string; source: 'mot' | 'visit'; readings: Array<{ date: string | Date; miles: number }> },

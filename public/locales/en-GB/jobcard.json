@@ -273,7 +273,7 @@
   },
   "completion": {
     "mileageOut": "Mileage out",
-    "mileageHint": "Odometer reading at completion — seeds future service advisories. Optional.",
+    "mileageHint": "Read it off the dash before the car goes. Leave it blank if nobody looked — a blank is honest, a guess is not.",
     "saveMileage": "Save mileage",
     "delta": "{{miles}} miles this visit"
   },
