@@ -12,7 +12,7 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery' | 'observation'; jobCardId: string;
+  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery' | 'observation' | 'schedule'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
@@ -37,6 +37,12 @@ export type OutboxItem = {
     // customerResponse is shared with the due_item kind above — the same field meaning the same
     // thing, so it is declared once rather than shadowed.
     observationKey?: string;
+    // kind:'schedule' — the ARRIVAL service-computer reading, five rows at once. NO id, same
+    // argument as tyres and battery: ServiceScheduleReading is unique on (job_card_id, item_key).
+    // The stage is NOT in the payload — it is fixed at 'arrival' in both the enqueue and the drain,
+    // because the departure reading is the one the invoice freezes and the phone has no surface on
+    // which taking one would be guarded.
+    entries?: Array<{ key: string; dueMonth: string | null; dueMileage: number | null }>;
   };
   durationSeconds?: number | null;                                     // kind:'video'
   // kind:'video' is stored as PRE-SLICED 5 MiB ARRAY BUFFERS (post-mortem 2026-07-13: WebKit's
@@ -155,6 +161,35 @@ export async function enqueueTyres(args: {
 }): Promise<string> {
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'tyres', jobCardId: args.jobCardId, payload: { corners: args.corners },
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item));
+  triggerDrain();
+  return item.id;
+}
+
+/**
+ * THE SERVICE COMPUTER'S ARRIVAL READING — five rows in one envelope.
+ *
+ * One envelope for the same reason as the tyres: a mechanic transcribes a screen, not a row, and a
+ * half-delivered schedule is a worse record than none.
+ *
+ * ── ARRIVAL ONLY, AND THAT IS NOT A SIMPLIFICATION ──────────────────────────────────────────────
+ * The stage is not a parameter here. What the computer said on ARRIVAL is a fact about a visit; what
+ * the car needs NEXT is a fact about a car, and it is the second that reaches the invoice. The phone
+ * has no completion surface — no mileage-out, no notion of where the card sits on the spine — so a
+ * departure reading taken here would be an invoice-bound figure captured on the one surface with no
+ * guard at all. Hard-coded rather than passed, so no future caller can quietly send the other one.
+ *
+ * Replay-safe without an id: ServiceScheduleReading is unique on (job_card_id, item_key), so a
+ * redelivered envelope upserts the same rows by construction.
+ */
+export async function enqueueSchedule(args: {
+  jobCardId: string;
+  entries: Array<{ key: string; dueMonth: string | null; dueMileage: number | null }>;
+}): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'schedule', jobCardId: args.jobCardId, payload: { entries: args.entries },
     createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item));

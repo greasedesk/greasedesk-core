@@ -102,6 +102,18 @@ async function sendItem(item) {
     if (!res.ok) throw Object.assign(new Error('tyres:' + res.status), { status: res.status });
     return;
   }
+  /* THE ARRIVAL SERVICE SCHEDULE, five rows in one envelope. stage is 'arrival', fixed here as
+     well as at the enqueue: the departure reading is what the invoice freezes, and the phone has no
+     completion surface to take one on. No id: ServiceScheduleReading is unique on
+     (job_card_id, item_key), so a replay upserts the same rows. */
+  if (item.kind === 'schedule') {
+    const res = await fetch('/api/service-schedule', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ jobCardId: item.jobCardId, stage: 'arrival', entries: (item.payload || {}).entries || [] }),
+    });
+    if (!res.ok) throw Object.assign(new Error('schedule:' + res.status), { status: res.status });
+    return;
+  }
   // ONE TAPPED OBSERVATION. No id: (group, vehicle, observation_key) is unique while open, so a
   // replay finds the finding that already exists and the server reports success rather than 409 —
   // a 409 would look like a failure and the outbox would retry it forever.

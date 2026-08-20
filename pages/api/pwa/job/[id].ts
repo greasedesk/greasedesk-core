@@ -61,6 +61,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // bay could not see the reading they had just taken. Still NO money on this surface.
     tyreCondition: p.tyreCondition ?? [],
     tyresOnThisCard: p.tyresOnThisCard ?? [],
+    // THIS VISIT'S ARRIVAL SCHEDULE, so the phone panel opens on what it already recorded rather
+    // than blank. The DEPARTURE reading (p.serviceSchedule) is deliberately NOT sent: there is no
+    // surface here that could take one safely, so shipping it would be an invitation.
+    scheduleOnArrival: p.scheduleOnArrival ?? [],
     batteryCondition: p.batteryCondition ?? null,
     // The four prompts, already resolved server-side. On the phone because an escalation firing
     // for items nobody was ever prompted about is worse than no escalation — the false-positive

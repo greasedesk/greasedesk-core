@@ -29,6 +29,7 @@ import { posterFromVideoBlob } from '@/lib/video-poster';
 import MediaGallery from '@/components/media/MediaGallery';
 import PhoneFindings from '@/components/pwa/PhoneFindings';
 import PhoneTyres from '@/components/pwa/PhoneTyres';
+import PhoneServiceSchedule from '@/components/pwa/PhoneServiceSchedule';
 import PhoneBattery from '@/components/pwa/PhoneBattery';
 import PhoneObservations from '@/components/pwa/PhoneObservations';
 import type { TyreCondition, BatteryCondition } from '@/lib/vehicle-condition';
@@ -51,6 +52,7 @@ type JobData = {
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   tyresOnThisCard?: unknown[];
+  scheduleOnArrival?: unknown[];
   batteryCondition?: BatteryCondition | null;
   intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
   nothingFoundAt?: string | null;
@@ -544,6 +546,16 @@ export default function MobileJobCard() {
                   lastRatedCca={job.lastBattery?.ratedCca ?? null}
                   lastCcaStandard={job.lastBattery?.ccaStandard ?? null}
                   recorded={job.batteryCondition ?? null} onQueued={refreshPhotos} />
+              )}
+
+              {/* THE SERVICE COMPUTER, AFTER THE BONNET. Last of the capture panels because it is
+                  the only one that is not a measurement of the car — the mechanic reads a screen
+                  and types what it says, which happens once everything physical has been looked at.
+                  ARRIVAL only; see the component for why the departure reading is not here. */}
+              {job && (
+                <PhoneServiceSchedule jobCardId={job.id}
+                  recorded={(job.scheduleOnArrival ?? []) as never}
+                  motExpiry={job.motExpiry ?? null} onQueued={refreshPhotos} />
               )}
 
               {STAGES.map((stage) => {

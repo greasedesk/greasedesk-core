@@ -394,6 +394,76 @@ try {
     && /30 November 2026/.test(snap));
   check('  …and no arrival figure anywhere in it', !/60,000/.test(snap),
     'the arrival reading is a visit measurement and must never reach a customer document');
+  // ── 8. THE ARRIVAL READING, IN THE BAY ───────────────────────────────────────────────────────
+  // Reading a service computer is a bay job by definition — the screen is in the car — and until
+  // now the mechanic standing at it was the one person who could not record what it said.
+  console.log('\n— the phone, where the screen actually is —');
+  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 },
+    isMobile: true, hasTouch: true, storageState: await page.context().storageState() })).newPage();
+  await phone.goto(`${BASE}/m/job/${card.id}`, { waitUntil: 'domcontentloaded' });
+  await phone.locator('[data-testid="phone-schedule"]').waitFor({ timeout: 30000 });
+  check('the schedule panel is on the phone card', true);
+  check('  …opening on what this visit already recorded, not blank',
+    (await phone.locator('[data-testid="phone-schedule-month-schedule_oil_service"]').inputValue()) !== '',
+    'a capture panel that opens blank over stored values tells a mechanic their work was lost');
+
+  // THE LEGS ARE THE SHARED RULE, not a second copy of it.
+  check('a pads row offers miles and no month, here too',
+    (await phone.locator('[data-testid="phone-schedule-miles-schedule_pads_front"]').count()) === 1
+    && (await phone.locator('[data-testid="phone-schedule-month-schedule_pads_front"]').count()) === 0);
+  check('  …and brake fluid the reverse',
+    (await phone.locator('[data-testid="phone-schedule-month-schedule_brake_fluid"]').count()) === 1
+    && (await phone.locator('[data-testid="phone-schedule-miles-schedule_brake_fluid"]').count()) === 0);
+  check('  …and the vehicle check now offers BOTH, as the corrected basis says',
+    (await phone.locator('[data-testid="phone-schedule-month-schedule_vehicle_check"]').count()) === 1
+    && (await phone.locator('[data-testid="phone-schedule-miles-schedule_vehicle_check"]').count()) === 1,
+    'one catalogue, both surfaces — a basis corrected in one place is corrected in both');
+  check('the MOT is shown and cannot be typed into',
+    (await phone.locator('[data-testid="phone-schedule-mot"]').count()) === 1
+    && (await phone.locator('[data-testid="phone-schedule-mot"] input').count()) === 0);
+
+  // ── THE DEPARTURE READING IS NOT REACHABLE FROM HERE, AND THAT IS THE DESIGN ──────────────────
+  const phoneSrc = readFileSync('components/pwa/PhoneServiceSchedule.tsx', 'utf8');
+  check('the phone panel takes no stage, so it cannot be asked for the departure one',
+    !/stage/.test(phoneSrc.split('export default function')[1] ?? ''),
+    'the reading that freezes onto an invoice is not taken on the surface with no guard');
+  check('  …and the drain fixes stage:arrival too, not just the caller',
+    /stage: 'arrival'/.test(readFileSync('public/sw.js', 'utf8')),
+    'a queued envelope is replayed by the worker; the caller is not the last word');
+  // MATCHED AS AN EMITTED KEY, not as a word. The first version banned the string outright and
+  // failed on the comment in that file explaining why the field is withheld — a scan whose search
+  // term appears in its own subject, for the third time today.
+  check('  …and the PWA payload does not even carry the departure reading',
+    !/^\s*serviceSchedule:/m.test(readFileSync('pages/api/pwa/job/[id].ts', 'utf8')),
+    'shipping it would be an invitation');
+
+  // ── AND IT REACHES THE DATABASE THROUGH THE QUEUE ────────────────────────────────────────────
+  // The save is a durable enqueue, not a request. What is proven here is the whole path: panel →
+  // outbox → service worker → /api/service-schedule → ServiceScheduleReading.
+  // COUNTED BEFORE AND AFTER. A pads_rear due item already exists on this car — the DESKTOP
+  // departure panel wrote one earlier in this run — so "no due item exists" would be false for a
+  // reason that has nothing to do with the phone. What must not change is that the phone added one.
+  const dueBefore = await prisma.vehicleDueItem.count({ where: { vehicle_id: veh.id } });
+  await phone.fill('[data-testid="phone-schedule-miles-schedule_pads_rear"]', '54321');
+  await phone.locator('[data-testid="phone-schedule-save"]').click();
+  await phone.locator('[data-testid="phone-schedule-queued"]').waitFor({ timeout: 25000 });
+  let landed = null;
+  for (let i = 0; i < 40; i++) {
+    landed = await prisma.serviceScheduleReading.findFirst({
+      where: { job_card_id: card.id, item_key: 'schedule_pads_rear' }, select: { due_mileage: true } });
+    if (landed?.due_mileage === 54321) break;
+    await phone.waitForTimeout(500);
+  }
+  check('what was typed in the bay reached the database through the queue',
+    landed?.due_mileage === 54321, JSON.stringify(landed));
+  check('  …as an ARRIVAL reading, adding no due item',
+    (await prisma.vehicleDueItem.count({ where: { vehicle_id: veh.id } })) === dueBefore,
+    'the phone cannot put a line on a customer’s invoice');
+  check('  …and the figure it sent appears in no due item at all',
+    (await prisma.vehicleDueItem.count({ where: { vehicle_id: veh.id, due_mileage: 54321 } })) === 0,
+    '54321 is unique to this phone save, so its absence is traceable to the phone');
+  await phone.context().close();
+
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(BASE);
