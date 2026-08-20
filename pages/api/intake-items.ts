@@ -16,6 +16,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { refuseBayWrite, bayWriteCard, BAY_WRITE_SELECT } from '@/lib/bay-write';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
@@ -37,11 +38,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: groupId },
-    select: { id: true, site_id: true, vehicle_id: true, intake_nothing_found_at: true },
+    select: { id: true, site_id: true, vehicle_id: true, intake_nothing_found_at: true, ...BAY_WRITE_SELECT },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
+  // A FINISHED JOB TAKES NO NEW BAY DATA — the dipstick included. See lib/bay-write.
+  const bayRefusal = refuseBayWrite(bayWriteCard(card as never));
+  if (bayRefusal) return res.status(409).json({ message: bayRefusal.message, code: bayRefusal.code });
 
   // ── THE AFFIRMATIVE ─────────────────────────────────────────────────────────────────────────────
   // ONE TAP. It is the difference between an escalation that gets read and one that gets filtered:
