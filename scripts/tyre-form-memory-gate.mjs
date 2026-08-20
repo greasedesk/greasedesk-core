@@ -141,6 +141,43 @@ try {
   check('  …and its Save has nothing to do either',
     /Nothing to save/.test(await phone.locator('[data-testid="phone-tyre-save"]').innerText()));
 
+  // ── 5b. THE PHONE PAINTS FROM CACHE FIRST, AND THE CACHE CAN PREDATE THE FIELD ───────────────
+  // The defining behaviour of this surface: cacheGet paints the last-known payload before the
+  // network answers. A phone that cached this card BEFORE tyresOnThisCard existed paints a job
+  // object without it — and the seed is a useState INITIALISER, which runs once, on that paint.
+  // The fresh payload arrives milliseconds later and cannot re-seed anything.
+  //
+  // Simulated by stripping the field from the stored entry, which is exactly the state a returning
+  // phone is in. Section 5 above passed only because a fresh browser context has no cache at all —
+  // the gate was testing a phone that had never been used.
+  console.log('\n— the phone, returning with a cache from before the field existed —');
+  await phone.evaluate(async (cardId) => {
+    const db = await new Promise((res) => { const r = indexedDB.open('gd-outbox', 1); r.onsuccess = () => res(r.result); });
+    const key = `job:${cardId}`;
+    const entry = await new Promise((res) => {
+      const t = db.transaction('cache', 'readonly').objectStore('cache').get(key);
+      t.onsuccess = () => res(t.result);
+    });
+    if (entry?.value) {
+      delete entry.value.tyresOnThisCard;
+      await new Promise((res) => { const t = db.transaction('cache', 'readwrite').objectStore('cache').put(entry); t.onsuccess = () => res(null); });
+    }
+  }, card.id);
+  await phone.goto(`${BASE}/m/job/${card.id}`, { waitUntil: 'domcontentloaded' });
+  await phone.locator('[data-testid="ph-tyre-front_left"]').waitFor({ timeout: 30000 });
+  // WAITED FOR, not sampled. A cache-first surface is SUPPOSED to paint last-known first, so a
+  // brief "0 of 4" is correct behaviour, not the defect. The claim is that it SETTLES once the
+  // network answers — reading the counter immediately just races the paint.
+  const settled = await phone.waitForFunction(() => {
+    const e = document.querySelector('[data-testid="phone-tyre-progress"]');
+    return !!e && e.textContent.trim() === '4 of 4';
+  }, { timeout: 15000 }).then(() => true).catch(() => false);
+  check('the form still opens on this visit’s readings after a stale first paint', settled,
+    `counter stuck at "${(await phone.locator('[data-testid="phone-tyre-progress"]').innerText()).trim()}" — the fresh payload arrived and the form did not take it`);
+  check('  …and Save still has nothing to do',
+    /Nothing to save/.test(await phone.locator('[data-testid="phone-tyre-save"]').innerText()),
+    'if the seed missed, every corner looks changed and one tap re-dates all four');
+
   // ── 6. THE SEED IS THE VISIT, NOT THE CAR ────────────────────────────────────────────────────
   console.log('\n— a second visit does not inherit the first —');
   const card2 = await prisma.jobCard.create({

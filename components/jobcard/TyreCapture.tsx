@@ -19,7 +19,7 @@
  * Chip values are the real-world clusters, and 1.6 is present because it is the legal limit and a
  * mechanic reaches for it by name.
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { resizeImage } from '@/lib/image-resize';
 import { TyreSummary } from '@/components/jobcard/ConditionSummary';
 import type { TyreCondition } from '@/lib/vehicle-condition';
@@ -95,8 +95,21 @@ const unchanged = (a: Corner, b: Corner) =>
 
 export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded = [], onThisCard = [], onSaved }: Props) {
   const seedType = defaultType ?? 'summer_standard';
-  const [seed] = useState<Record<TyreCorner, Corner>>(() => seedFrom(onThisCard, seedType));
+  const [seed, setSeed] = useState<Record<TyreCorner, Corner>>(() => seedFrom(onThisCard, seedType));
   const [state, setState] = useState<Record<TyreCorner, Corner>>(() => seedFrom(onThisCard, seedType));
+  // RE-SEEDS WHEN A NEW PAYLOAD ARRIVES, while untouched. This surface is server-rendered so it
+  // cannot hit the phone's stale-first-paint case — but after a save, `seed` still held the
+  // pre-save values, so the button went on offering to re-save what had just been saved. Same
+  // effect, same guard: `dirty` protects work in progress.
+  const [dirty, setDirty] = useState(false);
+  const fingerprint = JSON.stringify(onThisCard);
+  const seenRef = useRef(fingerprint);
+  useEffect(() => {
+    if (dirty || fingerprint === seenRef.current) return;
+    seenRef.current = fingerprint;
+    const fresh = seedFrom(onThisCard, seedType);
+    setSeed(fresh); setState(fresh);
+  }, [fingerprint, dirty, onThisCard, seedType]);
   // WHICH CORNERS ARE OPEN FOR EDITING. A recorded corner collapses to its value; this is how it
   // reopens. Never pre-populated — a corner someone has already measured should not greet them
   // with eight chips they have to read past.
@@ -133,7 +146,7 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded 
     finally { setUpBusy(null); if (fileRef.current) fileRef.current.value = ''; }
   }
 
-  const set = (c: TyreCorner, patch: Partial<Corner>) => setState((s) => ({ ...s, [c]: { ...s[c], ...patch } }));
+  const set = (c: TyreCorner, patch: Partial<Corner>) => { setDirty(true); setState((s) => ({ ...s, [c]: { ...s[c], ...patch } })); };
   const depthsOf = (c: Corner) => c.uneven
     ? { outer: c.outer, centre: c.centre, inner: c.inner }
     : { outer: c.even, centre: c.even, inner: c.even };

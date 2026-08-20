@@ -25,7 +25,7 @@
  * lib/service-schedule, so a row offers exactly the legs its clock needs on both surfaces, and a
  * basis corrected in one place is corrected in both.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
 import { enqueueSchedule } from '@/lib/pwa-outbox';
 
@@ -56,9 +56,25 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
   }
   const [rows, setRows] = useState(seed);
   const [queued, setQueued] = useState(false);
+  // SAME STALE-FIRST-PAINT EXPOSURE AS PhoneTyres, and for the same reason: this surface paints
+  // from IndexedDB before the network answers, so a useState initialiser can seed from a payload
+  // that predates the field. Re-seeds on a genuinely different payload, never while dirty.
+  const [dirty, setDirty] = useState(false);
+  const fingerprint = JSON.stringify(recorded);
+  const seenRef = useRef(fingerprint);
+  useEffect(() => {
+    if (dirty || fingerprint === seenRef.current) return;
+    seenRef.current = fingerprint;
+    const fresh: Record<string, { month: string; miles: string }> = {};
+    for (const it of SCHEDULE_ITEMS) {
+      const r = recorded.find((x) => x.key === it.key);
+      fresh[it.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+    }
+    setRows(fresh);
+  }, [fingerprint, dirty, recorded]);
 
   const set = (k: string, patch: Partial<{ month: string; miles: string }>) => {
-    setQueued(false);
+    setQueued(false); setDirty(true);
     setRows((r) => ({ ...r, [k]: { ...r[k], ...patch } }));
   };
   const filled = SCHEDULE_ITEMS.filter((s) => rows[s.key].month.trim() || rows[s.key].miles.trim()).length;

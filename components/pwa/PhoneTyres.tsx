@@ -11,7 +11,7 @@
  * The queue makes it replay-safe: TyreReading is unique on (job_card_id, corner), so a redelivered
  * envelope upserts the same rows. Nothing here needs an id for that.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { enqueueTyres } from '@/lib/pwa-outbox';
 import { TyreSummary } from '@/components/jobcard/ConditionSummary';
 import type { TyreCondition } from '@/lib/vehicle-condition';
@@ -70,12 +70,31 @@ export default function PhoneTyres({ jobCardId, defaultType, recorded = [], onTh
   onQueued?: () => void;
 }) {
   const seed = (defaultType as TType) ?? 'summer_standard';
-  const [base] = useState<Record<Corner, C>>(() => seedFrom(onThisCard, seed));
+  const [base, setBase] = useState<Record<Corner, C>>(() => seedFrom(onThisCard, seed));
   const [s, setS] = useState<Record<Corner, C>>(() => seedFrom(onThisCard, seed));
+  // ── THE FIRST PAINT ON THIS SURFACE IS STALE BY DESIGN ────────────────────────────────────
+  // The phone card is cache-first: it paints the last-known payload from IndexedDB and the
+  // network answers milliseconds later. A useState INITIALISER runs on that first paint, so a
+  // phone whose cache predates tyresOnThisCard seeded from nothing and never got a second
+  // chance — every corner then looked changed, and one tap re-dated all four. That is what
+  // happened to DE59SXW on 20 Aug: four readings rewritten at 14:40:24 within 27ms.
+  //
+  // Re-seeds when a DIFFERENT payload arrives and only while untouched. `dirty` is what keeps
+  // the original property that made this an initialiser: a refresh must never clobber what
+  // somebody is halfway through typing.
+  const [dirty, setDirty] = useState(false);
+  const fingerprint = JSON.stringify(onThisCard);
+  const seenRef = useRef(fingerprint);
+  useEffect(() => {
+    if (dirty || fingerprint === seenRef.current) return;
+    seenRef.current = fingerprint;
+    const fresh = seedFrom(onThisCard, seed);
+    setBase(fresh); setS(fresh);
+  }, [fingerprint, dirty, onThisCard, seed]);
   // A recorded corner collapses to its value; this is how it reopens.
   const [editing, setEditing] = useState<Partial<Record<Corner, boolean>>>({});
   const [queued, setQueued] = useState(false);
-  const set = (c: Corner, p: Partial<C>) => setS((x) => ({ ...x, [c]: { ...x[c], ...p } }));
+  const set = (c: Corner, p: Partial<C>) => { setDirty(true); setS((x) => ({ ...x, [c]: { ...x[c], ...p } })); };
   const depths = (c: C) => c.uneven ? { outer: c.outer, centre: c.centre, inner: c.inner } : { outer: c.even, centre: c.even, inner: c.even };
   const ok = (c: C) => Object.values(depths(c)).every((v) => typeof v === 'number' && v > 0);
   const filled = CORNERS.filter(({ k }) => ok(s[k])).length;
