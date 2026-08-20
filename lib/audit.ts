@@ -29,6 +29,9 @@ export type AuditAction =
   // rather than vehicle.edited: nobody edited anything, and a trail that says a human did would
   // send the next reader looking for a person who does not exist.
   | 'vehicle.mot_refresh'
+  // An MOT reminder actually went to a customer, from the marketing list. Distinct from the
+  // Contacted button, which records that a human did something we did not do.
+  | 'marketing.sent'
   | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
   | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'

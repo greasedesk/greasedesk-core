@@ -111,6 +111,73 @@ export const NOTIFICATION_TEMPLATES = {
    * The SMS is deliberately short: it must stay inside ONE GSM-7 segment (160 septets) with a
    * 41-character link and a real garage name — see lib/sms-text and the segment budget.
    */
+  /**
+   * ── THE MOT REMINDER, IN TWO KEYS ─────────────────────────────────────────────────────────────
+   * A car that is DUE and a car that is EXPIRED are not the same message: the second is off the
+   * road, and words that work as a nudge read as negligence when the customer is already illegal
+   * to drive. Two template KEYS rather than one key with a variant flag, so a NotificationLog row
+   * says which was sent — support asking "which template was that?" is the reason this registry
+   * exists, and a variant hidden in `data` does not answer it.
+   *
+   * ── THERE IS NOTHING TO TAP ───────────────────────────────────────────────────────────────────
+   * Every magic link is bound to one job card (lib/magic-link) and a car whose owner has not
+   * booked has no card. `portal_view` is deliberately dark. So these messages carry no link, and
+   * the copy names the next step honestly — a phone call — rather than implying a button.
+   *
+   * ── NO URGENCY LANGUAGE ───────────────────────────────────────────────────────────────────────
+   * No fine, no "don't get caught". The fact does the work, and a reminder that reads like a scare
+   * gets ignored the second time. `not road legal` rather than `illegal`: accurate, and it does
+   * not accuse someone who simply has not noticed.
+   *
+   * ── expiryDate, NOT dueLabel ──────────────────────────────────────────────────────────────────
+   * lib/due-items::dueLabel returns "due by 25 August 2026" — a complete phrase, for rendering on
+   * its own. Dropped into "runs out …" it produces "runs out due by 25 August 2026". These take a
+   * bare `expiryDate` ("25 August 2026") because the sentence supplies its own preposition.
+   */
+  mot_due: {
+    label: 'MOT due soon',
+    email: (d) => ({
+      subject: `MOT due on ${d.registration ?? 'your car'}`,
+      html: shell(`
+        <p>Hello ${esc(d.customerName ?? 'there')},</p>
+        <p>Your MOT on the ${esc(d.vehicleDesc ?? 'car')} (<strong>${esc(d.registration)}</strong>) runs out on ${esc(d.expiryDate)}.</p>
+        <p>We can book you in — call us on ${esc(d.garagePhone)} and we'll find you a slot.</p>
+        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
+    }),
+    // MEASURED, not estimated: 135 septets at the longest real tenant name (24 chars) with the
+    // reply route appended, and it tips to two segments only at a 50-character garage name.
+    sms: (d) => ({
+      text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: your MOT on ${d.registration} runs out ${d.expiryDate}. We can book you in — give us a ring`),
+    }),
+  },
+
+  mot_expired: {
+    label: 'MOT expired — car off the road',
+    email: (d) => ({
+      subject: `MOT due on ${d.registration ?? 'your car'}`,
+      html: shell(`
+        <p>Hello ${esc(d.customerName ?? 'there')},</p>
+        <p>Your MOT on the ${esc(d.vehicleDesc ?? 'car')} (<strong>${esc(d.registration)}</strong>) ran out on ${esc(d.expiryDate)}, which means it isn't road legal until it's tested.</p>
+        <p>We can book you in — call us on ${esc(d.garagePhone)} and we'll find you a slot.</p>
+        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
+    }),
+    /**
+     * THE SHORTER FORM IS NOT A DIFFERENT MESSAGE, it is the same one with a clause removed.
+     *
+     * The full body measures 153 of 160 septets at a 24-character garage name — seven spare, and a
+     * 32-character name tips it to two segments. Real names today run 10 to 24, so the full form
+     * fits every live tenant; the next one to sign up may not. Rather than shorten the words for
+     * everybody, this measures and drops "We can sort it" when it has to, which buys headroom out
+     * to 48 characters. Same pattern as quote_revised, and the same reason: a template that sits
+     * one character from doubling its own cost is not a template, it is a bill waiting to happen.
+     */
+    sms: (d) => {
+      const head = `${d.garageName ?? 'Your garage'}: the MOT on ${d.registration} ran out ${d.expiryDate}, so it's not road legal`;
+      const full = withReplyRoute(d, `${head}. We can sort it — give us a ring`);
+      return { text: isOneSegment(smsText(full)) ? full : withReplyRoute(d, `${head}. Give us a ring`) };
+    },
+  },
+
   quote_revised: {
     label: 'Updated price after a change',
     email: (d) => ({

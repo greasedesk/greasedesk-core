@@ -11,10 +11,14 @@
  *     existed for any car, ever.
  *
  * ── WHAT THIS GATE CANNOT PROVE ─────────────────────────────────────────────────────────────────
- * DVSA is not configured locally (creds live on Vercel), so nothing here calls it. The lookup half
- * is proven in production by the 125 TMBS cars that DO carry a date from it. What is proven here is
- * everything downstream of the lookup: the payload, the storage, the convergence, and that both
- * surfaces now ask. Said plainly rather than implied by omission.
+ * NOTHING HERE CALLS DVSA — not because the credentials are absent (they are present on this
+ * machine; that claim sat here for weeks and was wrong), but because these fixtures use made-up
+ * registrations, which DVSA answers with a 404. The distinction matters: a gate that says "we
+ * cannot reach it" invites nobody to try, and scripts/mot-refresh-gate now proves all three
+ * refresh branches locally against one real plate.
+ *
+ * What is proven here is everything downstream of the lookup: the payload, the storage, the
+ * convergence, and that both surfaces now ask. Said plainly rather than implied by omission.
  *
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
@@ -237,8 +241,8 @@ try {
   check('the reason it was NOT worth running before is recorded',
     /would have been a treadmill/.test(prose(sweep)) && /hide the trend/.test(prose(sweep)));
   check('and what this gate cannot prove is said out loud',
-    /DVSA is not configured locally/.test(prose(readFileSync('scripts/mot-capture-gate.mjs', 'utf8'))),
-    'the lookup half is proven in production, not here');
+    /NOTHING HERE CALLS DVSA/.test(prose(readFileSync('scripts/mot-capture-gate.mjs', 'utf8'))),
+    'and says WHY — made-up registrations, not missing credentials');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(BASE);

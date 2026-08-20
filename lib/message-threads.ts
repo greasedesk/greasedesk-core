@@ -36,6 +36,21 @@ export type ThreadState = typeof THREAD_STATES[number];
  * the card has no vehicle or the vehicle has no current ownership edge — an honest "no thread here",
  * never a fabricated one.
  */
+/**
+ * The thread for a CAR — used by sends that are about the vehicle itself rather than about a
+ * visit. The owner is resolved through the ownership edge, exactly as the job-card path does, so
+ * a car that has changed hands threads under whoever owns it NOW.
+ */
+export async function threadKeyForVehicle(db: Db, vehicleId: string): Promise<ThreadKey | null> {
+  const v = (await (db as any).vehicle.findUnique({
+    where: { id: vehicleId }, select: { group_id: true },
+  })) as { group_id: string } | null;
+  if (!v) return null;
+  const customerId = await getCurrentOwnerId(db as any, vehicleId);
+  if (!customerId) return null; // no owner: a real gap, and not a conversation with nobody
+  return { groupId: v.group_id, customerId, vehicleId };
+}
+
 export async function threadKeyForJobCard(db: Db, jobCardId: string): Promise<ThreadKey | null> {
   const card = (await (db as any).jobCard.findUnique({
     where: { id: jobCardId },
@@ -61,6 +76,12 @@ export async function threadKeyForSubject(db: Db, subjectType: string | null, su
   if (!subjectId) return null;
   if (subjectType === 'job_card') return threadKeyForJobCard(db, subjectId);
   if (subjectType === 'invoice') return threadKeyForInvoice(db, subjectId);
+  // A MESSAGE ABOUT A CAR, WITH NO VISIT BEHIND IT. An MOT reminder goes to someone who has not
+  // booked, so there is no job card and no invoice to derive from — and without this arm the send
+  // was recorded but never threaded, which means the reply (once inbound is live) could not be
+  // matched to the message that prompted it. The thread key is already (group, customer, vehicle);
+  // this only supplies the same three from the car and its current owner.
+  if (subjectType === 'vehicle') return threadKeyForVehicle(db, subjectId);
   return null; // 'user' and anything else: staff/operator mail is not a customer conversation
 }
 

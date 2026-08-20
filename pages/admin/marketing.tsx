@@ -4,11 +4,11 @@
  *
  * Everything the intake work has captured since yesterday feeds a marketing list. This is the list.
  *
- * ── NOTHING HERE SENDS ──────────────────────────────────────────────────────────────────────────
- * The garage rings, texts or emails through the surfaces that already exist. This page answers
- * three questions and records what was done about the answer — bulk send is its own slice, and
- * shipping a send button beside an untested list is how a garage's first impression of a feature
- * becomes an apology to a hundred customers.
+ * ── IT SENDS NOW, ONE ROW AT A TIME ─────────────────────────────────────────────────────────────
+ * It did not, and the reason it did not still holds: shipping a BULK send button beside an
+ * untested list is how a garage's first impression of a feature becomes an apology to a hundred
+ * customers. What ships here is per-row and two-pressed — open the panel, see the exact words the
+ * customer will receive, then send. Bulk remains its own slice, deliberately.
  *
  * ── EXCEPT THE CHECK, WHICH ASKS DVSA RATHER THAN THE CUSTOMER ──────────────────────────────────
  * Every MOT row carries a Check button. It is not a repair for rows that look wrong: any stored
@@ -40,6 +40,13 @@ const STATE_LABEL: Record<string, string> = {
   contacted: 'Contacted', booked: 'Booked', declined: 'Declined', snoozed: 'Snoozed',
 };
 
+/**
+ * The channel qualifies the state, it does not replace it. "Texted" as a fifth word would make a
+ * garage choose between two names for one fact — a texted car IS a contacted car. NULL says
+ * nothing extra rather than guessing: those rows were a phone call, or predate sending entirely.
+ */
+const CHANNEL_SUFFIX: Record<string, string> = { sms: ' by text', email: ' by email', both: ' by text and email' };
+
 function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'service'; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
@@ -51,6 +58,41 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<{ kind: string; sentence: string; stillDue: boolean } | null>(null);
   const [checkedAt, setCheckedAt] = useState<string | null>(row.motCheckedAt);
+  // ── SENDING OPENS A PANEL, IT DOES NOT FIRE ──────────────────────────────────────────────────
+  // One press on a list of two hundred rows must not put words on a customer's phone. The panel
+  // shows exactly what will go — rendered by the SERVER, from the same template that sends it —
+  // and the send is a second, deliberate press.
+  const [panel, setPanel] = useState<any | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<Record<string, { ok: boolean; message: string }> | null>(null);
+  const [want, setWant] = useState<{ sms: boolean; email: boolean }>({ sms: false, email: false });
+  async function openPanel() {
+    if (panel) { setPanel(null); return; }
+    setOpening(true);
+    try {
+      const r = await fetch(`/api/marketing-send?vehicleId=${encodeURIComponent(row.vehicleId)}`);
+      const j = await r.json().catch(() => null);
+      if (j?.template) { setPanel(j); setWant({ sms: !!j.canSms, email: !!j.canEmail && !j.canSms }); }
+      else setPanel({ error: j?.message ?? 'Could not prepare the message.' });
+    } finally { setOpening(false); }
+  }
+  async function send() {
+    const channels = [want.sms && 'sms', want.email && 'email'].filter(Boolean);
+    if (!channels.length) return;
+    setSending(true);
+    try {
+      const r = await fetch('/api/marketing-send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId: row.vehicleId, channels }),
+      });
+      const j = await r.json().catch(() => null);
+      setSent(j?.results ?? { error: { ok: false, message: j?.message ?? 'The send didn’t complete.' } });
+    } catch {
+      setSent({ error: { ok: false, message: 'The send didn’t complete.' } });
+    } finally { setSending(false); }
+  }
+
   async function check() {
     setChecking(true);
     try {
@@ -108,7 +150,10 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
       )}
       <div className="flex flex-wrap items-center gap-3 mt-1.5">
         {row.state
-          ? <span className="text-xs font-medium text-ok" data-testid="marketing-state">{STATE_LABEL[row.state] ?? row.state}</span>
+          ? <span className="text-xs font-medium text-ok" data-testid="marketing-state">
+              {STATE_LABEL[row.state] ?? row.state}
+              {row.state === 'contacted' && row.channel ? CHANNEL_SUFFIX[row.channel] ?? '' : ''}
+            </span>
           : <span className="text-xs text-muted">Not yet contacted</span>}
         <button type="button" disabled={busy} onClick={() => record('contacted')} className={act} data-testid="marketing-contacted">Contacted</button>
         <button type="button" disabled={busy} onClick={() => record('booked')} className={act} data-testid="marketing-booked">Booked</button>
@@ -128,9 +173,65 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
                 {checkedLabel(checkedAt, new Date())}
               </span>
             )}
+            <button type="button" disabled={opening} onClick={openPanel}
+              className="text-xs underline text-accent disabled:opacity-50" data-testid="marketing-send-open">
+              {opening ? 'Preparing…' : panel ? 'Close' : 'Send a reminder'}
+            </button>
           </>
         )}
       </div>
+      {panel && (
+        <div className="mt-2 rounded-lg border border-line bg-canvas p-3" data-testid="marketing-send-panel">
+          {panel.error ? <p className="text-xs text-warn">{panel.error}</p> : (
+            <>
+              {/* THE WORDS, AS THEY WILL ARRIVE. Rendered server-side through smsText, so this is
+                  the transmitted text — not a hopeful copy of it. */}
+              {panel.sms?.text && (
+                <p className="text-xs text-ink whitespace-pre-wrap" data-testid="marketing-send-preview">{panel.sms.text}</p>
+              )}
+              {panel.sms && (
+                <p className="text-[11px] text-muted mt-1" data-testid="marketing-send-cost">
+                  {panel.sms.septets} of 160 · {panel.sms.segments === 1 ? 'one text' : `${panel.sms.segments} texts`}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-3 mt-2">
+                {(['sms', 'email'] as const).map((ch) => {
+                  const can = ch === 'sms' ? panel.canSms : panel.canEmail;
+                  const why = ch === 'sms' ? panel.smsWhyNot : panel.emailWhyNot;
+                  return (
+                    <label key={ch} className={`text-xs flex items-center gap-1.5 ${can ? 'text-ink' : 'text-muted'}`}
+                      title={why ?? undefined} data-testid={`marketing-send-${ch}`}>
+                      <input type="checkbox" disabled={!can} checked={can && want[ch]}
+                        onChange={(e) => setWant((w) => ({ ...w, [ch]: e.target.checked }))} />
+                      {ch === 'sms' ? 'Text' : 'Email'}
+                      {/* A REFUSAL AND A MISSING ADDRESS ARE DIFFERENT PROBLEMS, fixed in different
+                          places, so the row says which one it is rather than greying out silently. */}
+                      {!can && why && <span className="text-[11px]">— {why}</span>}
+                    </label>
+                  );
+                })}
+                <button type="button" disabled={sending || (!want.sms && !want.email)} onClick={send}
+                  className="text-xs font-medium rounded-lg border border-accent bg-accent text-white px-3 py-1.5 disabled:opacity-40"
+                  data-testid="marketing-send-go">{sending ? 'Sending…' : 'Send'}</button>
+              </div>
+              {/* NEITHER CHANNEL, AND A NUMBER INSTEAD. Roughly one customer in five on a real
+                  fleet can only be phoned, and the list has always shown the number for them. */}
+              {!panel.canSms && !panel.canEmail && panel.phone && (
+                <p className="text-xs text-muted mt-2" data-testid="marketing-send-ring">
+                  Nothing to send to — ring {panel.phone}.
+                </p>
+              )}
+              {sent && (
+                <ul className="mt-2 space-y-0.5" data-testid="marketing-send-result">
+                  {Object.entries(sent).map(([ch, r]: any) => (
+                    <li key={ch} className={`text-xs ${r.ok ? 'text-ok' : 'text-warn'}`} data-ok={r.ok ? '1' : '0'}>{r.message}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </li>
   );
 }
@@ -167,8 +268,8 @@ export default function MarketingPage({ mot, service, currency }: PageProps) {
       <Head><title>Marketing — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Marketing</h1>
       <p className="text-sm text-muted mb-4">
-        Cars due in the next {WINDOW_DAYS} days. Nothing here sends — ring, text or email them the
-        way you already do, then say what happened so the list clears.
+        Cars due in the next {WINDOW_DAYS} days. Send a reminder from the row, or ring them and say
+        what happened, so the list clears.
       </p>
 
       <div className="flex gap-2 mb-4">

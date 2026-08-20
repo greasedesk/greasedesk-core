@@ -9,12 +9,16 @@
  *   unchanged → "Checked just now — MOT date unchanged."
  *   no answer → nothing was learned, said so, and mot_checked_at NOT stamped.
  *
- * ── WHAT THIS GATE CANNOT PROVE ─────────────────────────────────────────────────────────────────
- * DVSA is not configured locally (creds live on Vercel). So the endpoint here always takes the
- * no-answer branch — which is fortunate, because that is the branch worth proving on a served
- * page: press Check on a real row and confirm the row does NOT claim to have been checked. The
- * changed/unchanged branches are proven against the pure function, and the write rule they depend
- * on (motFieldsToWrite) is proven in scripts/mot-capture-gate.
+ * ── WHAT DVSA DOES AND DOES NOT ANSWER HERE ─────────────────────────────────────────────────────
+ * DVSA IS configured on this machine. An earlier version of this header said it was not — copied
+ * from scripts/mot-capture-gate without checking, and then ASSERTED as present, so a gate was
+ * enforcing a false statement about its own coverage. The observable behaviour was the same, which
+ * is exactly what made it survive: a made-up registration returns 404, so a fixture car reaches
+ * the no-answer branch either way. The reason was wrong, not the result.
+ *
+ * Because it does answer, all three branches are proven end to end below, using ONE REAL
+ * registration on a ZZ fixture car (read-only public MOT data; the write lands on the fixture,
+ * never on the tenant the plate belongs to). What remains unprovable locally is nothing.
  *
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
@@ -96,8 +100,15 @@ try {
   check('a failed lookup returns BEFORE any write',
     api.indexOf('if (!data)') < api.indexOf('prisma.vehicle.update'),
     'not the fields, and not mot_checked_at');
-  check('and what this gate cannot prove is said out loud',
-    /DVSA is not configured locally/.test(prose(readFileSync('scripts/mot-refresh-gate.mjs', 'utf8'))));
+  // READ THE HEADER ONLY. The first version of this searched the whole file for a phrase that its
+  // own source line contains, so it could never pass — the fixture-name collision rule, applied to
+  // a scan whose search word was written into the scanner.
+  const header = prose(readFileSync('scripts/mot-refresh-gate.mjs', 'utf8').split('*/')[0]);
+  check('the header does not claim DVSA is unconfigured here, because it is not',
+    !/is not configured locally/.test(header),
+    'the claim was false and was being asserted as present — see the header');
+  check('  …and says what a made-up plate actually gets instead', /returns 404/.test(header),
+    'the observable behaviour was the same, which is what let a wrong reason survive');
 
   // ── 4. ON THE SERVED PAGE ────────────────────────────────────────────────────────────────────
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700900456' }, select: { id: true } });
@@ -143,6 +154,69 @@ try {
     'a reload here would lose the place of whoever is working the list');
   check('  …and nothing is struck through, because nothing changed',
     !(await row.locator('[data-testid="marketing-due-label"]').getAttribute('class') ?? '').includes('line-through'));
+
+  // ── 4b. THE OTHER TWO BRANCHES, AGAINST A PLATE DVSA ACTUALLY KNOWS ──────────────────────────
+  // A REAL registration on a ZZ fixture car. The lookup is read-only public data; every write
+  // lands on this fixture, never on the tenant whose plate it is. Held deliberately WRONG (a year
+  // early) so the first check must change it — which is the branch a made-up plate can never reach.
+  console.log('\n— a plate DVSA knows —');
+  const REAL = 'K15NAL';
+  const real = await prisma.vehicle.create({
+    data: { group_id: ZZ, registration: REAL, registration_normalized: REAL, make: 'Fixture', model: 'Real',
+      year: 2015, mot_expiry: new Date('2026-09-11T00:00:00.000Z') },
+    select: { id: true },
+  });
+  fix.real = real.id;
+  await prisma.vehicleOwnership.create({ data: { vehicle_id: real.id, customer_id: cust.id, is_current: true } });
+
+  const hit = await page.evaluate(async (id) => {
+    const r = await fetch('/api/mot-refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify({ vehicleId: id }) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, real.id);
+  check('DVSA answers for a real plate', hit.body?.outcome?.kind !== 'no_answer',
+    `${hit.body?.outcome?.kind}: ${hit.body?.outcome?.sentence}`);
+  check('  …the held date was a year out, so this is the CHANGED branch',
+    hit.body?.outcome?.kind === 'changed' && /2027/.test(hit.body?.outcome?.sentence ?? ''),
+    hit.body?.outcome?.sentence);
+  const w1 = await prisma.vehicle.findUnique({ where: { id: real.id },
+    select: { mot_expiry: true, mot_checked_at: true, last_mot_mileage: true } });
+  check('  …and NOW mot_checked_at is stamped, because something was learned', w1?.mot_checked_at != null,
+    w1?.mot_checked_at?.toISOString() ?? 'null');
+  check('  …the expiry was written', w1?.mot_expiry?.toISOString().slice(0, 10) === '2027-09-11',
+    w1?.mot_expiry?.toISOString().slice(0, 10));
+  check('  …and the odometer history came with it, as the sweep does',
+    (await prisma.vehicleOdometerReading.count({ where: { vehicle_id: real.id, source: 'mot' } })) > 1,
+    'a per-row check must not produce worse rates than the sweep');
+  check('  …and it was audited as a refresh, not as an edit',
+    (await prisma.auditLog.count({ where: { group_id: ZZ, entity_id: real.id, action: 'vehicle.mot_refresh' } })) === 1);
+
+  // PRESSED AGAIN: nothing has moved, and the wording changes accordingly.
+  const again = await page.evaluate(async (id) => {
+    const r = await fetch('/api/mot-refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify({ vehicleId: id }) });
+    return await r.json().catch(() => ({}));
+  }, real.id);
+  check('pressed again, the same car reports UNCHANGED', again?.outcome?.kind === 'unchanged', again?.outcome?.sentence);
+  check('  …and no second audit row was written', 
+    (await prisma.auditLog.count({ where: { group_id: ZZ, entity_id: real.id, action: 'vehicle.mot_refresh' } })) === 1,
+    'a row per press would be noise in an append-only table; what is audited is the CHANGE');
+
+  // AND THE STRIKE, DRAWN. This is the half that was unprovable while the fixtures were fictional.
+  await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
+  const realRow = page.locator(`[data-testid="marketing-row-${real.id}"]`);
+  if (await realRow.count()) {
+    await realRow.locator('[data-testid="marketing-check"]').click();
+    await realRow.locator('[data-testid="marketing-check-result"]').waitFor({ timeout: 25000 });
+    check('a checked row shows a time on it once DVSA has answered',
+      await realRow.locator('[data-testid="marketing-checked-at"]').count() === 1);
+  } else {
+    // 2027 is outside the 30-day window, so the renewed car correctly leaves the list on reload.
+    check('the renewed car is off the list on the next load, which is the point',
+      (await prisma.vehicle.findUnique({ where: { id: real.id }, select: { mot_expiry: true } }))
+        ?.mot_expiry?.toISOString().slice(0, 10) === '2027-09-11',
+      'the row stayed put while it was being worked; the list reconciles when it is next built');
+  }
 
   // ── 5. THE ENDPOINT'S OWN REFUSALS ───────────────────────────────────────────────────────────
   console.log('\n— whose car —');
@@ -192,8 +266,11 @@ try {
   check('the row renders the sentence the SERVER produced, not one of its own',
     /\{checked\.sentence\}/.test(src) && !/MOT renewed to/.test(src),
     'lib/mot-refresh owns the words; a second copy in the component is how they drift');
+  // THE CHECK'S OWN FALLBACK, not any sentence that resembles it: the send panel added later uses
+  // "The send didn't complete", and counting the shared half turned this into a test of an
+  // unrelated feature.
   check('  …and a fetch that throws still says something',
-    (src.match(/didn’t complete/g) ?? []).length === 2,
+    (src.match(/The check didn’t complete/g) ?? []).length === 2,
     'a silent row after a press reads as "no change"');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
@@ -203,14 +280,16 @@ try {
   if (fix) {
     const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
     // BY THE FIXTURE'S OWN REGISTRATION, never an id the code handed back.
-    const mine = await prisma.vehicle.findMany({ where: { group_id: ZZ, registration: REG }, select: { id: true } });
-    const vids = [...new Set([fix.veh, ...mine.map((v) => v.id)])];
+    // BOTH fixture plates, by registration. The real plate is a ZZ row that happens to share a
+    // string with a TMBS car — scoped by group_id, so the tenant's own vehicle is untouched.
+    const mine = await prisma.vehicle.findMany({ where: { group_id: ZZ, registration: { in: [REG, 'K15NAL'] } }, select: { id: true } });
+    const vids = [...new Set([fix.veh, fix.real, ...mine.map((v) => v.id)].filter(Boolean))];
     await step('readings', () => prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: { in: vids } } }));
     await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: { in: vids } } }));
     await step('vehicles', () => prisma.vehicle.deleteMany({ where: { id: { in: vids } } }));
     await step('customers', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: CUST } }));
     check('teardown removed every fixture row (ZZ only)',
-      (await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } })) === 0
+      (await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: [REG, 'K15NAL'] } } })) === 0
       && (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } })) === 0);
   }
 }

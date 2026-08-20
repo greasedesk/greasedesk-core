@@ -1817,6 +1817,12 @@ model MarketingContact {
   /// is a hide, and a hide is how a list quietly empties.
   snooze_until DateTime?
 
+  /// HOW it went out: 'sms' | 'email' | 'both', constrained in the database. NULL means we do not
+  /// know — a phone call, or any contact recorded before sending existed. Written only by a send,
+  /// so a non-null value always means GreaseDesk sent the message. NOT a fifth state: a texted car
+  /// is a contacted car, and two words for one fact is a choice nobody should have to make.
+  channel String?
+
   actor_id   String?
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt

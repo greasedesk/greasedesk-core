@@ -41,6 +41,9 @@ export type MarketingRow = {
   mileageLegUnevaluated: boolean;
   /** contacted | booked | declined | snoozed, or null when nobody has done anything. */
   state: string | null;
+  /** HOW it went, when GreaseDesk sent it: sms | email | both. NULL means we do not know — a phone
+   *  call, or a contact recorded before sending existed. Not a fifth state. */
+  channel: string | null;
   unactioned: boolean;
 };
 
@@ -116,7 +119,7 @@ const shape = (
     dueMileage?: number | null;
     precision?: 'day' | 'month';
   },
-  rec: { state: string; forDate: Date; snoozeUntil: Date | null; createdAt: Date } | null,
+  rec: { state: string; forDate: Date; snoozeUntil: Date | null; createdAt: Date; channel?: string | null } | null,
   now: Date,
 ): MarketingRow => {
   const route = c ? contactRoute(c) : { sms: false, email: false, phone: null };
@@ -142,6 +145,7 @@ const shape = (
     triggerText: due.triggerText,
     mileageLegUnevaluated: due.mileageLegUnevaluated,
     state: rec?.state ?? null,
+    channel: rec?.channel ?? null,
     unactioned: isUnactioned(
       { dueDate: due.dueDate },
       rec ? ({ reason: 'mot', forDate: rec.forDate, snoozeUntil: rec.snoozeUntil, createdAt: rec.createdAt } as ContactRecord) : null,
@@ -163,7 +167,7 @@ export async function buildMotList(groupId: string, now: Date): Promise<MotList>
     }),
     prisma.vehicle.count({ where: { group_id: groupId } }),
     prisma.vehicle.findMany({ where: { group_id: groupId, mot_expiry: null }, select: { year: true } }),
-    prisma.marketingContact.findMany({ where: { group_id: groupId, reason: 'mot' }, select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true } }),
+    prisma.marketingContact.findMany({ where: { group_id: groupId, reason: 'mot' }, select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true, channel: true } }),
   ]);
   const byVehicle = new Map(contacts.map((c) => [c.vehicle_id, c]));
 
@@ -175,7 +179,7 @@ export async function buildMotList(groupId: string, now: Date): Promise<MotList>
     const row = shape(v, await ownerOf(v.id),
       // A DVSA expiry is a real calendar day, so `day` is honest here and the label shows it.
       { dueDate: v.mot_expiry, triggerText: null, mileageLegUnevaluated: false, basis: 'date', precision: 'day' },
-      rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at } : null, now);
+      rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at, channel: rec.channel } : null, now);
     (band === 'expired' ? expired : due).push(row);
   }
 
@@ -199,7 +203,7 @@ export async function buildServiceList(groupId: string, now: Date): Promise<Serv
   });
   const contacts = await prisma.marketingContact.findMany({
     where: { group_id: groupId, reason: 'service' },
-    select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true },
+    select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true, channel: true },
   });
   const byVehicle = new Map(contacts.map((c) => [c.vehicle_id, c]));
 
@@ -229,7 +233,7 @@ export async function buildServiceList(groupId: string, now: Date): Promise<Serv
       basis: pick.item.dueBasis,
       dueMileage: pick.item.dueMileage,
       precision: pick.item.dueDatePrecision ?? 'day',
-    }, rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at } : null, now);
+    }, rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at, channel: rec.channel } : null, now);
     (pick.band === 'dated' ? dated : trigger).push(row);
   }
 
