@@ -35,6 +35,7 @@ import { prisma } from '@/lib/db';
 import { resolveMagicLink, MAGIC_LINK_DAYS, type MagicPurpose } from '@/lib/magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
+import DocumentCredit from '@/components/DocumentCredit';
 import { buildInvoiceDoc, type InvoiceDoc } from '@/lib/invoice-doc';
 import { canOfferCardPayment } from '@/lib/invoice-payment-intent';
 import { balanceOwedPennies } from '@/lib/invoice';
@@ -290,6 +291,8 @@ export default function CustomerLinkPage(props: Props) {
           <p className="mt-6 text-[11px] text-muted">
             Anyone with this link can view the quote — please don’t forward it.
           </p>
+          {/* The maker's mark. See lib/product-credit — every customer document carries it. */}
+          <DocumentCredit className="mt-3" />
         </div>
       </div>
     </>

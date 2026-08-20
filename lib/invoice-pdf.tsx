@@ -6,6 +6,7 @@
  * browser, serverless-friendly. Strings via tServer (same locale JSON as the client). Server-only.
  */
 import React from 'react';
+import { CREDIT_LINE, CREDIT_HREF } from '@/lib/product-credit';
 import { Document, Page, Text, View, StyleSheet, Image, Link, renderToBuffer } from '@react-pdf/renderer';
 import type { InvoiceDoc } from '@/lib/invoice-doc';
 import { formatMoney } from '@/lib/format-money';
@@ -35,7 +36,9 @@ const S = StyleSheet.create({
   totals: { width: 200 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
   grand: { borderTopWidth: 1, borderTopColor: '#e5e7eb', marginTop: 4, paddingTop: 4, fontFamily: 'Helvetica-Bold', fontSize: 12 },
-  footer: { position: 'absolute', bottom: 32, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
+  footer: { position: 'absolute', bottom: 26, left: 48, right: 48, textAlign: 'center', fontSize: 8, color: '#9ca3af' },
+  // A shade quieter than the identification line above it: present, not competing.
+  credit: { textAlign: 'center', fontSize: 7, color: '#b6bcc6', textDecoration: 'none', marginTop: 2 },
   // ── PAY ONLINE. Xero's placement: a prompt beside the amount due where the eye already is, and
   // the QR + marks in a block at the foot for someone holding a printed copy. Two placements, one
   // URL — see lib/invoice-pay-link for why the mint is single.
@@ -266,7 +269,19 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
             It is absolutely positioned, so its place in this file changes nothing visually — but
             it DOES change the order of text runs in the content stream, and that is the whole
             fix below. Do not move it back under the pay block. */}
-        <Text style={S.footer} fixed>{doc.company.name} — {t('title')} {doc.number}</Text>
+        {/* TWO LINES, ONE FIXED BLOCK. The first is the RUNNING IDENTIFICATION and is not
+            decoration: on page 3 of a long invoice it is the only thing saying whose document
+            this is and which one. The second is the maker's mark (lib/product-credit).
+
+            A <Link>, not a <Text>: react-pdf links carry an annotation URI, so a click never
+            depends on the text layer — which matters here for the reason documented below the pay
+            block. Adjacent text runs are emitted with no separator, so a selection starting at
+            greasedesk.com would run on into whatever follows. The annotation sidesteps it, and the
+            pay URL keeps its place as the last text on the page. */}
+        <View style={S.footer} fixed>
+          <Text>{doc.company.name} — {t('title')} {doc.number}</Text>
+          <Link src={CREDIT_HREF} style={S.credit}>{CREDIT_LINE}</Link>
+        </View>
 
         {/* THE PAY BLOCK, LAST. For someone holding a printed copy: a URL they must retype is a
             URL they will not use, so the QR carries the same link the email button does.

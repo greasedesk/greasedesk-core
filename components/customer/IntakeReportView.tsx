@@ -16,6 +16,7 @@
  *      garage sees the history and the customer is never stuck with a mis-tap.
  */
 import React, { useCallback, useRef, useState } from 'react';
+import DocumentCredit from '@/components/DocumentCredit';
 
 type Media = { id: string; kind: 'photo' | 'video'; url: string | null; posterUrl: string | null; label: string | null; durationSeconds: number | null; rotation: number };
 type Finding = { id: string; description: string; timing: string; answered: 'yes' | 'no' | 'call_me' | null };
@@ -302,6 +303,11 @@ export default function IntakeReportView(p: Props) {
           Questions? Call {p.garageName} on <a href={`tel:${p.garagePhone.replace(/[^\d+]/g, '')}`} className="text-accent font-medium">{p.garagePhone}</a>.
         </footer>
       )}
+
+      {/* OUTSIDE the phone conditional, deliberately. The credit is on every document; a garage
+          with no number on file still hands the customer a report. Adjacency still holds — the
+          page is headed "{garageName} looked over…" and their name is on the call line above. */}
+      <DocumentCredit className="mt-3" />
     </div>
   );
 }

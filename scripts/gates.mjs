@@ -63,7 +63,7 @@ const TIERS = {
   ],
   core: [
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
-    'demo-fuel-gate', 'demo-generation-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
+    'demo-fuel-gate', 'demo-generation-gate', 'document-credit-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
     'demo-subject-gate', 'due-items-gate', 'due-timing-gate', 'gate-hygiene-gate',
     'intake-prompts-gate', 'intake-report-gate', 'no-show-gate', 'notify-scope-gate',
     'nullable-annotation-gate', 'observation-key-gate', 'odometer-gate', 'photo-partition-gate',

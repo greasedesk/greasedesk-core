@@ -27,6 +27,7 @@
  * There is deliberately no "Pay now" button that does nothing.
  */
 import React from 'react';
+import DocumentCredit from '@/components/DocumentCredit';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import DocumentLines from '@/components/DocumentLines';
@@ -224,6 +225,8 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
             <p className="mt-6 text-[11px] text-muted">
               Anyone with this link can view this invoice — please don’t forward it.
             </p>
+            {/* The maker's mark, beneath the garage's document. See lib/product-credit. */}
+            <DocumentCredit className="mt-3" />
           </div>
         </div>
       </div>
