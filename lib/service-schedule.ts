@@ -76,8 +76,21 @@ export const SCHEDULE_ITEMS: readonly ScheduleItem[] = [
     basis: 'mileage', why: 'wear is use — you cannot predict by date when pads run out' },
   { key: 'schedule_pads_rear', label: 'Rear brake pads', description: 'Rear brake pads',
     basis: 'mileage', why: 'same as the fronts' },
+  // CORRECTED 2026-08-20, and the original reasoning is kept because the reversal is the useful part.
+  //
+  // This shipped as `date`, on my argument that "a vehicle check is a touchpoint, not a wear item —
+  // appointments book by date". That is wrong in the same way it would be wrong for the oil
+  // service: a manufacturer's inspection interval is 12 months OR a mileage, whichever comes first,
+  // and a car doing 30,000 a year reaches it long before the year is up. Being a touchpoint
+  // describes how the appointment is BOOKED, not when the car becomes due — and the schedule
+  // records the second, not the first.
+  //
+  // The second half of the original note stands and now cuts the other way: this is the row that
+  // projects with no mileage rate, and only 192 of 221 cars had one (measured 19 Aug 2026). With a
+  // mileage leg it will sometimes carry a target it cannot forecast from; mileageLegUnevaluated
+  // already says so on the marketing list rather than guessing.
   { key: 'schedule_vehicle_check', label: 'Vehicle check', description: 'Vehicle check',
-    basis: 'date', why: 'a touchpoint, not a wear item — appointments book by date. It is also the row that projects with no mileage rate, and only 192 of 221 cars have one (19 Aug 2026)' },
+    basis: 'whichever_first', why: 'an inspection interval is months OR miles, whichever comes first — the same shape as the oil service, and for the same reason' },
 ];
 
 /**

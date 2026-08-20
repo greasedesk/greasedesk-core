@@ -42,8 +42,17 @@ try {
   check('brake fluid is a date', by('schedule_brake_fluid') === 'date', 'moisture with time, not use');
   check('both pad rows are mileage', by('schedule_pads_front') === 'mileage' && by('schedule_pads_rear') === 'mileage',
     'you cannot predict by date when pads run out');
-  check('a vehicle check is a date', by('schedule_vehicle_check') === 'date',
-    'a touchpoint books by date — and it is the row that projects with no mileage rate');
+  // CORRECTED 2026-08-20. It shipped as `date` on the argument that a check is a touchpoint booked
+  // by date — which describes how the appointment is made, not when the car becomes due.
+  check('a vehicle check is BOTH, like the oil service', by('schedule_vehicle_check') === 'whichever_first',
+    'an inspection interval is months OR miles, and a car doing 30,000 a year gets there first');
+  check('  …so it demands both legs, and refuses half of one',
+    S.refuseSchedule([{ key: 'schedule_vehicle_check', dueMonth: '2027-08', dueMileage: null,
+      item: S.SCHEDULE_ITEMS.find((i) => i.key === 'schedule_vehicle_check') }])[0]?.code === 'incomplete',
+    'one leg alone is a different basis and loses the trigger that would have fired first');
+  check('  …and the reversal is left visible in the source',
+    /CORRECTED 2026-08-20/.test(readFileSync('lib/service-schedule.ts', 'utf8')),
+    'the original reasoning is the useful part — a why that was wrong teaches more than one that was never written');
   // NON-EMPTY AND NOT ALL THE SAME. The first version demanded 20 characters, which failed on
   // "same as the fronts" — a perfectly good reason, and a length threshold is not what makes a
   // reason a reason.
@@ -195,7 +204,8 @@ try {
   const r1 = await post([
     { key: 'schedule_oil_service', dueMonth: '2027-03', dueMileage: 60000 },
     { key: 'schedule_pads_front', dueMonth: null, dueMileage: 45000 },
-    { key: 'schedule_vehicle_check', dueMonth: '2027-08', dueMileage: null },
+    // BOTH LEGS NOW — a vehicle check is whichever_first, so a month alone would be refused.
+    { key: 'schedule_vehicle_check', dueMonth: '2027-08', dueMileage: 90000 },
     { key: 'schedule_brake_fluid', dueMonth: null, dueMileage: null },
   ]);
   check('the DEPARTURE schedule saves', r1.status === 200 && r1.body.written === 3, JSON.stringify(r1.body));
@@ -223,7 +233,7 @@ try {
   check('  …three rows, three bases', items.length === 3
     && items.find((i) => i.observation_key === 'schedule_oil_service')?.due_basis === 'whichever_first'
     && items.find((i) => i.observation_key === 'schedule_pads_front')?.due_basis === 'mileage'
-    && items.find((i) => i.observation_key === 'schedule_vehicle_check')?.due_basis === 'date',
+    && items.find((i) => i.observation_key === 'schedule_vehicle_check')?.due_basis === 'whichever_first',
     items.map((i) => `${i.observation_key}:${i.due_basis}`).join(' '));
   check('  …the blank row wrote nothing', !items.some((i) => i.observation_key === 'schedule_brake_fluid'));
   check('  …and the response is not_raised, by design', items.every((i) => i.customer_response === 'not_raised'));
