@@ -20,6 +20,7 @@ const { explainIfClientStale } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
+const { readFileSync } = await import('node:fs');
 const prisma = new PrismaClient();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -42,7 +43,10 @@ try {
   const site = await prisma.site.create({
     data: {
       group_id: ZZ, site_name: 'ZZ Timing Fixture Site',
-      intake_prompt_findings: true, intake_prompt_walkaround: true,
+      // oil_level ON as well, because the panel that exposed the photo-only refresh is the oil
+      // chip row — it is the only capture here that writes ONLINE with no "saved" message of its
+      // own, so a screen that does not update is the entire feedback a mechanic gets.
+      intake_prompt_findings: true, intake_prompt_walkaround: true, intake_prompt_oil_level: true,
     },
     select: { id: true },
   });
@@ -123,15 +127,95 @@ try {
   console.log('\n— the phone page, top to bottom —');
   await page.goto(`${B}/m/job/${fix.card}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="phone-tyres"]', { timeout: 30000 });
-  const order = await page.evaluate(() => ['phone-checklist', 'phone-observations', 'phone-findings', 'phone-tyres', 'phone-battery', 'phone-send-report']
+  // THE ORDER THE MECHANIC ASKED FOR, after using it: the schedule is read off the car's computer
+  // before anything is touched, so it comes second; tyres are the longest panel and the least
+  // urgent, so they come last. This list is the assertion — reordering the page without reordering
+  // this fails, which is the point.
+  const order = await page.evaluate(() => ['phone-checklist', 'phone-schedule', 'phone-battery', 'phone-observations', 'phone-findings', 'phone-tyres', 'phone-send-report']
     .map((t) => { const e = document.querySelector(`[data-testid="${t}"]`); return e ? { t, y: e.getBoundingClientRect().top + window.scrollY } : { t, y: null }; }));
   check('every intake section renders on the phone', order.every((o) => o.y !== null),
     order.filter((o) => o.y === null).map((o) => o.t).join(', ') || 'all present');
+  // ── EVERY PANEL REFRESHES THE CARD, NOT THE PHOTOS ──────────────────────────────────────────
+  // They were all wired onChanged={refreshPhotos}, which fetches /api/photos and nothing else — so
+  // a panel that wrote successfully never saw its own result. The audit trail holds six identical
+  // oil_level writes inside one minute on 20 Aug 2026: someone tapping again because the chip
+  // never lit. load() refetches the job payload; refreshPhotos is for photos.
+  const pageSrc = readFileSync('pages/m/job/[id].tsx', 'utf8');
+  check('no capture panel is wired to the photo-only refresh',
+    !/on(Changed|Queued)=\{refreshPhotos\}/.test(pageSrc),
+    'a panel that cannot see its own write reads as a panel that did not write');
+  check('  …and all six go to load()', (pageSrc.match(/on(?:Changed|Queued)=\{load\}/g) ?? []).length === 6,
+    `${(pageSrc.match(/on(?:Changed|Queued)=\{load\}/g) ?? []).length} of 6`);
+
+  // ── THE TWO PANELS THAT READ AS ONE ─────────────────────────────────────────────────────────
+  // "What this car needs" described the schedule panel equally well. Both are a thing plus a
+  // clock, and neither said what happens next — which is the only difference that matters at the
+  // point of entry: one reaches the customer, one does not.
+  // READ OFF THE RENDERED PAGE, not out of the source. The first version grepped the component
+  // for the OLD heading and failed against the comment that explains why it was changed — a scan
+  // term appearing in its own explanation, for the fourth time in one day. What a mechanic sees is
+  // the claim anyway, so assert that.
+  const findsText = await page.locator('[data-testid="phone-findings"]').innerText();
+  const schedText = await page.locator('[data-testid="phone-schedule"]').innerText();
+  check('the findings panel is named for whose observation it is',
+    /What you found/.test(findsText) && !/What this car needs/.test(findsText),
+    'the old heading described the schedule panel equally well');
+  check('  …and says where it ends up', /report and their invoice/.test(findsText));
+  check('the schedule panel says the customer is NOT told', /customer isn’t told about these/.test(schedText));
+  check('  …so the two panels differ by consequence, not by provenance',
+    /customer isn’t told/.test(schedText) && /report and their invoice/.test(findsText),
+    'where it came from is what the mechanic already knows; what happens next is what they cannot see');
+
+  // ── THE MILEAGE COLUMN DOES NOT MOVE ────────────────────────────────────────────────────────
+  // A pads row has no month leg. Under flex-wrap its mileage box slid into the month's place, so
+  // the column of numbers moved depending on the item — measured here rather than eyeballed.
+  //
+  // EQUAL IS NOT ENOUGH, and a probe proved it: reverting the grid to a flex-wrap made every
+  // mileage box wrap onto its own line at the LEFT edge — uniformly wrong, and an all-equal
+  // assertion passed. So the rule is pinned, not the coincidence: same x on every row AND flush
+  // with the right-hand edge of its row, which is what "the right-hand column" means.
+  const cols = await page.evaluate(() => ['schedule_oil_service', 'schedule_pads_front', 'schedule_pads_rear', 'schedule_vehicle_check']
+    .map((k) => {
+      const e = document.querySelector(`[data-testid="phone-schedule-miles-${k}"]`);
+      const row = document.querySelector(`[data-testid="phone-schedule-row-${k}"]`);
+      if (!e || !row) return null;
+      const a = e.getBoundingClientRect(), b = row.getBoundingClientRect();
+      return { left: Math.round(a.left), fromRight: Math.round(b.right - a.right) };
+    }));
+  check('every mileage box starts at the same x, whatever legs its row has',
+    cols.every((c) => c !== null) && new Set(cols.map((c) => c.left)).size === 1,
+    JSON.stringify(cols.map((c) => c && c.left)));
+  check('  …and sits in the RIGHT-hand column, not merely in the same wrong place',
+    cols.every((c) => c && c.fromRight <= 16),
+    `distance from each row's right edge: ${JSON.stringify(cols.map((c) => c && c.fromRight))}`);
+
+  // ── AND THE TAP ACKNOWLEDGES ITSELF ─────────────────────────────────────────────────────────
+  // The write always worked; the screen never changed, so it read as a dead button. Proven on the
+  // served page rather than by wiring: tap a level, and WITHOUT a reload the chip must come back
+  // selected. If it does not, someone taps it again — the audit trail holds six of those.
+  const oilRow = page.locator('[data-testid="ph-item-oil_level"]');
+  check('the oil chips are offered before a level is taken',
+    (await page.locator('[data-testid="ph-oil-between"]').count()) === 1);
+  await page.locator('[data-testid="ph-oil-between"]').click();
+  // THE ACKNOWLEDGEMENT IS THE TICK AND THE READING, not a lit chip: recording a level marks the
+  // item done, and the chip row renders only while it is NOT done. The first version of this check
+  // waited for the chip to highlight and timed out on a detached element — asserting a state the
+  // component cannot reach.
+  await page.locator('[data-testid="ph-oil-recorded"]').waitFor({ timeout: 20000 }).catch(() => {});
+  check('tapping a level acknowledges itself, with no reload',
+    (await page.locator('[data-testid="ph-oil-recorded"]').count()) === 1,
+    'the write always worked — six identical audit rows inside one minute say the screen did not');
+  check('  …saying WHICH level, not just that something happened',
+    /Between/i.test(await oilRow.innerText()),
+    'the reading used to vanish at the moment of capture: chips hidden once done, value shown nowhere');
+  check('  …and the chips are gone, because the item is done',
+    (await page.locator('[data-testid="ph-oil-between"]').count()) === 0);
+
   const promptCount = await page.locator('[data-testid^="ph-item-"]').count();
-  check('  …and the checklist shows the TWO prompts this site switched on, not four', promptCount === 2,
+  check('  …and the checklist shows the THREE prompts this site switched on, not four', promptCount === 3,
     `${promptCount} items — an unprompted item must never appear, or the escalation names it later`);
   const ys = order.map((o) => o.y);
-  check('  …checklist → spotted-it → findings → tyres → battery → send, in that order',
+  check('  …checklist → schedule → battery → spotted-it → what-you-found → tyres → send',
     ys.every((y, i) => i === 0 || (y !== null && ys[i - 1] !== null && y > ys[i - 1])),
     order.map((o) => `${o.t}@${o.y === null ? '—' : Math.round(o.y)}`).join(' · '));
   const mot = await page.locator('[data-testid="phone-mot"]').count();

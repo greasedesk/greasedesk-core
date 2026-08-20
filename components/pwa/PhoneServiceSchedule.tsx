@@ -84,8 +84,12 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
         <h2 className="text-sm font-semibold text-ink">Service schedule on arrival</h2>
         <span className="text-xs text-muted" data-testid="phone-schedule-progress">{filled} of {SCHEDULE_ITEMS.length}</span>
       </div>
+      {/* SAID BY CONSEQUENCE, NOT BY PROVENANCE. This panel and "What you found" were the same
+          shape — a thing plus a clock — and nothing on either screen said which was which. Where
+          the information came from is the difference we designed in and the one thing the mechanic
+          already knows; what they cannot see is what happens NEXT. So each panel now says that. */}
       <p className="text-xs text-muted mb-3">
-        Off the service computer as the car came in — what was already due. Leave a row blank if it isn’t scheduled.
+        Off the car’s computer as it came in. Sets when it’s next due — the customer isn’t told about these.
       </p>
 
       {/* DVSA, READ-ONLY — shown so nobody retypes it as a row, which would print it twice on the
@@ -107,18 +111,22 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
                 <span className="text-sm font-medium text-ink">{s.label}</span>
                 <span className="text-[11px] text-muted" data-testid={`phone-schedule-basis-${s.key}`}>{BASIS_LABEL[s.basis]}</span>
               </div>
-              {/* STACKED, NOT A GRID. A 390px screen has no room for label, month, miles and basis
-                  on one line, and a month input squeezed to a third of it is a mis-tap waiting. */}
-              <div className="flex flex-wrap gap-2">
-                {legs.date && (
+              {/* A FIXED TWO-COLUMN GRID, mileage always in the right-hand column. It was a
+                  flex-wrap, so the mileage box sat on the RIGHT of an oil-service row (month
+                  first) and on the LEFT of a pads row (no month at all) — the field moved
+                  depending on which legs the item happened to have, which is the one thing a
+                  column of numbers must not do. The desktop already solves this with placeholder
+                  cells; this is the same fix, two columns instead of four. */}
+              <div className="grid grid-cols-[1fr_7rem] gap-2">
+                {legs.date ? (
                   <input type="month" value={row.month} onChange={(e) => set(s.key, { month: e.target.value })}
-                    data-testid={`phone-schedule-month-${s.key}`} className={`${field} flex-1 min-w-[9rem]`} />
-                )}
-                {legs.mileage && (
+                    data-testid={`phone-schedule-month-${s.key}`} className={field} />
+                ) : <span />}
+                {legs.mileage ? (
                   <input inputMode="numeric" value={row.miles} placeholder="miles"
                     onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
-                    data-testid={`phone-schedule-miles-${s.key}`} className={`${field} w-28`} />
-                )}
+                    data-testid={`phone-schedule-miles-${s.key}`} className={`${field} text-right`} />
+                ) : <span />}
               </div>
             </div>
           );

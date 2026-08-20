@@ -95,7 +95,13 @@ check('  …which sends NO id, because job_card_id IS the natural key',
   && /BatteryReading is unique on job_card_id/.test(prose(sw)),
   'the same argument as tyres, and the opposite of a due item');
 check('the phone renders it', /<PhoneBattery/.test(page));
-check('  …after the tyres, matching the desktop', page.indexOf('<PhoneBattery') > page.indexOf('<PhoneTyres'));
+// ORDER CHANGED 2026-08-20, on the word of the person holding the phone. It was "after the tyres,
+// matching the desktop" — matching a surface nobody is standing at was the wrong authority. Tyres
+// are the longest panel (four corners, up to twelve taps) and the least urgent, so they go LAST;
+// the battery is a quick reading under a bonnet already open. The full order is asserted in
+// scripts/phone-capture-timing; this is the pairwise half that belongs with the battery slice.
+check('  …before the tyres, which are the longest panel and the least urgent',
+  page.indexOf('<PhoneBattery') < page.indexOf('<PhoneTyres'));
 check('  …fed by the prefilled rating', /lastBattery: p\.lastBattery/.test(api));
 check('the save parks durably before any network', /enqueueBattery/.test(pb) && !/fetch\(/.test(pb));
 check('all three numbers are required together', /ok\(v, 0\.1, 30\) && ok\(sc, 0, 100\) && ok\(sh, 0, 100\)/.test(pb),

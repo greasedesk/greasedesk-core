@@ -516,46 +516,57 @@ export default function MobileJobCard() {
                   a desktop nobody is standing at, which made the measured capture time meaningless.
                   Order matches the desktop tab: findings, tyres, then the photos that evidence
                   them. Both write through the OUTBOX, so a dead-signal bay costs nothing. */}
-              {/* THE CHECKLIST FIRST — it is the thing that says what is still outstanding, and it
-                  is useless on a screen the mechanic is not at: the escalation would name items
-                  nobody was ever prompted about. */}
+              {/* ── THE ORDER A MECHANIC ACTUALLY WORKS, not the order the desktop tab has ────
+                  Checklist, schedule, battery, spotted-it, findings, tyres. Two changes from the
+                  first version, both from the person holding the phone:
+
+                    · THE SERVICE SCHEDULE MOVED UP, to second. It is read off the car's computer
+                      before anything is touched — it is the first thing that happens, not the last.
+                    · TYRES MOVED LAST. It is the longest panel (four corners, up to twelve taps)
+                      and the least urgent, and sitting third it pushed everything else off screen.
+
+                  onChanged/onQueued go to load(), NOT refreshPhotos: refreshPhotos fetches photos
+                  only, so a panel that wrote successfully never saw its own result. The oil-level
+                  chips were the visible case — the audit trail holds six identical writes in one
+                  minute, someone tapping again because nothing acknowledged them. */}
+
+              {/* THE CHECKLIST FIRST — it is the pre-work gate, and the escalation reads from it. */}
               {job && (job.intakeItems?.length ?? 0) > 0 && (
                 <PhoneIntakeChecklist jobCardId={job.id} items={job.intakeItems!}
-                  nothingFoundAt={job.nothingFoundAt ?? null} oilLevel={job.oilLevel ?? null} onChanged={refreshPhotos} />
+                  nothingFoundAt={job.nothingFoundAt ?? null} oilLevel={job.oilLevel ?? null} onChanged={load} />
               )}
+
+              {/* THE SERVICE COMPUTER, BEFORE ANYTHING IS TOUCHED. */}
+              {job && (
+                <PhoneServiceSchedule jobCardId={job.id}
+                  recorded={(job.scheduleOnArrival ?? []) as never}
+                  motExpiry={job.motExpiry ?? null} onQueued={load} />
+              )}
+
+              {job && (
+                <PhoneBattery jobCardId={job.id}
+                  lastRatedCca={job.lastBattery?.ratedCca ?? null}
+                  lastCcaStandard={job.lastBattery?.ccaStandard ?? null}
+                  recorded={job.batteryCondition ?? null} onQueued={load} />
+              )}
+
               {/* THE TAP-LIST BEFORE THE TYPING. Most findings are not novel, and the one that is
                   should be reached past the eighteen that are — not the other way round. */}
               {job && (
                 <PhoneObservations jobCardId={job.id} counts={job.observationCounts ?? {}}
                   openKeys={(job.dueItems ?? []).map((d) => (d as { observationKey?: string | null }).observationKey).filter(Boolean) as string[]}
-                  onQueued={refreshPhotos} />
+                  onQueued={load} />
               )}
               {job && (
                 <PhoneFindings jobCardId={job.id} existing={job.dueItems ?? []}
-                  motExpiry={job.motExpiry ?? null} onQueued={refreshPhotos} />
+                  motExpiry={job.motExpiry ?? null} onQueued={load} />
               )}
+
+              {/* TYRES LAST — the longest panel and the least urgent. */}
               {job && (
                 <PhoneTyres jobCardId={job.id} defaultType={job.lastTyreType ?? null}
                   recorded={job.tyreCondition ?? []} onThisCard={(job.tyresOnThisCard ?? []) as never}
-                  onQueued={refreshPhotos} />
-              )}
-              {/* BATTERY after the tyres, matching the desktop order and the order a mechanic walks
-                  the car: the wheels are what you reach first, the bonnet is what you open next. */}
-              {job && (
-                <PhoneBattery jobCardId={job.id}
-                  lastRatedCca={job.lastBattery?.ratedCca ?? null}
-                  lastCcaStandard={job.lastBattery?.ccaStandard ?? null}
-                  recorded={job.batteryCondition ?? null} onQueued={refreshPhotos} />
-              )}
-
-              {/* THE SERVICE COMPUTER, AFTER THE BONNET. Last of the capture panels because it is
-                  the only one that is not a measurement of the car — the mechanic reads a screen
-                  and types what it says, which happens once everything physical has been looked at.
-                  ARRIVAL only; see the component for why the departure reading is not here. */}
-              {job && (
-                <PhoneServiceSchedule jobCardId={job.id}
-                  recorded={(job.scheduleOnArrival ?? []) as never}
-                  motExpiry={job.motExpiry ?? null} onQueued={refreshPhotos} />
+                  onQueued={load} />
               )}
 
               {STAGES.map((stage) => {

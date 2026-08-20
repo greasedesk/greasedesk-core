@@ -56,7 +56,11 @@ export default function PhoneFindings({ jobCardId, existing, motExpiry, onQueued
 
   return (
     <section className="bg-surface border border-line rounded-xl p-4" data-testid="phone-findings">
-      <h2 className="text-sm font-semibold text-ink mb-1">What this car needs</h2>
+      {/* "What this car needs" described the service-schedule panel equally well, which is why the
+          two read as duplicates on a phone. Named for whose observation it is, and subtitled with
+          where it ends up — the axis that actually separates them. */}
+      <h2 className="text-sm font-semibold text-ink mb-1">What you found</h2>
+      <p className="text-xs text-muted mb-2">Goes on the customer’s report and their invoice.</p>
       {/* THE MOT IS ALREADY KNOWN — shown so nobody retypes a DVSA fact into a finding. */}
       {motExpiry && <p className="text-xs text-muted mb-2" data-testid="phone-mot">MOT expires {motExpiry} — from DVSA, no need to record it</p>}
 

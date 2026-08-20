@@ -66,6 +66,15 @@ export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt,
               <span className={`text-sm ${it.done ? 'text-muted' : 'text-ink font-medium'}`}>{LABEL[it.item] ?? it.item}</span>
             </div>
             {it.skipped && <p className="text-xs text-warn mt-1">{it.skipReason ? `skipped — ${it.skipReason}` : 'skipped, no reason given'}</p>}
+            {/* WHAT WAS RECORDED, once it is. The chip row renders only while the item is NOT
+                done, and recording a level marks it done — so the selected-chip highlight beside
+                it could never appear, and the reading a mechanic had just taken became invisible
+                the instant they took it. The tick said "something happened"; nothing said what. */}
+            {it.item === 'oil_level' && it.done && oilLevel && (
+              <p className="text-xs text-ok mt-1" data-testid="ph-oil-recorded">
+                {OIL.find(([lv]) => lv === oilLevel)?.[1] ?? oilLevel}
+              </p>
+            )}
 
             {!it.done && skipOpen !== it.item && (
               <div className="flex flex-wrap gap-2 mt-2">

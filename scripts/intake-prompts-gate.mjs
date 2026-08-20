@@ -58,9 +58,16 @@ const noneOn = intakeItemStates(NONE, {}, {});
 check('an item switched OFF is never prompted and never reported', intakeOutstanding(noneOn).length === 0,
   'switched off generates nothing at all');
 const neverOpened = intakeOutstanding(intakeItemStates(NONE, ALL_ON, {}));
-check('a mechanic who never opened the tab leaves all four outstanding', neverOpened.length === 4,
-  'catching only the one who pressed skip would miss the commoner case');
-const cleanCar = intakeOutstanding(intakeItemStates({ ...NONE, nothingFoundAt: new Date(), odometerIn: 1, vin: 'X', hasIntakeVideo: true, hasDiagScanPhoto: true }, ALL_ON, {}));
+// COUNTED FROM INTAKE_ITEMS, not written as a literal. This said "all four" and was written when
+// there were four; oil_level landed the same day (bc04c1f) and the gate has been red ever since —
+// unnoticed, because no runner runs every gate and my hand-written sweep lists never included it.
+// A literal count in an assertion is a second source of truth for the list it counts.
+check(`a mechanic who never opened the tab leaves all ${INTAKE_ITEMS.length} outstanding`,
+  neverOpened.length === INTAKE_ITEMS.length,
+  `${neverOpened.length} of ${INTAKE_ITEMS.length} — catching only the one who pressed skip would miss the commoner case`);
+// EVERY item satisfied — oilLevelAt included, which this fixture was missing for the same reason
+// as the count above: it was written before the dipstick existed.
+const cleanCar = intakeOutstanding(intakeItemStates({ ...NONE, nothingFoundAt: new Date(), odometerIn: 1, vin: 'X', hasIntakeVideo: true, hasDiagScanPhoto: true, oilLevelAt: new Date() }, ALL_ON, {}));
 check('a fully-done clean car reports NOTHING — no email at all', cleanCar.length === 0,
   'the escalation must be silent when the workshop did its job');
 
@@ -70,7 +77,21 @@ const tabs = readFileSync('lib/jobcard-tabs.ts', 'utf8');
 check('the tab spine knows nothing about intake items', !/intake_prompt|intakeItem/.test(tabs),
   'a prompt that could lock a stage would be a gate wearing a different name');
 const api = readFileSync('pages/api/jobcard-stage.ts', 'utf8');
-check('advancing the stage does not consult them either', !/intake_prompt|intakeItem/.test(api));
+// RE-AIMED 2026-08-20. This asserted the stage API mentions intake items NOWHERE, which was true
+// until the escalation was wired into it: completing a stage now reads the item states in order to
+// REPORT what is outstanding. That is the opposite of gating and the whole design, but the old
+// assertion could not tell the two apart — it banned the words, so it went red the moment the
+// feature it was protecting arrived.
+//
+// The rule is that nothing here can REFUSE on an intake item. So: the refusals in this file are
+// counted, and none of them may sit in a branch that reads one.
+const refusals = (api.match(/return res\.status\((?:400|403|409)\)/g) ?? []).length;
+check('the stage API still has its refusals', refusals >= 3, `${refusals} refusal paths`);
+check('advancing the stage cannot be REFUSED on an intake item',
+  !/if\s*\([^)]*intakeItem[^)]*\)[\s\S]{0,200}?return res\.status\((?:400|403|409)\)/.test(api)
+  && !/if\s*\([^)]*outstanding[^)]*\)[\s\S]{0,200}?return res\.status\((?:400|403|409)\)/.test(api),
+  'it reads them to escalate, which is the design — a prompt that could lock a stage would be a gate wearing a different name');
+check('  …and it reads them only to escalate', /escalateOutstandingIntake\(/.test(api));
 const ui = readFileSync('components/jobcard/IntakeChecklist.tsx', 'utf8');
 // COMMENT-STRIPPED. The first version matched the file's own comment explaining why a required
 // category would be ceremony — a scanner reading the prose that describes what the code does NOT

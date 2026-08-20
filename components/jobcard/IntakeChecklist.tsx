@@ -82,6 +82,14 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
               </span>
             )}
 
+            {/* THE READING, AFTER IT IS TAKEN. The chip row renders only while the item is NOT
+                done, and recording a level marks it done — so `oilLevel === lv` could never
+                highlight anything, and the reading a mechanic had just taken became invisible the
+                instant they took it. The tick said "something happened"; nothing said what. */}
+            {it.item === 'oil_level' && it.done && oilLevel && (
+              <span className="text-xs text-ok" data-testid="oil-level-recorded">{t(`intake.oilLevel.${oilLevel}`)}</span>
+            )}
+
             {canEdit && !it.done && skipOpen !== it.item && (
               <span className="ml-auto flex flex-wrap gap-2">
                 {/* ONE TAP, and the most important control here: a clean car must be able to satisfy
