@@ -16,10 +16,14 @@ const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_mo
 const S = await import('../lib/service-schedule.ts');
 const D = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
+const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
+const { acceptQuote } = await import('../lib/quote-acceptance.ts');
+const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
 const prisma = new PrismaClient();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const CUST = 'Schedule Fixture Owner';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (t) => t.replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ');
@@ -109,19 +113,34 @@ try {
   // ── 4. AGAINST THE DATABASE ──────────────────────────────────────────────────────────────────
   console.log('\n— transcribed onto a throwaway car —');
   const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
-  const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76SCH', make: 'Sched', model: 'Fixture' }, select: { id: true } });
-  // FAR ENOUGH ALONG THE SPINE TO REACH COMPLETION. lib/jobcard-tabs gates In-Job on intake being
-  // complete AND the quote accepted, and Completion on In-Job — so a card carrying only
-  // stage_details_done can show the arrival panel and never the departure one. Set directly as
-  // fixture setup: it is a state a real card reaches, and the gating has its own gate.
+  const owner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
+  const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900321' }, select: { id: true } });
+  const veh = await prisma.vehicle.create({
+    data: { group_id: ZZ, registration: 'ZZ76SCH', registration_normalized: 'ZZ76SCH', make: 'Sched', model: 'Fixture',
+      mot_expiry: new Date('2026-11-30T00:00:00.000Z') },
+    select: { id: true } });
+  await prisma.vehicleOwnership.create({ data: { vehicle_id: veh.id, customer_id: cust.id, is_current: true, valid_from: new Date() } });
+
+  // ── THE CARD STARTS WHERE A REAL ONE STARTS ───────────────────────────────────────────────────
+  // It used to be created with stage_details_done / stage_intake_done / stage_injob_done already
+  // true, and a comment in this file justified it: "it is a state a real card reaches, and the
+  // gating has its own gate." Both halves were true and the conclusion was still wrong. spine-gate
+  // does prove completion.reachable as a PURE FUNCTION, in both directions — what nothing proved
+  // was that a card can be WALKED from creation to Completion through the real APIs, or that the
+  // panel waiting on the far side saves anything. The fixture was manufacturing the state it then
+  // verified, so the departure panel shipped having never once been driven.
   const card = await prisma.jobCard.create({
-    data: {
-      group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'in_progress',
-      stage_details_done: true, stage_intake_done: true, stage_injob_done: true,
-    },
+    data: { group_id: ZZ, site_id: site.id, customer_id: cust.id, vehicle_id: veh.id, status: 'quoted' },
     select: { id: true },
   });
-  fix = { veh: veh.id, card: card.id };
+  await prisma.jobCardItem.create({
+    data: { job_card_id: card.id, item_type: 'labour', description: 'Schedule fixture work', qty: 1,
+      unit_price: 100, vat_rate: 20, vat_amount: 20, labour_hours: 1 } });
+  await freezeQuoteVersion({ groupId: ZZ, jobCardId: card.id, vatRegistered: true, taxLabel: 'VAT' });
+  await prisma.$transaction(async (tx) => {
+    await acceptQuote(tx, { groupId: ZZ, jobCardId: card.id, via: 'counter', actorUserId: owner.id, attested: null, at: new Date() });
+  });
+  fix = { veh: veh.id, card: card.id, cust: cust.id };
 
   browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext()).newPage();
@@ -129,6 +148,19 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+  // ── THE STAGES ARE WALKED, NOT SET ────────────────────────────────────────────────────────────
+  // Every stage flag on this card is toggled through /api/jobcard-stage, which reads the SAME
+  // reachability chokepoint the UI greys with. The card was created at `quoted` with nothing done,
+  // so each step must be legal when it is taken — and the sections below run in the order a
+  // mechanic works: Details, then Intake (the arrival reading), then In-Job, then Completion (the
+  // departure reading). The old fixture set three flags at creation and jumped straight to the
+  // end, which is how the departure panel shipped without its save path ever being driven.
+  const stage = (st, done = true) => page.evaluate(async (b) => {
+    const r = await fetch('/api/jobcard-stage', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { jobCardId: card.id, stage: st, done });
+
   const post = (entries, stage = 'departure') => page.evaluate(async (b) => {
     const r = await fetch('/api/service-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin', body: JSON.stringify(b) });
@@ -232,8 +264,11 @@ try {
 
   // ── 5. ON THE SERVED CARD ────────────────────────────────────────────────────────────────────
   console.log('\n— above "Record a finding" —');
-  await page.goto(`${BASE}/admin/jobcards/${card.id}`, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Intake', exact: false }).first().click();
+  // INTAKE IS LOCKED UNTIL DETAILS IS DONE, and the server says so before the tab does.
+  const intakeTooSoon = await stage('intake');
+  check('Intake cannot be completed before Details', intakeTooSoon.status === 409, JSON.stringify(intakeTooSoon));
+  check('Details completes, and unlocks it', (await stage('details')).status === 200);
+  await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=intake`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="service-schedule"]', { timeout: 25000 });
   check('the form renders for EVERY site, with no switch to find', true,
     'no escalation to protect, so nothing to gate');
@@ -271,12 +306,31 @@ try {
   // ── AND THE DEPARTURE READING LIVES ON COMPLETION ────────────────────────────────────────────
   // Where the work finishes, beside mileage-out, because it cannot be known until the job is done.
   console.log('\n— the after reading, where the work ends —');
-  // NAVIGATED BY URL, not by clicking the strip. The active tab lives in ?tab= (JobCardWorkspace),
-  // and the strip side-scrolls on a narrow viewport so a tab further along is present, enabled and
-  // not clickable. Driving the real state rather than fighting the scroll container.
+  console.log('\n— on to Completion, still through the stages —');
+  // THE LOCK IS REAL. Completion is not merely un-ticked on a fresh card — it cannot be
+  // ticked, and the refusal comes from the server, not from a greyed button.
+  const tooSoon = await stage('complete');
+  check('Completion cannot be completed before In-Job', tooSoon.status === 409
+    && /Complete the previous step/.test(tooSoon.body?.message ?? ''), JSON.stringify(tooSoon));
   await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=completion`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-testid="service-schedule"]', { timeout: 25000 });
-  check('the schedule panel is on Completion too', true);
+  check('  …and the panel is not reachable while it is locked',
+    (await page.locator('[data-testid="service-schedule"]').count()) === 0,
+    'this is the state the fixture used to skip past, and the state a real card sat in all morning');
+
+  check('Intake completes, the arrival reading having been taken', (await stage('intake')).status === 200);
+  check('In-Job completes, the quote having been accepted', (await stage('injob')).status === 200);
+
+  await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=completion`, { waitUntil: 'domcontentloaded' });
+  // A NAMED CHECK, not a waitForSelector. When the panel is absent — the defect as it was actually
+  // reported — a bare wait aborts the run at a timeout and takes the twelve assertions after it
+  // down with it. "The panel is not there" is the finding; it should read as one.
+  // Anchored on the tab's OWN stage button, which is present whether or not the panel is — so the
+  // wait proves the tab rendered and the count below is then a real answer about the panel.
+  await page.locator('[data-testid="stage-complete-complete"]').waitFor({ timeout: 25000 });
+  const panelHere = (await page.locator('[data-testid="service-schedule"]').count()) === 1;
+  check('the schedule panel is on Completion too', panelHere,
+    panelHere ? '' : 'THE DEPARTURE READING CANNOT BE TAKEN — every schedule line downstream of this is unreachable');
+  if (!panelHere) throw new Error('departure panel absent — remaining assertions would be meaningless');
   check('  …opening on the DEPARTURE reading',
     (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2027-03',
     'what the car needs next — the one the invoice freezes');
@@ -286,6 +340,50 @@ try {
   check('the heading says which reading it is',
     /what’s next/.test(await page.locator('[data-testid="service-schedule"] h3').innerText()),
     'two panels, two jobs, and neither should be mistaken for the other');
+
+  // ── THE PANEL ITSELF, TYPED INTO AND SAVED ───────────────────────────────────────────────────
+  // Everything above this line reached the database through fetch('/api/service-schedule'). That
+  // proved the endpoint and the freeze; it proved NOTHING about whether a mechanic can produce
+  // such a write, and the departure panel shipped with its save path never once exercised.
+  //
+  // The values here are deliberately unlike any written earlier in this run, so what lands in
+  // VehicleDueItem is traceable to THIS form submission and not to an earlier API call.
+  console.log('\n— typed into the panel, and saved —');
+  await page.fill('[data-testid="schedule-month-schedule_oil_service"]', '2028-05');
+  await page.fill('[data-testid="schedule-miles-schedule_oil_service"]', '88000');
+  await page.fill('[data-testid="schedule-miles-schedule_pads_rear"]', '77000');
+  await page.locator('[data-testid="schedule-save"]').click();
+  await page.locator('[data-testid="schedule-saved"]').waitFor({ timeout: 25000 });
+  check('the panel reports it saved', true, await page.locator('[data-testid="schedule-saved"]').innerText());
+
+  const typed = await prisma.vehicleDueItem.findMany({
+    where: { vehicle_id: veh.id, closed_at: null, observation_key: { in: ['schedule_oil_service', 'schedule_pads_rear'] } },
+    select: { observation_key: true, due_basis: true, due_date: true, due_mileage: true, found_on_job_card_id: true },
+  });
+  const oil = typed.find((i) => i.observation_key === 'schedule_oil_service');
+  const rear = typed.find((i) => i.observation_key === 'schedule_pads_rear');
+  check('what was typed is what is stored', oil?.due_mileage === 88000
+    && oil?.due_date?.toISOString().slice(0, 10) === '2028-05-01' && oil?.due_basis === 'whichever_first',
+    `${oil?.due_mileage} / ${oil?.due_date?.toISOString().slice(0, 10)} / ${oil?.due_basis}`);
+  check('  …on the mileage-only row too', rear?.due_mileage === 77000 && rear?.due_basis === 'mileage',
+    `${rear?.due_mileage} / ${rear?.due_basis}`);
+  check('  …and the finding is attributed to the card it was taken on',
+    oil?.found_on_job_card_id === card.id, oil?.found_on_job_card_id ?? 'null');
+
+  // ── AND THE INVOICE FREEZES WHAT THE PANEL WROTE ─────────────────────────────────────────────
+  // A real mint through the real path, so the snapshot is the one a customer would receive.
+  check('Completion completes', (await stage('complete')).status === 200);
+  let invId = null;
+  await prisma.$transaction(async (tx) => { invId = await issueInvoiceForCard(tx, card.id, ZZ); }, { timeout: 30000 });
+  fix.invoice = invId;
+  const snap = (await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true } }))?.due_items_snapshot ?? '';
+  check('the invoice froze the line the PANEL produced',
+    /Next oil service due at 88,000 miles or by May 2028, whichever comes first/.test(snap), snap.slice(0, 200));
+  check('  …and the mileage-only row beside it', /Rear brake pads due at 77,000 miles/.test(snap));
+  check('  …with the MOT once, from the car', (snap.match(/MOT Expiry/g) ?? []).length === 1
+    && /30 November 2026/.test(snap));
+  check('  …and no arrival figure anywhere in it', !/60,000/.test(snap),
+    'the arrival reading is a visit measurement and must never reach a customer document');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(BASE);
@@ -293,12 +391,29 @@ try {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
     const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    // THE INVOICE GOES FIRST — an issued invoice blocks a card delete, by design.
+    //
+    // NOTE, because someone will find it: minting here CONSUMES a number from ZZ's gapless invoice
+    // series, and deleting the row afterwards leaves a hole. That is accepted on the gate tenant
+    // (scripts/card-fulfilment-gate does the same) and is exactly why fixtures never mint on TMBS.
+    if (fix.invoice) {
+      await step('invoice lines', () => prisma.invoiceLine.deleteMany({ where: { invoice_id: fix.invoice } }));
+      await step('invoice', () => prisma.invoice.deleteMany({ where: { id: fix.invoice } }));
+    }
+    await step('quote versions', () => prisma.quoteVersion.deleteMany({ where: { job_card_id: fix.card } }));
+    await step('card items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: fix.card } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
-    await step('vehicle', () => prisma.vehicle.delete({ where: { id: fix.veh } }));
+    await step('readings', () => prisma.serviceScheduleReading.deleteMany({ where: { vehicle_id: fix.veh } }));
+    await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
+    await step('vehicle', () => prisma.vehicle.deleteMany({ where: { id: fix.veh } }));
+    await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: CUST } }));
+    // BY THE FIXTURE'S OWN REGISTRATION AND NAME, not only by ids the run happens to hold.
     check('teardown removed every fixture row (ZZ only)',
-      (await prisma.vehicle.count({ where: { group_id: ZZ, id: fix.veh } })) === 0
-      && (await prisma.vehicleDueItem.count({ where: { group_id: ZZ, vehicle_id: fix.veh } })) === 0);
+      (await prisma.vehicle.count({ where: { group_id: ZZ, registration: 'ZZ76SCH' } })) === 0
+      && (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } })) === 0
+      && (await prisma.vehicleDueItem.count({ where: { group_id: ZZ, vehicle_id: fix.veh } })) === 0
+      && (await prisma.serviceScheduleReading.count({ where: { group_id: ZZ } })) === 0);
   }
 }
 
