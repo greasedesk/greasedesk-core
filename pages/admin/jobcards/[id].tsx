@@ -47,6 +47,7 @@ type PageProps = {
   scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: unknown[];
+  tyresOnThisCard?: unknown[];
   batteryCondition?: unknown;
   /** Derived report state — never stored. */
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
@@ -184,6 +185,7 @@ export default function JobCardDetailPage(props: PageProps) {
         scheduleOnArrival={props.scheduleOnArrival}
         oilLevel={props.oilLevel}
         tyreCondition={props.tyreCondition as never}
+        tyresOnThisCard={props.tyresOnThisCard as never}
         batteryCondition={props.batteryCondition as never}
         conversation={props.conversation}
         threadId={props.threadId}

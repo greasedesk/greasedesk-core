@@ -44,18 +44,63 @@ const blank = (type: TyreType): Corner => ({ type, even: null, outer: null, cent
 
 type Props = {
   jobCardId: string; canEdit: boolean; defaultType?: TyreType | null;
-  /** What the car ALREADY says (lib/vehicle-condition). The form used to be write-only. */
+  /** What the CAR says (lib/vehicle-condition) — shown above the form, across all visits. */
   recorded?: TyreCondition[];
+  /** What THIS VISIT recorded — what the form opens on. Not the same thing; see lib/jobcard-page-data. */
+  onThisCard?: TyreOnThisCard[];
   onSaved: () => void;
 };
 
 const tyreSlot = (c: TyreCorner) => `tyre_${c}`;
 
-export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded = [], onSaved }: Props) {
+/**
+ * ── THE FORM OPENS ON WHAT THE CAR ALREADY SAYS ─────────────────────────────────────────────────
+ * It used to open blank, always. TyreSummary showed the recorded depths above the form while every
+ * chip below sat unselected and the counter read "0 of 4" over four stored corners — the panel
+ * reporting itself unfilled when it was not, on the one screen whose job is to say what has been
+ * measured. A mechanic could not tell what they had entered, and a colleague could not tell whether
+ * the tyres had been done at all.
+ *
+ * Seeded from `raw` (lib/vehicle-condition), not from the display strings beside it: parsing "8.0"
+ * back into 80 would make this a second reader of our own output.
+ *
+ * A useState INITIALISER, not an effect. It runs once per mount, so a save that refreshes the card
+ * cannot clobber what someone is halfway through typing; leaving the tab unmounts and re-seeds.
+ */
+export type TyreOnThisCard = {
+  corner: string; type: string;
+  depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number;
+};
+
+const seedFrom = (rows: TyreOnThisCard[], fallbackType: TyreType): Record<TyreCorner, Corner> => {
+  const out: Record<TyreCorner, Corner> = {
+    front_left: blank(fallbackType), front_right: blank(fallbackType),
+    rear_left: blank(fallbackType), rear_right: blank(fallbackType),
+  };
+  for (const r of rows) {
+    const c = r.corner as TyreCorner;
+    if (!(c in out)) continue;
+    const o = r.depth_outer_tenths, m = r.depth_centre_tenths, i = r.depth_inner_tenths;
+    out[c] = (o === m && m === i)
+      ? { type: r.type as TyreType, even: o, outer: null, centre: null, inner: null, uneven: false }
+      : { type: r.type as TyreType, even: null, outer: o, centre: m, inner: i, uneven: true };
+  }
+  return out;
+};
+
+/** Same corner, same three depths, same type — nothing to write. */
+const unchanged = (a: Corner, b: Corner) =>
+  a.type === b.type && a.uneven === b.uneven && a.even === b.even
+  && a.outer === b.outer && a.centre === b.centre && a.inner === b.inner;
+
+export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded = [], onThisCard = [], onSaved }: Props) {
   const seedType = defaultType ?? 'summer_standard';
-  const [state, setState] = useState<Record<TyreCorner, Corner>>({
-    front_left: blank(seedType), front_right: blank(seedType), rear_left: blank(seedType), rear_right: blank(seedType),
-  });
+  const [seed] = useState<Record<TyreCorner, Corner>>(() => seedFrom(onThisCard, seedType));
+  const [state, setState] = useState<Record<TyreCorner, Corner>>(() => seedFrom(onThisCard, seedType));
+  // WHICH CORNERS ARE OPEN FOR EDITING. A recorded corner collapses to its value; this is how it
+  // reopens. Never pre-populated — a corner someone has already measured should not greet them
+  // with eight chips they have to read past.
+  const [editing, setEditing] = useState<Partial<Record<TyreCorner, boolean>>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -94,13 +139,25 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded 
     : { outer: c.even, centre: c.even, inner: c.even };
   const complete = (c: Corner) => Object.values(depthsOf(c)).every((v) => typeof v === 'number' && v > 0);
   const filled = CORNERS.filter(({ key }) => complete(state[key])).length;
+  // WHAT WOULD ACTUALLY BE WRITTEN. `filled` answers "how much of this car is measured" and now
+  // reads 4 of 4 the moment the form opens on a finished set — which is the honest answer and the
+  // wrong basis for a Save button. A button offering to save four corners that are already saved
+  // is the same lie in the other direction.
+  const changed = CORNERS.filter(({ key }) => complete(state[key]) && !unchanged(state[key], seed[key])).length;
 
   async function save() {
     setBusy(true); setErr(null);
     try {
-      const corners = CORNERS.filter(({ key }) => complete(state[key])).map(({ key }) => ({
-        corner: key, type: state[key].type, depths: depthsOf(state[key]) as { outer: number; centre: number; inner: number },
-      }));
+      // ONLY WHAT CHANGED. Now that the form opens on this visit's readings, sending every
+      // complete corner would re-write the three a mechanic never touched — and the upsert sets
+      // measured_at to now, so untouched corners would be re-dated to the moment somebody pressed
+      // Save on a fourth. "A corner not re-measured today is still the truth" has to survive the
+      // form knowing what it already holds.
+      const corners = CORNERS.filter(({ key }) => complete(state[key]) && !unchanged(state[key], seed[key]))
+        .map(({ key }) => ({
+          corner: key, type: state[key].type, depths: depthsOf(state[key]) as { outer: number; centre: number; inner: number },
+        }));
+      if (!corners.length) { setDone(true); return; }
       const r = await fetch('/api/tyre-readings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobCardId, corners }),
@@ -142,7 +199,11 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded 
                 )}
               </div>
 
-              {!c.uneven ? (
+              {complete(c) && !editing[key] ? (
+                // COLLAPSED. The value is the point; the eight chips that produced it are not.
+                <button type="button" disabled={!canEdit || busy} onClick={() => setEditing((e) => ({ ...e, [key]: true }))}
+                  data-testid={`tyre-${key}-change`} className="text-xs text-accent underline">Change</button>
+              ) : !c.uneven ? (
                 <div className="flex flex-wrap gap-1.5">
                   {CHIPS.map((v) => (
                     <button key={v} type="button" disabled={!canEdit || busy} onClick={() => set(key, { even: v })}
@@ -165,16 +226,20 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded 
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-2 mt-2">
+              <div className={`flex flex-wrap items-center gap-2 ${complete(c) && !editing[key] ? '' : 'mt-2'}`}>
                 <button type="button" disabled={!canEdit || busy || upBusy !== null}
                   onClick={() => { shotFor.current = key; fileRef.current?.click(); }}
                   data-testid={`tyre-${key}-photo`} className="text-xs text-accent underline">
                   {upBusy === key ? 'Uploading…' : shots[key] ? `Photo ✓${shots[key]! > 1 ? ` ×${shots[key]}` : ''}` : 'Photo'}
                 </button>
-                <button type="button" disabled={!canEdit || busy} onClick={() => set(key, { uneven: !c.uneven })}
-                  data-testid={`tyre-${key}-uneven`} className="text-xs text-accent underline">
-                  {c.uneven ? 'Same across the tyre' : 'Worn unevenly'}
-                </button>
+                {/* HIDDEN ON A COLLAPSED CORNER. "Worn unevenly" beside a settled reading invites a
+                    mode change nobody asked for; Change is the way back in. */}
+                {(!complete(c) || editing[key]) && (
+                  <button type="button" disabled={!canEdit || busy} onClick={() => set(key, { uneven: !c.uneven })}
+                    data-testid={`tyre-${key}-uneven`} className="text-xs text-accent underline">
+                    {c.uneven ? 'Same across the tyre' : 'Worn unevenly'}
+                  </button>
+                )}
               </div>
 
               {/* ── TYPE: FOUR VISIBLE OPTIONS, ONE TAP ──────────────────────────────────────────
@@ -202,9 +267,9 @@ export default function TyreCapture({ jobCardId, canEdit, defaultType, recorded 
       {err && <p className="text-sm text-danger mt-3">{err}</p>}
       {done && <p className="text-sm text-ok mt-3" data-testid="tyre-saved">Tyres saved. Anything worn is now on the car’s list.</p>}
       {canEdit && (
-        <button type="button" disabled={busy || filled === 0} onClick={save} data-testid="tyre-save"
+        <button type="button" disabled={busy || changed === 0} onClick={save} data-testid="tyre-save"
           className="mt-3 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 disabled:opacity-50">
-          {busy ? 'Saving…' : filled === 4 ? 'Save all four' : `Save ${filled}`}
+          {busy ? 'Saving…' : changed === 0 ? 'Nothing to save' : changed === 4 ? 'Save all four' : `Save ${changed}`}
         </button>
       )}
     </div>

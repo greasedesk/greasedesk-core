@@ -151,17 +151,32 @@ try {
   check('both surfaces call the shared reader',
     /latestTyres\(/.test(rep) && /latestBattery\(/.test(rep)
     && /latestTyres\(/.test(cardData) && /latestBattery\(/.test(cardData));
-  // THE PRECISE TEST: neither surface may read the columns a CONDITION is derived from. The first
-  // version banned batteryReading.findFirst outright and failed on a query that is legitimately
-  // there for a different job — jobcard-page-data fetches rated_cca to PREFILL the form, which is
-  // not a condition and must not be confused with one. Ban the depth and health columns instead.
-  const derives = (src) => /depth_outer_tenths|depth_centre_tenths|soh_pct|soc_pct|voltage_mv/.test(src);
+  // THE PRECISE TEST, TWICE CORRECTED. The first version banned batteryReading.findFirst outright
+  // and failed on a query legitimately there for another job — jobcard-page-data fetches rated_cca
+  // to PREFILL the form, which is not a condition. So it banned the raw COLUMNS instead. That was
+  // still the wrong axis, and it failed again on 2026-08-20 when the tyre form began seeding
+  // itself from this visit's depths: reading a depth to put it back in the box a mechanic typed it
+  // into is the same kind of prefill as rated_cca, and no more a judgement of the tyre.
+  //
+  // What must not be duplicated is the DERIVATION — the thresholds, the band, the lowest-of-three,
+  // the shoulder spread. Those live in lib/vehicle-condition and lib/tyres, and a second copy is
+  // what "two derivations of one truth" means. So the ban is on the vocabulary of judgement, and
+  // the raw columns are allowed where a form has to be filled.
+  const judges = (src) => /LEGAL_MIN_TENTHS|ADVISE_BELOW_TENTHS|shoulderSpread|minDepth\(|band:\s*'|unevenEdge:/.test(src);
   check('  …and neither derives its own condition',
-    !derives(rep) && !derives(cardData),
+    !judges(rep) && !judges(cardData),
     'two derivations of one truth agree until somebody edits one of them');
   check('  …while a prefill query is still allowed to exist',
-    /rated_cca: true/.test(cardData) && !derives(cardData),
+    /rated_cca: true/.test(cardData) && !judges(cardData),
     'fetching the rating to prefill a field is a different job from judging the battery');
+  check('  …including the tyre form’s seed, which is the same kind of prefill',
+    /depth_outer_tenths: true/.test(cardData) && !judges(cardData),
+    'a depth put back into the box it was typed into is not a verdict about the tyre');
+  // AND THE REPORT STILL HOLDS NO RAW DEPTHS AT ALL. It renders a condition and never builds one,
+  // so for that file the stricter column ban is still the right test.
+  check('  …and the customer report reads no raw depth or health column',
+    !/depth_outer_tenths|depth_centre_tenths|soh_pct|soc_pct|voltage_mv/.test(rep),
+    'the report has no form to fill, so it has no business holding the columns');
 
   // ── AND "NOTHING RECORDED" IS SAID, NOT LEFT BLANK ───────────────────────────────────────────
   console.log('\n— an untested car says so —');

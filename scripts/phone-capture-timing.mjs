@@ -53,7 +53,9 @@ try {
     data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'in_progress', odometer_in: 61000 },
     select: { id: true },
   });
-  fix = { veh: veh.id, card: card.id, site: site.id };
+  // `current` is the card the last scenario ran on — the one to assert against. Every timed
+  // scenario gets a fresh one; see run().
+  fix = { veh: veh.id, card: card.id, current: card.id, extraCards: [], site: site.id };
 
   browser = await chromium.launch({ channel: 'chrome' });
   const ctx = await browser.newContext({
@@ -84,8 +86,27 @@ try {
     await page.locator(`[data-testid="${tid}"]`).pressSequentially(v, { delay: KEY_MS });
   };
 
+  /**
+   * EVERY TIMED SCENARIO STARTS ON A FRESH CARD.
+   *
+   * This used to re-navigate to the SAME card each time, which worked only because the capture
+   * forms had no memory of what they had recorded. Once the tyre form began opening on this
+   * visit's readings, every scenario after the first met four collapsed corners and timed out
+   * hunting for a chip — and the timeout was the messenger. Each of these rows claims to measure a
+   * FIRST capture: a car arriving and being walked around. From the second scenario on, that had
+   * quietly stopped being what was measured.
+   *
+   * Here rather than at each call site, because this is the one place a scenario begins — a caller
+   * that forgot would silently measure the wrong thing again.
+   */
   async function run(label, plan) {
-    await page.goto(`${B}/m/job/${fix.card}`, { waitUntil: 'domcontentloaded' });
+    const fresh = await prisma.jobCard.create({
+      data: { group_id: ZZ, site_id: fix.site, vehicle_id: fix.veh, status: 'in_progress', odometer_in: 61000 },
+      select: { id: true },
+    });
+    fix.extraCards.push(fresh.id);
+    fix.current = fresh.id;
+    await page.goto(`${B}/m/job/${fresh.id}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="phone-tyres"]', { timeout: 30000 });
     taps = 0; keys = 0;
     const t0 = Date.now();
@@ -193,7 +214,7 @@ try {
   });
   // Let the queue land so the rating is genuinely on the car for the second run.
   for (let i = 0; i < 40; i++) {
-    if (await prisma.batteryReading.count({ where: { job_card_id: fix.card } })) break;
+    if (await prisma.batteryReading.count({ where: { job_card_id: fix.current } })) break;
     await page.waitForTimeout(500);
   }
   await run('BT2. battery, remembered', async () => {
@@ -208,13 +229,13 @@ try {
   // reported a stale 17%, an assertion that would have been green on a genuinely broken upsert.
   let bRow = null;
   for (let i = 0; i < 40; i++) {
-    bRow = await prisma.batteryReading.findFirst({ where: { job_card_id: fix.card }, select: { rated_cca: true, cca_standard: true, soh_pct: true } });
+    bRow = await prisma.batteryReading.findFirst({ where: { job_card_id: fix.current }, select: { rated_cca: true, cca_standard: true, soh_pct: true } });
     if (bRow?.soh_pct === 44) break;
     await page.waitForTimeout(500);
   }
   check('the battery test reached the database through the queue', bRow != null, JSON.stringify(bRow));
   check('  …and one test per visit, corrected not stacked',
-    (await prisma.batteryReading.count({ where: { job_card_id: fix.card } })) === 1 && bRow?.soh_pct === 44);
+    (await prisma.batteryReading.count({ where: { job_card_id: fix.current } })) === 1 && bRow?.soh_pct === 44);
   check('  …with the rating remembered rather than retyped',
     bRow?.rated_cca === 700 && bRow?.cca_standard === 'EN',
     'the second run typed no rating at all and the denominator survived');
@@ -291,7 +312,7 @@ try {
   const worstTaps = Math.max(...rows.map((r) => r.taps));
   check('the control count has not drifted', worstTaps === 15, `${worstTaps} controls worst case`);
 
-  const readings = await prisma.tyreReading.count({ where: { job_card_id: fix.card } });
+  const readings = await prisma.tyreReading.count({ where: { job_card_id: fix.current } });
   check('and the queue actually delivered', readings === 4, `${readings} readings landed`);
 } catch (e) {
   check('timing run completed', false, String(e?.message ?? e).slice(0, 300));
@@ -307,7 +328,7 @@ try {
     const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
     await step('readings', () => prisma.tyreReading.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
-    await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
+    await step('cards', () => prisma.jobCard.deleteMany({ where: { id: { in: [fix.card, ...(fix.extraCards ?? [])] } } }));
     await step('vehicle', () => prisma.vehicle.delete({ where: { id: fix.veh } }));
     await step('site', () => prisma.site.delete({ where: { id: fix.site } }));
     check('teardown removed every fixture row',

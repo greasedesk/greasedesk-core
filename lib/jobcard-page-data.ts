@@ -136,7 +136,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, oilRow, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, oilRow, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow, tyresOnThisCard] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -230,6 +230,20 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // The site's default labour rate (Financial settings) — pre-fills new labour lines and is the
     // rate the upcoming margin feature reads (labour retail = labour_hours × rate).
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, site_id: row.site_id, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } }) as Promise<{ default_labour_rate: unknown } | null>,
+    // ── THIS VISIT'S TYRE READINGS, WHICH IS NOT THE SAME AS THE CAR'S ────────────────────────
+    // `tyreCondition` above is latestTyres for the VEHICLE — the right answer to "what does this
+    // car say", which is what the summary and the customer report show. It is the WRONG thing to
+    // seed a capture form from: TyreReading is unique on (job_card_id, corner), so the car's
+    // latest may have been measured on a visit last March. Seeding from it would put another
+    // visit's figures into today's form, and saving would then stamp them as measured today.
+    //
+    // So the form seeds from THIS card's own rows. Raw tenths and the type enum, because a form
+    // needs what a form writes — parsing "8.0" back out of the display shape would make the
+    // component a second and lossy reader of our own output.
+    prisma.tyreReading.findMany({
+      where: { group_id: groupId, job_card_id: cardId },
+      select: { corner: true, type: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
+    }) as Promise<Array<{ corner: string; type: string; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>>,
   ]);
   const canEdit = canManageSite(vis, row.site_id);
   const canOperate = canAccessSite(vis, row.site_id);
@@ -522,6 +536,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     oilLevel: ((oilRow?.diff_json ?? {}) as { level?: string }).level ?? null,
     /** The car's CURRENT tyre and battery condition — the same values the customer report shows. */
     tyreCondition,
+    /** THIS VISIT's readings, for the capture form to open on. See the query for why not tyreCondition. */
+    tyresOnThisCard,
     batteryCondition,
     // DERIVED, not stored: sent-when plus how many findings carry an answer. "No reply after 3
     // days" needs no scheduled job and cannot drift.

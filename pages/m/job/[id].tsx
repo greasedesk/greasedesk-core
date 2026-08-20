@@ -50,6 +50,7 @@ type JobData = {
   observationCounts?: Record<string, number>;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
+  tyresOnThisCard?: unknown[];
   batteryCondition?: BatteryCondition | null;
   intakeItems?: Array<{ item: string; prompted: boolean; done: boolean; skipped: boolean; skipReason: string | null }>;
   nothingFoundAt?: string | null;
@@ -533,7 +534,8 @@ export default function MobileJobCard() {
               )}
               {job && (
                 <PhoneTyres jobCardId={job.id} defaultType={job.lastTyreType ?? null}
-                  recorded={job.tyreCondition ?? []} onQueued={refreshPhotos} />
+                  recorded={job.tyreCondition ?? []} onThisCard={(job.tyresOnThisCard ?? []) as never}
+                  onQueued={refreshPhotos} />
               )}
               {/* BATTERY after the tyres, matching the desktop order and the order a mechanic walks
                   the car: the wheels are what you reach first, the bonnet is what you open next. */}

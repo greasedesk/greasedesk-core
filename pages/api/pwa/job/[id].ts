@@ -60,6 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // the customer report use. The phone's capture forms were write-only too, so a mechanic in the
     // bay could not see the reading they had just taken. Still NO money on this surface.
     tyreCondition: p.tyreCondition ?? [],
+    tyresOnThisCard: p.tyresOnThisCard ?? [],
     batteryCondition: p.batteryCondition ?? null,
     // The four prompts, already resolved server-side. On the phone because an escalation firing
     // for items nobody was ever prompted about is worse than no escalation — the false-positive

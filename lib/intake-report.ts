@@ -20,7 +20,7 @@ import { openDueItemsForVehicle, dueLabel, showsDueLabel, latestCustomerAnswers,
 import { slotOwnedBySection } from '@/lib/photo-slots';
 import { BATTERY_SLOTS, type BatteryState } from '@/lib/battery';
 import { latestTyres, latestBattery, type TyreCondition, type BatteryCondition } from '@/lib/vehicle-condition';
-import { tyreSlot, minDepth, shoulderSpread, CORNER_LABEL, TYRE_TYPE_LABEL, LEGAL_MIN_TENTHS, ADVISE_BELOW_TENTHS, ALIGNMENT_SPREAD_TENTHS, type TyreCorner, type TyreType } from '@/lib/tyres';
+import { tyreSlot } from '@/lib/tyres';
 
 export type ReportMedia = {
   id: string;

@@ -99,6 +99,8 @@ type Props = {
   scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
+  /** THIS VISIT's tyre rows — what the capture form opens on. See lib/jobcard-page-data. */
+  tyresOnThisCard?: unknown[];
   batteryCondition?: BatteryCondition | null;
   reportStatus?: { state: 'not_sent' } | { state: 'awaiting' | 'partial'; sentAt: string; days: number; answered: number; total: number } | { state: 'all_answered'; sentAt: string; answered: number };
   owner: { name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null; smsOptOut?: boolean | null; emailOptOut?: boolean | null;
@@ -923,7 +925,8 @@ export default function JobCardWorkspace(p: Props) {
           canEdit={p.canOperate && !inactive} nothingFoundAt={eff.nothingFoundAt} oilLevel={p.oilLevel ?? null}
           onGoToFindings={() => selectTab('quote')} onChanged={refreshCard} />
         <TyreCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
-          defaultType={(p.lastTyreType as never) ?? null} recorded={p.tyreCondition ?? []} onSaved={refreshCard} />
+          defaultType={(p.lastTyreType as never) ?? null} recorded={p.tyreCondition ?? []}
+          onThisCard={(p.tyresOnThisCard ?? []) as never} onSaved={refreshCard} />
         {/* BATTERY after the tyres: both are measurements taken at the car, and the tyres are the
             ones a mechanic reaches first walking round it. */}
         <BatteryCapture jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
