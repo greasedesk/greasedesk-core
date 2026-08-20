@@ -41,6 +41,8 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
   const { t } = useTranslation('jobcard');
   const [busy, setBusy] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState<string | null>(null);
+  /** Items re-opened to correct. See the oil row: re-recording is what closes the advisory. */
+  const [reopen, setReopen] = useState<Record<string, boolean>>({});
   const [reason, setReason] = useState('');
 
   const prompted = items.filter((i) => i.prompted);
@@ -86,11 +88,20 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
                 done, and recording a level marks it done — so `oilLevel === lv` could never
                 highlight anything, and the reading a mechanic had just taken became invisible the
                 instant they took it. The tick said "something happened"; nothing said what. */}
-            {it.item === 'oil_level' && it.done && oilLevel && (
-              <span className="text-xs text-ok" data-testid="oil-level-recorded">{t(`intake.oilLevel.${oilLevel}`)}</span>
+            {it.item === 'oil_level' && it.done && oilLevel && !reopen[it.item] && (
+              <>
+                <span className="text-xs text-ok" data-testid="oil-level-recorded">{t(`intake.oilLevel.${oilLevel}`)}</span>
+                {/* THE WAY BACK IN — and the only route to the closure that already exists. Topping
+                    the oil up and re-recording a healthy level is what closes the advisory
+                    (/api/intake-items), and until now nothing could reach it. */}
+                {canEdit && (
+                  <button type="button" onClick={() => setReopen((r) => ({ ...r, [it.item]: true }))}
+                    data-testid="oil-level-change" className="text-xs text-accent underline">{t('action.change')}</button>
+                )}
+              </>
             )}
 
-            {canEdit && !it.done && skipOpen !== it.item && (
+            {canEdit && (!it.done || reopen[it.item]) && skipOpen !== it.item && (
               <span className="ml-auto flex flex-wrap gap-2">
                 {/* ONE TAP, and the most important control here: a clean car must be able to satisfy
                     the findings prompt without a skip, or every properly-checked clean car becomes

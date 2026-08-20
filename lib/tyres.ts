@@ -208,6 +208,22 @@ export async function recordTyreReadings(
       },
     });
 
+    // ── measured_at IS NOT RELIABLE BEFORE 20 AUGUST 2026, ON A SMALL KNOWN SET ────────────────
+    // The upsert below sets measured_at on every write. Until 20 Aug the phone's capture form
+    // failed to seed from this visit's readings when the card was painted from the IndexedDB
+    // cache, so it opened blank and one save re-wrote all four corners — re-dating corners nobody
+    // had re-measured. Fixed in 526411c; the swept damage, measured 20 August 2026:
+    //
+    //   DE59SXW  CONFIRMED — invoice 100003222 froze four readings at 14:36 and all four now
+    //            carry 14:40. Two corners were genuinely re-measured; front-left and front-right
+    //            kept their VALUES and lost their dates.
+    //   LL67ZZK  INDETERMINATE — one whole-set write at 13:08, no invoice and no earlier snapshot,
+    //            so a first capture and a re-date are indistinguishable here. Up to 4 corners.
+    //   Nothing else: only four cards in the database carry tyre readings at all.
+    //
+    // NOT REPAIRED, and not repairable: the values are right and no original timestamp survives.
+    // Recorded here because this is the function that would turn those dates into a wear rate.
+    //
     // THE WEAR RATE, for THIS corner on THIS car — from history, never a textbook figure.
     const history = (await (tx as Prisma.TransactionClient).tyreReading.findMany({
       where: { group_id: args.groupId, vehicle_id: args.vehicleId, corner: c.corner },

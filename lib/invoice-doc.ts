@@ -99,6 +99,9 @@ export type InvoiceDoc = {
    * customer's copy must not disagree with a reprint.
    */
   dueItemsBlock: string | null;
+  /** What this visit SORTED — findings closed as `fixed` on this card, frozen at issue. NULL on
+   *  most invoices, and on every invoice minted before 2026-08-20. */
+  workDoneBlock: string | null;
   lines: InvoiceDocLine[];
   totals: InvoiceTotals;
   currency: string;
@@ -220,6 +223,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       : { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
     // FROZEN, always — no live branch. See the type above for why this differs from reg/VIN.
     dueItemsBlock: inv.due_items_snapshot ?? null,
+    workDoneBlock: inv.work_done_snapshot ?? null,
     lines,
     totals,
     currency: inv.site?.currency_code ?? 'GBP',

@@ -1577,6 +1577,11 @@ model VehicleDueItem {
   closed_job_card_id String?
   /// Why it was closed without being done, when that is what happened. NULL while open.
   closed_reason String?
+  /// WHY it was closed, typed so it can be branched on: fixed | declined | no_longer_applies.
+  /// `closed_reason` keeps the words; this decides the consequence — only `fixed` prints on the
+  /// customer's document as work done. NULL means we do not know, which is the honest state of
+  /// every closure written before 2026-08-20, when the only UI sent an id and nothing else.
+  closed_kind String?
 
   created_by String?
   created_at DateTime @default(now())
@@ -1588,6 +1593,8 @@ model VehicleDueItem {
 
   /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
   @@index([group_id, vehicle_id, closed_at])
+  /// The work-done block on an invoice reads exactly this pair.
+  @@index([closed_job_card_id, closed_kind])
   /// A machine writer finding its OWN open item. Paired with a partial unique index on
   /// (group, vehicle, observation_key) WHERE closed_at IS NULL — declared in the migration, since
   /// Prisma cannot express a partial unique. One open item per observation per car, enforced.
@@ -2489,6 +2496,9 @@ model Invoice {
   /// NULL on every invoice minted before this existed, and on any card whose vehicle had nothing to
   /// say. Honest-null: no block was captured, as distinct from a block that was empty.
   due_items_snapshot String?
+  /// WHAT THIS VISIT SORTED — findings closed as `fixed` on this card, frozen at issue like the
+  /// advisories beside them. NULL means nothing was sorted, which is most visits.
+  work_done_snapshot String?
 }
 
 model InvoiceLine {

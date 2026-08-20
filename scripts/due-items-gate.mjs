@@ -247,11 +247,22 @@ check('  …and it is an OFFER, not a closure — nothing here writes', typeof c
 
 const ui3 = readFileSync('components/jobcard/DueItems.tsx', 'utf8');
 check('the card PROMPTS when the offer is on', /due-closure-offer-/.test(ui3) && /closurePrompt/.test(ui3));
-check('  …and the prompt is a button a human presses', /due-closure-confirm/.test(ui3) && /onClick=\{\(\) => close\(it\.id\)\}/.test(ui3));
+// The prompt now names the KIND as well, because closing says why since 2026-08-20 — and this one
+// is `fixed` by construction: it only appears when every linked line is on an issued invoice.
+check('  …and the prompt is a button a human presses',
+  /due-closure-confirm/.test(ui3) && /onClick=\{\(\) => close\(it\.id, 'fixed'\)\}/.test(ui3));
 // NOTHING in the invoice path may close a finding.
 const issue = readFileSync('lib/invoice-issue.ts', 'utf8');
-check('the MINT never closes a finding', !/closed_at/.test(issue),
+// RE-AIMED 2026-08-20. This banned the STRING `closed_at` anywhere in the file, and went red when
+// the mint began READING closures to print what the visit sorted — it orders them by closed_at.
+// Reading is not closing. The rule was always about the WRITE, so that is what is asserted:
+// the mint may look at a finding's closure, and may not create one.
+check('the MINT never closes a finding',
+  !/vehicleDueItem\.(update|updateMany|create|createMany|upsert)/.test(issue),
   'invoicing is not a statement that the car is fine');
+check('  …though it may READ them, which is how the work-done block exists',
+  /vehicleDueItem\.findMany/.test(issue) && /closed_kind: 'fixed'/.test(issue),
+  'the block prints what this visit sorted; printing is not closing');
 const statusApi = readFileSync('pages/api/jobcard-status.ts', 'utf8');
 check('  …and neither does the invoiced transition', !/closed_at|DueItem/.test(statusApi));
 

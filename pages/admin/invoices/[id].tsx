@@ -80,6 +80,7 @@ type PageProps = {
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   /** The frozen due-items block, as printed at mint (lib/due-items::printedDueItemsBlock). */
   dueItemsBlock: string | null;
+  workDoneBlock: string | null;
   lines: Line[];
   totals: Totals;
   currency: string;
@@ -683,6 +684,14 @@ export default function InvoicePage(props: PageProps) {
               being charged for; advice adjacent to priced rows can read as one of them. Moving it
               is a LAYOUT change: freeze-at-issue governs CONTENT, and the frozen
               due_items_snapshot is untouched. See lib/invoice-pdf for the full reasoning. */}
+          {/* Above the advisories, matching the PDF: what was sorted, then what is still due. */}
+          {props.workDoneBlock && (
+            <div className="mt-6 border-t border-line pt-4" data-testid="invoice-work-done">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('workDone.heading')}</p>
+              <p className="text-sm text-muted whitespace-pre-line">{props.workDoneBlock}</p>
+            </div>
+          )}
+
           {props.dueItemsBlock && (
             <div className="mt-6 border-t border-line pt-4" data-testid="invoice-due-items">
               <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('advisory.heading')}</p>

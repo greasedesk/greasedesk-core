@@ -234,6 +234,18 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
 
             Deliberately NOT frozen as a layout version on the row. That column would accumulate
             variants forever to protect something nobody is harmed by. */}
+        {/* WHAT WAS SORTED COMES FIRST. A customer reading "coolant below the minimum mark" wants
+            to know it was dealt with before they read what is still outstanding — and until today
+            the top-up printed as an advisory on the very invoice for the visit that fixed it. */}
+        {doc.workDoneBlock ? (
+          <View style={{ marginTop: 14 }}>
+            <Text style={[S.label, { marginBottom: 3 }]}>{t('workDone.heading')}</Text>
+            {doc.workDoneBlock.split('\n').map((line, i) => (
+              <Text key={i} style={S.muted}>{line}</Text>
+            ))}
+          </View>
+        ) : null}
+
         {doc.dueItemsBlock ? (
           <View style={{ marginTop: 14 }}>
             <Text style={[S.label, { marginBottom: 3 }]}>{t('advisory.heading')}</Text>

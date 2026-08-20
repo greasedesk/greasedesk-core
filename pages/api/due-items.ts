@@ -20,6 +20,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
+import { refuseClosure, closureFields } from '@/lib/due-item-closure';
 import { refuseDueItem, responseAtFor, openDueItemsForVehicle, closureOffersForCard, type DueBasis, type DueItemResponse } from '@/lib/due-items';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -79,8 +80,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── CLOSE ─────────────────────────────────────────────────────────────────────────────────────
   if (req.method === 'PATCH') {
-    const { id, closedReason } = (req.body || {}) as { id?: string; closedReason?: string };
+    // ── A CLOSURE NOW SAYS WHY, AND THE KIND IS REQUIRED ────────────────────────────────────────
+    // This accepted an OPTIONAL closedReason and the only caller sent neither it nor a card, so
+    // every human closure through the job card wrote closed_reason NULL and closed_job_card_id
+    // NULL — two of TMBS's three closed findings are in that state, and nothing can tell whether
+    // the garage did the work or the customer refused it. The kind is now demanded.
+    const { id, closedKind, closedReason, jobCardId } = (req.body || {}) as
+      { id?: string; closedKind?: string; closedReason?: string; jobCardId?: string };
     if (!id) return res.status(400).json({ message: 'id is required.' });
+    const refusal = refuseClosure({ kind: closedKind as never, note: closedReason ?? null, jobCardId: jobCardId ?? null });
+    if (refusal) return res.status(400).json({ message: refusal.message, code: refusal.code });
     const item = await prisma.vehicleDueItem.findFirst({
       where: { id, group_id: groupId },
       select: { id: true, closed_at: true, vehicle: { select: { job_cards: { select: { site_id: true }, take: 1, orderBy: { created_at: 'desc' } } } } },
@@ -93,14 +102,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.vehicleDueItem.update({
         where: { id },
-        data: { closed_at: new Date(), closed_reason: (closedReason ?? '').trim().slice(0, 300) || null },
+        data: closureFields({ kind: closedKind as never, note: closedReason ?? null, jobCardId: jobCardId ?? null }),
       });
       await writeAudit(tx, {
         groupId, userId: user.id as string,
         // Keyed on the ITEM, not a card: a finding closed a year later belongs to the car's
         // history, and the card it was found on may be long gone.
         entity: 'VehicleDueItem', entityId: id,
-        action: 'due_item.closed', diff: { closedReason: closedReason ?? null },
+        action: 'due_item.closed', diff: { closedKind, closedReason: closedReason ?? null, jobCardId: jobCardId ?? null },
       });
     });
     return res.status(200).json({ ok: true });

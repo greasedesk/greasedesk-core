@@ -14,6 +14,7 @@
  * date/mileage boxes happens to be filled.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import { CLOSED_KINDS, CLOSED_KIND_LABEL, type ClosedKind } from '@/lib/due-item-closure';
 import { useTranslation } from 'next-i18next';
 
 export type DueItemView = {
@@ -84,10 +85,25 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
     } finally { setBusy(false); }
   }
 
-  async function close(id: string) {
+  // ── CLOSING NOW SAYS WHY ──────────────────────────────────────────────────────────────────
+  // This sent `{ id }` and nothing else. The API had accepted an optional reason since the day it
+  // was written and no caller ever passed one, so every closure a human made through this list
+  // recorded neither a reason nor a card — and "the garage did it" became indistinguishable from
+  // "the customer refused it" on the car's permanent history.
+  const [closing, setClosing] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  async function close(id: string, kind: ClosedKind) {
     setBusy(true);
     try {
-      await fetch('/api/due-items', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      const r = await fetch('/api/due-items', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        // jobCardId ALWAYS, not only for `fixed`: it is true of every closure made from a card,
+        // and the server is what insists on it for the one kind that cannot do without it.
+        body: JSON.stringify({ id, closedKind: kind, closedReason: note.trim() || undefined, jobCardId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.message || t('dueItems.saveError')); return; }
+      setClosing(null); setNote('');
       await reload();
     } finally { setBusy(false); }
   }
@@ -132,9 +148,30 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
               <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${it.customerResponse === 'declined' ? 'bg-warn-soft text-warn' : 'bg-surface border border-line text-muted'}`}>
                 {t(`dueItems.response.${it.customerResponse}`)}
               </span>
-              {canEdit && (
-                <button type="button" disabled={busy} onClick={() => close(it.id)}
+              {canEdit && closing !== it.id && (
+                <button type="button" disabled={busy} onClick={() => { setClosing(it.id); setNote(''); }}
+                  data-testid={`due-item-close-${it.id}`}
                   className="ml-auto text-xs text-muted hover:text-ink underline">{t('dueItems.close')}</button>
+              )}
+              {canEdit && closing === it.id && (
+                <div className="w-full mt-2 space-y-2" data-testid="due-item-close-panel">
+                  {/* THREE OUTCOMES, NAMED. "We sorted it" is first because it is the one that
+                      reaches the customer's document, and the one that had no way of being said. */}
+                  <div className="flex flex-wrap gap-2">
+                    {CLOSED_KINDS.map((k) => (
+                      <button key={k} type="button" disabled={busy} onClick={() => close(it.id, k)}
+                        data-testid={`due-item-kind-${k}`}
+                        className={`text-xs font-semibold rounded-lg px-3 py-2 border ${k === 'fixed' ? 'bg-ok-soft text-ok border-ok' : 'bg-surface border-line text-ink'}`}>
+                        {CLOSED_KIND_LABEL[k]}
+                      </button>
+                    ))}
+                    <button type="button" disabled={busy} onClick={() => { setClosing(null); setNote(''); }}
+                      className="text-xs text-muted underline px-2">{t('action.cancel')}</button>
+                  </div>
+                  <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300}
+                    placeholder={t('dueItems.closeNote')} data-testid="due-item-close-note"
+                    className="w-full min-h-[40px] px-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                </div>
               )}
               {/* THE PROMPT, not the rule. Every line linked to this finding is on an issued
                   invoice, so the work is very likely finished — but "very likely" is not a reason
@@ -144,7 +181,11 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
                 <div className="w-full mt-2 flex flex-wrap items-center gap-2 bg-ok-soft rounded-lg px-3 py-2"
                   data-testid={`due-closure-offer-${it.id}`}>
                   <span className="text-xs text-ok flex-1">{t('dueItems.closurePrompt')}</span>
-                  <button type="button" disabled={busy} onClick={() => close(it.id)}
+                  {/* `fixed` BY CONSTRUCTION. This prompt only appears when every line linked to
+                      the finding is on an ISSUED invoice — the garage did the work and billed it,
+                      which is the definition of the kind. A human still confirms; what they cannot
+                      do from here is close it as something else. */}
+                  <button type="button" disabled={busy} onClick={() => close(it.id, 'fixed')}
                     data-testid="due-closure-confirm"
                     className="text-xs font-semibold bg-ok text-white rounded-lg px-3 py-1.5">{t('dueItems.closureConfirm')}</button>
                 </div>

@@ -37,6 +37,8 @@ export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt,
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState<string | null>(null);
+  /** Items a mechanic has re-opened to correct. Never pre-populated: a done item stays done-looking. */
+  const [reopen, setReopen] = useState<Record<string, boolean>>({});
   const [reason, setReason] = useState('');
   const prompted = items.filter((i) => i.prompted);
   if (!prompted.length) return null;
@@ -70,13 +72,23 @@ export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt,
                 done, and recording a level marks it done — so the selected-chip highlight beside
                 it could never appear, and the reading a mechanic had just taken became invisible
                 the instant they took it. The tick said "something happened"; nothing said what. */}
-            {it.item === 'oil_level' && it.done && oilLevel && (
-              <p className="text-xs text-ok mt-1" data-testid="ph-oil-recorded">
+            {it.item === 'oil_level' && it.done && oilLevel && !reopen[it.item] && (
+              <p className="text-xs text-ok mt-1 flex items-center gap-2" data-testid="ph-oil-recorded">
                 {OIL.find(([lv]) => lv === oilLevel)?.[1] ?? oilLevel}
+                {/* ── THE WAY BACK IN, WHICH IS ALSO THE WAY TO CLOSE THE ADVISORY ─────────────
+                    Recording a level marks the item done, and the chips render only while it is
+                    NOT done — so after topping the oil up there was no way to say so, and the
+                    "Oil level at the minimum mark" finding stayed open and printed on the invoice
+                    for a visit where the garage had fixed it.
+                    The mechanism was already there: /api/intake-items closes the open oil finding
+                    with 'Re-checked and within range' and the card id the moment a healthy level
+                    is recorded. It was simply unreachable. This is the door. */}
+                <button type="button" onClick={() => setReopen((r) => ({ ...r, [it.item]: true }))}
+                  data-testid="ph-oil-change" className="text-xs text-accent underline">Change</button>
               </p>
             )}
 
-            {!it.done && skipOpen !== it.item && (
+            {(!it.done || reopen[it.item]) && skipOpen !== it.item && (
               <div className="flex flex-wrap gap-2 mt-2">
                 {/* ONE TAP for the clean car — the affirmative that keeps the escalation believable. */}
                 {/* THE DIPSTICK, on the phone — the surface the mechanic is actually holding when

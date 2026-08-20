@@ -1,0 +1,12 @@
+-- WHAT THE VISIT SORTED, frozen at issue beside the advisories.
+--
+-- The advisory block told a customer what their car still needs. Nothing told them what the garage
+-- had just dealt with — so a coolant top-up and an oil top-up printed as OUTSTANDING advisories on
+-- the invoice for the visit that fixed them (DE59SXW, invoice 100003222, 20 Aug 2026).
+--
+-- A separate column rather than a £0.00 line: a line implies a price decision and reaches totals,
+-- VAT and margin. This is a statement, not a charge.
+--
+-- NULLABLE, meaning "nothing was sorted on this visit" — which is most visits, and is different
+-- from an empty string. Every invoice minted before today is NULL and honestly so.
+ALTER TABLE "Invoice" ADD COLUMN "work_done_snapshot" TEXT;

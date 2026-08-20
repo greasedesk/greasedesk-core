@@ -19,6 +19,7 @@
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
 import { printedDueItemsBlock, openDueItemsForVehicle } from '@/lib/due-items';
+import { printedWorkDoneBlock } from '@/lib/due-item-closure';
 import { printedTyreLines } from '@/lib/tyres';
 import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
 import { Prisma } from '@prisma/client';
@@ -105,6 +106,21 @@ async function createInvoiceRow(
       : null,
   });
 
+  // ── WHAT THIS VISIT SORTED ────────────────────────────────────────────────────────────────────
+  // Scoped to the CARD, not the car: the block describes this visit. A finding closed as `fixed`
+  // on this job appears; one closed months ago on another job does not, and one closed as declined
+  // or no-longer-applies never does.
+  //
+  // Frozen here with everything else, and for the same reason — "we topped the coolant up" is a
+  // claim on a document the customer keeps, so it must say what was true at issue.
+  const workDone = card.vehicle?.id
+    ? printedWorkDoneBlock((await (tx as Prisma.TransactionClient).vehicleDueItem.findMany({
+        where: { group_id: groupId, closed_job_card_id: jobCardId, closed_kind: 'fixed' },
+        select: { description: true, closed_kind: true },
+        orderBy: { closed_at: 'asc' },
+      })).map((r) => ({ description: r.description, closedKind: r.closed_kind })))
+    : null;
+
   const invoice = await tx.invoice.create({
     data: {
       group_id: groupId,
@@ -129,6 +145,7 @@ async function createInvoiceRow(
       // list changes as items are closed, and the MOT expiry moves when the car is retested, so a
       // live read would make a reprint disagree with the page the customer was handed.
       due_items_snapshot: dueItemsBlock,
+      work_done_snapshot: workDone,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,
       customer_name_snapshot: card.customer?.name ?? '',

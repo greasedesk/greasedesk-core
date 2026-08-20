@@ -95,7 +95,8 @@
     "draft": "Reopen",
     "working": "Working…",
     "error": "Could not update the status.",
-    "no_show": "Mark as no-show"
+    "no_show": "Mark as no-show",
+    "change": "Change"
   },
   "stage": {
     "title": "Stages",
@@ -446,7 +447,8 @@
     "closureConfirm": "Mark done",
     "stripTitle": "What this car also needs",
     "stripWanted": "wants a price",
-    "stripHint": "Recorded at the car, on the Intake tab."
+    "stripHint": "Recorded at the car, on the Intake tab.",
+    "closeNote": "Add a note (optional)"
   },
   "intake": {
     "title": "Before the car goes in",

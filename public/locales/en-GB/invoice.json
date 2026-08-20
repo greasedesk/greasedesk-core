@@ -132,5 +132,8 @@
   "payOnline": "View and pay online",
   "advisory": {
     "heading": "Advisory — not charged for"
+  },
+  "workDone": {
+    "heading": "Sorted on this visit"
   }
 }
