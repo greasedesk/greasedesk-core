@@ -471,6 +471,7 @@ model Group {
   tyre_readings      TyreReading[]
   battery_readings   BatteryReading[]
   marketing_contacts MarketingContact[]
+  schedule_readings  ServiceScheduleReading[]
 }
 
 /**
@@ -1827,6 +1828,43 @@ model MarketingContact {
   @@index([group_id, reason, for_date])
 }
 
+/// WHAT THE SERVICE COMPUTER SAID ON ARRIVAL — a fact about a VISIT, not about a car.
+///
+/// The departure reading is what the car needs next and is a VehicleDueItem; this is what was due
+/// when it came in. Keeping only one of them collapses "60,000 on arrival, 70,000 after" — a
+/// completed sale — into the same row as "60,000 on arrival, still 60,000 after", which is a job
+/// that walked. Never printed on an invoice: the customer's document says what the car needs NEXT.
+///
+/// Shaped like TyreReading and BatteryReading, with one deliberate difference: job_card_id is NOT
+/// NULL and cascades. A tyre depth outlives its card because it is about the car; this does not,
+/// because without the visit there is no reading.
+model ServiceScheduleReading {
+  id          String @id @default(uuid())
+  group_id    String
+  vehicle_id  String
+  job_card_id String
+
+  /// A key from lib/service-schedule's catalogue. Not an enum: the catalogue is code, and a new
+  /// item should not need a migration to be readable.
+  item_key String
+
+  /// The 1st of the month — month precision by construction, because a service computer prints
+  /// "11/2025". A row must carry at least one leg (CHECK constraint).
+  due_month   DateTime?
+  due_mileage Int?
+
+  recorded_by String?
+  recorded_at DateTime @default(now())
+
+  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle  Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+
+  /// One reading per item per visit — re-reading corrects, as (job_card_id, corner) does for tyres.
+  @@unique([job_card_id, item_key])
+  @@index([group_id, vehicle_id, recorded_at])
+}
+
 model BatteryReading {
   id         String @id @default(uuid())
   group_id   String
@@ -1935,6 +1973,7 @@ model Vehicle {
   tyre_readings    TyreReading[]
   battery_readings BatteryReading[]
   marketing_contacts MarketingContact[]
+  schedule_readings  ServiceScheduleReading[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
@@ -2166,6 +2205,7 @@ model JobCard {
   intake_nothing_found_by String?
   tyre_readings      TyreReading[]
   battery_readings   BatteryReading[]
+  schedule_readings  ServiceScheduleReading[]
 }
 
 model JobCardPhoto {

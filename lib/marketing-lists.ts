@@ -76,6 +76,35 @@ export function noContactLabel(c: { sms_opt_out: boolean | null; email_opt_out: 
 export type MotBand = 'expired' | 'due';
 
 /**
+ * ── WHAT THE EXPIRED BAND ACTUALLY CONTAINS — MEASURED 19 Aug 2026, TMBS, 221 cars ──────────────
+ * FOUR cars genuinely lapsed. Not fourteen: ten of the fourteen showing as expired had simply had
+ * their MOT done somewhere and our stored date had never been refreshed (see lib/dvsa's
+ * motFieldsToWrite for the fill-only defect that caused it). Any band built on a stored date is
+ * only as good as the last refresh, which is why the per-row check exists.
+ *
+ * The four, and the shape is the interesting part:
+ *
+ *     C3KUM     271 days lapsed
+ *     AJ15MXK   143
+ *     VK11SWN   142
+ *     R22CEH     61
+ *
+ * Nothing between 61 and 142 days. A cliff, not a drift — which reads as one live prospect and
+ * three cars that have gone elsewhere or off the road, rather than a backlog of calls. That is a
+ * RETENTION question and not a sales list, and it is the first real read either of us has had on
+ * it. Dated because it will age: re-measure before quoting it, and if the shape has changed the
+ * change is the finding.
+ */
+export const EXPIRED_BAND_BASELINE = {
+  measuredOn: '2026-08-19',
+  tenant: 'The Mini Specialist Ltd',
+  fleet: 221,
+  genuinelyLapsed: 4,
+  staleNotLapsed: 10,
+  lapsedDays: [271, 143, 142, 61],
+} as const;
+
+/**
  * Which band an MOT date falls in, or null for a car that is neither.
  *
  * EXPIRED IS ITS OWN BAND, not "very due". A lapsed MOT is a better call than one three weeks away

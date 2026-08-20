@@ -495,8 +495,19 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     lastBattery,
     /** How often this GARAGE has recorded each observation — the tap-list's own ordering. */
     observationCounts,
+    /** WHAT THE COMPUTER SAID ON ARRIVAL — a visit measurement, scoped to THIS card. Never printed;
+     *  shown on Intake to be corrected, and on Completion beside each row for comparison. */
+    scheduleOnArrival: (await prisma.serviceScheduleReading.findMany({
+      where: { group_id: groupId, job_card_id: cardId },
+      select: { item_key: true, due_month: true, due_mileage: true },
+    })).map((r) => ({
+      key: r.item_key,
+      dueDate: r.due_month ? r.due_month.toISOString().slice(0, 10) : null,
+      dueMileage: r.due_mileage,
+    })),
     /** The car's CURRENT service schedule — the open due items carrying a schedule key, so the
-     *  form opens on what is already recorded rather than blank. A schedule is a current state. */
+     *  form opens on what is already recorded rather than blank. A schedule is a current state.
+     *  Written by the DEPARTURE reading only; the invoice freezes these. */
     serviceSchedule: dueItems
       .filter((d) => d.observationKey && SCHEDULE_KEYS.has(d.observationKey))
       .map((d) => ({ key: d.observationKey as string, dueDate: d.dueDate, dueMileage: d.dueMileage })),

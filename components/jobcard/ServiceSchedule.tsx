@@ -33,8 +33,16 @@ export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage
 type Props = {
   jobCardId: string;
   canEdit: boolean;
+  /**
+   * WHICH READING THIS IS. `arrival` on Intake writes a visit measurement; `departure` on
+   * Completion writes what the car needs next, and is the only one the invoice ever reads.
+   */
+  stage: 'arrival' | 'departure';
   /** What is already recorded for this car, so the form opens on the current schedule. */
   recorded?: ScheduleRow[];
+  /** On Completion only: what the computer said when the car came in, shown beside each row so the
+   *  after reading is a comparison rather than a blank form. */
+  onArrival?: ScheduleRow[];
   /** DVSA, read-only. NULL when we have no MOT date for this car. */
   motExpiry?: string | null;
   onSaved: () => void;
@@ -47,7 +55,7 @@ const BASIS_LABEL: Record<string, string> = {
   whichever_first: 'whichever comes first',
 };
 
-export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], motExpiry = null, onSaved }: Props) {
+export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], motExpiry = null, onSaved }: Props) {
   const seed: Record<string, { month: string; miles: string }> = {};
   for (const s of SCHEDULE_ITEMS) {
     const r = recorded.find((x) => x.key === s.key);
@@ -72,7 +80,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
       }));
       const r = await fetch('/api/service-schedule', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, entries }),
+        body: JSON.stringify({ jobCardId, stage, entries }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j?.message ?? 'The schedule didn’t save.'); return; }
@@ -86,10 +94,13 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
 
   return (
     <div className="bg-surface border border-line rounded-xl p-5" data-testid="service-schedule">
-      <h3 className="text-sm font-semibold text-ink mb-1">Service schedule</h3>
+      <h3 className="text-sm font-semibold text-ink mb-1">
+        {stage === 'arrival' ? 'Service schedule on arrival' : 'Service schedule — what’s next'}
+      </h3>
       <p className="text-xs text-muted mb-3">
-        Off the service computer. Each row asks for what that item is actually scheduled by — leave a
-        row blank if it isn’t scheduled.
+        {stage === 'arrival'
+          ? 'Off the service computer as the car came in — what was already due. Leave a row blank if it isn’t scheduled.'
+          : 'Off the service computer after the work. This is what goes on the invoice and drives next year’s reminder.'}
       </p>
 
       {/* DVSA, READ-ONLY. Shown so nobody retypes it as a row, which would print it on the invoice
@@ -119,9 +130,18 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
                   onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
                   data-testid={`schedule-miles-${s.key}`} className={`${field} w-24`} />
               ) : <span />}
-              {/* DECLARED by the item, so it reads the same before and after anything is typed. */}
+              {/* DECLARED by the item, so it reads the same before and after anything is typed.
+                  On Completion it also carries what the car arrived with, so the mechanic is
+                  correcting a number rather than recalling one. */}
               <span className="text-xs text-muted min-w-[9rem]" data-testid={`schedule-basis-${s.key}`}>
                 {BASIS_LABEL[s.basis]}
+                {stage === 'departure' && (() => {
+                  const a = onArrival.find((x) => x.key === s.key);
+                  if (!a) return null;
+                  const bits = [a.dueMileage != null ? `${a.dueMileage.toLocaleString('en-GB')} mi` : null,
+                                storedDateToMonth(a.dueDate)].filter(Boolean);
+                  return <em className="not-italic block text-[11px] opacity-70" data-testid={`schedule-arrival-${s.key}`}>on arrival: {bits.join(' · ')}</em>;
+                })()}
               </span>
             </div>
           );
@@ -129,7 +149,9 @@ export default function ServiceSchedule({ jobCardId, canEdit, recorded = [], mot
       </div>
 
       <p className="text-xs text-muted mt-3">
-        Anything else — auto transmission fluid, diesel additive — goes in as a finding below.
+        {stage === 'arrival'
+          ? 'This is kept with the visit, not printed. Anything else — auto transmission fluid, diesel additive — goes in as a finding below.'
+          : 'Anything else — auto transmission fluid, diesel additive — goes in as a finding.'}
       </p>
 
       {err && <p className="text-sm text-danger mt-2" data-testid="schedule-error">{err}</p>}

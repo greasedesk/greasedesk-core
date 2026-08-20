@@ -1,6 +1,19 @@
 /**
  * File: pages/api/service-schedule.ts
- * POST { jobCardId, entries: [{ key, dueDate?, dueMileage? }] } — the service computer, transcribed.
+ * POST { jobCardId, stage: 'arrival' | 'departure', entries } — the service computer, transcribed.
+ *
+ * ── TWO READINGS, TWO DESTINATIONS, AND THE STAGE IS DECLARED ───────────────────────────────────
+ * The computer is read twice in a visit and the readings mean different things:
+ *
+ *   arrival    what was due when the car came in. A fact about a VISIT → ServiceScheduleReading.
+ *              Never printed: the customer's invoice says what the car needs NEXT, not what it
+ *              needed before we did the work.
+ *   departure  what the car needs now, after the indicator was reset and the pads went on. A fact
+ *              about a CAR → VehicleDueItem, and the only one the invoice reads.
+ *
+ * The stage is a required parameter rather than something inferred from which tab called. A caller
+ * that has not said which reading it is holding does not know, and guessing would put an arrival
+ * figure on a customer's document as though it were what happens next.
  *
  * OPERATIONAL authority. One transaction: the whole schedule lands, or none of it does — a garage
  * reading half a schedule back would not know which half.
@@ -32,8 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
   const groupId = user.group_id as string;
 
-  const { jobCardId, entries } = (req.body || {}) as { jobCardId?: string; entries?: ScheduleEntry[] };
+  const { jobCardId, stage, entries } = (req.body || {}) as
+    { jobCardId?: string; stage?: 'arrival' | 'departure'; entries?: ScheduleEntry[] };
   if (!jobCardId || !Array.isArray(entries)) return res.status(400).json({ message: 'A job card and its schedule are required.' });
+  if (stage !== 'arrival' && stage !== 'departure') {
+    return res.status(400).json({ message: 'Say whether this is the arrival or the departure reading.' });
+  }
   for (const e of entries) {
     if (!scheduleByKey(String(e?.key))) return res.status(400).json({ message: 'Unknown schedule item.' });
   }
@@ -50,6 +67,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
+
+  // ── ARRIVAL: A VISIT MEASUREMENT ─────────────────────────────────────────────────────────────
+  // Its own table, like a tyre depth or a battery test, and never a due item. Blank rows are simply
+  // not written — a CHECK constraint refuses a row with no leg, because a reading of nothing is not
+  // a reading. Re-reading the computer on the same visit corrects rather than stacks.
+  if (stage === 'arrival') {
+    const out = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      let written = 0, cleared = 0;
+      for (const e of paired) {
+        const legs = legsFor(e.item.basis);
+        if (isBlank(e.item, e)) {
+          const gone = await tx.serviceScheduleReading.deleteMany({ where: { job_card_id: card.id, item_key: e.item.key } });
+          cleared += gone.count;
+          continue;
+        }
+        const data = {
+          due_month: legs.date ? monthToStoredDate(e.dueMonth) : null,
+          due_mileage: legs.mileage ? (e.dueMileage ?? null) : null,
+          recorded_by: user.id as string,
+          recorded_at: new Date(),
+        };
+        await tx.serviceScheduleReading.upsert({
+          where: { job_card_id_item_key: { job_card_id: card.id, item_key: e.item.key } },
+          create: { group_id: groupId, vehicle_id: card.vehicle_id, job_card_id: card.id, item_key: e.item.key, ...data },
+          update: data,
+        });
+        written += 1;
+      }
+      await writeAudit(tx, {
+        groupId, userId: user.id as string, jobCardId,
+        action: 'service_schedule.recorded',
+        diff: { stage, written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+      });
+      return { written, cleared };
+    });
+    return res.status(200).json({ ok: true, stage, ...out });
+  }
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     let written = 0, cleared = 0;
@@ -105,10 +159,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await writeAudit(tx, {
       groupId, userId: user.id as string, jobCardId,
       action: 'service_schedule.recorded',
-      diff: { written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+      diff: { stage, written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
     });
     return { written, cleared };
   });
 
-  return res.status(200).json({ ok: true, ...result });
+  return res.status(200).json({ ok: true, stage, ...result });
 }

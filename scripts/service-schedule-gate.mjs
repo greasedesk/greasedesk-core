@@ -110,8 +110,15 @@ try {
   console.log('\n— transcribed onto a throwaway car —');
   const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76SCH', make: 'Sched', model: 'Fixture' }, select: { id: true } });
+  // FAR ENOUGH ALONG THE SPINE TO REACH COMPLETION. lib/jobcard-tabs gates In-Job on intake being
+  // complete AND the quote accepted, and Completion on In-Job — so a card carrying only
+  // stage_details_done can show the arrival panel and never the departure one. Set directly as
+  // fixture setup: it is a state a real card reaches, and the gating has its own gate.
   const card = await prisma.jobCard.create({
-    data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'in_progress', stage_details_done: true },
+    data: {
+      group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'in_progress',
+      stage_details_done: true, stage_intake_done: true, stage_injob_done: true,
+    },
     select: { id: true },
   });
   fix = { veh: veh.id, card: card.id };
@@ -122,11 +129,36 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  const post = (entries) => page.evaluate(async (b) => {
+  const post = (entries, stage = 'departure') => page.evaluate(async (b) => {
     const r = await fetch('/api/service-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin', body: JSON.stringify(b) });
     return { status: r.status, body: await r.json().catch(() => ({})) };
-  }, { jobCardId: card.id, entries });
+  }, { jobCardId: card.id, stage, entries });
+
+  // ── THE ARRIVAL READING IS A VISIT FACT AND NEVER REACHES THE INVOICE ────────────────────────
+  // The load-bearing distinction: what the computer said on arrival is a fact about a VISIT; what
+  // the car needs next is a fact about a CAR. Collapsing them loses "60,000 on arrival, 70,000
+  // after" — a completed sale — into the same row as "still 60,000", which is a job that walked.
+  console.log('\n— arrival is kept, and printed nowhere —');
+  const arrival = await post([
+    { key: 'schedule_oil_service', dueMonth: '2026-09', dueMileage: 60000 },
+    { key: 'schedule_pads_front', dueMonth: null, dueMileage: 45000 },
+  ], 'arrival');
+  check('the arrival reading saves', arrival.status === 200 && arrival.body.written === 2, JSON.stringify(arrival.body));
+  check('  …into its own table, not as due items',
+    (await prisma.serviceScheduleReading.count({ where: { job_card_id: card.id } })) === 2
+    && (await prisma.vehicleDueItem.count({ where: { vehicle_id: veh.id } })) === 0,
+    'a visit measurement, shaped like a tyre depth');
+
+  // AND THE INVOICE PRINTS NOTHING FOR A CARD THAT ONLY EVER HAD AN ARRIVAL READING. This is the
+  // silent-and-wrong case: an arrival figure on a customer's document, presented as what happens
+  // next, when in fact we did the work and it no longer applies.
+  const arrivalOnlyBlock = D.printedDueItemsBlock({
+    motExpiry: null,
+    items: await D.openDueItemsForVehicle(prisma, ZZ, veh.id),
+  });
+  check('a card with ONLY an arrival reading prints no schedule line', arrivalOnlyBlock === null,
+    'better an absent line than an arrival figure dressed as what is next');
 
   const r1 = await post([
     { key: 'schedule_oil_service', dueMonth: '2027-03', dueMileage: 60000 },
@@ -134,7 +166,23 @@ try {
     { key: 'schedule_vehicle_check', dueMonth: '2027-08', dueMileage: null },
     { key: 'schedule_brake_fluid', dueMonth: null, dueMileage: null },
   ]);
-  check('the schedule saves', r1.status === 200 && r1.body.written === 3, JSON.stringify(r1.body));
+  check('the DEPARTURE schedule saves', r1.status === 200 && r1.body.written === 3, JSON.stringify(r1.body));
+  check('  …and the arrival reading is still there beside it',
+    (await prisma.serviceScheduleReading.count({ where: { job_card_id: card.id } })) === 2,
+    'the departure reading must not overwrite what the car arrived with');
+  const arrivalOil = await prisma.serviceScheduleReading.findFirst({ where: { job_card_id: card.id, item_key: 'schedule_oil_service' }, select: { due_mileage: true } });
+  const departureOil = await prisma.vehicleDueItem.findFirst({ where: { vehicle_id: veh.id, observation_key: 'schedule_oil_service' }, select: { due_mileage: true } });
+  check('the two readings differ and both survive',
+    arrivalOil?.due_mileage === 60000 && departureOil?.due_mileage === 60000,
+    `arrival ${arrivalOil?.due_mileage}, departure ${departureOil?.due_mileage}`);
+
+  console.log('\n— the stage is declared, never guessed —');
+  const noStage = await page.evaluate(async (b) => {
+    const r = await fetch('/api/service-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { jobCardId: card.id, entries: [{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: 30000 }] });
+  check('a request with no stage is refused', noStage.status === 400 && /arrival or the departure/.test(noStage.body?.message ?? ''),
+    'a caller that has not said which reading it holds does not know');
   const items = await prisma.vehicleDueItem.findMany({
     where: { vehicle_id: veh.id, closed_at: null },
     select: { observation_key: true, description: true, due_basis: true, due_mileage: true, customer_response: true },
@@ -166,6 +214,17 @@ try {
   const block = D.printedDueItemsBlock({ motExpiry: new Date('2026-08-21T00:00:00Z'), items: open });
   check('it reaches the invoice block with no new plumbing',
     /Next oil service due at 60,000 miles or by March 2027, whichever comes first/.test(block ?? ''), block);
+  // THE MINT READS DEPARTURE. Arrival said September 2026; departure said March 2027. The frozen
+  // block must carry the SECOND reading — not merely contain it, but not contain the first.
+  check('  …carrying the DEPARTURE month and not the arrival one', !/September 2026/.test(block ?? ''),
+    'arrival said 2026-09; the customer document must say what the car needs after the work');
+  // …and the same renderer DOES print September 2026 when that is the stored value, so the check
+  // above is discriminating rather than merely true.
+  check('  …and September 2026 is a string this renderer can produce',
+    /September 2026/.test(D.printedDueItemsBlock({ motExpiry: null,
+      items: open.map((i) => (i.observationKey === 'schedule_oil_service'
+        ? { ...i, dueDate: '2026-09-01' } : i)) }) ?? ''),
+    'otherwise the absence above proves nothing');
   check('  …saying the MONTH, never a day nobody chose', !/1 March 2027/.test(block ?? ''),
     'the 1st is stored so the row can be ordered; it is not a fact about the car');
   check('  …and the MOT appears exactly ONCE', (block.match(/MOT Expiry/g) ?? []).length === 1,
@@ -184,9 +243,12 @@ try {
   });
   check('  …above the findings panel', order.schedule != null && order.findings != null && order.schedule < order.findings,
     `schedule@${Math.round(order.schedule)} findings@${Math.round(order.findings)}`);
-  check('  …opening on what is already recorded',
-    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2027-03',
-    'a schedule is a current state, so the form shows it — as a month, which is what was recorded');
+  // INTAKE OPENS ON THE ARRIVAL READING, not the departure one. They are different facts and the
+  // tab that captures each shows its own — this assertion checked the departure value on the Intake
+  // tab and was passing only because both used to be the same row.
+  check('  …opening on the ARRIVAL reading, which is what this tab captures',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2026-09',
+    'the arrival reading, as a month');
   check('  …saying the basis the ITEM declares', 
     (await page.locator('[data-testid="schedule-basis-schedule_oil_service"]').innerText()).includes('whichever comes first'));
   // EACH ROW SHOWS ONLY ITS OWN CLOCK. This is the change: a pads row has no month field to fill in
@@ -205,6 +267,25 @@ try {
     'a dd/mm/yyyy picker forces a day nobody has');
   check('the MOT is shown and has no input', (await page.locator('[data-testid="schedule-mot"]').count()) === 1
     && (await page.locator('[data-testid="schedule-mot"] input').count()) === 0);
+
+  // ── AND THE DEPARTURE READING LIVES ON COMPLETION ────────────────────────────────────────────
+  // Where the work finishes, beside mileage-out, because it cannot be known until the job is done.
+  console.log('\n— the after reading, where the work ends —');
+  // NAVIGATED BY URL, not by clicking the strip. The active tab lives in ?tab= (JobCardWorkspace),
+  // and the strip side-scrolls on a narrow viewport so a tab further along is present, enabled and
+  // not clickable. Driving the real state rather than fighting the scroll container.
+  await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=completion`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="service-schedule"]', { timeout: 25000 });
+  check('the schedule panel is on Completion too', true);
+  check('  …opening on the DEPARTURE reading',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2027-03',
+    'what the car needs next — the one the invoice freezes');
+  check('  …and showing what the car arrived with, for comparison',
+    /on arrival: 60,000 mi/.test(await page.locator('[data-testid="schedule-arrival-schedule_oil_service"]').innerText()),
+    'so the mechanic corrects a number rather than recalling one');
+  check('the heading says which reading it is',
+    /what’s next/.test(await page.locator('[data-testid="service-schedule"] h3').innerText()),
+    'two panels, two jobs, and neither should be mistaken for the other');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(BASE);

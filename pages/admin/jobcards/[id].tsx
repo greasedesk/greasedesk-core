@@ -44,6 +44,7 @@ type PageProps = {
   observationCounts?: Record<string, number>;
   offerIntakePrompts?: boolean;
   serviceSchedule?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
+  scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: unknown[];
   batteryCondition?: unknown;
@@ -180,6 +181,7 @@ export default function JobCardDetailPage(props: PageProps) {
         observationCounts={props.observationCounts}
         offerIntakePrompts={props.offerIntakePrompts}
         serviceSchedule={props.serviceSchedule}
+        scheduleOnArrival={props.scheduleOnArrival}
         oilLevel={props.oilLevel}
         tyreCondition={props.tyreCondition as never}
         batteryCondition={props.batteryCondition as never}

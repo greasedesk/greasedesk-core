@@ -96,6 +96,7 @@ type Props = {
   observationCounts?: Record<string, number>;
   offerIntakePrompts?: boolean;
   serviceSchedule?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
+  scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   batteryCondition?: BatteryCondition | null;
@@ -899,11 +900,13 @@ export default function JobCardWorkspace(p: Props) {
         {p.offerIntakePrompts && (
           <IntakePromptsOffer jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} onDismissed={refreshCard} />
         )}
-        {/* THE SCHEDULE ABOVE THE FINDINGS. It is transcription, not discovery: a service advisor
-            copies it off a screen before anybody looks at the car, and it is the source of next
-            year's reminders. Not per-site switchable — it has no escalation to protect. */}
-        <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive}
-          recorded={(p.serviceSchedule ?? []) as never} motExpiry={eff.vehicle.motExpiry ?? null}
+        {/* THE ARRIVAL READING, above the findings. Transcription, not discovery: a service advisor
+            copies it off a screen before anybody looks at the car, and it catches what the customer
+            did not know about. A VISIT fact — it is never printed, and the invoice reads the
+            DEPARTURE reading captured on Completion. Not per-site switchable: no escalation to
+            protect. */}
+        <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="arrival"
+          recorded={(p.scheduleOnArrival ?? []) as never} motExpiry={eff.vehicle.motExpiry ?? null}
           onSaved={refreshCard} />
         {/* FINDINGS FIRST — it is the reason the mechanic is at the car, and the MOT read-only
             line rides with it so nobody retypes a DVSA fact. Then tyres, then the photos and video
@@ -956,6 +959,13 @@ export default function JobCardWorkspace(p: Props) {
         <div className="space-y-5">
           <PhotoStage jobCardId={p.jobCardId} stage="completion" canEdit={p.canOperate && !inactive} locked={eff.stages.complete} locale={p.locale} />
           <MileageOut jobCardId={p.jobCardId} initial={p.vehicle.mileageOut} canEdit={p.canOperate && !inactive} busy={busy} setBusy={setBusy} setErr={setErr} onDone={refreshCard} t={t} mileageIn={p.vehicle.mileageIn} locale={p.locale} />
+          {/* THE DEPARTURE READING — after the indicator was reset and the pads went on. This is the
+              one that becomes a VehicleDueItem, feeds the reminder and freezes onto the invoice.
+              Here rather than on Intake because it cannot be known until the work is done, and
+              beside mileage-out because they are read in the same breath. */}
+          <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="departure"
+            recorded={(p.serviceSchedule ?? []) as never} onArrival={(p.scheduleOnArrival ?? []) as never}
+            motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>
       )}
