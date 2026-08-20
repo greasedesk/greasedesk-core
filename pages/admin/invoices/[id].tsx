@@ -333,12 +333,28 @@ export default function InvoicePage(props: PageProps) {
               );
             })()}
             {props.status === 'issued' && !props.hasFrozenLines && props.isAdmin && (
-              <button onClick={reissue} disabled={busy !== null} className="text-sm text-ok border border-ok/40 rounded-lg px-4 py-2 hover:bg-ok-soft disabled:opacity-50">
+              <button onClick={reissue} disabled={busy !== null} data-testid="invoice-reissue"
+                className="text-sm text-ok border border-ok/40 rounded-lg px-4 py-2 hover:bg-ok-soft disabled:opacity-50">
                 {busy === 'reissue' ? t('reissuing') : t('reissue')}
               </button>
             )}
           </div>
         </div>
+
+        {/* ── WHAT RE-ISSUE WILL AND WILL NOT DO, BEFORE IT IS PRESSED ──────────────────────────
+            An admin unlocking a document to correct it had no way of knowing which parts follow.
+            They did not: the money re-froze and the advisory block stayed exactly as first
+            written, so a corrected invoice kept the tyre depths and the open advisories it had
+            been wrong about — and the button said success. The same shape as the £75 that
+            survived four cycles on 100003203.
+            Both now rebuild, and the sentence names the consequence rather than leaving it to be
+            discovered: rebuilt from what is true TODAY. An admin fixing a typo an hour later
+            wants exactly that; one re-issuing in March is changing what the customer was told. */}
+        {props.status === 'issued' && !props.hasFrozenLines && props.isAdmin && (
+          <p className="p-2 rounded mb-3 text-sm bg-surface-muted text-muted border border-line" data-testid="reissue-explains">
+            {t('reissueExplains')}
+          </p>
+        )}
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         {/* RETIRED, AND SAID SO. The document is retained and still renders (VATREC5010), so the

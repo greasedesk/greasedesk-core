@@ -69,57 +69,7 @@ async function createInvoiceRow(
   // Built BEFORE the row is created, from what is true at this instant — the open findings on this
   // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
   // moment from the rest of the document.
-  // THE LATEST READING PER CORNER for this car — the tyre condition as it stood at mint, frozen
-  // with everything else. A reading taken after this invoice must not change what it printed.
-  const tyreRows = card.vehicle?.id
-    ? await (tx as Prisma.TransactionClient).tyreReading.findMany({
-        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
-        orderBy: { measured_at: 'desc' },
-        select: { corner: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
-      })
-    : [];
-  const latestTyre = new Map<string, { corner: never; depths: { outer: number; centre: number; inner: number } }>();
-  for (const r of tyreRows as Array<{ corner: string; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>) {
-    if (!latestTyre.has(r.corner)) {
-      latestTyre.set(r.corner, { corner: r.corner as never, depths: { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths } });
-    }
-  }
-  // THE LATEST BATTERY TEST for this car, frozen the same way and for the same reason: a test taken
-  // after this invoice must not change what it printed.
-  const batteryRow = card.vehicle?.id
-    ? await (tx as Prisma.TransactionClient).batteryReading.findFirst({
-        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
-        orderBy: { measured_at: 'desc' },
-        select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true },
-      })
-    : null;
-
-  const dueItemsBlock = printedDueItemsBlock({
-    motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
-    items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
-    tyreLines: printedTyreLines([...latestTyre.values()]),
-    batteryLine: batteryRow
-      ? printedBatteryLine({
-          voltageMv: batteryRow.voltage_mv, socPct: batteryRow.soc_pct, sohPct: batteryRow.soh_pct,
-          ratedCca: batteryRow.rated_cca, ccaStandard: batteryRow.cca_standard as CcaStandard | null,
-        })
-      : null,
-  });
-
-  // ── WHAT THIS VISIT SORTED ────────────────────────────────────────────────────────────────────
-  // Scoped to the CARD, not the car: the block describes this visit. A finding closed as `fixed`
-  // on this job appears; one closed months ago on another job does not, and one closed as declined
-  // or no-longer-applies never does.
-  //
-  // Frozen here with everything else, and for the same reason — "we topped the coolant up" is a
-  // claim on a document the customer keeps, so it must say what was true at issue.
-  const workDone = card.vehicle?.id
-    ? printedWorkDoneBlock((await (tx as Prisma.TransactionClient).vehicleDueItem.findMany({
-        where: { group_id: groupId, closed_job_card_id: jobCardId, closed_kind: 'fixed' },
-        select: { description: true, closed_kind: true },
-        orderBy: { closed_at: 'asc' },
-      })).map((r) => ({ description: r.description, closedKind: r.closed_kind })))
-    : null;
+  const { dueItemsBlock, workDone } = await computeNarrativeBlocks(tx as Prisma.TransactionClient, groupId, jobCardId);
 
   const invoice = await tx.invoice.create({
     data: {
@@ -240,6 +190,87 @@ export async function billingDivergence(
   if (livePennies === accepted.gross_pennies) return null; // reshaped, same bill
 
   return { agreedPennies: accepted.gross_pennies, livePennies, version: accepted.version };
+}
+
+
+/**
+ * ── THE NARRATIVE BLOCKS, COMPUTED IN ONE PLACE ─────────────────────────────────────────────────
+ * The advisory block and the work-done block, built together because they are two halves of one
+ * statement about the car and must describe the same instant.
+ *
+ * EXTRACTED 2026-08-20, and the reason matters. These were computed inline in issueInvoiceForCard
+ * and written by its single `invoice.create`, so the ONLY code path that ever produced them was
+ * the original mint. An unlock-and-re-issue re-froze the LINES (snapshotInvoiceLines) and left the
+ * blocks exactly as first written — so a document corrected an hour after issue kept the tyre
+ * depths and the open advisories it had been wrong about, and the button reported success.
+ *
+ * That is the same shape as the £75 on invoice 100003203: part of the document did not move and
+ * nothing said so. One function, two callers, so it cannot happen a third time by omission.
+ */
+export async function computeNarrativeBlocks(
+  tx: Prisma.TransactionClient,
+  groupId: string,
+  jobCardId: string,
+): Promise<{ dueItemsBlock: string | null; workDone: string | null }> {
+  const card = (await tx.jobCard.findUnique({
+    where: { id: jobCardId },
+    select: { id: true, vehicle: { select: { id: true, mot_expiry: true } } },
+  })) as { id: string; vehicle: { id: string; mot_expiry: Date | null } | null } | null;
+  if (!card) return { dueItemsBlock: null, workDone: null };
+
+  // THE LATEST READING PER CORNER for this car — the tyre condition as it stood at mint, frozen
+  // with everything else. A reading taken after this invoice must not change what it printed.
+  const tyreRows = card.vehicle?.id
+    ? await (tx as Prisma.TransactionClient).tyreReading.findMany({
+        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
+        orderBy: { measured_at: 'desc' },
+        select: { corner: true, depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true },
+      })
+    : [];
+  const latestTyre = new Map<string, { corner: never; depths: { outer: number; centre: number; inner: number } }>();
+  for (const r of tyreRows as Array<{ corner: string; depth_outer_tenths: number; depth_centre_tenths: number; depth_inner_tenths: number }>) {
+    if (!latestTyre.has(r.corner)) {
+      latestTyre.set(r.corner, { corner: r.corner as never, depths: { outer: r.depth_outer_tenths, centre: r.depth_centre_tenths, inner: r.depth_inner_tenths } });
+    }
+  }
+  // THE LATEST BATTERY TEST for this car, frozen the same way and for the same reason: a test taken
+  // after this invoice must not change what it printed.
+  const batteryRow = card.vehicle?.id
+    ? await (tx as Prisma.TransactionClient).batteryReading.findFirst({
+        where: { group_id: groupId, vehicle_id: card.vehicle.id as string },
+        orderBy: { measured_at: 'desc' },
+        select: { voltage_mv: true, soc_pct: true, soh_pct: true, rated_cca: true, cca_standard: true },
+      })
+    : null;
+
+  const dueItemsBlock = printedDueItemsBlock({
+    motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
+    items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
+    tyreLines: printedTyreLines([...latestTyre.values()]),
+    batteryLine: batteryRow
+      ? printedBatteryLine({
+          voltageMv: batteryRow.voltage_mv, socPct: batteryRow.soc_pct, sohPct: batteryRow.soh_pct,
+          ratedCca: batteryRow.rated_cca, ccaStandard: batteryRow.cca_standard as CcaStandard | null,
+        })
+      : null,
+  });
+
+  // ── WHAT THIS VISIT SORTED ────────────────────────────────────────────────────────────────────
+  // Scoped to the CARD, not the car: the block describes this visit. A finding closed as `fixed`
+  // on this job appears; one closed months ago on another job does not, and one closed as declined
+  // or no-longer-applies never does.
+  //
+  // Frozen here with everything else, and for the same reason — "we topped the coolant up" is a
+  // claim on a document the customer keeps, so it must say what was true at issue.
+  const workDone = card.vehicle?.id
+    ? printedWorkDoneBlock((await (tx as Prisma.TransactionClient).vehicleDueItem.findMany({
+        where: { group_id: groupId, closed_job_card_id: jobCardId, closed_kind: 'fixed' },
+        select: { description: true, closed_kind: true },
+        orderBy: { closed_at: 'asc' },
+      })).map((r) => ({ description: r.description, closedKind: r.closed_kind })))
+    : null;
+
+  return { dueItemsBlock, workDone };
 }
 
 /** The re-issue caller. Kept as its own name because the endpoint reads better for it. */

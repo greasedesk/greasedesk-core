@@ -32,7 +32,7 @@ import { writeAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
 import { refuseIfVoid, amendmentRequirement } from '@/lib/invoice-void';
 import { isUnderCorrection } from '@/lib/invoice';
-import { snapshotInvoiceLines, reissueDivergence, billingDivergence } from '@/lib/invoice-issue';
+import { snapshotInvoiceLines, reissueDivergence, billingDivergence, computeNarrativeBlocks } from '@/lib/invoice-issue';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const invoice = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: user.group_id },
-    select: { id: true, status: true, series: true, invoice_number: true, job_card_id: true, receipt_sent_at: true, vat_registered_at_issue: true, amount_paid_pennies: true, paid_at: true, date_paid: true, payment_method_snapshot: true, amendments: true, job_card: { select: { status: true } }, lines: { select: { id: true, line_total: true, line_vat: true } }, site: { select: { locale: true } } },
+    select: { id: true, group_id: true, status: true, series: true, invoice_number: true, job_card_id: true, receipt_sent_at: true, vat_registered_at_issue: true, amount_paid_pennies: true, paid_at: true, date_paid: true, payment_method_snapshot: true, amendments: true, job_card: { select: { status: true } }, lines: { select: { id: true, line_total: true, line_vat: true } }, site: { select: { locale: true } } },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
 
@@ -161,6 +161,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await snapshotInvoiceLines(tx, invoice, {
           goodwill: tServer(invoice.site?.locale, 'invoice', 'warrantyGoodwill'),
           noCharge: tServer(invoice.site?.locale, 'invoice', 'warrantyLine'),
+        });
+        // ── AND THE NARRATIVE BLOCKS, REBUILT FROM WHAT IS TRUE NOW ─────────────────────────
+        // These used to be written only by the original mint, so a re-issue corrected the money
+        // and left the advisory block saying what it had been wrong about — stale tyre depths,
+        // and findings listed as outstanding that had since been closed. The button reported
+        // success and part of the document did not move: the same shape as the £75 that survived
+        // four unlock/re-issue cycles on 100003203.
+        //
+        // REBUILT FROM TODAY, deliberately, and the re-issue screen says so before it is pressed.
+        // An admin correcting a typo an hour later wants exactly that. One re-issuing in March
+        // gets what the car needs in March, which is a real change to what the customer was told
+        // — so it is named on the button rather than discovered afterwards.
+        const blocks = await computeNarrativeBlocks(tx, invoice.group_id, invoice.job_card_id);
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: { due_items_snapshot: blocks.dueItemsBlock, work_done_snapshot: blocks.workDone },
         });
         if (invoice.series === 'warranty') {
           await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'settled' as any } }); // back to terminal

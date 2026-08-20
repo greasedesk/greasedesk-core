@@ -81,6 +81,7 @@
   "frozenNote": "This document is frozen — the lines locked when the invoice was raised. An admin can unlock it to make corrections.",
   "unlockedNote": "UNLOCKED FOR CORRECTION — this invoice’s lines are not frozen and it currently contributes nothing to your figures. Correct the estimate on the job card, then re-issue (or mark paid) to freeze it again.",
   "reissue": "Re-issue (freeze corrections)",
+  "reissueExplains": "Re-issuing rebuilds the charges from the agreed quote, and rebuilds the advisory block and anything sorted on the visit from what the car needs TODAY — not from what it needed when this invoice was first issued. The invoice number does not change.",
   "reissuing": "Re-issuing…",
   "reissueError": "Could not re-issue the invoice.",
   "voidWatermark": "VOID",

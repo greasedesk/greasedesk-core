@@ -72,7 +72,7 @@ const TIERS = {
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
   ],
   slow: [
-    'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
+    'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',
     'observations-gate', 'oil-level-gate', 'quote-invoice-sms-gate', 'service-schedule-gate',
     'tyre-form-memory-gate', 'phone-capture-timing',
