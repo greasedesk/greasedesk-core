@@ -32,6 +32,9 @@ export type MarketingRow = {
    *  interval reads "due by November 2026" and an MOT expiry reads "due by 21 August 2026". The
    *  page rendered `dueDate` directly and showed a garage "2026-11-01". */
   dueLabel: string | null;
+  /** When DVSA last ANSWERED about this car, ISO — rendered through lib/mot-refresh::checkedLabel.
+   *  Null on most of the fleet, which is not news and renders nothing. */
+  motCheckedAt: string | null;
   /** What to show when there is no date — the item's own words. */
   triggerText: string | null;
   /** The whichever_first item showing on its date leg because no rate exists. */
@@ -104,7 +107,7 @@ async function ownerOf(vehicleId: string): Promise<CustomerBits | null> {
 }
 
 const shape = (
-  v: { id: string; registration: string; make: string | null; model: string | null },
+  v: { id: string; registration: string; make: string | null; model: string | null; mot_checked_at?: Date | null },
   c: CustomerBits | null,
   due: {
     dueDate: Date | null; triggerText: string | null; mileageLegUnevaluated: boolean;
@@ -135,6 +138,7 @@ const shape = (
           dueDatePrecision: due.precision ?? 'day',
         })
       : null,
+    motCheckedAt: v.mot_checked_at ? v.mot_checked_at.toISOString() : null,
     triggerText: due.triggerText,
     mileageLegUnevaluated: due.mileageLegUnevaluated,
     state: rec?.state ?? null,
@@ -154,7 +158,7 @@ export async function buildMotList(groupId: string, now: Date): Promise<MotList>
   const [vehicles, fleet, undated, contacts] = await Promise.all([
     prisma.vehicle.findMany({
       where: { group_id: groupId, mot_expiry: { not: null, lte: new Date(now.getTime() + WINDOW_DAYS * 86_400_000) } },
-      select: { id: true, registration: true, make: true, model: true, mot_expiry: true },
+      select: { id: true, registration: true, make: true, model: true, mot_expiry: true, mot_checked_at: true },
       orderBy: { mot_expiry: 'asc' },
     }),
     prisma.vehicle.count({ where: { group_id: groupId } }),

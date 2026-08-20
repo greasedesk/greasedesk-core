@@ -193,6 +193,9 @@ export const showsDueLabel = (item: Pick<OpenDueItem, 'timingInDescription'>): b
  * DateTime column, and printing it on an invoice a customer keeps would be the fabricated-constant
  * failure this codebase refuses everywhere else.
  */
+// AND THE CONVERSE, so this is not read as a house style: where the day IS known — an MOT expiry,
+// which DVSA states as a real date — the day is printed. See lib/mot-refresh, which prints
+// "25 July 2027" for exactly that reason. The rule is "say what is known", not "prefer months".
 function britishMonth(iso: string): string {
   const [y, m] = iso.split('-').map(Number);
   if (!y || !m) return iso;

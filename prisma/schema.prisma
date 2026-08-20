@@ -1952,6 +1952,11 @@ model Vehicle {
   mot_expiry              DateTime? @db.Date
   last_mot_mileage        Int?
   last_mot_date           DateTime? @db.Date
+  /// When DVSA last ANSWERED about this car — an instant, not a calendar day. Written only on a
+  /// successful lookup: a failed one teaches nothing, and stamping it would let the row claim a
+  /// freshness it does not have. Stored rather than held in the page because two people work the
+  /// same marketing list. See pages/api/mot-refresh.
+  mot_checked_at          DateTime?
   mileage_at_create       Int?
   created_at              DateTime  @default(now())
 

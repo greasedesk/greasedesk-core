@@ -25,6 +25,10 @@ export type AuditAction =
   | 'booking.removed'
   | 'owner.edited'
   | 'vehicle.edited'
+  // DVSA moved a car's MOT date, through the per-row check on the marketing list. Its OWN action
+  // rather than vehicle.edited: nobody edited anything, and a trail that says a human did would
+  // send the next reader looking for a person who does not exist.
+  | 'vehicle.mot_refresh'
   | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
   | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'

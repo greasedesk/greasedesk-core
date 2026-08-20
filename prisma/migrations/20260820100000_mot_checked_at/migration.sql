@@ -1,0 +1,14 @@
+-- WHEN DVSA LAST ANSWERED ABOUT THIS CAR.
+--
+-- Not "when we last pressed Check". A lookup that failed teaches nothing, and stamping this on a
+-- failure would make the row claim a freshness it does not have — the same honest-null rule that
+-- keeps motFieldsToWrite from letting an absent expiry erase a held one. Only a successful answer
+-- writes it, so "checked 09:12" beside a row is always a fact about DATA, never about a button.
+--
+-- The reason it is stored at all rather than held in the page: two people work the same list, and
+-- a "checked just now" that vanishes on reload is a client-side comfort rather than a fact about
+-- the row — the second person re-checks what the first just did.
+--
+-- timestamptz, not date: this is an INSTANT (09:12 this morning), unlike mot_expiry/last_mot_date
+-- which are calendar days DVSA states.
+ALTER TABLE "Vehicle" ADD COLUMN "mot_checked_at" TIMESTAMP(3);

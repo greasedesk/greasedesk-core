@@ -10,6 +10,12 @@
  * shipping a send button beside an untested list is how a garage's first impression of a feature
  * becomes an apology to a hundred customers.
  *
+ * ── EXCEPT THE CHECK, WHICH ASKS DVSA RATHER THAN THE CUSTOMER ──────────────────────────────────
+ * Every MOT row carries a Check button. It is not a repair for rows that look wrong: any stored
+ * MOT date is stale the moment it is stored, because the car can be tested anywhere and we hear
+ * about it only when we look. It belongs beside the phone number as a normal step — check, then
+ * ring. See pages/api/mot-refresh for what it writes and lib/mot-refresh for what it says.
+ *
  * ── AN OPT-OUT IS AN OPT-OUT OF EVERYTHING ──────────────────────────────────────────────────────
  * No adjudicating service versus offer. An opted-out customer still APPEARS — they are still due,
  * and a phone call is not an electronic message — with the phone number visible and the refused
@@ -23,6 +29,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { buildMotList, buildServiceList, type MarketingRow, type MotList, type ServiceList } from '@/lib/marketing-data';
 import { WINDOW_DAYS } from '@/lib/marketing-lists';
+import { checkedLabel } from '@/lib/mot-refresh';
 
 type PageProps = { mot: MotList; service: ServiceList; currency: string };
 
@@ -35,6 +42,30 @@ const STATE_LABEL: Record<string, string> = {
 
 function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'service'; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
+  // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
+  // Every other action here ends in a full reload, which is right for them: recording a contact is
+  // finished business and the row should go. A check is the opposite — it happens WHILE someone is
+  // working the list, often seconds before they dial. Re-sorting or removing the row under their
+  // cursor loses their place in a list they are working, so the result is rendered in place and
+  // the page reconciles on its next natural load.
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<{ kind: string; sentence: string; stillDue: boolean } | null>(null);
+  const [checkedAt, setCheckedAt] = useState<string | null>(row.motCheckedAt);
+  async function check() {
+    setChecking(true);
+    try {
+      const r = await fetch('/api/mot-refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId: row.vehicleId }),
+      });
+      const j = await r.json().catch(() => null);
+      if (j?.outcome) { setChecked(j.outcome); if (j.checkedAt) setCheckedAt(j.checkedAt); }
+      // A THROWN FETCH SAYS SO. Leaving the row silent after a press would read as "no change".
+      else setChecked({ kind: 'no_answer', sentence: 'The check didn’t complete — nothing was learned.', stillDue: true });
+    } catch {
+      setChecked({ kind: 'no_answer', sentence: 'The check didn’t complete — nothing was learned.', stillDue: true });
+    } finally { setChecking(false); }
+  }
   async function record(state: string) {
     setBusy(true);
     try {
@@ -60,10 +91,21 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
         <span className="ml-auto text-xs text-muted">
           {/* THROUGH dueLabel, never the raw column. This showed "2026-11-01" to a garage, and once
               schedule rows carry month precision the raw value would also imply a day nobody chose. */}
-          {row.dueLabel ?? row.triggerText}
+          {/* STRUCK THROUGH, NOT REPLACED. What it used to say is why the row is still sitting in
+              the Expired band, and removing it would leave a renewed car looking mis-sorted. */}
+          <span className={checked?.kind === 'changed' ? 'line-through text-muted/60' : undefined}
+            data-testid="marketing-due-label">
+            {row.dueLabel ?? row.triggerText}
+          </span>
           {row.mileageLegUnevaluated && <em className="not-italic"> · mileage leg not projected</em>}
         </span>
       </div>
+      {checked && (
+        <p className={`text-xs mt-1 ${checked.kind === 'no_answer' ? 'text-warn' : checked.kind === 'changed' ? 'text-ok' : 'text-muted'}`}
+          data-testid="marketing-check-result" data-kind={checked.kind}>
+          {checked.sentence}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-3 mt-1.5">
         {row.state
           ? <span className="text-xs font-medium text-ok" data-testid="marketing-state">{STATE_LABEL[row.state] ?? row.state}</span>
@@ -72,6 +114,22 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
         <button type="button" disabled={busy} onClick={() => record('booked')} className={act} data-testid="marketing-booked">Booked</button>
         <button type="button" disabled={busy} onClick={() => record('declined')} className={act} data-testid="marketing-declined">Declined</button>
         <button type="button" disabled={busy} onClick={() => record('snoozed')} className={act} data-testid="marketing-snoozed">Snooze a month</button>
+        {/* MOT ROWS ONLY. A service row's date comes from a schedule reading we took ourselves;
+            there is nothing to check it against, and a button that can only ever say "no change"
+            is worse than no button. */}
+        {reason === 'mot' && (
+          <>
+            <button type="button" disabled={checking} onClick={check}
+              className="text-xs underline text-accent disabled:opacity-50" data-testid="marketing-check">
+              {checking ? 'Checking…' : 'Check with DVSA'}
+            </button>
+            {checkedAt && (
+              <span className="text-xs text-muted" data-testid="marketing-checked-at">
+                {checkedLabel(checkedAt, new Date())}
+              </span>
+            )}
+          </>
+        )}
       </div>
     </li>
   );
@@ -83,6 +141,11 @@ function Band({ title, note, rows, reason, onDone }: {
   if (!rows.length) return null;
   return (
     <section className="mb-6" data-testid={`marketing-band-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
+      {/* THE COUNT DOES NOT MOVE WHEN A ROW IS CHECKED, and that is deliberate rather than a bug.
+          A car whose MOT turns out to be renewed stays in this band, struck through, so nobody
+          loses their place — and a count that decremented while the rows it counts deliberately
+          stayed put would be the same disorientation in miniature. It is briefly stale by design;
+          the next load reconciles it. */}
       <h3 className="text-sm font-semibold text-ink">{title} <span className="text-muted font-normal">({rows.length})</span></h3>
       {note && <p className="text-xs text-muted mt-0.5 mb-1">{note}</p>}
       <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} reason={reason} onDone={onDone} />)}</ul>
