@@ -19,7 +19,7 @@ import React, { useRef, useState } from 'react';
 import { resizeImage } from '@/lib/image-resize';
 import { BatterySummary } from '@/components/jobcard/ConditionSummary';
 import type { BatteryCondition } from '@/lib/vehicle-condition';
-import { CCA_STANDARDS, MIN_RATED_CCA, MAX_RATED_CCA, BATTERY_SLOTS, BATTERY_SLOT_LABEL, type BatterySlot, type CcaStandard } from '@/lib/battery';
+import { CCA_STANDARDS, CCA_STANDARD_LABEL, MIN_RATED_CCA, MAX_RATED_CCA, BATTERY_SLOTS, BATTERY_SLOT_LABEL, type BatterySlot, type CcaStandard } from '@/lib/battery';
 
 type Props = {
   jobCardId: string;
@@ -155,7 +155,7 @@ export default function BatteryCapture({ jobCardId, canEdit, lastRatedCca, lastC
               <button key={k} type="button" role="radio" aria-checked={std === k} disabled={!canEdit}
                 onClick={() => setStd(std === k ? '' : k)} data-testid={`battery-std-${k}`}
                 className={`min-h-[44px] px-3 text-xs font-semibold rounded-lg border ${std === k ? 'bg-ink text-white border-ink' : 'bg-surface border-line text-muted'}`}>
-                {k}
+                {CCA_STANDARD_LABEL[k]}
               </button>
             ))}
           </div>

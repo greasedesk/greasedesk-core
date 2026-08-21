@@ -56,8 +56,38 @@ export const CHARGING_FAULT_BELOW_SOC = 50;
 export const MIN_RATED_CCA = 100;
 export const MAX_RATED_CCA = 3000;
 
-export type CcaStandard = 'EN' | 'SAE' | 'DIN' | 'JIS' | 'IEC';
-export const CCA_STANDARDS: CcaStandard[] = ['EN', 'SAE', 'DIN', 'JIS', 'IEC'];
+/**
+ * ── UNSTATED IS A READING, NOT A MISSING OPTION ─────────────────────────────────────────────────
+ * Most UK batteries are labelled just "760 CCA". The Ancel BT410 prints "Rated: 760A CCA" and
+ * names no standard either — that is what the mechanic is copying off the screen.
+ *
+ * The form demanded one of five, and the pairing rule below refuses a rating without a standard,
+ * so recording what the label actually says was impossible: guess a standard, drop the rating, or
+ * type something to get past it. `UNSTATED` is the honest answer — "the label does not say" is a
+ * FACT about the battery, the same shape as every other honest-null in this codebase.
+ *
+ * It is not a sixth way of rating a battery. It is the absence of one, said out loud, so that a
+ * comparison can refuse on it — which is the only place the pairing rule was ever needed.
+ */
+export type CcaStandard = 'EN' | 'SAE' | 'DIN' | 'JIS' | 'IEC' | 'UNSTATED';
+export const CCA_STANDARDS: CcaStandard[] = ['EN', 'SAE', 'DIN', 'JIS', 'IEC', 'UNSTATED'];
+
+/** What a mechanic taps. UNSTATED reads as the label, not as a standard. */
+export const CCA_STANDARD_LABEL: Record<CcaStandard, string> = {
+  EN: 'EN', SAE: 'SAE', DIN: 'DIN', JIS: 'JIS', IEC: 'IEC',
+  UNSTATED: 'Not stated',
+};
+
+/**
+ * CAN TWO RATINGS BE COMPARED? EN, SAE and DIN rate the same battery differently, so a comparison
+ * across standards is meaningless — and so is one where either side does not know its own. This is
+ * the entire job the both-or-neither pairing rule was doing, moved to the place that needs it.
+ *
+ * Nothing compares ratings today (sohDecline compares HEALTH over time, which is a percentage and
+ * standard-agnostic). Declared now so the first comparison written cannot forget.
+ */
+export const ratingsComparable = (a: CcaStandard | null, b: CcaStandard | null): boolean =>
+  a != null && b != null && a !== 'UNSTATED' && b !== 'UNSTATED' && a === b;
 
 export type BatteryState = 'ok' | 'monitor' | 'replace' | 'dead_cell' | 'charging_fault' | 'retest';
 
@@ -153,8 +183,15 @@ export type BatteryAdvisory = {
   carriesOwnTiming: boolean;
 };
 
-const ratedSuffix = (n: BatteryNumbers): string =>
-  n.ratedCca && n.ccaStandard ? ` against ${n.ratedCca} CCA ${n.ccaStandard}` : '';
+// WHAT THE LABEL SAYS, and no more. With a standard the document names it; with UNSTATED it
+// prints the rating alone, because inventing "EN" on a customer's invoice would be asserting
+// something the battery does not claim about itself.
+const ratedSuffix = (n: BatteryNumbers): string => {
+  if (!n.ratedCca || !n.ccaStandard) return '';
+  return n.ccaStandard === 'UNSTATED'
+    ? ` against ${n.ratedCca} CCA`
+    : ` against ${n.ratedCca} CCA ${n.ccaStandard}`;
+};
 
 /**
  * WHAT ONE TEST ADVISES. Returns 0 or 1 advisories — unlike a tyre, which can be both worn out and

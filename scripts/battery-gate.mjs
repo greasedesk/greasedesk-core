@@ -384,6 +384,45 @@ try {
   }
 }
 
+
+// ── UNSTATED: THE LABEL THAT NAMES NO STANDARD ─────────────────────────────────────────────────
+// Most UK batteries are labelled just "760 CCA", and the Ancel BT410 prints "Rated: 760A CCA" with
+// no standard either. The form demanded one of five and the endpoint refused a rating without one,
+// so recording what the label actually says was impossible.
+console.log('\n— what the label says, and no more —');
+check('UNSTATED is one of the choices', B.CCA_STANDARDS.includes('UNSTATED'),
+  B.CCA_STANDARDS.join(' '));
+check('  …and reads as the label, not as a standard', B.CCA_STANDARD_LABEL.UNSTATED === 'Not stated',
+  'a picker offering "UNSTATED" in caps is a database value on a screen');
+check('a rating with no named standard prints the rating alone',
+  B.printedBatteryLine({ voltageMv: 12400, socPct: 80, sohPct: 75, ratedCca: 760, ccaStandard: 'UNSTATED' })
+    === 'Battery — 12.40V, 80% charge, 75% health against 760 CCA',
+  B.printedBatteryLine({ voltageMv: 12400, socPct: 80, sohPct: 75, ratedCca: 760, ccaStandard: 'UNSTATED' }));
+check('  …and never invents one on a customer document',
+  !/EN|SAE|DIN/.test(B.printedBatteryLine({ voltageMv: 12400, socPct: 80, sohPct: 75, ratedCca: 760, ccaStandard: 'UNSTATED' })),
+  'asserting EN would claim something the battery does not claim about itself');
+check('  …while a named standard still prints it',
+  /760 CCA EN$/.test(B.printedBatteryLine({ voltageMv: 12400, socPct: 80, sohPct: 75, ratedCca: 760, ccaStandard: 'EN' })));
+
+// THE PAIRING RULE'S REAL JOB, moved to where comparisons happen.
+check('two EN ratings are comparable', B.ratingsComparable('EN', 'EN'));
+check('  …EN against SAE is not', !B.ratingsComparable('EN', 'SAE'),
+  'the same battery rates differently under each');
+check('  …and UNSTATED is comparable to nothing, including itself',
+  !B.ratingsComparable('UNSTATED', 'UNSTATED') && !B.ratingsComparable('UNSTATED', 'EN'),
+  'this is the entire job the both-or-neither rule was doing');
+
+// BOTH SURFACES OFFER THE SAME SET. The phone had its own five-element literal.
+const { readFileSync: rf } = await import('node:fs');
+const phone = rf('components/pwa/PhoneBattery.tsx', 'utf8');
+check('the phone reads the shared list rather than its own',
+  /const STANDARDS = CCA_STANDARDS;/.test(phone) && !/\['EN', 'SAE'/.test(phone),
+  'a literal here would have left the phone on five options while the desktop had six');
+
+// AND THE 9. Traced: the floor landed 87 minutes AFTER that row was written.
+check('a 9 CCA rating is refused today', 9 < B.MIN_RATED_CCA,
+  'the row that prompted this predates the floor (written 13:51, floor shipped 15:18 on 19 Aug) — not a validation failing to fire');
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma.$disconnect();
 process.exit(out.includes('F') ? 1 : 0);

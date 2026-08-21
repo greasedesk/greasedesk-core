@@ -49,10 +49,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Charge and health must be whole percentages between 0 and 100.' });
   }
 
-  // BOTH OR NEITHER. A rated CCA without its standard is not comparable to another rated CCA — EN,
-  // SAE and DIN rate the same battery differently — and the health percentage is computed against
-  // it. The database enforces this too; refusing here means the mechanic gets a sentence rather
-  // than a constraint violation.
+  // BOTH OR NEITHER, and UNSTATED is a valid "both". The rule exists because EN, SAE and DIN rate
+  // the same battery differently, so a rating with no standard cannot be compared to another — but
+  // "the label does not say" is a fact about the battery, and most UK batteries are labelled just
+  // "760 CCA". Demanding one of five made recording the truth impossible: guess, drop the rating,
+  // or type something to get past the form. The comparison rule lives where comparisons happen now
+  // (lib/battery::ratingsComparable), which is the only place it was ever needed.
   const ratedCca = b.ratedCca == null || b.ratedCca === ('' as never) ? null : Number(b.ratedCca);
   const ccaStandard = b.ccaStandard ? String(b.ccaStandard).toUpperCase() : null;
   if (ratedCca != null && (!Number.isInteger(ratedCca) || ratedCca < MIN_RATED_CCA || ratedCca > MAX_RATED_CCA)) {

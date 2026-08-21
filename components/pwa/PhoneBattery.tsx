@@ -20,11 +20,14 @@
  */
 import React, { useState } from 'react';
 import { enqueueBattery } from '@/lib/pwa-outbox';
-import { MIN_RATED_CCA, MAX_RATED_CCA } from '@/lib/battery';
+import { CCA_STANDARDS, CCA_STANDARD_LABEL, MIN_RATED_CCA, MAX_RATED_CCA } from '@/lib/battery';
 import { BatterySummary } from '@/components/jobcard/ConditionSummary';
 import type { BatteryCondition } from '@/lib/vehicle-condition';
 
-const STANDARDS = ['EN', 'SAE', 'DIN', 'JIS', 'IEC'] as const;
+// FROM THE SHARED LIST, not a second copy. This was a literal five-element array, so adding
+// UNSTATED to lib/battery would have given the desktop a sixth option and left the phone with
+// five — the surface a mechanic is actually holding when the bonnet is open.
+const STANDARDS = CCA_STANDARDS;
 const num = (s: string) => (s.trim() === '' ? null : Number(s));
 
 export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard, recorded = null, onQueued }: {
@@ -104,7 +107,7 @@ export default function PhoneBattery({ jobCardId, lastRatedCca, lastCcaStandard,
               <button key={k} type="button" role="radio" aria-checked={std === k} onClick={() => setStd(std === k ? '' : k)}
                 data-testid={`phone-battery-std-${k}`}
                 className={`min-h-[48px] px-2.5 text-xs font-semibold rounded-lg border ${std === k ? 'bg-ink text-white border-ink' : 'bg-surface border-line text-muted'}`}>
-                {k}
+                {CCA_STANDARD_LABEL[k as never]}
               </button>
             ))}
           </div>
