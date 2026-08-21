@@ -81,6 +81,18 @@ try {
   console.log('\n— blank rows, and half-filled ones —');
   const it = (k) => S.scheduleByKey(k);
   const entry = (k, o) => ({ key: k, dueMonth: null, dueMileage: null, item: it(k), ...o });
+  // ── THE TWO SENTENCES A BLANK ROW CAN BE, PROVED WITHOUT A ROW ───────────────────────────────
+  const oilItem = S.scheduleByKey('schedule_oil_service');
+  check('a filled row records', S.classifyEntry(oilItem, { dueMonth: '2027-07', dueMileage: 1000 }) === 'record');
+  check('a blank row the form HELD is a clear', S.classifyEntry(oilItem, { dueMonth: null, dueMileage: null, wasRecorded: true }) === 'clear');
+  check('a blank row the form never held is a skip', S.classifyEntry(oilItem, { dueMonth: null, dueMileage: null, wasRecorded: false }) === 'skip');
+  check('  …and so is one that says nothing either way', S.classifyEntry(oilItem, { dueMonth: null, dueMileage: null }) === 'skip',
+    'absent is unknown, and unknown never deletes — a queued offline save replays in its old shape');
+  check('  …but a claim cannot resurrect a row that has values', S.classifyEntry(oilItem, { dueMonth: '2027-07', dueMileage: 1000, wasRecorded: false }) === 'record',
+    'wasRecorded only ever decides what a BLANK means; it is not a switch over the whole entry');
+  check('the reason a skip happened is a sentence, available to both callers',
+    /did not report holding a reading/.test(S.SKIPPED_BLANK_REASON));
+
   check('a row with neither leg is blank, not an error',
     S.isBlank(it('schedule_oil_service'), { dueMonth: null, dueMileage: null })
     && S.refuseSchedule([entry('schedule_oil_service')]).length === 0,
@@ -201,6 +213,18 @@ try {
     motExpiry: null,
     items: await D.openDueItemsForVehicle(prisma, ZZ, veh.id),
   });
+  // The arrival table is the one that lost the five rows, so prove the floor on THAT branch too —
+  // the departure branch closes a due item, this one deletes outright.
+  const aStale = await post([{ key: 'schedule_oil_service', dueMonth: null, dueMileage: null }], 'arrival');
+  const aLeft = await prisma.serviceScheduleReading.count({ where: { job_card_id: card.id, item_key: 'schedule_oil_service' } });
+  check('an unclaimed blank does not DELETE an arrival reading either',
+    aStale.body.skipped === 1 && aStale.body.cleared === 0 && aLeft === 1,
+    JSON.stringify({ ...aStale.body, rowsLeft: aLeft }));
+  const aClear = await post([{ key: 'schedule_oil_service', dueMonth: null, dueMileage: null, wasRecorded: true }], 'arrival');
+  check('  …and a claimed one still does', aClear.body.cleared === 1,
+    'the correction path a garage actually needs is untouched');
+  await post([{ key: 'schedule_oil_service', dueMonth: '2026-09', dueMileage: 60000 }], 'arrival');   // put it back
+
   check('a card with ONLY an arrival reading prints no schedule line', arrivalOnlyBlock === null,
     'better an absent line than an arrival figure dressed as what is next');
 
@@ -241,14 +265,42 @@ try {
   check('  …the blank row wrote nothing', !items.some((i) => i.observation_key === 'schedule_brake_fluid'));
   check('  …and the response is not_raised, by design', items.every((i) => i.customer_response === 'not_raised'));
 
+  // ── A BLANK ROW THE FORM NEVER HELD IS NOT AN ERASURE ────────────────────────────────────────
+  // The trapdoor under the 21 Aug loss. The seed-once defect that walked into it is fixed; this is
+  // the floor, so the next component to go stale finds a writer that declines rather than deletes.
+  console.log('\n— blank, versus cleared —');
+  const seeded = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: 61000 }]);
+  check('a row is recorded to be erased later', seeded.body.written === 1);
+  const stale = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: null }]);   // no claim
+  const survived = await prisma.vehicleDueItem.findFirst({
+    where: { vehicle_id: veh.id, observation_key: 'schedule_pads_rear', closed_at: null }, select: { due_mileage: true } });
+  check('a blank with NO wasRecorded claim clears nothing',
+    stale.body.cleared === 0 && stale.body.skipped === 1 && survived?.due_mileage === 61000,
+    JSON.stringify({ ...stale.body, still: survived?.due_mileage }));
+  check('  …and the audit says so in a sentence, not a count',
+    /did not report holding a reading/.test(JSON.stringify(
+      (await prisma.auditLog.findFirst({ where: { entity_id: card.id, action: 'service_schedule.recorded' }, orderBy: { created_at: 'desc' }, select: { diff_json: true } }))?.diff_json ?? {})),
+    'a skipped row is a decision the writer took, and has to read as one a year from now');
+  const erased = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: null, wasRecorded: true }]);
+  check('  …while the SAME payload with the claim does clear it', erased.body.cleared === 1 && erased.body.skipped === 0,
+    JSON.stringify(erased.body));
+  check('  …so the difference is the claim, not the values', JSON.stringify(erased.body) !== JSON.stringify(stale.body));
+
+  // wasRecorded:false is not the same request as wasRecorded absent, and both must be safe.
+  const explicitFalse = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null, wasRecorded: false }]);
+  check('an explicit wasRecorded:false is also declined', explicitFalse.body.skipped === 1 && explicitFalse.body.cleared === 0);
+
   // RE-TRANSCRIBING CORRECTS. A schedule is a current state, not a log.
   const r2 = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: 48000 }]);
   const pads = await prisma.vehicleDueItem.findMany({ where: { vehicle_id: veh.id, observation_key: 'schedule_pads_front' } });
   check('re-recording corrects rather than stacks', r2.status === 200 && pads.length === 1 && pads[0].due_mileage === 48000,
     `${pads.length} row(s), ${pads[0]?.due_mileage} miles`);
 
-  // EMPTYING A ROW RETRACTS IT.
-  const r3 = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null }]);
+  // ── EMPTYING A ROW RETRACTS IT — BUT ONLY WHEN A PERSON EMPTIED IT ───────────────────────────
+  // `wasRecorded: true` is the form saying "I was handed a reading for this row and it is gone
+  // now", which is a retraction. The same payload WITHOUT that claim is a form that never held
+  // the row, and the block below proves it is left alone. Both sentences, one writer.
+  const r3 = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null, wasRecorded: true }]);
   const padsAfter = await prisma.vehicleDueItem.findFirst({ where: { vehicle_id: veh.id, observation_key: 'schedule_pads_front' }, select: { closed_at: true, closed_reason: true } });
   check('emptying a row CLOSES it rather than leaving it', r3.body.cleared === 1 && padsAfter?.closed_at != null,
     'otherwise a wrong date is impossible to retract, and people type 1970 into the field instead');

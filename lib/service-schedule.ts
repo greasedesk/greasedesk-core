@@ -144,6 +144,18 @@ export type ScheduleEntry = {
    *  or the garage did not record one. */
   dueMonth: string | null;
   dueMileage: number | null;
+  /**
+   * What the CLIENT WAS HANDED for this row when its form was seeded — true if a stored reading
+   * existed then. Not what the inputs contain now, and not derivable from them: a row the form
+   * never loaded and a row the user emptied look identical by the time they reach the wire.
+   *
+   * Optional ON PURPOSE, and the one place a missing value is not a caller forgetting. A phone
+   * can queue a schedule save offline and replay it days later, in the shape it had when it was
+   * queued. Rejecting a replayed payload would throw away readings a mechanic actually took;
+   * accepting it while declining its CLEARS keeps the writes and drops only the destructive half.
+   * Absent therefore means unknown, and unknown never deletes. See classifyEntry.
+   */
+  wasRecorded?: boolean;
 };
 
 /** `YYYY-MM` → the stored instant. Returns null for anything that is not a month. */
@@ -173,6 +185,45 @@ export function isBlank(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 
   const legs = legsFor(item.basis);
   return !(legs.date && e.dueMonth) && !(legs.mileage && e.dueMileage != null);
 }
+
+/**
+ * ── A BLANK ROW IS TWO DIFFERENT SENTENCES ─────────────────────────────────────────────────────
+ * "I emptied this" and "I never had this" arrive identically: an entry with no legs filled. The
+ * writer used to read both as *clear this item*, which is right for the first and destroyed five
+ * real readings for the second — TMBS D13DSK, 21 August, a form that came back stale-empty after
+ * a tab switch and was saved:
+ *
+ *     09:22:48  arrival  written=5  cleared=0
+ *     09:23:37  arrival  written=0  cleared=5
+ *
+ * The seed-once defect behind that is fixed, and the next component to go stale will find the
+ * same open trapdoor unless the two sentences are told apart HERE. They cannot be told apart from
+ * the values, because the values are what is missing — so the client says which it means, from
+ * what it was seeded with rather than from what its inputs happen to contain.
+ *
+ * Refusing every blank outright would be the wrong fix: clearing a mis-read row is an ordinary
+ * thing to do, and a garage that cannot correct a wrong reading will write a wrong one instead.
+ *
+ * NOT A SECURITY BOUNDARY. `wasRecorded` is a claim by the caller, and a caller that lies can
+ * still delete a row it is entitled to delete. It is an INTENT signal, and its whole value is
+ * that a stale form has nothing to lie WITH: a form seeded from an empty prop honestly reports
+ * false for every row, which is exactly the case that must not delete.
+ *
+ * WHAT THIS DOES NOT COVER: a form seeded with STALE VALUES rather than none. There, wasRecorded
+ * is legitimately true and the client overwrites newer data with older — a lost update, a
+ * different defect needing a different mechanism (a version, or the seeded value echoed back).
+ * Naming it here so a green gate on this rule is not read as covering that one.
+ */
+export type EntryAction = 'record' | 'clear' | 'skip';
+
+export function classifyEntry(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 'dueMileage' | 'wasRecorded'>): EntryAction {
+  if (!isBlank(item, e)) return 'record';
+  return e.wasRecorded === true ? 'clear' : 'skip';
+}
+
+/** Said in a sentence, for the audit and for the person reading it later. */
+export const SKIPPED_BLANK_REASON =
+  'blank, and the client did not report holding a reading for it — treated as nothing to say, not as an erasure';
 
 /**
  * Refuse what cannot be stored. PURE, so every rule is provable without a row.

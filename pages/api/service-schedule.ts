@@ -37,7 +37,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
-import { scheduleByKey, refuseSchedule, isBlank, monthToStoredDate, legsFor, type ScheduleEntry, type ScheduleItem } from '@/lib/service-schedule';
+import { scheduleByKey, refuseSchedule, isBlank, classifyEntry, SKIPPED_BLANK_REASON, monthToStoredDate, legsFor, type ScheduleEntry, type ScheduleItem } from '@/lib/service-schedule';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
@@ -80,10 +80,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // a reading. Re-reading the computer on the same visit corrects rather than stacks.
   if (stage === 'arrival') {
     const out = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      let written = 0, cleared = 0;
+      let written = 0, cleared = 0, skipped = 0;
       for (const e of paired) {
         const legs = legsFor(e.item.basis);
-        if (isBlank(e.item, e)) {
+        const action = classifyEntry(e.item, e);
+        if (action === 'skip') { skipped += 1; continue; }   // nothing to say — see SKIPPED_BLANK_REASON
+        if (action === 'clear') {
           const gone = await tx.serviceScheduleReading.deleteMany({ where: { job_card_id: card.id, item_key: e.item.key } });
           cleared += gone.count;
           continue;
@@ -104,15 +106,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await writeAudit(tx, {
         groupId, userId: user.id as string, jobCardId,
         action: 'service_schedule.recorded',
-        diff: { stage, written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+        diff: { stage, written, cleared, skipped, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
       });
-      return { written, cleared };
+      return { written, cleared, skipped };
     });
     return res.status(200).json({ ok: true, stage, ...out });
   }
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    let written = 0, cleared = 0;
+    let written = 0, cleared = 0, skipped = 0;
     for (const e of paired) {
       const item = e.item;
       const open = await tx.vehicleDueItem.findFirst({
@@ -120,8 +122,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         select: { id: true },
       });
 
-      if (isBlank(item, e)) {
-        // CLEARED, not ignored — see the header. A garage emptying a row is retracting it.
+      const action = classifyEntry(item, e);
+      if (action === 'skip') { skipped += 1; continue; }
+      if (action === 'clear') {
+        // CLEARED, not ignored — a garage emptying a row IT WAS SHOWN is retracting it. A row the
+        // form never held says nothing, and closing an open due item on that basis is the same
+        // mistake as deleting the arrival reading, one table along.
         if (open) {
           await tx.vehicleDueItem.update({
             where: { id: open.id },
@@ -165,9 +171,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await writeAudit(tx, {
       groupId, userId: user.id as string, jobCardId,
       action: 'service_schedule.recorded',
-      diff: { stage, written, cleared, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+      diff: { stage, written, cleared, skipped, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
     });
-    return { written, cleared };
+    return { written, cleared, skipped };
   });
 
   return res.status(200).json({ ok: true, stage, ...result });

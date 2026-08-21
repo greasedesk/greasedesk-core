@@ -67,6 +67,10 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   };
   const [rows, setRows] = useState(() => seedFrom(recorded));
   const [dirty, setDirty] = useState(false);
+  // WHAT THE FORM WAS HANDED, kept beside what it now holds. The save reports this per row so the
+  // writer can tell "I emptied it" from "I never had it" — see classifyEntry. Derived from the
+  // seed and re-derived with it, NEVER from the inputs: the inputs are what the question is about.
+  const [held, setHeld] = useState(() => new Set(recorded.map((r) => r.key)));
   // ── SEEDED ONCE IS NOT SEEDED ────────────────────────────────────────────────────────────────
   // A tab switch UNMOUNTS this pane, so `useState(seed)` runs again on the way back — against
   // whatever the parent is holding. When the parent held the page-load value, the form came back
@@ -80,6 +84,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
     if (dirty || fingerprint === seenRef.current) return;
     seenRef.current = fingerprint;
     setRows(seedFrom(recorded));
+    setHeld(new Set(recorded.map((r) => r.key)));
   }, [fingerprint, dirty, recorded]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -97,6 +102,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
         key: s.key,
         dueMonth: rows[s.key].month.trim() || null,
         dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
+        wasRecorded: held.has(s.key),
       }));
       const r = await fetch('/api/service-schedule', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -104,7 +110,17 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j?.message ?? 'The schedule didn’t save.'); return; }
-      setSaved(j.cleared ? `Saved — ${j.written} recorded, ${j.cleared} cleared.` : `Saved — ${j.written} recorded.`);
+      // WHAT THE SERVER NOW HOLDS, said by the server having just written it. Without this, `held`
+      // stays at the last seed until refreshCard lands — and refreshCard fails QUIETLY by design,
+      // so a user who saved rows and then emptied one would have the clear silently skipped. The
+      // whole rule turns on this set being right at the moment of the NEXT save.
+      setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null).map((x) => x.key)));
+      const parts = [`${j.written} recorded`];
+      if (j.cleared) parts.push(`${j.cleared} cleared`);
+      // Never silent. A skip is the writer declining to delete something it was not told about,
+      // and a person who meant to clear a row needs to see that it did not happen.
+      if (j.skipped) parts.push(`${j.skipped} left alone (blank, and not loaded from a saved reading)`);
+      setSaved(`Saved — ${parts.join(', ')}.`);
       // What was typed is now what is stored, so this is no longer half-typed work to protect.
       // Without this the guard would latch on for the life of the mount and the reconciled prop
       // could never land — the fix would hold for one save and then behave exactly as before.

@@ -186,7 +186,10 @@ export async function enqueueTyres(args: {
  */
 export async function enqueueSchedule(args: {
   jobCardId: string;
-  entries: Array<{ key: string; dueMonth: string | null; dueMileage: number | null }>;
+  // `wasRecorded` rides along so a replay days later still says which blanks were erasures. An
+  // item QUEUED BEFORE this field existed replays without it, and the writer reads that absence
+  // as unknown and declines to delete — the conservative half, on purpose.
+  entries: Array<{ key: string; dueMonth: string | null; dueMileage: number | null; wasRecorded?: boolean }>;
 }): Promise<string> {
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'schedule', jobCardId: args.jobCardId, payload: { entries: args.entries },

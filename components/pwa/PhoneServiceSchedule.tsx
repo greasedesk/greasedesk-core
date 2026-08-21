@@ -60,6 +60,10 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
   // from IndexedDB before the network answers, so a useState initialiser can seed from a payload
   // that predates the field. Re-seeds on a genuinely different payload, never while dirty.
   const [dirty, setDirty] = useState(false);
+  // As the desktop: what this form WAS HANDED, so a blank row can say which kind of blank it is.
+  // It matters more here, not less — this screen is cache-first and can paint from a payload
+  // stored before the car was even booked in.
+  const [held, setHeld] = useState(() => new Set(recorded.map((r) => r.key)));
   const fingerprint = JSON.stringify(recorded);
   const seenRef = useRef(fingerprint);
   useEffect(() => {
@@ -71,6 +75,7 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
       fresh[it.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
     }
     setRows(fresh);
+    setHeld(new Set(recorded.map((r) => r.key)));
   }, [fingerprint, dirty, recorded]);
 
   const set = (k: string, patch: Partial<{ month: string; miles: string }>) => {
@@ -80,14 +85,18 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
   const filled = SCHEDULE_ITEMS.filter((s) => rows[s.key].month.trim() || rows[s.key].miles.trim()).length;
 
   async function save() {
-    await enqueueSchedule({
-      jobCardId,
-      entries: SCHEDULE_ITEMS.map((s) => ({
-        key: s.key,
-        dueMonth: rows[s.key].month.trim() || null,
-        dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
-      })),
-    });
+    const entries = SCHEDULE_ITEMS.map((s) => ({
+      key: s.key,
+      dueMonth: rows[s.key].month.trim() || null,
+      dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
+      wasRecorded: held.has(s.key),
+    }));
+    await enqueueSchedule({ jobCardId, entries });
+    // What the server WILL hold once this drains. There is no response to learn it from here, and
+    // the next save may well be composed before the queue has moved — on a phone in a bay, quite
+    // likely offline the whole time. Advancing it at enqueue is what makes a clear typed two
+    // minutes later reach the writer as a clear.
+    setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null).map((x) => x.key)));
     setQueued(true);
     onQueued?.();
   }
