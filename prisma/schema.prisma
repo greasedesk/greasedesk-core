@@ -1564,6 +1564,12 @@ model VehicleDueItem {
   due_date_precision DueDatePrecision @default(day)
   due_mileage Int?
 
+  /// The countdown this target was derived from, when the garage read one off the cluster rather
+  /// than a target. See ServiceScheduleReading.countdown_miles for the whole reasoning — same fact,
+  /// the other side of the visit. Counted from the DEPARTURE reading here, not arrival: "240 miles
+  /// left" means from where the car is now, and after the work that is the odometer it leaves on.
+  countdown_miles Int?
+
   /// THREE-STATE, and there is NO default: the capture surface must make someone choose, or a
   /// mechanic tapping through at speed would silently record every finding as `not_raised` and
   /// `declined` — the only one that is a lead — would never appear.
@@ -1866,8 +1872,28 @@ model ServiceScheduleReading {
 
   /// The 1st of the month — month precision by construction, because a service computer prints
   /// "11/2025". A row must carry at least one leg (CHECK constraint).
+  ///
+  /// TRANSCRIPTION NOTE, so it is not rediscovered as a defect: the cluster prints "10/2027" and
+  /// the form is an <input type="month">, which Chrome renders "October 2027" in en-GB AND en-US
+  /// (screenshotted, not assumed). A substitution, not a re-ordering — and deliberately kept,
+  /// because a free-text numeric field would invite "2027/10".
   due_month   DateTime?
   due_mileage Int?
+
+  /// WHAT THE SCREEN ACTUALLY SAID, when the garage read a countdown rather than a target.
+  ///
+  /// A MINI cluster shows distance REMAINING — "1,240 mi", or "-240 mi" with "Service overdue" —
+  /// never the odometer the service falls due at. `due_mileage` above is derived from it and the
+  /// car's reading; this is the measurement that derivation came from.
+  ///
+  /// Kept because the derivation's other input can MOVE. Mileage-in is editable: correct a
+  /// mis-keyed odometer and a stored target becomes silently wrong with nothing to re-derive it
+  /// from. With this column the row explains itself and survives the correction — and the odometer
+  /// it was counted from needs no column of its own, being due_mileage minus this.
+  ///
+  /// NULL means the garage entered an absolute target, which is a different thing from a countdown
+  /// of zero (a service due at exactly this reading).
+  countdown_miles Int?
 
   recorded_by String?
   recorded_at DateTime @default(now())

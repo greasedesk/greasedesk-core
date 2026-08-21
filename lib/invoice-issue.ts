@@ -28,10 +28,14 @@ import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, form
 import { resolveCompanyIdentity } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { dueDateFor } from '@/lib/account-terms';
+import { visitEndMileage } from '@/lib/odometer';
 
 const CARD_SELECT = {
   site_id: true,
   odometer_in: true,
+  // The reading the car LEAVES on, for the due-items block: a target the car has already passed
+  // must not print as still ahead of it. visitEndMileage decides in/out, so this file does not.
+  odometer_out: true,
   group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true, account_terms_days: true } },
@@ -215,8 +219,10 @@ export async function computeNarrativeBlocks(
 ): Promise<{ dueItemsBlock: string | null; measuredBlock: string | null; workDone: string | null }> {
   const card = (await tx.jobCard.findUnique({
     where: { id: jobCardId },
-    select: { id: true, vehicle: { select: { id: true, mot_expiry: true } } },
-  })) as { id: string; vehicle: { id: string; mot_expiry: Date | null } | null } | null;
+    // The two odometer columns ride along for the same reason mot_expiry does: they decide what
+    // the block PRINTS, and must be read at mint with everything else it freezes.
+    select: { id: true, odometer_in: true, odometer_out: true, vehicle: { select: { id: true, mot_expiry: true } } },
+  })) as { id: string; odometer_in: number | null; odometer_out: number | null; vehicle: { id: string; mot_expiry: Date | null } | null } | null;
   if (!card) return { dueItemsBlock: null, measuredBlock: null, workDone: null };
 
   // THE LATEST READING PER CORNER for this car — the tyre condition as it stood at mint, frozen
@@ -245,9 +251,14 @@ export async function computeNarrativeBlocks(
     : null;
 
   // TWO BLOCKS, TWO HEADINGS. See lib/due-items for what went wrong with one.
+  // WHAT THE CAR LEFT ON, through the one function that answers it. `assumed_unchanged` is still
+  // the honest comparison here: if nobody read the dash, the arrival figure is the last thing known
+  // to be true, and a target already behind THAT is already behind the car whatever it did today.
+  const endMiles = visitEndMileage({ odometerIn: card.odometer_in ?? null, odometerOut: card.odometer_out ?? null }).miles;
   const dueItemsBlock = printedNeedsBlock({
     motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
     items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
+    atMiles: endMiles,
   });
   const measuredBlock = printedMeasuredBlock({
     tyreLines: printedTyreLines([...latestTyre.values()]),

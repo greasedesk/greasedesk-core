@@ -170,8 +170,24 @@ check('the same form WITH a re-seed effect is NOT flagged', synthetic(GOOD).leng
 // prop the parent never updates re-seeds the same stale value; the parent reconciling a prop the
 // component reads only at mount never reaches the form.
 const ss = read('components/jobcard/ServiceSchedule.tsx');
+// PIN THE RULE, NOT THE CALL SHAPE. This matched `setRows(seedFrom(recorded))` exactly, so adding
+// a second argument to seedFrom read as "the re-seed was removed". What matters is that a useEffect
+// keyed on the recorded rows puts them back into state.
+const reseedEffect = (() => {
+  const i = ss.indexOf('useEffect(');
+  if (i < 0) return '';
+  let d = 0, out = '';
+  for (let j = ss.indexOf('(', i); j < ss.length; j++) {
+    const c = ss[j];
+    if (c === '(') { d++; if (d === 1) continue; }
+    if (c === ')') { d--; if (!d) break; }
+    out += c;
+  }
+  return out;
+})();
 check('ServiceSchedule re-seeds when the recorded rows change',
-  /useEffect\(/.test(ss) && /setRows\(seedFrom\(recorded\)\)/.test(ss) && /fingerprint/.test(ss));
+  /setRows\(\s*seedFrom\(\s*recorded/.test(reseedEffect) && /fingerprint/.test(reseedEffect),
+  'an effect keyed on the recorded rows, not a particular call signature');
 check('  …and will not overwrite half-typed work', /if\s*\(dirty\b/.test(ss),
   'a dirty guard, cleared on a successful save so the guard cannot latch on for the life of the mount');
 check('  …and clears dirty once what was typed is what is stored', /setDirty\(false\)/.test(ss));

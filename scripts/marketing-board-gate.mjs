@@ -63,6 +63,41 @@ try {
     P.leadStack({ ...base, battery: 'monitor' }, NOW).reasons.length === 0,
     'monitor is a note on a document, not a phone call');
 
+  // ── PAST IT IS NOT THE SAME AS COMING UP ─────────────────────────────────────────────────────
+  // A car months past its service mileage was sitting in Warm beside one due in three weeks. Not a
+  // wording problem: effectiveDueDate computed `alreadyPassed` and serviceDue's return type DROPPED
+  // it, so nothing downstream could see the difference. The MOT pair in this same file was already
+  // right — expired Hot, due Warm — which is the shape this now mirrors.
+  console.log('\n— overdue servicing is hot —');
+  const F = (over) => ({ description: 'Rear brake pads', response: 'not_raised', dueWithinWindow: true, overdue: over });
+  const soon = P.leadStack({ ...base, findings: [F(false)] }, NOW);
+  check('a service due soon is warm', soon.stack === 'warm' && soon.reasons.some((r) => r.kind === 'service_due'),
+    JSON.stringify(soon.reasons.map((r) => [r.kind, r.stack])));
+  const past = P.leadStack({ ...base, findings: [F(true)] }, NOW);
+  check('a service already PAST is hot', past.stack === 'hot' && past.reasons.some((r) => r.kind === 'service_overdue'),
+    JSON.stringify(past.reasons.map((r) => [r.kind, r.stack])));
+  check('  …and says overdue, not due', /overdue/.test(past.reasons.find((r) => r.kind === 'service_overdue').text),
+    past.reasons.find((r) => r.kind === 'service_overdue').text);
+  const both = P.leadStack({ ...base, findings: [F(true), F(false)] }, NOW);
+  check('a car with one of each raises BOTH reasons', both.stack === 'hot'
+    && both.reasons.some((r) => r.kind === 'service_overdue') && both.reasons.some((r) => r.kind === 'service_due'),
+    'the overdue one decides the stack; the other is still a job worth mentioning on the call');
+  check('  …and a DECLINED overdue job is not a lead',
+    P.leadStack({ ...base, findings: [{ ...F(true), response: 'declined' }] }, NOW).reasons
+      .every((r) => r.kind !== 'service_overdue'),
+    'the customer already said no — the same rule the due-soon side has always had');
+  check('the new reason is a DECLARED kind, so a contact can record it',
+    P.LEAD_REASON_KINDS.includes('service_overdue'));
+  // THE LIST AND THE CONSTRAINT ARE TWO DIFFERENT THINGS. Adding a kind in TypeScript and not in
+  // the database gives a board that shows a reason nobody can then record against — the failure
+  // arrives at the moment a garage rings the customer, which is the worst place to find it.
+  const [{ def }] = await prisma.$queryRawUnsafe(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'MarketingContact_reason_check'`);
+  const inDb = [...String(def).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+  check('  …and the DATABASE agrees, kind for kind',
+    P.LEAD_REASON_KINDS.every((k) => inDb.includes(k)) && inDb.every((k) => P.LEAD_REASON_KINDS.includes(k)),
+    `code: ${P.LEAD_REASON_KINDS.length}, db: ${inDb.length}${inDb.includes('service_overdue') ? '' : ' — service_overdue MISSING from the CHECK'}`);
+
   // ── 3. THE MOVEMENT RULE ─────────────────────────────────────────────────────────────────────
   console.log('\n— what stops Hot becoming a graveyard —');
   const hotDeclined = P.leadStack({ ...base, motBand: 'expired', motDays: -62,

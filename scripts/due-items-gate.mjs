@@ -47,9 +47,13 @@ check('agreed_later stamps it', responseAtFor('agreed_later', now) === now);
 console.log('\n— the three-state answer cannot be defaulted away —');
 const schema = readFileSync('prisma/schema.prisma', 'utf8');
 const model = schema.slice(schema.indexOf('model VehicleDueItem'), schema.indexOf('model Vehicle {'));
-check('the COLUMN has no default', /customer_response DueItemResponse\s*$/m.test(model),
+// PIN THE RULE, NOT THE WHITESPACE. These matched a fixed run of spaces, so `prisma format`
+// re-aligning the block — which it does whenever a longer field name joins it — read as "somebody
+// added a default". The rule is that the line ends after the type.
+const noDefault = (field, type) => new RegExp(`^\\s*${field}\\s+${type}\\s*$`, 'm').test(model);
+check('the COLUMN has no default', noDefault('customer_response', 'DueItemResponse'),
   'a @default(not_raised) would make the refusal above unreachable from the database side');
-check('and neither does due_basis', /due_basis   DueBasis\s*$/m.test(model));
+check('and neither does due_basis', noDefault('due_basis', 'DueBasis'));
 const ui = readFileSync('components/jobcard/DueItems.tsx', 'utf8');
 check('the capture UI starts with NOTHING selected', /useState<typeof RESPONSES\[number\] \| null>\(null\)/.test(ui),
   'a pre-selected radio is how declined would quietly stop happening');
@@ -74,6 +78,29 @@ check('the label states both legs and needs NO rate',
 // "by 2025-11-01", so it was asserting the inconsistency rather than catching it.
 check('  …in the same date format the MOT line has always used',
   dueLabel({ dueBasis: 'date', dueDate: '2025-11-01', dueMileage: null }) === 'due by 1 November 2025');
+
+// ── "DUE AT 68,120" IS TRUE OF A CAR ON 68,360 AND UNDERSTATES IT BADLY ────────────────────────
+// The customer's own dash says "Service overdue"; the paperwork should be neither more alarming
+// than the car nor softer than it. One chokepoint, so the invoice, the customer report and the
+// marketing board cannot disagree about the same car.
+const OIL = { dueBasis: 'whichever_first', dueDate: '2027-10-01', dueMileage: 68120, dueDatePrecision: 'month' };
+const PADS = { dueBasis: 'mileage', dueDate: null, dueMileage: 68120, dueDatePrecision: 'day' };
+console.log('\n— overdue is a fact about the mileage leg —');
+check('with NO reading supplied the wording is exactly what it always was',
+  dueLabel(PADS) === 'due at 68,120 miles'
+  && dueLabel(OIL) === 'due at 68,120 miles or by October 2027, whichever comes first',
+  'every caller without a reading to compare keeps its old output — this is additive or it is a rewrite');
+check('a car short of the target still reads as ahead of it', dueLabel(PADS, 67000) === 'due at 68,120 miles');
+check('a car PAST it says by how much', dueLabel(PADS, 68360) === 'overdue by 240 miles — was due at 68,120 miles',
+  'the same 240 the dash shows as -240, so the paperwork and the car agree');
+check('  …and whichever_first goes past tense with it',
+  dueLabel(OIL, 68360) === 'overdue by 240 miles — was due at 68,120 miles or by October 2027, whichever came first',
+  '"whichever comes first" beside "was due" would be a sentence arguing with itself');
+check('EXACTLY on the target is due, not overdue', dueLabel(PADS, 68120) === 'due now, at 68,120 miles',
+  '"overdue by 0 miles" is not a sentence; effectiveDueDate still ranks it as passed, which is the ordering, not the words');
+check('the DATE leg is deliberately left alone',
+  dueLabel({ dueBasis: 'date', dueDate: '2020-01-01', dueMileage: null }, 99999) === 'due by 1 January 2020',
+  'at mint the departure reading is a VISIT fact and can be frozen; whether a date has passed depends on when you read the paper, and an invoice is frozen');
 
 // ── AN ALREADY-PASSED MILEAGE TARGET IS AN ANSWER, NOT A FAILURE ───────────────────────────────
 // projectMileageDate returns null once the car is past the target, and reading every null as
@@ -273,7 +300,7 @@ const schema2 = readFileSync('prisma/schema.prisma', 'utf8');
 const lineModel = schema2.slice(schema2.indexOf('model DueItemLine'), schema2.indexOf('model VehicleOdometerReading'));
 check('the link is a JOIN, not a column on either side', /@@unique\(\[due_item_id, job_card_item_id\]\)/.test(lineModel),
   'one finding can become discs, pads AND the labour to fit them');
-check('a deleted estimate line takes only the LINK', /job_card_item JobCardItem @relation[\s\S]*?onDelete: Cascade/.test(lineModel)
+check('a deleted estimate line takes only the LINK', /job_card_item\s+JobCardItem\s+@relation[\s\S]*?onDelete: Cascade/.test(lineModel)
   && /The FINDING survives/.test(lineModel),
   'deleting a line is a pricing decision, not a statement that the car is fine');
 

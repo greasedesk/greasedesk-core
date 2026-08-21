@@ -108,6 +108,9 @@ export type OpenDueItem = {
   dueBasis: DueBasis;
   dueDate: string | null;
   dueMileage: number | null;
+  /** The countdown the target was derived from, when the garage read one off the cluster. NULL when
+   *  they typed a target. See the schema note on VehicleDueItem.countdown_miles. */
+  countdownMiles?: number | null;
   customerResponse: DueItemResponse;
   foundOnJobCardId: string | null;
   createdAt: string;
@@ -134,12 +137,13 @@ export async function openDueItemsForVehicle(
     where: { group_id: groupId, vehicle_id: vehicleId, closed_at: null },
     orderBy: { created_at: 'desc' },
     select: {
-      id: true, description: true, due_basis: true, due_date: true, due_mileage: true,
+      id: true, description: true, due_basis: true, due_date: true, due_mileage: true, countdown_miles: true,
       customer_response: true, found_on_job_card_id: true, created_at: true, observation_key: true,
       timing_in_description: true, due_date_precision: true,
     },
   })) as Array<{
     id: string; description: string; due_basis: DueBasis; due_date: Date | null; due_mileage: number | null;
+    countdown_miles: number | null;
     customer_response: DueItemResponse; found_on_job_card_id: string | null; created_at: Date;
     observation_key: string | null; timing_in_description: boolean;
     due_date_precision: 'day' | 'month';
@@ -150,6 +154,7 @@ export async function openDueItemsForVehicle(
     dueBasis: r.due_basis,
     dueDate: r.due_date ? r.due_date.toISOString().slice(0, 10) : null,
     dueMileage: r.due_mileage,
+    countdownMiles: r.countdown_miles,
     customerResponse: r.customer_response,
     foundOnJobCardId: r.found_on_job_card_id,
     createdAt: r.created_at.toISOString().slice(0, 10),
@@ -228,18 +233,53 @@ function britishDate(iso: string): string {
  *
  * One line of human text for a due item's timing — the same words on every surface.
  */
-export function dueLabel(item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision'>): string {
+export function dueLabel(
+  item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision'>,
+  /**
+   * ── OVERDUE IS A FACT ABOUT THE MILEAGE LEG ONLY, AND ON PURPOSE ─────────────────────────────
+   * The car's reading, when the caller has one. "Due at 68,120 miles" is true of a car sitting on
+   * 68,360 and understates it badly: the customer's own dash says "Service overdue" and we should
+   * be neither more alarming than the car nor softer than it.
+   *
+   * NOT DONE FOR THE DATE LEG, deliberately. At mint we know the departure odometer, so overdue-by
+   * -mileage is a fact ABOUT THE VISIT and can be frozen onto a document honestly. Whether a DATE
+   * has passed depends on when you read the paper, and an invoice's text is frozen — a document
+   * that silently became "overdue" between printings would be making a claim nobody wrote. The
+   * board answers the date question separately, where it is allowed to change.
+   *
+   * Omitted or null → the wording is exactly what it always was, for every caller that has no
+   * reading to compare against.
+   */
+  atMiles?: number | null,
+): string {
   const miles = item.dueMileage != null ? `${item.dueMileage.toLocaleString('en-GB')} miles` : 'a mileage';
+  const past = atMiles != null && item.dueMileage != null && atMiles >= item.dueMileage;
+  const by = past ? (atMiles as number) - (item.dueMileage as number) : 0;
+  // EXACTLY ON THE TARGET IS DUE, NOT OVERDUE — and "overdue by 0 miles" is not a sentence.
+  // effectiveDueDate treats `>=` as passed for ORDERING, which is right: a service due now belongs
+  // at the top of the list. This is the WORDING, and it can be precise where the ordering only
+  // needs a rank. The two agreeing on urgency while differing in words is the point.
+  const exactly = past && by === 0;
+  const overdueBy = `overdue by ${by.toLocaleString('en-GB')} miles — was `;
   // ONE PLACE DECIDES HOW A DUE DATE READS, so the invoice block, the customer report and the
   // marketing list cannot disagree — and none of them can print a day that was never known.
   const when = (iso: string) => (item.dueDatePrecision === 'month' ? britishMonth(iso) : britishDate(iso));
   switch (item.dueBasis) {
     case 'date': return item.dueDate ? `due by ${when(item.dueDate)}` : 'due by a date';
-    case 'mileage': return `due at ${miles}`;
+    case 'mileage':
+      if (exactly) return `due now, at ${miles}`;
+      return past ? `${overdueBy}due at ${miles}` : `due at ${miles}`;
     case 'next_service': return 'due at the next service';
     // The label needs NO RATE — it states both legs, exactly as the garage wrote it. Only ORDERING
     // needs a projection, and that is effectiveDueDate's job.
-    case 'whichever_first': return `due at ${miles} or by ${item.dueDate ? when(item.dueDate) : 'a date'}, whichever comes first`;
+    case 'whichever_first': {
+      const when2 = item.dueDate ? when(item.dueDate) : 'a date';
+      // Past tense throughout once it has fired, or the sentence argues with itself.
+      if (exactly) return `due now, at ${miles} — or by ${when2}, whichever came first`;
+      return past
+        ? `${overdueBy}due at ${miles} or by ${when2}, whichever came first`
+        : `due at ${miles} or by ${when2}, whichever comes first`;
+    }
   }
 }
 
@@ -343,13 +383,16 @@ export function effectiveDueDate(
  */
 export function printedNeedsBlock(args: {
   motExpiry: Date | null;
+  /** The car's reading, so a target it has already passed does not print as still ahead of it.
+   *  NULL when unknown — the wording then stays exactly as it was. */
+  atMiles?: number | null;
   items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
 }): string | null {
   const lines: string[] = [];
   if (args.motExpiry) {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
-  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it)}` : it.description);
+  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it, args.atMiles)}` : it.description);
   if (!lines.length) return null;
   return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
 }
@@ -384,6 +427,9 @@ export function printedMeasuredBlock(args: {
  */
 export function printedDueItemsBlock(args: {
   motExpiry: Date | null;
+  /** The car's reading, so a target it has already passed does not print as still ahead of it.
+   *  NULL when unknown — the wording then stays exactly as it was. */
+  atMiles?: number | null;
   items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
   tyreLines?: string[];
   batteryLine?: string | null;
@@ -392,7 +438,7 @@ export function printedDueItemsBlock(args: {
   if (args.motExpiry) {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
-  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it)}` : it.description);
+  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it, args.atMiles)}` : it.description);
   for (const t of args.tyreLines ?? []) lines.push(t);
   if (args.batteryLine) lines.push(args.batteryLine);
   if (!lines.length) return null;

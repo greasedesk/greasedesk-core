@@ -131,6 +131,13 @@ export type ServiceDue = {
   triggerText: string | null;
   /** True when a whichever_first item is showing on its date leg because no rate exists. */
   mileageLegUnevaluated: boolean;
+  /**
+   * The trigger has ALREADY FIRED — the car is past its mileage target, or its date has gone.
+   * effectiveDueDate has computed this all along and this type used to drop it, so every caller
+   * saw "due today" and could not tell a car three weeks early from one months late. The board
+   * read that as one band and put both in Warm.
+   */
+  alreadyPassed: boolean;
 };
 
 /**
@@ -170,13 +177,17 @@ export function serviceDue(
       // its mileage target arrives here with today's date and `alreadyPassed` — the chokepoint
       // answers the question rather than making this file translate a failure code (it used to).
       if (p.date <= end) {
-        out.push({ item, band: 'dated', date: p.date, triggerText: null, mileageLegUnevaluated: !!p.mileageLegUnevaluated });
+        out.push({ item, band: 'dated', date: p.date, triggerText: null, mileageLegUnevaluated: !!p.mileageLegUnevaluated,
+          // A DATE that has gone is as passed as a mileage that has: same fact, the other leg.
+          alreadyPassed: !!p.alreadyPassed || p.date.getTime() < ctx.now.getTime() });
       }
       continue;
     }
     // `next_service` and `no_rate` both mean "no clock we can read", which is a trigger, not a gap.
     if (p.reason === 'next_service' || p.reason === 'no_rate') {
-      out.push({ item, band: 'trigger', date: null, triggerText: null, mileageLegUnevaluated: false });
+      // 'due at the next service' means overdue a visit BY DEFINITION — but there is no clock to
+      // read, so it stays a trigger and does not claim a passed date it cannot evidence.
+      out.push({ item, band: 'trigger', date: null, triggerText: null, mileageLegUnevaluated: false, alreadyPassed: false });
     }
     // `no_date` is a malformed row and is deliberately NOT surfaced: it has nothing to tell anyone.
   }

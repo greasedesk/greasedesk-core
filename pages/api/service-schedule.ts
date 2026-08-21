@@ -37,7 +37,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
-import { scheduleByKey, refuseSchedule, isBlank, classifyEntry, SKIPPED_BLANK_REASON, monthToStoredDate, legsFor, type ScheduleEntry, type ScheduleItem } from '@/lib/service-schedule';
+import { scheduleByKey, refuseSchedule, isBlank, classifyEntry, resolveCountdown, SKIPPED_BLANK_REASON, monthToStoredDate, legsFor, type ScheduleEntry, type ScheduleItem } from '@/lib/service-schedule';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
@@ -58,12 +58,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Paired with their catalogue entry, because the DECLARED basis is what decides which legs a row
   // needs — the payload no longer implies it.
   const paired = entries.map((e) => ({ ...e, item: scheduleByKey(String(e.key)) as ScheduleItem }));
-  const refusals = refuseSchedule(paired);
-  if (refusals.length) return res.status(400).json({ message: refusals[0].message, refusals });
 
+  // THE CARD IS LOADED BEFORE THE PAYLOAD IS JUDGED, because a countdown cannot be judged without
+  // the reading it counts from. refuseSchedule used to run first; it now runs on RESOLVED entries,
+  // so "the mileage leg is missing" is asked of the derived target rather than of the units the
+  // garage happened to type it in.
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: groupId },
-    select: { id: true, site_id: true, vehicle_id: true, ...BAY_WRITE_SELECT },
+    select: { id: true, site_id: true, vehicle_id: true, odometer_in: true, odometer_out: true, ...BAY_WRITE_SELECT },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   // ── A FINISHED JOB TAKES NO NEW BAY DATA ────────────────────────────────────────────────────
@@ -73,6 +75,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (bayRefusal) return res.status(409).json({ message: bayRefusal.message, code: bayRefusal.code });
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
+
+  // ── COUNTDOWN → TARGET, ONCE, ON THE SERVER ───────────────────────────────────────────────────
+  // The client shows its arithmetic so a mis-keyed odometer is caught at the car, but it does not
+  // get to BE the arithmetic: the stored countdown and the stored target have to agree, and the
+  // only way to guarantee that is for one side to derive the other. Counted from the reading for
+  // THIS stage — arrival from what came in, departure from what goes out.
+  const odometer = stage === 'arrival' ? card.odometer_in : card.odometer_out;
+  for (const e of paired) {
+    if (e.countdownMiles == null) continue;
+    const r = resolveCountdown(Number(e.countdownMiles), odometer, stage);
+    if (!r.ok) {
+      // ── "NOT YET" IS NOT "NOT EVER" ─────────────────────────────────────────────────────────
+      // 400 is in the service worker's TERMINAL_STATUSES: a queued item that gets one is DELETED,
+      // not retried. A phone can legitimately queue a countdown before its own mileage write has
+      // drained, and answering that with 400 would destroy a reading a mechanic took — the exact
+      // failure this whole area has spent the week closing. A missing odometer is a 409: the card
+      // is not in a state to accept this yet, and it will be. A countdown that lands before zero
+      // is a bad payload and stays 400, because retrying it changes nothing.
+      const status = r.code === 'no_odometer' ? 409 : 400;
+      return res.status(status).json({ message: r.message, refusals: [{ key: e.key, code: r.code, message: r.message }] });
+    }
+    e.dueMileage = r.dueMileage;   // whatever the client put here is replaced, never merged
+  }
+
+  const refusals = refuseSchedule(paired);
+  if (refusals.length) return res.status(400).json({ message: refusals[0].message, refusals });
 
   // ── ARRIVAL: A VISIT MEASUREMENT ─────────────────────────────────────────────────────────────
   // Its own table, like a tyre depth or a battery test, and never a due item. Blank rows are simply
@@ -93,6 +121,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const data = {
           due_month: legs.date ? monthToStoredDate(e.dueMonth) : null,
           due_mileage: legs.mileage ? (e.dueMileage ?? null) : null,
+          // NULL when the garage typed a target. Not zero — a countdown of zero is a real reading
+          // ("due at exactly this mileage") and must not be confused with "no countdown was read".
+          countdown_miles: legs.mileage ? (e.countdownMiles ?? null) : null,
           recorded_by: user.id as string,
           recorded_at: new Date(),
         };
@@ -106,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await writeAudit(tx, {
         groupId, userId: user.id as string, jobCardId,
         action: 'service_schedule.recorded',
-        diff: { stage, written, cleared, skipped, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+        diff: { stage, written, cleared, skipped, odometer, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null, countdownMiles: e.countdownMiles ?? null })) },
       });
       return { written, cleared, skipped };
     });
@@ -149,6 +180,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         due_date: legs.date ? monthToStoredDate(e.dueMonth) : null,
         due_date_precision: 'month' as const,
         due_mileage: legs.mileage ? (e.dueMileage ?? null) : null,
+        countdown_miles: legs.mileage ? (e.countdownMiles ?? null) : null,
         // The description says WHAT and the basis says WHEN — no timing in the words.
         timing_in_description: false,
       };
@@ -171,7 +203,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await writeAudit(tx, {
       groupId, userId: user.id as string, jobCardId,
       action: 'service_schedule.recorded',
-      diff: { stage, written, cleared, skipped, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null })) },
+      diff: { stage, written, cleared, skipped, odometer, skippedMeans: skipped ? SKIPPED_BLANK_REASON : undefined, entries: paired.filter((e) => !isBlank(e.item, e)).map((e) => ({ key: e.key, basis: e.item.basis, dueMonth: e.dueMonth ?? null, dueMileage: e.dueMileage ?? null, countdownMiles: e.countdownMiles ?? null })) },
     });
     return { written, cleared, skipped };
   });

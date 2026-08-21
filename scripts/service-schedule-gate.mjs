@@ -104,6 +104,35 @@ try {
     /WHAT THIS DOES NOT COVER/.test(src) && /STALE VALUES/.test(src) && /lost update/.test(src),
     'a form seeded with stale VALUES still overwrites newer data with older — not covered here, needs a version or an echoed seed value');
 
+  // ── A COUNTDOWN IS WHAT THE SCREEN SHOWS; A TARGET IS WHAT WE STORE ──────────────────────────
+  console.log('\n— the countdown —');
+  check('a countdown behind the car converts to a target behind it',
+    JSON.stringify(S.resolveCountdown(-240, 68360, 'departure')) === '{"ok":true,"dueMileage":68120}');
+  check('  …and an ordinary one ahead of it converts too',
+    JSON.stringify(S.resolveCountdown(1240, 68360, 'departure')) === '{"ok":true,"dueMileage":69600}',
+    'the cluster shows a countdown ALWAYS, not only when overdue — the negative is the case that exposed it');
+  const noOdo = S.resolveCountdown(-240, null, 'departure');
+  check('no reading to count from is refused, not guessed', !noOdo.ok && noOdo.code === 'no_odometer');
+  check('  …and reads as the NEXT STEP, naming the right box',
+    /Record the mileage out first/.test(noOdo.message)
+    && /Record the mileage in first/.test(S.resolveCountdown(-240, null, 'arrival').message),
+    'the empty mileage-out box is deliberate, so on Completion this is the ordinary path');
+  check('  …and the two stages name DIFFERENT boxes',
+    S.resolveCountdown(-240, null, 'arrival').message !== noOdo.message,
+    'departure counts from what the car leaves on; sharing a sentence would send a mechanic to the wrong field');
+  const daft = S.resolveCountdown(-9000, 500, 'arrival');
+  check('a countdown landing before zero is refused', !daft.ok && daft.code === 'before_zero');
+
+  // THE INTERACTION WITH BLANK-VERSUS-CLEARED, which is where these two features could have
+  // combined into a deletion: a filled-in countdown row has no dueMileage yet, and a writer that
+  // only looked at dueMileage would call it blank — and a blank row is a request to clear.
+  const padsItem = S.scheduleByKey('schedule_pads_front');
+  check('a countdown row is NOT blank', !S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: -240 }));
+  check('  …so it is recorded, never read as an erasure',
+    S.classifyEntry(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: -240, wasRecorded: true }) === 'record');
+  check('  …while a genuinely empty row still is blank',
+    S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: null }));
+
   check('a row with neither leg is blank, not an error',
     S.isBlank(it('schedule_oil_service'), { dueMonth: null, dueMileage: null })
     && S.refuseSchedule([entry('schedule_oil_service')]).length === 0,
@@ -235,6 +264,43 @@ try {
   check('  …and a claimed one still does', aClear.body.cleared === 1,
     'the correction path a garage actually needs is untouched');
   await post([{ key: 'schedule_oil_service', dueMonth: '2026-09', dueMileage: 60000 }], 'arrival');   // put it back
+
+  // ── THE ROUND TRIP: WHAT THE SCREEN SAID, AND WHAT WE CONCLUDED FROM IT ──────────────────────
+  // On the ARRIVAL table deliberately: it is never printed, so this cannot disturb the invoice
+  // assertions further down.
+  const cd = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: null, countdownMiles: -240 }], 'arrival');
+  const cdRow = await prisma.serviceScheduleReading.findFirst({
+    where: { job_card_id: card.id, item_key: 'schedule_pads_rear' }, select: { due_mileage: true, countdown_miles: true } });
+  check('a countdown save stores BOTH the reading and the conclusion',
+    cd.body.written === 1 && cdRow?.countdown_miles === -240 && cdRow?.due_mileage === 59760,
+    JSON.stringify({ ...cdRow, odometerIn: 60000 }));
+  check('  …and the pair is arithmetic, so the reading it counted from needs no column',
+    (cdRow.due_mileage - cdRow.countdown_miles) === 60000,
+    'due_mileage minus countdown_miles IS the odometer — recoverable, so not stored twice');
+  check('  …with the SERVER deriving it, not the client',
+    (await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: 999999, countdownMiles: -240 }], 'arrival')).body.written === 1
+    && (await prisma.serviceScheduleReading.findFirst({ where: { job_card_id: card.id, item_key: 'schedule_pads_rear' }, select: { due_mileage: true } }))?.due_mileage === 59760,
+    'a client sending both had its target replaced, never merged — the stored pair cannot disagree');
+
+  // ── "NOT YET" IS A DIFFERENT ANSWER FROM "NOT EVER" ──────────────────────────────────────────
+  // The departure stage has no odometer_out on this card, which is the ordinary state of a card
+  // mid-job and exactly the case a phone can queue against.
+  const noRead = await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null, countdownMiles: -100 }], 'departure');
+  check('a countdown with no reading to count from is refused', noRead.status === 409, String(noRead.status));
+  check('  …with 409 and NOT 400, because 400 is terminal in the outbox', noRead.status === 409
+    && /TERMINAL_STATUSES = \[400, 403, 404\]/.test(readFileSync('public/sw.js', 'utf8')),
+    'a queued phone save answered 400 is DELETED, not retried — that would destroy a reading a mechanic took');
+  check('  …while a countdown landing before zero stays 400',
+    (await post([{ key: 'schedule_pads_front', dueMonth: null, dueMileage: null, countdownMiles: -999999 }], 'arrival')).status === 400,
+    'retrying a bad payload changes nothing, so it must not sit in the queue forever');
+
+  // LEAVE THE FIXTURE AS IT WAS FOUND. This block added a third arrival row and a later check
+  // counts them — an assertion about the departure write must not fail because of a countdown
+  // test that ran before it. Cleared through the CLAIMED path, which is a small extra proof that
+  // the two features compose.
+  await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: null, wasRecorded: true }], 'arrival');
+  check('  …and the countdown row clears again, leaving the fixture as it was',
+    (await prisma.serviceScheduleReading.count({ where: { job_card_id: card.id } })) === 2);
 
   check('a card with ONLY an arrival reading prints no schedule line', arrivalOnlyBlock === null,
     'better an absent line than an arrival figure dressed as what is next');
@@ -592,6 +658,38 @@ try {
     kept.some((r) => r.item_key === 'schedule_pads_front' && r.due_mileage === 52000)
     && kept.some((r) => r.item_key === 'schedule_brake_fluid' && r.due_month?.toISOString().slice(0, 7) === '2029-03'),
     `${kept.length} rows: ${kept.map((r) => r.item_key).join(', ')}`);
+
+  // ── THE COUNTDOWN, AT THE CAR ────────────────────────────────────────────────────────────────
+  // The screen shows "-240 mi" and the mechanic needs somewhere to put it. Before this, the box
+  // stripped the minus and stored 240 — a service due at 240 miles, silently.
+  console.log('\n— reading a countdown off the cluster —');
+  await page.click('[data-testid="schedule-unit-countdown"]');
+  await page.fill('[data-testid="schedule-miles-schedule_pads_rear"]', '-240');
+  const working = await page.locator('[data-testid="schedule-working-schedule_pads_rear"]').innerText();
+  check('the minus survives being typed', (await page.inputValue('[data-testid="schedule-miles-schedule_pads_rear"]')) === '-240',
+    'it used to be stripped by the input, turning -240 into a target of 240');
+  check('  …and the form shows what it worked out', /due at 59,760/.test(working) && /already overdue/.test(working), working);
+  check('  …counting from the reading it names',
+    /60,000/.test(await page.locator('[data-testid="schedule-count-from"]').innerText()));
+  await page.click('[data-testid="schedule-save"]');
+  await page.waitForSelector('[data-testid="schedule-saved"]');
+  const stored = await prisma.serviceScheduleReading.findFirst({
+    where: { job_card_id: fix.card, item_key: 'schedule_pads_rear' }, select: { due_mileage: true, countdown_miles: true } });
+  check('  …and stores the reading beside the conclusion', stored?.countdown_miles === -240 && stored?.due_mileage === 59760,
+    JSON.stringify(stored));
+
+  // Switching back CONVERTS rather than reinterpreting: -240 is 59,760 as a target, not a service
+  // 240 miles from nowhere. Getting this wrong would silently multiply every figure on the panel.
+  await page.click('[data-testid="schedule-unit-target"]');
+  check('switching units converts what is already typed',
+    (await page.inputValue('[data-testid="schedule-miles-schedule_pads_rear"]')) === '59760',
+    'leaving the digits alone would turn a countdown into a target 60,000 miles out');
+
+  // Leave the fixture as it was found — this row is not part of the invoice assertions below, and
+  // a later check counts the arrival rows.
+  await page.fill('[data-testid="schedule-miles-schedule_pads_rear"]', '');
+  await page.click('[data-testid="schedule-save"]');
+  await page.waitForSelector('[data-testid="schedule-saved"]');
 
   // Put the browser back where the next section inherited it (Completion, loaded at line ~411).
   // Leaving it on Intake broke the mileage-out checks downstream — a section reading a control

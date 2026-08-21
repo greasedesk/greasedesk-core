@@ -28,7 +28,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
 
-export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null };
+export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null; countdownMiles?: number | null };
 
 type Props = {
   jobCardId: string;
@@ -43,6 +43,12 @@ type Props = {
   /** On Completion only: what the computer said when the car came in, shown beside each row so the
    *  after reading is a comparison rather than a blank form. */
   onArrival?: ScheduleRow[];
+  /**
+   * THE READING A COUNTDOWN COUNTS FROM — mileage IN on arrival, mileage OUT on departure. NULL
+   * when it has not been taken yet, which is ordinary: this panel and the odometer box sit on the
+   * same tab in no fixed order, and mileage-out is deliberately empty by default.
+   */
+  countFrom?: number | null;
   /** DVSA, read-only. NULL when we have no MOT date for this car. */
   motExpiry?: string | null;
   onSaved: () => void;
@@ -55,17 +61,29 @@ const BASIS_LABEL: Record<string, string> = {
   whichever_first: 'whichever comes first',
 };
 
-export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], motExpiry = null, onSaved }: Props) {
-  const seedFrom = (rs: ScheduleRow[]) => {
+export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], countFrom = null, motExpiry = null, onSaved }: Props) {
+  // ── WHAT THE SCREEN SHOWS, NOT WHAT THE MODEL STORES ─────────────────────────────────────────
+  // A MINI cluster shows distance REMAINING — "1,240 mi", or "-240 mi" with "Service overdue" —
+  // and never the odometer the service falls due at. Other computers show the target. The panel
+  // asks which, once, because a given car's screen uses one convention for all of its items; and
+  // a bare "240" is otherwise ambiguous between "due at 240" and "240 to go".
+  type Unit = 'target' | 'countdown';
+  const seededUnit: Unit = recorded.some((r) => r.countdownMiles != null) ? 'countdown' : 'target';
+  const shownFor = (r: ScheduleRow | undefined, u: Unit) =>
+    u === 'countdown'
+      ? (r?.countdownMiles != null ? String(r.countdownMiles) : '')
+      : (r?.dueMileage != null ? String(r.dueMileage) : '');
+  const seedFrom = (rs: ScheduleRow[], u: Unit) => {
     const out: Record<string, { month: string; miles: string }> = {};
     for (const s of SCHEDULE_ITEMS) {
       const r = rs.find((x) => x.key === s.key);
       // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
-      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownFor(r, u) };
     }
     return out;
   };
-  const [rows, setRows] = useState(() => seedFrom(recorded));
+  const [unit, setUnit] = useState<Unit>(seededUnit);
+  const [rows, setRows] = useState(() => seedFrom(recorded, seededUnit));
   const [dirty, setDirty] = useState(false);
   // WHAT THE FORM WAS HANDED, kept beside what it now holds. The save reports this per row so the
   // writer can tell "I emptied it" from "I never had it" — see classifyEntry. Derived from the
@@ -78,17 +96,48 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   // real card went that way (TMBS D13DSK, 21 Aug). Two halves, both required — the parent
   // reconciles the prop through /api/jobcard-pane, and this re-seeds when it changes.
   // `dirty` is the whole safety of it: never overwrite something half-typed.
-  const fingerprint = JSON.stringify(recorded.map((r) => [r.key, r.dueDate, r.dueMileage]));
+  const fingerprint = JSON.stringify(recorded.map((r) => [r.key, r.dueDate, r.dueMileage, r.countdownMiles ?? null]));
   const seenRef = useRef(fingerprint);
   useEffect(() => {
     if (dirty || fingerprint === seenRef.current) return;
     seenRef.current = fingerprint;
-    setRows(seedFrom(recorded));
+    setUnit(seededUnit);
+    setRows(seedFrom(recorded, seededUnit));
     setHeld(new Set(recorded.map((r) => r.key)));
-  }, [fingerprint, dirty, recorded]);
+  }, [fingerprint, dirty, recorded, seededUnit]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+
+  /** '' → null, '-' → null (mid-typing), otherwise the number. A lone minus is not a reading. */
+  const numeric = (v: string): number | null => {
+    const t = v.trim();
+    if (t === '' || t === '-') return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  };
+  const countdownUsable = countFrom != null;
+  const noReadingYet = stage === 'arrival'
+    ? 'Record the mileage in first — a countdown needs a reading to count from.'
+    : 'Record the mileage out first — a countdown needs a reading to count from.';
+
+  // Switching CONVERTS what is already typed rather than silently changing what it means: 68,120
+  // as a target is -240 as a countdown from 68,360, and leaving the digits alone would turn one
+  // into a service due 136,480 miles away. Only reachable when the reading is known, because the
+  // countdown option is disabled without it.
+  const switchUnit = (u: Unit) => {
+    if (u === unit || countFrom == null) return;
+    setDirty(true);
+    setUnit(u);
+    setRows((r) => {
+      const out = { ...r };
+      for (const s of SCHEDULE_ITEMS) {
+        const n = numeric(r[s.key].miles);
+        out[s.key] = { ...r[s.key], miles: n == null ? '' : String(u === 'countdown' ? n - countFrom : countFrom + n) };
+      }
+      return out;
+    });
+  };
 
   const set = (k: string, patch: Partial<{ month: string; miles: string }>) => {
     setDirty(true);
@@ -101,7 +150,10 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
       const entries = SCHEDULE_ITEMS.map((s) => ({
         key: s.key,
         dueMonth: rows[s.key].month.trim() || null,
-        dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
+        // ONE OF THE TWO, NEVER BOTH. In countdown mode the server derives the target — sending a
+        // target as well would invite the two to disagree, and the stored pair has to be arithmetic.
+        dueMileage: unit === 'target' ? numeric(rows[s.key].miles) : null,
+        countdownMiles: unit === 'countdown' ? numeric(rows[s.key].miles) : null,
         wasRecorded: held.has(s.key),
       }));
       const r = await fetch('/api/service-schedule', {
@@ -114,7 +166,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
       // stays at the last seed until refreshCard lands — and refreshCard fails QUIETLY by design,
       // so a user who saved rows and then emptied one would have the clear silently skipped. The
       // whole rule turns on this set being right at the moment of the NEXT save.
-      setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null).map((x) => x.key)));
+      setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null || x.countdownMiles != null).map((x) => x.key)));
       const parts = [`${j.written} recorded`];
       if (j.cleared) parts.push(`${j.cleared} cleared`);
       // Never silent. A skip is the writer declining to delete something it was not told about,
@@ -151,6 +203,35 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
           : <>No MOT date from DVSA for this car</>}
       </p>
 
+      {/* ── WHICH WAY THE SCREEN COUNTS ─────────────────────────────────────────────────────────
+          One control for the panel, not one per row: a given car's cluster uses one convention for
+          everything on it. Defaults to `target` so nothing changes for a garage whose computer
+          shows targets — and to `countdown` when the row was SAVED as one, so it reopens the way
+          it was entered. */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap" data-testid="schedule-unit">
+        <span className="text-xs text-muted">The computer shows</span>
+        {([['target', 'a due mileage'], ['countdown', 'miles remaining']] as const).map(([u, label]) => (
+          <button key={u} type="button" disabled={!canEdit || (u === 'countdown' && !countdownUsable)}
+            onClick={() => switchUnit(u)} data-testid={`schedule-unit-${u}`}
+            title={u === 'countdown' && !countdownUsable ? noReadingYet : undefined}
+            className={`px-2.5 py-1 rounded-lg border text-xs font-medium ${
+              unit === u ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'
+            } ${u === 'countdown' && !countdownUsable ? 'opacity-50 cursor-not-allowed' : ''}`}>
+            {label}
+          </button>
+        ))}
+        {!countdownUsable && (
+          // A NEXT STEP, NOT A REJECTION. The empty mileage-out box is deliberate, so on Completion
+          // this is the ordinary case and reads as the thing to do rather than something gone wrong.
+          <span className="text-xs text-muted" data-testid="schedule-no-reading">{noReadingYet}</span>
+        )}
+        {countdownUsable && unit === 'countdown' && (
+          <span className="text-xs text-muted" data-testid="schedule-count-from">
+            counting from <strong className="text-ink tabular-nums">{countFrom!.toLocaleString('en-GB')}</strong>
+          </span>
+        )}
+      </div>
+
       <div className="space-y-2">
         {SCHEDULE_ITEMS.map((s) => {
           const row = rows[s.key];
@@ -166,15 +247,38 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
                   data-testid={`schedule-month-${s.key}`} className={field} />
               ) : <span />}
               {legs.mileage ? (
-                <input inputMode="numeric" value={row.miles} disabled={!canEdit} placeholder="miles"
-                  onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
-                  data-testid={`schedule-miles-${s.key}`} className={`${field} w-24`} />
+                <input inputMode={unit === 'countdown' ? 'text' : 'numeric'} value={row.miles} disabled={!canEdit}
+                  placeholder={unit === 'countdown' ? 'miles left' : 'miles'}
+                  // A LEADING MINUS IS DATA HERE. It used to be stripped, so a mechanic copying
+                  // "-240" off the cluster got 240 — a service due at 240 miles, silently. The
+                  // minus is only meaningful against a countdown, so a target still cannot take one.
+                  onChange={(e) => set(s.key, {
+                    miles: (unit === 'countdown'
+                      ? e.target.value.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '')
+                      : e.target.value.replace(/[^\d]/g, '')).slice(0, 8),
+                  })}
+                  data-testid={`schedule-miles-${s.key}`} className={`${field} w-28`} />
               ) : <span />}
               {/* DECLARED by the item, so it reads the same before and after anything is typed.
                   On Completion it also carries what the car arrived with, so the mechanic is
                   correcting a number rather than recalling one. */}
               <span className="text-xs text-muted min-w-[9rem]" data-testid={`schedule-basis-${s.key}`}>
                 {BASIS_LABEL[s.basis]}
+                {/* THE ARITHMETIC, SHOWN. A wrong odometer is otherwise invisible until a customer
+                    is reminded at a mileage the car passed months ago; here it is one glance.
+                    Advisory only — the SERVER does the conversion that gets stored. */}
+                {unit === 'countdown' && legs.mileage && countFrom != null && (() => {
+                  const n = numeric(row.miles);
+                  if (n == null) return null;
+                  const target = countFrom + n;
+                  return (
+                    <em className="not-italic block text-[11px] opacity-70" data-testid={`schedule-working-${s.key}`}>
+                      {n > 0 ? `+${n.toLocaleString('en-GB')}` : n.toLocaleString('en-GB')} → {target < 0
+                        ? 'before the car had any mileage — check the figures'
+                        : <>due at <strong className="text-ink tabular-nums">{target.toLocaleString('en-GB')}</strong>{n < 0 ? ' — already overdue' : ''}</>}
+                    </em>
+                  );
+                })()}
                 {stage === 'departure' && (() => {
                   const a = onArrival.find((x) => x.key === s.key);
                   if (!a) return null;

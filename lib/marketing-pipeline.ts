@@ -40,14 +40,14 @@ export type Stack = 'hot' | 'warm' | 'later';
  * a component — one place to read when somebody asks why a car is at the top.
  */
 export type LeadReasonKind =
-  | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked'
+  | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked' | 'service_overdue'
   | 'mot_due' | 'service_due' | 'unanswered' | 'battery_retest'
   | 'declined' | 'snoozed' | 'distant';
 
 /** The set, as VALUES — MarketingContact.reason is checked against exactly this, in the database
  *  and at the endpoint, so a contact can say what the call was really about. */
 export const LEAD_REASON_KINDS: LeadReasonKind[] = [
-  'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked',
+  'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked', 'service_overdue',
   'mot_due', 'service_due', 'unanswered', 'battery_retest',
   'declined', 'snoozed', 'distant',
 ];
@@ -65,7 +65,7 @@ export type LeadSignals = {
   /** The lowest single tread reading on the car, in tenths. NULL when no tyre has been measured. */
   lowestTreadTenths: number | null;
   /** Open findings, with what the customer said. */
-  findings: Array<{ description: string; response: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call'; dueWithinWindow: boolean }>;
+  findings: Array<{ description: string; response: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call'; dueWithinWindow: boolean; overdue?: boolean }>;
   /** The garage's last contact record for this car, if any. */
   contact: { state: 'contacted' | 'booked' | 'declined' | 'snoozed'; snoozeUntil: Date | null; spent: boolean } | null;
 };
@@ -117,7 +117,18 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   if (s.battery === 'charging_fault') {
     out.push({ kind: 'battery_retest', stack: 'warm', text: 'Charging fault suspected — the battery held up, the charging did not' });
   }
-  const dueSoon = s.findings.filter((f) => f.dueWithinWindow && f.response !== 'declined');
+  // ── PAST IT IS HOT; COMING UP IS WARM ────────────────────────────────────────────────────────
+  // Exactly the pair this file already draws for the MOT — mot_expired Hot, mot_due Warm — and it
+  // was missing here only because serviceDue dropped `alreadyPassed`, so nothing downstream could
+  // see the difference. A car months past its service is not a car due in three weeks, and it was
+  // sitting in the same stack.
+  const live = s.findings.filter((f) => f.dueWithinWindow && f.response !== 'declined');
+  const overdue = live.filter((f) => f.overdue);
+  const dueSoon = live.filter((f) => !f.overdue);
+  if (overdue.length) {
+    out.push({ kind: 'service_overdue', stack: 'hot',
+      text: `${plural(overdue.length, 'job', 'jobs')} overdue — ${overdue[0].description}` });
+  }
   if (dueSoon.length) {
     out.push({ kind: 'service_due', stack: 'warm', text: `${plural(dueSoon.length, 'job', 'jobs')} due — ${dueSoon[0].description}` });
   }

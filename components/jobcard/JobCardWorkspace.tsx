@@ -95,8 +95,8 @@ type Props = {
   lastBattery?: { ratedCca: number | null; ccaStandard: string | null } | null;
   observationCounts?: Record<string, number>;
   offerIntakePrompts?: boolean;
-  serviceSchedule?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
-  scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null }>;
+  serviceSchedule?: Array<{ key: string; dueDate: string | null; dueMileage: number | null; countdownMiles?: number | null }>;
+  scheduleOnArrival?: Array<{ key: string; dueDate: string | null; dueMileage: number | null; countdownMiles?: number | null }>;
   oilLevel?: string | null;
   tyreCondition?: TyreCondition[];
   /** THIS VISIT's tyre rows — what the capture form opens on. See lib/jobcard-page-data. */
@@ -917,7 +917,8 @@ export default function JobCardWorkspace(p: Props) {
             DEPARTURE reading captured on Completion. Not per-site switchable: no escalation to
             protect. */}
         <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="arrival"
-          recorded={eff.scheduleOnArrival as never} motExpiry={eff.vehicle.motExpiry ?? null}
+          recorded={eff.scheduleOnArrival as never} countFrom={eff.vehicle.mileageIn}
+          motExpiry={eff.vehicle.motExpiry ?? null}
           onSaved={refreshCard} />
         {/* FINDINGS FIRST — it is the reason the mechanic is at the car, and the MOT read-only
             line rides with it so nobody retypes a DVSA fact. Then tyres, then the photos and video
@@ -977,7 +978,7 @@ export default function JobCardWorkspace(p: Props) {
               beside mileage-out because they are read in the same breath. */}
           <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="departure"
             recorded={eff.serviceSchedule as never} onArrival={eff.scheduleOnArrival as never}
-            motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
+            countFrom={eff.vehicle.mileageOut} motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>
       )}

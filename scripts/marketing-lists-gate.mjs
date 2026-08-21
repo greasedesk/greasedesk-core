@@ -45,6 +45,26 @@ try {
 
   const dated = M.serviceDue([item({ dueBasis: 'date', dueDate: '2026-09-01' })], noRate);
   check('a date lands in the dated band', dated[0]?.band === 'dated');
+
+  // ── THE FLAG THIS TYPE USED TO DROP ──────────────────────────────────────────────────────────
+  // effectiveDueDate has always computed `alreadyPassed`; ServiceDue did not carry it, so every
+  // caller saw "due today" and could not tell a car three weeks early from one months late. The
+  // board read that as one band and put both in Warm. Asserted HERE, on serviceDue itself: the
+  // board gate hands `overdue` straight to leadReasons, which proves the wording and would stay
+  // green with the lift removed — it did.
+  const past = M.serviceDue([item({ dueBasis: 'mileage', dueMileage: 40000 })], { ...noRate, currentMiles: 50000 });
+  check('a car PAST its mileage target is flagged as passed', past[0]?.alreadyPassed === true,
+    JSON.stringify(past[0] ?? null));
+  const ahead = M.serviceDue([item({ dueBasis: 'mileage', dueMileage: 50400 })], withRate);
+  check('  …and one still short of it is not', ahead[0]?.alreadyPassed === false,
+    'both are "dated" and both are due — the flag is the only thing separating them');
+  check('a date that has GONE is passed too', 
+    M.serviceDue([item({ dueBasis: 'date', dueDate: '2020-01-01' })], noRate)[0]?.alreadyPassed === true,
+    'same fact, the other leg — an overdue MOT-shaped service is not a different kind of late');
+  check('  …while a future date is not', dated[0]?.alreadyPassed === false);
+  check('a trigger-band item claims nothing it cannot evidence',
+    M.serviceDue([item({ dueBasis: 'next_service' })], noRate)[0]?.alreadyPassed === false,
+    '"due at the next service" IS overdue a visit, but there is no clock to read and a claim needs one');
   const nextSvc = M.serviceDue([item({ dueBasis: 'next_service' })], noRate);
   check('next_service lands in the TRIGGER band, not nowhere', nextSvc[0]?.band === 'trigger',
     'a car due at its next service is overdue a visit by definition — hiding it removes the best call');

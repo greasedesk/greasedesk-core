@@ -79,6 +79,10 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
     where: { id: jobCardId, group_id: groupId },
     select: {
       id: true, vehicle_id: true,
+      // For the timing words: a target the car has already passed must not read as ahead of it.
+      // This report is written DURING the visit, so the arrival reading is the honest comparison —
+      // there is no departure figure yet, and inventing one would be a guess on a customer's copy.
+      odometer_in: true,
       vehicle: { select: { registration: true, make: true, model: true } },
       site: { select: { phone: true } },
       group: { select: { group_name: true, trading_name: true, phone: true } },
@@ -133,7 +137,7 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
     description: i.description,
     // EMPTY when the description already says when — the same rule as the invoice block, asked
     // through the same predicate rather than re-derived here.
-    timing: showsDueLabel(i) ? dueLabel(i) : '',
+    timing: showsDueLabel(i) ? dueLabel(i, card.odometer_in ?? null) : '',
     answered: answers.get(i.id)?.answer ?? null,
   }));
 

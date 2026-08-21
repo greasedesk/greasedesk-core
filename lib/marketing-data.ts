@@ -118,6 +118,9 @@ const shape = (
     basis?: 'date' | 'mileage' | 'next_service' | 'whichever_first';
     dueMileage?: number | null;
     precision?: 'day' | 'month';
+    /** The car's latest known reading, so a target it has already passed does not read as ahead
+     *  of it. NULL on the MOT list, whose rows are dated and have nothing to compare. */
+    atMiles?: number | null;
   },
   rec: { state: string; forDate: Date; snoozeUntil: Date | null; createdAt: Date; channel?: string | null } | null,
   now: Date,
@@ -139,7 +142,7 @@ const shape = (
           dueDate: due.dueDate.toISOString().slice(0, 10),
           dueMileage: due.dueMileage ?? null,
           dueDatePrecision: due.precision ?? 'day',
-        })
+        }, due.atMiles ?? null)
       : null,
     motCheckedAt: v.mot_checked_at ? v.mot_checked_at.toISOString() : null,
     triggerText: due.triggerText,
@@ -233,6 +236,9 @@ export async function buildServiceList(groupId: string, now: Date): Promise<Serv
       basis: pick.item.dueBasis,
       dueMileage: pick.item.dueMileage,
       precision: pick.item.dueDatePrecision ?? 'day',
+      // The reading serviceDue already judged this row against — the same number, so the words on
+      // the row and the band it sits in cannot disagree.
+      atMiles: currentMiles,
     }, rec ? { state: rec.state, forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at, channel: rec.channel } : null, now);
     (pick.band === 'dated' ? dated : trigger).push(row);
   }

@@ -156,6 +156,13 @@ export type ScheduleEntry = {
    * Absent therefore means unknown, and unknown never deletes. See classifyEntry.
    */
   wasRecorded?: boolean;
+  /**
+   * WHAT THE CLUSTER SHOWED, when it showed distance remaining instead of a target. Negative means
+   * the service is already behind the car. The SERVER derives `dueMileage` from this and the car's
+   * reading — a client must not send both, and if it sends this one, whatever it put in dueMileage
+   * is ignored rather than trusted. One conversion, one place.
+   */
+  countdownMiles?: number | null;
 };
 
 /** `YYYY-MM` → the stored instant. Returns null for anything that is not a month. */
@@ -181,9 +188,58 @@ export const legsFor = (basis: ScheduleBasis): { date: boolean; mileage: boolean
  * A row is BLANK when none of the legs its basis needs is filled. Blank is not an error — most cars
  * leave most rows empty, and a schedule the garage does not have is not a mistake.
  */
-export function isBlank(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 'dueMileage'>): boolean {
+export function isBlank(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 'dueMileage' | 'countdownMiles'>): boolean {
   const legs = legsFor(item.basis);
-  return !(legs.date && e.dueMonth) && !(legs.mileage && e.dueMileage != null);
+  // A countdown IS a mileage leg — it is the same fact in the units the screen used. Reading only
+  // dueMileage here would call a filled-in countdown row blank, and a blank row is a request to
+  // clear. The two features would have combined into a deletion, which is the exact shape of the
+  // defect that motivated both of them.
+  const hasMileage = e.dueMileage != null || e.countdownMiles != null;
+  return !(legs.date && e.dueMonth) && !(legs.mileage && hasMileage);
+}
+
+/**
+ * ── A COUNTDOWN IS A MEASUREMENT; A DUE MILEAGE IS A CONCLUSION ────────────────────────────────
+ * A MINI cluster shows distance REMAINING — "1,240 mi", or "-240 mi" beside "Service overdue" —
+ * and never the odometer the service falls due at. Everything downstream understands the target:
+ * effectiveDueDate compares `currentMiles >= dueMileage`, dueLabel prints "due at N miles",
+ * serviceDue projects a date from it. So the countdown converts, here, once.
+ *
+ * WHICH READING IT COUNTS FROM IS THE WHOLE THING. "240 miles left" is 240 miles from where the
+ * car is NOW — which on arrival is the odometer it came in on, and after the work is the one it
+ * leaves on. Counting a departure reading from the arrival figure would understate every target
+ * by the length of the job.
+ *
+ * REFUSE, NEVER GUESS. Both readings are genuinely optional at the moment this is typed: the
+ * schedule panel sits on the same tab as the odometer box, in no fixed order, and mileage-out is
+ * deliberately EMPTY by default (a measurement, never a default — see lib/odometer). So the
+ * absent-odometer path is the common one on Completion, not a corner, and it has to read as the
+ * next thing to do rather than as a rejection.
+ */
+export type CountdownRefusal = { code: 'no_odometer' | 'before_zero'; message: string };
+export type CountdownResolution = { ok: true; dueMileage: number } | { ok: false } & CountdownRefusal;
+
+export function resolveCountdown(
+  countdownMiles: number,
+  odometer: number | null,
+  stage: 'arrival' | 'departure',
+): CountdownResolution {
+  if (!Number.isInteger(countdownMiles)) return { ok: false, code: 'before_zero', message: 'A countdown has to be a whole number of miles.' };
+  if (odometer == null) {
+    return { ok: false, code: 'no_odometer',
+      message: stage === 'arrival'
+        ? 'Record the mileage in first — a countdown needs a reading to count from.'
+        : 'Record the mileage out first — a countdown needs a reading to count from.' };
+  }
+  const dueMileage = odometer + countdownMiles;
+  // Behind the car is ordinary and is the case this was built for. Behind ZERO is a mis-key —
+  // a countdown bigger than the odometer — and storing it would put a nonsense target on a
+  // customer document.
+  if (dueMileage < 0) {
+    return { ok: false, code: 'before_zero',
+      message: `${countdownMiles.toLocaleString('en-GB')} miles from ${odometer.toLocaleString('en-GB')} is before the car had any — check the countdown and the odometer.` };
+  }
+  return { ok: true, dueMileage };
 }
 
 /**

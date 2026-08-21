@@ -167,6 +167,11 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
     const readings = (cardsByVehicle.get(v.id) ?? []).map((c) => ({ date: c.created_at, miles: c.odometer_in as number }));
     const hits = serviceDue(items as never, { now, currentMiles: readings.length ? readings[readings.length - 1].miles : null, readings });
     const dueIds = new Set(hits.map((h: { item: { id: string } }) => h.item.id));
+    // PAST is not the same as SOON, and the board could not tell them apart because serviceDue
+    // dropped the flag. Kept as its own set rather than folded into dueIds: an overdue item is
+    // still due, and both bands want it.
+    const overdueIds = new Set(hits.filter((h: { alreadyPassed: boolean }) => h.alreadyPassed)
+      .map((h: { item: { id: string } }) => h.item.id));
 
     const findings = items
       .filter((i) => !(i.observationKey && COVERED_BY_A_SIGNAL.has(i.observationKey)))
@@ -174,6 +179,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
         description: i.description,
         response: i.customerResponse as 'not_raised' | 'declined' | 'agreed_later' | 'wants_call',
         dueWithinWindow: dueIds.has(i.id),
+        overdue: overdueIds.has(i.id),
       }));
     unansweredFindings += findings.filter((f) => f.response === 'not_raised').length;
 
