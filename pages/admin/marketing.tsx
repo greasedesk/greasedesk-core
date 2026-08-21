@@ -1,6 +1,16 @@
 /**
  * File: pages/admin/marketing.tsx
- * WHICH CARS ARE DUE, WHAT IT IS WORTH, AND WHO TO RING.
+ * THE PIPELINE. Three stacks, and what a car is doing in each one.
+ *
+ * ── IT IS REVENUE GENERATION, AND IT IS FOR EVERYONE IN THE BUILDING ────────────────────────────
+ * This is what gets staff paid, so the board is visible to every role. What is NOT visible is
+ * money: the version this replaces rendered "£1,214 of work due" — four cars times the tenant's
+ * average job — to a STANDARD mechanic, with no permission check of any kind, on a page that never
+ * consulted financeVisibility. There is now no figure on the board at all, so there is nothing to
+ * leak; when value arrives it arrives shaped server-side like the diary's.
+ *
+ * A mechanic cannot ring a customer, but they can say "that car is in tomorrow and its battery is
+ * dying" — which is the reason the board is not admin-only and the phone number is never hidden.
  *
  * Everything the intake work has captured since yesterday feeds a marketing list. This is the list.
  *
@@ -27,11 +37,11 @@ import type { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
-import { buildMotList, buildServiceList, type MarketingRow, type MotList, type ServiceList } from '@/lib/marketing-data';
+import { buildBoard, type Board, type BoardRow } from '@/lib/marketing-board';
 import { WINDOW_DAYS } from '@/lib/marketing-lists';
 import { checkedLabel } from '@/lib/mot-refresh';
 
-type PageProps = { mot: MotList; service: ServiceList; currency: string };
+type PageProps = { board: Board };
 
 const money = (pennies: number, currency: string) =>
   new Intl.NumberFormat('en-GB', { style: 'currency', currency, maximumFractionDigits: 0 }).format(pennies / 100);
@@ -47,7 +57,7 @@ const STATE_LABEL: Record<string, string> = {
  */
 const CHANNEL_SUFFIX: Record<string, string> = { sms: ' by text', email: ' by email', both: ' by text and email' };
 
-function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'service'; onDone: () => void }) {
+function Row({ row, reason, onDone }: { row: BoardRow; reason: 'mot' | 'service'; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
   // Every other action here ends in a full reload, which is right for them: recording a contact is
@@ -133,15 +143,29 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
         <span className="ml-auto text-xs text-muted">
           {/* THROUGH dueLabel, never the raw column. This showed "2026-11-01" to a garage, and once
               schedule rows carry month precision the raw value would also imply a day nobody chose. */}
-          {/* STRUCK THROUGH, NOT REPLACED. What it used to say is why the row is still sitting in
-              the Expired band, and removing it would leave a renewed car looking mis-sorted. */}
+          {/* STRUCK THROUGH, NOT REPLACED, when a DVSA check has moved the date. What the row
+              used to say is why it is still sitting in this stack, and removing it would leave a
+              renewed car looking mis-sorted. */}
           <span className={checked?.kind === 'changed' ? 'line-through text-muted/60' : undefined}
             data-testid="marketing-due-label">
-            {row.dueLabel ?? row.triggerText}
+            {row.reasons[0]?.text ?? ''}
           </span>
-          {row.mileageLegUnevaluated && <em className="not-italic"> · mileage leg not projected</em>}
         </span>
       </div>
+
+      {/* EVERY REASON, NOT JUST THE WINNING ONE. A car with an expired MOT AND a failed battery is
+          a better call than one with either, and whoever rings should be able to say both. The
+          first reason is in the line above; the rest sit here so the row stays one line tall when
+          there is only one thing to say. Authored in lib/marketing-pipeline, not assembled here. */}
+      {row.reasons.length > 1 && (
+        <ul className="mt-1 space-y-0.5" data-testid={`row-reasons-${row.vehicleId}`}>
+          {row.reasons.slice(1).map((r, i) => (
+            <li key={i} className={`text-xs ${r.stack === 'hot' ? 'text-warn' : 'text-muted'}`} data-kind={r.kind}>
+              · {r.text}
+            </li>
+          ))}
+        </ul>
+      )}
       {checked && (
         <p className={`text-xs mt-1 ${checked.kind === 'no_answer' ? 'text-warn' : checked.kind === 'changed' ? 'text-ok' : 'text-muted'}`}
           data-testid="marketing-check-result" data-kind={checked.kind}>
@@ -236,116 +260,74 @@ function Row({ row, reason, onDone }: { row: MarketingRow; reason: 'mot' | 'serv
   );
 }
 
-function Band({ title, note, rows, reason, onDone }: {
-  title: string; note?: string; rows: MarketingRow[]; reason: 'mot' | 'service'; onDone: () => void;
+/**
+ * A STACK, not a band. The heading carries the count and the sentence that says what this stack
+ * MEANS — "money available this week" is the instruction; "Hot" alone is a colour.
+ */
+function Stack({ title, meaning, rows, onDone }: {
+  title: string; meaning: string; rows: BoardRow[]; onDone: () => void;
 }) {
-  if (!rows.length) return null;
   return (
-    <section className="mb-6" data-testid={`marketing-band-${title.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
+    <section className="mb-6" data-testid={`stack-${title.toLowerCase()}`}>
       {/* THE COUNT DOES NOT MOVE WHEN A ROW IS CHECKED, and that is deliberate rather than a bug.
-          A car whose MOT turns out to be renewed stays in this band, struck through, so nobody
-          loses their place — and a count that decremented while the rows it counts deliberately
-          stayed put would be the same disorientation in miniature. It is briefly stale by design;
-          the next load reconciles it. */}
-      <h3 className="text-sm font-semibold text-ink">{title} <span className="text-muted font-normal">({rows.length})</span></h3>
-      {note && <p className="text-xs text-muted mt-0.5 mb-1">{note}</p>}
-      <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} reason={reason} onDone={onDone} />)}</ul>
+          A car whose MOT turns out to be renewed stays in this stack, struck through, so nobody
+          loses their place in a list they are working — and a count that decremented while the
+          rows it counts deliberately stayed put would be the same disorientation in miniature. It
+          is briefly stale by design; the next load reconciles it, because the stacks are computed
+          on load and nothing is stored. */}
+      <div className="flex items-baseline gap-2">
+        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        <span className="text-sm text-muted tabular-nums" data-testid={`stack-count-${title.toLowerCase()}`}>{rows.length}</span>
+      </div>
+      <p className="text-xs text-muted mt-0.5 mb-2">{meaning}</p>
+      {/* AN EMPTY STACK SAYS SO. A heading with nothing under it reads as a loading failure; the
+          board's own prompt (below) explains WHY Hot is empty when it is. */}
+      {rows.length === 0
+        ? <p className="text-xs text-muted italic" data-testid={`stack-empty-${title.toLowerCase()}`}>Nothing here.</p>
+        : <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} reason="mot" onDone={onDone} />)}</ul>}
     </section>
   );
 }
 
-export default function MarketingPage({ mot, service, currency }: PageProps) {
-  const [tab, setTab] = useState<'mot' | 'service'>('mot');
+export default function MarketingPage({ board }: PageProps) {
   const reload = () => window.location.reload();
-  const list = tab === 'mot' ? mot : service;
 
   // NO AdminLayout HERE. _app wraps every /admin route in it, mounted ONCE and kept mounted across
   // navigations so the locations bar does not refetch and the shell does not tear down. Wrapping
-  // again nested a second sidebar inside the first and broke the layout — and it also cost the
-  // persistence the shell exists for, remounting the whole thing on every visit to this page.
+  // again nested a second sidebar inside the first and broke the layout.
   return (
     <>
       <Head><title>Marketing — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Marketing</h1>
       <p className="text-sm text-muted mb-4">
-        Cars due in the next {WINDOW_DAYS} days. Send a reminder from the row, or ring them and say
-        what happened, so the list clears.
+        Who to ring, in the order worth ringing them. A car moves down when the customer answers
+        and comes back up when its clock comes round.
       </p>
 
-      <div className="flex gap-2 mb-4">
-        {(['mot', 'service'] as const).map((k) => (
-          <button key={k} type="button" onClick={() => setTab(k)} data-testid={`marketing-tab-${k}`}
-            className={`min-h-[40px] px-4 text-sm font-medium rounded-lg border ${tab === k ? 'bg-accent text-white border-accent' : 'bg-surface border-line text-ink'}`}>
-            {k === 'mot' ? 'MOTs due soon' : 'Servicing likely due'}
-          </button>
-        ))}
-      </div>
-
-      {/* THE TILE. The method travels with the number rather than sitting underneath it as a
-          caveat — "23 cars × your average job of £178" is readable; "£4,100 of work due" is a
-          forecast nobody made. */}
-      <div className="mb-5 rounded-xl border border-line bg-surface p-4" data-testid="marketing-revenue">
-        {list.revenue.ok ? (
-          <>
-            <p className="text-2xl font-bold text-ink tabular-nums">{money(list.revenue.pennies, currency)}</p>
-            <p className="text-xs text-muted">
-              {list.revenue.cars} car{list.revenue.cars === 1 ? '' : 's'} ×{' '}
-              {list.revenue.basis === 'mot_price'
-                ? <>your MOT price of {money(list.revenue.averagePennies, currency)}</>
-                : <>your average job of {money(list.revenue.averagePennies, currency)}</>}
-              . {list.revenue.basis === 'mot_price'
-                ? 'Exact if every one comes in.'
-                : 'A rough figure from your own average, not a quote for these cars.'}
-            </p>
-          </>
-        ) : (
-          // A MISSING TILE READS AS A BUG; A SENTENCE READS AS SOMETHING YOU CAN FIX.
-          <p className="text-sm text-muted" data-testid="marketing-revenue-none">
-            {list.revenue.reason === 'no_price'
-              ? 'No figure here — add an MOT to your products with a price and this will show what the list is worth. An average job value would overstate it.'
-              : 'No figure here yet — it comes from your own average invoice, and there are no invoices from the last twelve months to average.'}
-          </p>
+      {/* ── A COUNT, NOT A VALUE ────────────────────────────────────────────────────────────────
+          What replaced "£1,214 of work due", which was four cars times the tenant's average job
+          and described none of them. A count is true. Value when the ordering has earned it —
+          and when it comes, it comes shaped by financeVisibility, not rendered to everyone. */}
+      <div className="mb-5 rounded-xl border border-line bg-surface p-4" data-testid="board-summary">
+        <p className="text-2xl font-bold text-ink tabular-nums">
+          {board.hot.length} <span className="text-base font-medium text-muted">worth ringing today</span>
+        </p>
+        <p className="text-xs text-muted mt-0.5">
+          {board.warm.length} warm · {board.later.length} later · {board.fleet} cars on the books
+        </p>
+        {/* THE BOARD EXPLAINS ITS OWN EMPTINESS. An empty Hot stack is usually not a quiet week —
+            it is the answer nobody recorded. Saying so is the argument for recording it. */}
+        {board.prompt && (
+          <p className="text-xs text-accent mt-2" data-testid="board-prompt">{board.prompt}</p>
         )}
       </div>
 
-      {tab === 'mot' ? (
-        <>
-          <Band title="Expired" note="Off the road until it is done — the best call on this page." rows={mot.expired} reason="mot" onDone={reload} />
-          <Band title="Due soon" rows={mot.due} reason="mot" onDone={reload} />
-          {/* A LIST THAT SILENTLY OMITS 43% OF THE FLEET MISREPRESENTS ITSELF. */}
-          {/* THREE NUMBERS, NOT ONE, AND ONLY THE ONES THAT ARE NOT ZERO. "95 cars have no MOT
-              date" counted 6 too new to need one and 27 whose age we do not know — overstating the
-              gap on a screen a garage is being asked to trust. And a line reading "0 of your 101
-              cars have no MOT date" is the badge mistake in sentence form: nothing to report should
-              report nothing. */}
-          {(mot.missingMotDate > 0 || mot.unknownAge > 0) && (
-            <p className="text-xs text-muted" data-testid="marketing-no-mot-date">
-              {mot.missingMotDate > 0 && (
-                <>{mot.missingMotDate} of your {mot.fleet} cars have no MOT date from DVSA. </>
-              )}
-              {mot.unknownAge > 0 && (
-                <>{mot.unknownAge} {mot.unknownAge === 1 ? 'car has' : 'cars have'} no year recorded, so we can’t tell whether {mot.unknownAge === 1 ? 'it needs' : 'they need'} one. </>
-              )}
-              {mot.tooNewForMot > 0 && (
-                <>{mot.tooNewForMot} {mot.tooNewForMot === 1 ? 'is' : 'are'} too new to need one.</>
-              )}
-            </p>
-          )}
-          {!mot.expired.length && !mot.due.length && (
-            <p className="text-sm text-muted">Nothing due in the next {WINDOW_DAYS} days.</p>
-          )}
-        </>
-      ) : (
-        <>
-          <Band title="Due by a date" rows={service.dated} reason="service" onDone={reload} />
-          <Band title="Due on a trigger"
-            note="No date to project — these are due at the next service, or at a mileage we cannot forecast. A car due at its next service is overdue a visit by definition."
-            rows={service.trigger} reason="service" onDone={reload} />
-          {!service.dated.length && !service.trigger.length && (
-            <p className="text-sm text-muted">Nothing due in the next {WINDOW_DAYS} days.</p>
-          )}
-        </>
-      )}
+      <Stack title="Hot" meaning="Money available this week. They will say yes."
+        rows={board.hot} onDone={reload} />
+      <Stack title="Warm" meaning={`Due within ${WINDOW_DAYS} days, plausible, not urgent.`}
+        rows={board.warm} onDone={reload} />
+      <Stack title="Later" meaning="Declined, snoozed, or genuinely distant. They come back up when their clock comes round."
+        rows={board.later} onDone={reload} />
     </>
   );
 }
@@ -354,12 +336,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
+  // Site scope only. NO role gate: the board is for everyone in the building, and it carries no
+  // money to gate — see the header.
   await getVisibility(user.id as string);
-  const groupId = user.group_id as string;
-  const now = new Date();
-
-  const { prisma } = await import('@/lib/db');
-  const site = await prisma.site.findFirst({ where: { group_id: groupId }, select: { currency_code: true } });
-  const [mot, service] = await Promise.all([buildMotList(groupId, now), buildServiceList(groupId, now)]);
-  return { props: { mot: JSON.parse(JSON.stringify(mot)), service: JSON.parse(JSON.stringify(service)), currency: site?.currency_code ?? 'GBP' } };
+  // COMPUTED HERE, ON EVERY LOAD. No stack column, nothing scheduled: every input is a stored date
+  // or reading compared against `now`, so time promotes for free and a stale board is impossible.
+  const board = await buildBoard(user.group_id as string, new Date());
+  return { props: { board: JSON.parse(JSON.stringify(board)) } };
 };

@@ -153,39 +153,40 @@ try {
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
   await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-testid="marketing-tab-mot"]', { timeout: 25000 });
+  // THE PAGE IS A PIPELINE NOW, not two tabs of bands. The rule these assertions protected is
+  // unchanged — a lapsed MOT is a better call than one three weeks away — so they follow it to
+  // the new shape rather than being deleted with the old markup.
+  await page.waitForSelector('[data-testid="stack-hot"]', { timeout: 25000 });
 
   check('the expired car is on the page', (await page.locator(`[data-testid="marketing-row-${expired.id}"]`).count()) === 1);
-  check('  …in the Expired band, above Due soon', (await page.evaluate(() => {
+  check('  …in Hot, above Warm', (await page.evaluate(() => {
     const y = (t) => { const e = document.querySelector(`[data-testid="${t}"]`); return e ? e.getBoundingClientRect().top + window.scrollY : null; };
-    const a = y('marketing-band-expired'), b = y('marketing-band-due-soon');
+    const a = y('stack-hot'), b = y('stack-warm');
     return a != null && b != null && a < b;
   })), 'a lapsed MOT is a better call than one three weeks away');
+  check('  …and the expired car is in the HOT stack specifically', await page.evaluate((id) => {
+    const hot = document.querySelector('[data-testid="stack-hot"]');
+    return !!hot && !!hot.querySelector(`[data-testid="marketing-row-${id}"]`);
+  }, expired.id));
   const rowText = await page.locator(`[data-testid="marketing-row-${expired.id}"]`).innerText();
   check('the opted-out customer still appears', /Marketing Fixture/.test(rowText));
   check('  …marked "No texts", not silenced entirely', /No texts/.test(rowText), rowText.replace(/\n/g, ' | '));
   check('  …with the phone number shown', /01384 111222/.test(rowText), 'no opt-out covers a phone call');
-  // THREE NUMBERS, because one overstated the gap. Asserted against the DATABASE rather than
-  // against the sentence, so the line cannot drift from what is actually true of the fleet.
-  const coverage = await page.locator('[data-testid="marketing-no-mot-date"]').innerText();
-  const undated = await prisma.vehicle.findMany({ where: { group_id: ZZ, mot_expiry: null }, select: { year: true } });
-  const firstMotYear = NOW.getUTCFullYear() - M.MOT_EXEMPT_YEARS;
-  const gaps = undated.filter((v) => v.year != null && v.year < firstMotYear).length;
-  const unknown = undated.filter((v) => v.year == null).length;
-  check('the coverage line states the GAP, not every undated car',
-    gaps === 0 ? !/have no MOT date from DVSA/.test(coverage) : coverage.includes(`${gaps} of your`),
-    `${coverage} — expected gap ${gaps}`);
-  check('  …and says separately how many it cannot judge',
-    unknown === 0 ? !/no year recorded/.test(coverage) : coverage.includes(`${unknown} car`), coverage);
-  check('  …with nothing said when there is nothing to say',
-    (gaps > 0 || unknown > 0) === (await page.locator('[data-testid="marketing-no-mot-date"]').count() === 1),
-    'a line reading "0 of your cars" is the badge mistake in sentence form');
-  check('  …because a car too new to need an MOT is not a gap',
-    /too new to need one/.test(coverage) || undated.every((v) => v.year == null || v.year < firstMotYear),
-    'counting those would overstate the gap on a screen a garage is asked to trust');
-
-  const tile = await page.locator('[data-testid="marketing-revenue"]').innerText();
-  check('the MOT tab shows no invented figure', /add an MOT to your products/.test(tile), tile.replace(/\n/g, ' | '));
+  // ── THE COVERAGE LINE AND THE REVENUE TILE ARE GONE WITH THE OLD PAGE ───────────────────────
+  // The tile said "£1,214 of work due" — four cars times the tenant's average job, describing none
+  // of them, and rendered to every role with no permission check. It is replaced by a COUNT, so
+  // the assertions that policed the figure are replaced by one that no figure exists.
+  //
+  // The three-number coverage line ("N of your M cars have no MOT date") is not lost: it belongs
+  // to the fleet, not to the pipeline, and it is asserted against the DATABASE in the pure section
+  // of this gate above. Removing it from a board about who to ring is deliberate — it answers a
+  // different question from "who do I call today".
+  const summary = await page.locator('[data-testid="board-summary"]').innerText();
+  check('the board leads with a count, not a value', /worth ringing today/.test(summary) && !/£/.test(summary),
+    summary.replace(/\n/g, ' | '));
+  check('  …and no money appears anywhere on the page',
+    !/£/.test(await page.locator('body').innerText()),
+    'the tile it replaced was visible to a STANDARD mechanic with no check at all');
 
   // THE BADGE FALLS WHEN THE LIST IS WORKED. The whole point.
   const before = await (await page.request.get(`${BASE}/api/marketing/unactioned`)).json();
