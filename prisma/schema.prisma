@@ -1787,11 +1787,6 @@ enum CcaStandard {
 /// Replay-safe by construction, like TyreReading and unlike a due item: a redelivered outbox
 /// envelope upserts on the natural key, so the phone sends no client-supplied id.
 /// Why a car is on a marketing list. Two reasons, two lists, two badges' worth of work.
-enum MarketingReason {
-  mot
-  service
-}
-
 /// What the garage did about it. `contacted` is not an outcome — it is the first step — but it is
 /// enough to take the car off the badge, which is the badge's whole job.
 enum MarketingState {
@@ -1815,7 +1810,12 @@ model MarketingContact {
   group_id   String
   vehicle_id String
 
-  reason MarketingReason
+  /// WHAT THE CALL WAS ABOUT — a record, not part of the identity (see the unique index below).
+  /// A LeadReasonKind from lib/marketing-pipeline, constrained in the database. It was an enum of
+  /// the two LIST NAMES the board used to have, so once the lists went it could only record which
+  /// tab a row came from — and every row comes from the same place now, so it said 'mot' for a car
+  /// rung about a failed battery.
+  reason String
   state  MarketingState
 
   /// The trigger this contact was about. The record is SPENT once it passes — see the migration.
@@ -1837,8 +1837,11 @@ model MarketingContact {
   group   Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
   vehicle Vehicle @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
 
-  @@unique([group_id, vehicle_id, reason])
-  @@index([group_id, reason, for_date])
+  /// ONE ANSWER PER CAR. A garage makes one phone call about a car, and the board is one row per
+  /// car carrying every reason it is worth ringing about — so keying on `reason` too would let a
+  /// car be contacted under one and not-contacted under another after a single call.
+  @@unique([group_id, vehicle_id])
+  @@index([group_id, for_date])
 }
 
 /// WHAT THE SERVICE COMPUTER SAID ON ARRIVAL — a fact about a VISIT, not about a car.

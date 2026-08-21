@@ -44,6 +44,14 @@ export type LeadReasonKind =
   | 'mot_due' | 'service_due' | 'unanswered' | 'battery_retest'
   | 'declined' | 'snoozed' | 'distant';
 
+/** The set, as VALUES — MarketingContact.reason is checked against exactly this, in the database
+ *  and at the endpoint, so a contact can say what the call was really about. */
+export const LEAD_REASON_KINDS: LeadReasonKind[] = [
+  'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked',
+  'mot_due', 'service_due', 'unanswered', 'battery_retest',
+  'declined', 'snoozed', 'distant',
+];
+
 export type LeadReason = { kind: LeadReasonKind; stack: Stack; text: string };
 
 /** The signals, all of them already stored. Nothing here is inferred from another surface. */
@@ -164,8 +172,18 @@ export function leadStack(s: LeadSignals, now: Date = new Date()): { stack: Stac
  */
 export function unansweredPrompt(hotCount: number, unansweredFindings: number): string | null {
   if (!unansweredFindings) return null;
-  if (hotCount === 0) {
-    return `Nothing hot right now — and ${plural(unansweredFindings, 'finding is', 'findings are')} waiting on an answer. Asking is what moves them up.`;
-  }
-  return `${plural(unansweredFindings, 'finding is', 'findings are')} waiting on an answer — a yes moves them to Hot.`;
+  // ── ONE SENTENCE, NOT TWO VARIANTS ──────────────────────────────────────────────────────────
+  // It used to lead with "Nothing hot right now" when Hot was empty. On the tabbed board the empty
+  // Hot tab already says that, in the place a reader is looking, so the compound version said it
+  // twice and buried the useful half.
+  //
+  // The pair now reads: "Nothing hot right now." / "12 findings are waiting on an answer — each yes
+  // puts a car in Hot." The first states the position, the second says what changes it. That is the
+  // whole job, and on an empty Hot tab those two lines are the entire screen — which is what turns
+  // it from "this feature does nothing" into "here is what makes it work".
+  //
+  // "each yes puts a CAR in Hot", not "moves them": what moves is a car, and twelve findings are
+  // spread across fewer cars than twelve.
+  const n = unansweredFindings;
+  return `${n} finding${n === 1 ? ' is' : 's are'} waiting on an answer — each yes puts a car in Hot.`;
 }

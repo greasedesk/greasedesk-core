@@ -120,7 +120,10 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
+  // ?stack=warm — the fixture's MOT is days away, not lapsed, so the board puts it in Warm and the
+  // page lands on Hot. Navigating to the tab the car is actually in is what a garage would do, and
+  // it documents which stack this fixture belongs to.
+  await page.goto(`${BASE}/admin/marketing?stack=warm`, { waitUntil: 'domcontentloaded' });
   const row = page.locator(`[data-testid="marketing-row-${veh.id}"]`);
   await row.waitFor({ timeout: 25000 });
   check('the row offers to send', await row.locator('[data-testid="marketing-send-open"]').count() === 1);

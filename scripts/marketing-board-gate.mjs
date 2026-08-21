@@ -106,10 +106,16 @@ try {
 
   // ── 5. THE BOARD EXPLAINS ITS OWN EMPTINESS ──────────────────────────────────────────────────
   console.log('\n— an empty Hot stack is usually an unasked question —');
-  check('with nothing hot, the board says what would move things up',
-    /Asking is what moves them up/.test(P.unansweredPrompt(0, 15) ?? ''), P.unansweredPrompt(0, 15));
-  check('  …and with hot leads it still names the unanswered',
-    /a yes moves them to Hot/.test(P.unansweredPrompt(6, 12) ?? ''), P.unansweredPrompt(6, 12));
+  // ONE SENTENCE, both cases. On the tabbed board the empty Hot tab already says "Nothing hot
+  // right now", so a prompt that opened with the same words said it twice and buried the half
+  // that matters. The pair on an empty tab IS the whole screen.
+  check('the prompt says what changes the position, not what it is',
+    /each yes puts a car in Hot/.test(P.unansweredPrompt(0, 15) ?? ''), P.unansweredPrompt(0, 15));
+  check('  …and does not repeat what the empty tab already says',
+    !/Nothing hot/.test(P.unansweredPrompt(0, 15) ?? ''), P.unansweredPrompt(0, 15));
+  check('  …reading the same with hot leads present', P.unansweredPrompt(6, 12) === P.unansweredPrompt(0, 12));
+  check('  …and one finding is singular', /1 finding is waiting/.test(P.unansweredPrompt(0, 1) ?? ''),
+    P.unansweredPrompt(0, 1));
   check('  …and says nothing when there is nothing to say', P.unansweredPrompt(3, 0) === null,
     'a prompt about zero findings is noise');
 

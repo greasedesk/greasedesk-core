@@ -33,6 +33,7 @@
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
@@ -57,7 +58,13 @@ const STATE_LABEL: Record<string, string> = {
  */
 const CHANNEL_SUFFIX: Record<string, string> = { sms: ' by text', email: ' by email', both: ' by text and email' };
 
-function Row({ row, reason, onDone }: { row: BoardRow; reason: 'mot' | 'service'; onDone: () => void }) {
+/**
+ * NO `reason` PROP. It was 'mot' | 'service' — the names of the two lists this board used to be —
+ * and the Stack passed a hardcoded 'mot' for every row, so a car rung about a failed battery
+ * recorded a contact saying the call was about its MOT. The row already knows what it is: its own
+ * strongest reason, the same one printed on the line the caller is reading.
+ */
+function Row({ row, onDone }: { row: BoardRow; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
   // Every other action here ends in a full reload, which is right for them: recording a contact is
@@ -123,7 +130,7 @@ function Row({ row, reason, onDone }: { row: BoardRow; reason: 'mot' | 'service'
     try {
       await fetch('/api/marketing-contact', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vehicleId: row.vehicleId, reason, state, forDate: row.dueDate }),
+        body: JSON.stringify({ vehicleId: row.vehicleId, reason: row.reasons[0]?.kind, state, forDate: row.dueDate }),
       });
       onDone();
     } finally { setBusy(false); }
@@ -183,10 +190,13 @@ function Row({ row, reason, onDone }: { row: BoardRow; reason: 'mot' | 'service'
         <button type="button" disabled={busy} onClick={() => record('booked')} className={act} data-testid="marketing-booked">Booked</button>
         <button type="button" disabled={busy} onClick={() => record('declined')} className={act} data-testid="marketing-declined">Declined</button>
         <button type="button" disabled={busy} onClick={() => record('snoozed')} className={act} data-testid="marketing-snoozed">Snooze a month</button>
-        {/* MOT ROWS ONLY. A service row's date comes from a schedule reading we took ourselves;
-            there is nothing to check it against, and a button that can only ever say "no change"
-            is worse than no button. */}
-        {reason === 'mot' && (
+        {/* EVERY ROW NOW. This was gated on `reason === 'mot'`, because a service row's date came
+            from a schedule reading we took ourselves and there was nothing to check it against.
+            The board is one row per CAR — every row has a registration, DVSA has an answer for
+            every registration, and a stored MOT date is stale the moment it is stored whatever
+            else the car is on the board for. The old gate was about which LIST a row came from,
+            and the lists are gone. */}
+        {true && (
           <>
             <button type="button" disabled={checking} onClick={check}
               className="text-xs underline text-accent disabled:opacity-50" data-testid="marketing-check">
@@ -261,40 +271,39 @@ function Row({ row, reason, onDone }: { row: BoardRow; reason: 'mot' | 'service'
 }
 
 /**
- * A STACK, not a band. The heading carries the count and the sentence that says what this stack
- * MEANS — "money available this week" is the instruction; "Hot" alone is a colour.
+ * ONE STACK'S ROWS. The heading and the count moved to the tab strip, which is now where a garage
+ * reads the shape of the day without clicking — "Hot (6) · Warm (19) · Later (0)".
  */
-function Stack({ title, meaning, rows, onDone }: {
-  title: string; meaning: string; rows: BoardRow[]; onDone: () => void;
-}) {
-  return (
-    <section className="mb-6" data-testid={`stack-${title.toLowerCase()}`}>
-      {/* THE COUNT DOES NOT MOVE WHEN A ROW IS CHECKED, and that is deliberate rather than a bug.
-          A car whose MOT turns out to be renewed stays in this stack, struck through, so nobody
-          loses their place in a list they are working — and a count that decremented while the
-          rows it counts deliberately stayed put would be the same disorientation in miniature. It
-          is briefly stale by design; the next load reconciles it, because the stacks are computed
-          on load and nothing is stored. */}
-      <div className="flex items-baseline gap-2">
-        <h3 className="text-sm font-semibold text-ink">{title}</h3>
-        <span className="text-sm text-muted tabular-nums" data-testid={`stack-count-${title.toLowerCase()}`}>{rows.length}</span>
-      </div>
-      <p className="text-xs text-muted mt-0.5 mb-2">{meaning}</p>
-      {/* AN EMPTY STACK SAYS SO. A heading with nothing under it reads as a loading failure; the
-          board's own prompt (below) explains WHY Hot is empty when it is. */}
-      {rows.length === 0
-        ? <p className="text-xs text-muted italic" data-testid={`stack-empty-${title.toLowerCase()}`}>Nothing here.</p>
-        : <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} reason="mot" onDone={onDone} />)}</ul>}
-    </section>
-  );
+function StackRows({ rows, empty, onDone }: { rows: BoardRow[]; empty: string; onDone: () => void }) {
+  // AN EMPTY TAB SAYS WHY, not just that it is empty. On a tabbed board this matters more than it
+  // did stacked: you land on Hot, and if it is empty that is the whole screen. See the prompt in
+  // the summary above, which is the sentence that turns it from "this does nothing" into "here is
+  // what makes it work".
+  if (!rows.length) return <p className="text-sm text-muted italic" data-testid="stack-empty">{empty}</p>;
+  return <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} onDone={onDone} />)}</ul>;
 }
 
+const STACKS = [
+  { key: 'hot' as const, label: 'Hot', meaning: 'Money available this week. They will say yes.',
+    empty: 'Nothing hot right now.' },
+  { key: 'warm' as const, label: 'Warm', meaning: `Due within ${WINDOW_DAYS} days, plausible, not urgent.`,
+    empty: 'Nothing warm — no MOTs or findings coming due.' },
+  { key: 'later' as const, label: 'Later', meaning: 'Declined, snoozed, or genuinely distant. They come back up when their clock comes round.',
+    empty: 'Nothing here yet. A car lands here when somebody answers.' },
+];
+
 export default function MarketingPage({ board }: PageProps) {
+  const router = useRouter();
+  // ── THE TAB LIVES IN THE URL ──────────────────────────────────────────────────────────────────
+  // Not component state. Recording a contact reloads the page, and a garage working the Warm tab
+  // should not be thrown back to Hot every time they mark a car — which is what component state
+  // would do. It is also the state a gate can drive, rather than a strip it has to click.
+  const active = STACKS.find((s) => s.key === router.query.stack)?.key ?? 'hot';
+  const rows = board[active];
+  const select = (k: string) =>
+    router.replace({ pathname: router.pathname, query: { ...router.query, stack: k } }, undefined, { shallow: true });
   const reload = () => window.location.reload();
 
-  // NO AdminLayout HERE. _app wraps every /admin route in it, mounted ONCE and kept mounted across
-  // navigations so the locations bar does not refetch and the shell does not tear down. Wrapping
-  // again nested a second sidebar inside the first and broke the layout.
   return (
     <>
       <Head><title>Marketing — GreaseDesk</title></Head>
@@ -306,28 +315,43 @@ export default function MarketingPage({ board }: PageProps) {
 
       {/* ── A COUNT, NOT A VALUE ────────────────────────────────────────────────────────────────
           What replaced "£1,214 of work due", which was four cars times the tenant's average job
-          and described none of them. A count is true. Value when the ordering has earned it —
-          and when it comes, it comes shaped by financeVisibility, not rendered to everyone. */}
+          and described none of them. Value when the ordering has earned it — and when it comes, it
+          comes shaped by financeVisibility, not rendered to everyone.
+
+          The per-stack counts moved to the tab strip, so the second line here is the fleet alone. */}
       <div className="mb-5 rounded-xl border border-line bg-surface p-4" data-testid="board-summary">
         <p className="text-2xl font-bold text-ink tabular-nums">
           {board.hot.length} <span className="text-base font-medium text-muted">worth ringing today</span>
         </p>
-        <p className="text-xs text-muted mt-0.5">
-          {board.warm.length} warm · {board.later.length} later · {board.fleet} cars on the books
-        </p>
-        {/* THE BOARD EXPLAINS ITS OWN EMPTINESS. An empty Hot stack is usually not a quiet week —
-            it is the answer nobody recorded. Saying so is the argument for recording it. */}
+        <p className="text-xs text-muted mt-0.5">{board.fleet} cars on the books</p>
         {board.prompt && (
           <p className="text-xs text-accent mt-2" data-testid="board-prompt">{board.prompt}</p>
         )}
       </div>
 
-      <Stack title="Hot" meaning="Money available this week. They will say yes."
-        rows={board.hot} onDone={reload} />
-      <Stack title="Warm" meaning={`Due within ${WINDOW_DAYS} days, plausible, not urgent.`}
-        rows={board.warm} onDone={reload} />
-      <Stack title="Later" meaning="Declined, snoozed, or genuinely distant. They come back up when their clock comes round."
-        rows={board.later} onDone={reload} />
+      {/* COUNTS ON THE TABS, so the shape of the day is readable without clicking.
+
+          THE COUNT DOES NOT MOVE WHEN A ROW IS CHECKED, and that is deliberate rather than a bug.
+          A car whose MOT turns out to be renewed stays in its tab, struck through, so nobody loses
+          their place in a list they are working — and a count that decremented while the rows it
+          counts deliberately stayed put would be the same disorientation in miniature. It is
+          briefly stale by design; the next load reconciles it, because the stacks are computed on
+          load and nothing is stored. */}
+      <div className="flex gap-2 mb-3" role="tablist">
+        {STACKS.map((s) => (
+          <button key={s.key} type="button" role="tab" aria-selected={active === s.key}
+            onClick={() => select(s.key)} data-testid={`stack-tab-${s.key}`}
+            className={`min-h-[40px] px-4 text-sm font-medium rounded-lg border ${
+              active === s.key ? 'bg-accent text-white border-accent' : 'bg-surface border-line text-ink'}`}>
+            {s.label} <span className="tabular-nums opacity-80" data-testid={`stack-count-${s.key}`}>({board[s.key].length})</span>
+          </button>
+        ))}
+      </div>
+
+      <section data-testid={`stack-${active}`}>
+        <p className="text-xs text-muted mb-2">{STACKS.find((s) => s.key === active)!.meaning}</p>
+        <StackRows rows={rows} empty={STACKS.find((s) => s.key === active)!.empty} onDone={reload} />
+      </section>
     </>
   );
 }

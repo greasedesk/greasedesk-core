@@ -127,7 +127,10 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
+  // ?stack=warm — the fixture's MOT is days away, not lapsed, so the board puts it in Warm and the
+  // page lands on Hot. Navigating to the tab the car is actually in is what a garage would do, and
+  // it documents which stack this fixture belongs to.
+  await page.goto(`${BASE}/admin/marketing?stack=warm`, { waitUntil: 'domcontentloaded' });
   const row = page.locator(`[data-testid="marketing-row-${veh.id}"]`);
   await row.waitFor({ timeout: 25000 });
   check('the fixture car is on the list', await row.count() === 1);
@@ -203,7 +206,10 @@ try {
     'a row per press would be noise in an append-only table; what is audited is the CHANGE');
 
   // AND THE STRIKE, DRAWN. This is the half that was unprovable while the fixtures were fictional.
-  await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
+  // ?stack=warm — the fixture's MOT is days away, not lapsed, so the board puts it in Warm and the
+  // page lands on Hot. Navigating to the tab the car is actually in is what a garage would do, and
+  // it documents which stack this fixture belongs to.
+  await page.goto(`${BASE}/admin/marketing?stack=warm`, { waitUntil: 'domcontentloaded' });
   const realRow = page.locator(`[data-testid="marketing-row-${real.id}"]`);
   if (await realRow.count()) {
     await realRow.locator('[data-testid="marketing-check"]').click();
@@ -246,8 +252,16 @@ try {
   // ── 6. THE SERVICE TAB HAS NO BUTTON ─────────────────────────────────────────────────────────
   console.log('\n— nothing to check a service date against —');
   const src = readFileSync('pages/admin/marketing.tsx', 'utf8');
-  check('the Check button is gated to MOT rows', /reason === 'mot' && \(/.test(src),
-    'a service date comes from a schedule reading we took ourselves');
+  // GATED TO MOT ROWS UNTIL 2026-08-21, when the board became one row per car and the MOT/service
+  // lists went. Every row has a registration now and DVSA answers for every registration, so the
+  // question the gate protects is no longer "which list is this" but "is the control still there".
+  // COMMENT-STRIPPED. The page's own comment explains that the button USED to be gated on
+  // `reason === 'mot'`, so scanning the raw source found the phrase it was banning — the ninth
+  // time in two days a scan has matched its own explanation.
+  const srcCode = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('every row can be checked with DVSA', /data-testid="marketing-check"/.test(srcCode)
+    && !/reason === 'mot'/.test(srcCode),
+    'the old gate was about which LIST a row came from, and the lists are gone');
   check('the stale band count explains itself where it is', /count that decremented/.test(prose(src)),
     'otherwise the next person to find it reads it as a bug');
 

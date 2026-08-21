@@ -137,10 +137,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const channel = went.length === 2 ? 'both' : went[0] ?? null;
   if (channel) {
     await prisma.marketingContact.upsert({
-      where: { group_id_vehicle_id_reason: { group_id: groupId, vehicle_id: v.id, reason: 'mot' } },
-      create: { group_id: groupId, vehicle_id: v.id, reason: 'mot', state: 'contacted',
-        for_date: v.mot_expiry, channel, actor_id: user.id as string },
-      update: { state: 'contacted', for_date: v.mot_expiry, channel, snooze_until: null, actor_id: user.id as string },
+      // ONE ANSWER PER CAR — see the unique index on MarketingContact. `reason` records what this
+      // send was about, and here it is known exactly: the template chosen from the car's own band.
+      where: { group_id_vehicle_id: { group_id: groupId, vehicle_id: v.id } },
+      create: { group_id: groupId, vehicle_id: v.id, reason: band === 'expired' ? 'mot_expired' : 'mot_due',
+        state: 'contacted', for_date: v.mot_expiry, channel, actor_id: user.id as string },
+      update: { state: 'contacted', reason: band === 'expired' ? 'mot_expired' : 'mot_due',
+        for_date: v.mot_expiry, channel, snooze_until: null, actor_id: user.id as string },
     });
     await writeAudit(prisma, {
       groupId, userId: user.id as string, action: 'marketing.sent',

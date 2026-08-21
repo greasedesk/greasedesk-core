@@ -159,15 +159,45 @@ try {
   await page.waitForSelector('[data-testid="stack-hot"]', { timeout: 25000 });
 
   check('the expired car is on the page', (await page.locator(`[data-testid="marketing-row-${expired.id}"]`).count()) === 1);
-  check('  …in Hot, above Warm', (await page.evaluate(() => {
-    const y = (t) => { const e = document.querySelector(`[data-testid="${t}"]`); return e ? e.getBoundingClientRect().top + window.scrollY : null; };
-    const a = y('stack-hot'), b = y('stack-warm');
-    return a != null && b != null && a < b;
+  // THE ORDER LIVES IN THE TAB STRIP NOW. This measured vertical position when the stacks were
+  // stacked; with tabs only one is in the DOM at a time, so the rule it protects — a lapsed MOT is
+  // a better call than one three weeks away — is expressed as Hot coming first, and landing there.
+  check('  …and Hot comes before Warm, which comes before Later', (await page.evaluate(() => {
+    const x = (t) => { const e = document.querySelector(`[data-testid="stack-tab-${t}"]`); return e ? e.getBoundingClientRect().left : null; };
+    const [h, w, l] = ['hot', 'warm', 'later'].map(x);
+    return h != null && w != null && l != null && h < w && w < l;
   })), 'a lapsed MOT is a better call than one three weeks away');
   check('  …and the expired car is in the HOT stack specifically', await page.evaluate((id) => {
     const hot = document.querySelector('[data-testid="stack-hot"]');
     return !!hot && !!hot.querySelector(`[data-testid="marketing-row-${id}"]`);
   }, expired.id));
+
+  // ── THREE TABS, LANDING ON HOT ───────────────────────────────────────────────────────────────
+  console.log('\n— the shape of the day, without clicking —');
+  for (const k of ['hot', 'warm', 'later']) {
+    check(`the ${k} tab carries its count`, /\(\d+\)/.test(await page.locator(`[data-testid="stack-tab-${k}"]`).innerText()),
+      await page.locator(`[data-testid="stack-tab-${k}"]`).innerText());
+  }
+  check('  …and the counts match the stacks they name',
+    (await page.locator('[data-testid="stack-count-hot"]').innerText()).replace(/[()]/g, '')
+      === String((await page.locator('[data-testid="stack-hot"] [data-testid^="marketing-row-"]').count())),
+    'a count that disagrees with the list under it is worse than no count');
+  check('it lands on Hot', (await page.locator('[data-testid="stack-tab-hot"]').getAttribute('aria-selected')) === 'true');
+  check('  …with only one stack rendered', (await page.locator('[data-testid="stack-warm"]').count()) === 0,
+    'tabs, not a scroll — the point is seeing one thing at a time');
+
+  // THE TAB IS IN THE URL, so a reload after recording a contact does not throw the caller back to
+  // Hot — and so this gate drives the state rather than the strip.
+  await page.goto(`${BASE}/admin/marketing?stack=warm`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stack-warm"]', { timeout: 25000 });
+  check('the tab comes from the URL', (await page.locator('[data-testid="stack-tab-warm"]').getAttribute('aria-selected')) === 'true');
+  check('  …and an unknown stack falls back to Hot rather than rendering nothing', await (async () => {
+    await page.goto(`${BASE}/admin/marketing?stack=nonsense`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid="stack-hot"]', { timeout: 25000 });
+    return (await page.locator('[data-testid="stack-tab-hot"]').getAttribute('aria-selected')) === 'true';
+  })());
+  await page.goto(`${BASE}/admin/marketing`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stack-hot"]', { timeout: 25000 });
   const rowText = await page.locator(`[data-testid="marketing-row-${expired.id}"]`).innerText();
   check('the opted-out customer still appears', /Marketing Fixture/.test(rowText));
   check('  …marked "No texts", not silenced entirely', /No texts/.test(rowText), rowText.replace(/\n/g, ' | '));

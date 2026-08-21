@@ -45,6 +45,20 @@ export type Board = {
   later: BoardRow[];
   /** A COUNT, not a value. See lib/marketing-pipeline for why there is no figure here. */
   fleet: number;
+  /**
+   * HOT AND NOT YET RUNG — what the nav badge counts.
+   *
+   * Not the same question as the stack. The STACK is about the car's condition: an expired MOT is
+   * still an expired MOT after you have left a voicemail, so `contacted` does not push a car out
+   * of Hot and should not. The BADGE is about outstanding work, and a car you rang this morning is
+   * not outstanding this afternoon — so it falls on contact while the row stays where it is,
+   * marked with what was done.
+   *
+   * Getting these the same way round would produce one of two familiar failures: a badge that
+   * never falls however hard the list is worked, or a car that disappears from Hot because
+   * somebody left a message and nobody ever called back.
+   */
+  hotUnactioned: number;
   /** Findings nobody has put to the customer — the reason Hot is empty, when it is. */
   unansweredFindings: number;
   /** The sentence the board says about itself. NULL when there is nothing to say. */
@@ -215,6 +229,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   return {
     hot, warm: pick('warm'), later: pick('later'),
     fleet, unansweredFindings,
+    hotUnactioned: hot.filter((r) => r.state == null).length,
     prompt: unansweredPrompt(hot.length, unansweredFindings),
   };
 }

@@ -18,8 +18,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { writeAudit } from '@/lib/audit';
 import { SNOOZE_DAYS } from '@/lib/marketing-lists';
+import { LEAD_REASON_KINDS } from '@/lib/marketing-pipeline';
 
-const REASONS = ['mot', 'service'] as const;
 const STATES = ['contacted', 'booked', 'declined', 'snoozed'] as const;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,7 +32,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { vehicleId, reason, state, forDate } = (req.body || {}) as
     { vehicleId?: string; reason?: string; state?: string; forDate?: string | null };
   if (!vehicleId) return res.status(400).json({ message: 'A vehicle is required.' });
-  if (!REASONS.includes(reason as never)) return res.status(400).json({ message: 'Unknown list.' });
+  // WHAT THE CALL WAS ABOUT, in the board's own vocabulary. This used to check a two-value enum of
+  // LIST NAMES — and the board, being one list, sent 'mot' for every car including the ones rung
+  // about a failed battery. LEAD_REASON_KINDS is the set the pipeline actually produces.
+  if (!LEAD_REASON_KINDS.includes(reason as never)) return res.status(400).json({ message: 'Unknown reason.' });
   if (!STATES.includes(state as never)) return res.status(400).json({ message: 'Unknown outcome.' });
 
   // TENANT SCOPE, from the row rather than the caller. A vehicle id is guessable and this endpoint
@@ -50,12 +53,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.marketingContact.upsert({
-      where: { group_id_vehicle_id_reason: { group_id: groupId, vehicle_id: vehicleId, reason: reason as never } },
+      // ONE ANSWER PER CAR. Keyed on the car alone: a garage makes one phone call, and keying on
+      // the reason too would let the same call leave a car contacted for one thing and not for
+      // another. `reason` is UPDATED as well as created — the latest call is what it was about.
+      where: { group_id_vehicle_id: { group_id: groupId, vehicle_id: vehicleId } },
       create: {
         group_id: groupId, vehicle_id: vehicleId, reason: reason as never, state: state as never,
         for_date: forAt, snooze_until: snoozeUntil, actor_id: user.id as string,
       },
-      update: { state: state as never, for_date: forAt, snooze_until: snoozeUntil, actor_id: user.id as string },
+      update: { state: state as never, reason: reason as never, for_date: forAt, snooze_until: snoozeUntil, actor_id: user.id as string },
     });
     // The HISTORY lives here, which is where history lives. The table above answers one question:
     // what is outstanding right now.
