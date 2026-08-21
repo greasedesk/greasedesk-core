@@ -70,6 +70,7 @@ export const INVOICE_SNAPSHOTS: readonly SnapshotPolicy[] = [
   // a re-issue is actually used for, and a real change when it happens months later. Named on the
   // re-issue control rather than discovered afterwards.
   { column: 'due_items_snapshot', policy: 'rebuild' },
+  { column: 'measured_snapshot', policy: 'rebuild' },
   { column: 'work_done_snapshot', policy: 'rebuild' },
 ];
 

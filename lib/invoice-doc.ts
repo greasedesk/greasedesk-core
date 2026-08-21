@@ -102,6 +102,14 @@ export type InvoiceDoc = {
   /** What this visit SORTED — findings closed as `fixed` on this card, frozen at issue. NULL on
    *  most invoices, and on every invoice minted before 2026-08-20. */
   workDoneBlock: string | null;
+  /** WHAT WE MEASURED — tread depths and the battery reading. NULL means one of two things and the
+   *  renderer must tell them apart: on a document minted before 2026-08-21 it means all three
+   *  categories are in dueItemsBlock as one list (see `combinedBlocks`); after, it means nothing
+   *  was measured on that visit. */
+  measuredBlock: string | null;
+  /** TRUE for a document written before the split, whose dueItemsBlock holds all three categories.
+   *  Derived, not stored: it IS measuredBlock being null on a document that has a dueItemsBlock. */
+  combinedBlocks: boolean;
   lines: InvoiceDocLine[];
   totals: InvoiceTotals;
   currency: string;
@@ -119,6 +127,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       customer_name_snapshot: true, customer_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       due_items_snapshot: true,
+      measured_snapshot: true,
       payment_method_snapshot: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },
@@ -223,6 +232,10 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       : { reg: inv.vehicle_reg_snapshot, desc: inv.vehicle_desc_snapshot, vin: inv.vehicle_vin_snapshot, mileage: inv.vehicle_mileage_snapshot },
     // FROZEN, always — no live branch. See the type above for why this differs from reg/VIN.
     dueItemsBlock: inv.due_items_snapshot ?? null,
+    measuredBlock: inv.measured_snapshot ?? null,
+    // The old shape, recognised rather than guessed at: a document with a needs block and no
+    // measured block was written when the two were one list.
+    combinedBlocks: !!inv.due_items_snapshot && inv.measured_snapshot == null,
     workDoneBlock: inv.work_done_snapshot ?? null,
     lines,
     totals,

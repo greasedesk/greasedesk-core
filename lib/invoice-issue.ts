@@ -18,7 +18,7 @@
  * were classified 2026-07-12 and every writer here sets it; tighten the column to NOT NULL in a
  * follow-up migration. A nullable classification column on the ledger is a hole waiting for a null.
  */
-import { printedDueItemsBlock, openDueItemsForVehicle } from '@/lib/due-items';
+import { printedNeedsBlock, printedMeasuredBlock, openDueItemsForVehicle } from '@/lib/due-items';
 import { printedWorkDoneBlock } from '@/lib/due-item-closure';
 import { printedTyreLines } from '@/lib/tyres';
 import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
@@ -69,7 +69,7 @@ async function createInvoiceRow(
   // Built BEFORE the row is created, from what is true at this instant — the open findings on this
   // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
   // moment from the rest of the document.
-  const { dueItemsBlock, workDone } = await computeNarrativeBlocks(tx as Prisma.TransactionClient, groupId, jobCardId);
+  const { dueItemsBlock, measuredBlock, workDone } = await computeNarrativeBlocks(tx as Prisma.TransactionClient, groupId, jobCardId);
 
   const invoice = await tx.invoice.create({
     data: {
@@ -95,6 +95,7 @@ async function createInvoiceRow(
       // list changes as items are closed, and the MOT expiry moves when the car is retested, so a
       // live read would make a reprint disagree with the page the customer was handed.
       due_items_snapshot: dueItemsBlock,
+      measured_snapshot: measuredBlock,
       work_done_snapshot: workDone,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,
@@ -211,12 +212,12 @@ export async function computeNarrativeBlocks(
   tx: Prisma.TransactionClient,
   groupId: string,
   jobCardId: string,
-): Promise<{ dueItemsBlock: string | null; workDone: string | null }> {
+): Promise<{ dueItemsBlock: string | null; measuredBlock: string | null; workDone: string | null }> {
   const card = (await tx.jobCard.findUnique({
     where: { id: jobCardId },
     select: { id: true, vehicle: { select: { id: true, mot_expiry: true } } },
   })) as { id: string; vehicle: { id: string; mot_expiry: Date | null } | null } | null;
-  if (!card) return { dueItemsBlock: null, workDone: null };
+  if (!card) return { dueItemsBlock: null, measuredBlock: null, workDone: null };
 
   // THE LATEST READING PER CORNER for this car — the tyre condition as it stood at mint, frozen
   // with everything else. A reading taken after this invoice must not change what it printed.
@@ -243,9 +244,12 @@ export async function computeNarrativeBlocks(
       })
     : null;
 
-  const dueItemsBlock = printedDueItemsBlock({
+  // TWO BLOCKS, TWO HEADINGS. See lib/due-items for what went wrong with one.
+  const dueItemsBlock = printedNeedsBlock({
     motExpiry: (card.vehicle?.mot_expiry as Date | null) ?? null,
     items: await openDueItemsForVehicle(tx, groupId, card.vehicle?.id as string | undefined),
+  });
+  const measuredBlock = printedMeasuredBlock({
     tyreLines: printedTyreLines([...latestTyre.values()]),
     batteryLine: batteryRow
       ? printedBatteryLine({
@@ -255,13 +259,6 @@ export async function computeNarrativeBlocks(
       : null,
   });
 
-  // ── WHAT THIS VISIT SORTED ────────────────────────────────────────────────────────────────────
-  // Scoped to the CARD, not the car: the block describes this visit. A finding closed as `fixed`
-  // on this job appears; one closed months ago on another job does not, and one closed as declined
-  // or no-longer-applies never does.
-  //
-  // Frozen here with everything else, and for the same reason — "we topped the coolant up" is a
-  // claim on a document the customer keeps, so it must say what was true at issue.
   const workDone = card.vehicle?.id
     ? printedWorkDoneBlock((await (tx as Prisma.TransactionClient).vehicleDueItem.findMany({
         where: { group_id: groupId, closed_job_card_id: jobCardId, closed_kind: 'fixed' },
@@ -270,7 +267,7 @@ export async function computeNarrativeBlocks(
       })).map((r) => ({ description: r.description, closedKind: r.closed_kind })))
     : null;
 
-  return { dueItemsBlock, workDone };
+  return { dueItemsBlock, measuredBlock, workDone };
 }
 
 /** The re-issue caller. Kept as its own name because the endpoint reads better for it. */

@@ -385,6 +385,27 @@ try {
 }
 
 
+// ── THE ADVISORY IS A JUDGEMENT; THE MEASUREMENT IS ITS EVIDENCE ───────────────────────────────
+// "Battery — 62% health against 760 CCA EN, worth watching" printed directly above
+// "Battery — 12.48V, 76% charge, 62% health against 760 CCA EN" — the same numbers twice, under a
+// heading that described neither. It happened on the invoice, on the job card and on the marketing
+// board row: one fact and its derived advisory rendered side by side, three times.
+console.log('\n— the judgement stops restating the reading —');
+const monitorAdv = B.batteryAdvisory({ voltageMv: 12480, socPct: 76, sohPct: 62, ratedCca: 760, ccaStandard: 'EN' }, new Date('2026-08-21'));
+check('a worth-watching battery carries no figures', monitorAdv.description === 'Battery — worth watching',
+  monitorAdv.description);
+check('  …while the MEASUREMENT still carries them all',
+  /12\.48V, 76% charge, 62% health against 760 CCA EN/.test(
+    B.printedBatteryLine({ voltageMv: 12480, socPct: 76, sohPct: 62, ratedCca: 760, ccaStandard: 'EN' })),
+  'dropping them from both would lose the evidence, which is the opposite mistake');
+// replace/dead_cell KEEP theirs: a resting voltage and a seasonal urgency are part of the
+// judgement, not a restatement of the reading.
+const replaceAdv = B.batteryAdvisory({ voltageMv: 12400, socPct: 80, sohPct: 40, ratedCca: 760, ccaStandard: 'EN' }, new Date('2026-11-01'));
+check('a failing battery keeps its figure, because the judgement rests on it',
+  /40% health/.test(replaceAdv.description), replaceAdv.description);
+const deadAdv = B.batteryAdvisory({ voltageMv: 9000, socPct: 7, sohPct: 8, ratedCca: 760, ccaStandard: 'EN' }, new Date('2026-11-01'));
+check('  …and a dead cell keeps its resting voltage', /9\.00V resting/.test(deadAdv.description), deadAdv.description);
+
 // ── UNSTATED: THE LABEL THAT NAMES NO STANDARD ─────────────────────────────────────────────────
 // Most UK batteries are labelled just "760 CCA", and the Ancel BT410 prints "Rated: 760A CCA" with
 // no standard either. The form demanded one of five and the endpoint refused a rating without one,

@@ -176,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const blocks = await computeNarrativeBlocks(tx, invoice.group_id, invoice.job_card_id);
         await tx.invoice.update({
           where: { id: invoice.id },
-          data: { due_items_snapshot: blocks.dueItemsBlock, work_done_snapshot: blocks.workDone },
+          data: { due_items_snapshot: blocks.dueItemsBlock, measured_snapshot: blocks.measuredBlock, work_done_snapshot: blocks.workDone },
         });
         if (invoice.series === 'warranty') {
           await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'settled' as any } }); // back to terminal

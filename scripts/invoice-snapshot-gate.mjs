@@ -47,7 +47,7 @@ try {
   const model = schema.slice(schema.indexOf('model Invoice {'));
   const body = model.slice(0, model.indexOf('\n}'));
   const columns = [...body.matchAll(/^\s{2}([a-z_]*(?:snapshot|_at_issue))\s+\w/gm)].map((m) => m[1]);
-  check('the schema still has the fourteen this was written against', columns.length === 14,
+  check('the schema still has the fifteen this was written against', columns.length === 15,
     `${columns.length}: ${columns.join(' ')}`);
   const undeclared = columns.filter((c) => !S.snapshotPolicy(c));
   check('every one is declared rebuild or frozen', undeclared.length === 0,
@@ -115,6 +115,15 @@ try {
     select: { id: true } });
   fix = { veh: veh.id, cust: cust.id, card: card.id };
 
+  // MEASUREMENTS, so the split is actually exercised. Without them `measured_snapshot` is null
+  // for the honest reason "nothing was measured" and the assertion below passes on the empty
+  // branch — green, and proving nothing about the thing it names.
+  await prisma.tyreReading.create({ data: { group_id: ZZ, vehicle_id: veh.id, job_card_id: card.id,
+    corner: 'front_left', type: 'summer_standard',
+    depth_outer_tenths: 60, depth_centre_tenths: 60, depth_inner_tenths: 60 } });
+  await prisma.batteryReading.create({ data: { group_id: ZZ, vehicle_id: veh.id, job_card_id: card.id,
+    voltage_mv: 12480, soc_pct: 76, soh_pct: 62, rated_cca: 760, cca_standard: 'EN' } });
+
   let invId = null;
   await prisma.$transaction(async (tx) => { invId = await issueInvoiceForCard(tx, card.id, ZZ); }, { timeout: 30000 });
   fix.invoice = invId;
@@ -152,12 +161,50 @@ try {
   }, invId);
   check('the re-issue endpoint accepts it', reissued.status === 200, JSON.stringify(reissued.body).slice(0, 120));
 
-  const after = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true, work_done_snapshot: true, _count: { select: { lines: true } } } });
+  const after = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true, measured_snapshot: true, work_done_snapshot: true, _count: { select: { lines: true } } } });
+  // ── THREE CATEGORIES, THREE BLOCKS ───────────────────────────────────────────────────────────
+  // The block that carried all three said "Advisory — not charged for" over an MOT date, two
+  // advisories, four tread depths and a battery reading — and the battery appeared twice, once as
+  // a judgement and once as its own evidence.
+  check('a fresh document splits needs from measurements',
+    !!after.measured_snapshot && /6\.0 \/ 6\.0 \/ 6\.0mm/.test(after.measured_snapshot),
+    `needs: ${JSON.stringify((after.due_items_snapshot ?? '').slice(0, 60))} | measured: ${JSON.stringify(after.measured_snapshot)}`);
+  check('  …the battery reading is in MEASURED, not in needs',
+    /12\.48V/.test(after.measured_snapshot ?? '') && !/12\.48V/.test(after.due_items_snapshot ?? ''));
+  // The advisory's WORDING is asserted in battery-gate, against batteryAdvisory directly. Checking
+  // it here read the needs block — which is empty on this fixture once the coolant is closed, so
+  // `!/62% health/` was true of an empty string and the check passed with the figures restored.
+  check('  …and no tread depth appears under "what your car needs"',
+    !/mm$/m.test(after.due_items_snapshot ?? ''),
+    'a tread depth is a measurement, not something the car needs');
+
   check('after the re-issue the coolant is no longer outstanding', !/Coolant/.test(after.due_items_snapshot ?? ''),
     JSON.stringify(after.due_items_snapshot));
   check('  …it is recorded as sorted on the visit', /Coolant/.test(after.work_done_snapshot ?? ''),
     JSON.stringify(after.work_done_snapshot));
   check('  …and the money re-froze in the same pass', after._count.lines > 0, `${after._count.lines} lines`);
+
+  // ── A DOCUMENT ISSUED BEFORE THE SPLIT KEEPS BOTH ITS TEXT AND ITS HEADING ───────────────────
+  // Freeze-at-issue governs CONTENT. Relabelling an old combined block "What your car needs" would
+  // put tread depths under a heading that does not describe them, on a document a customer already
+  // holds. measured_snapshot NULL on an invoice that HAS a needs block is what "written before the
+  // split" looks like in the data — recognised, never backfilled.
+  console.log('\n— and an older document is left as it was issued —');
+  const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');
+  await prisma.invoice.update({ where: { id: invId },
+    data: { measured_snapshot: null, due_items_snapshot: '(1) MOT Expiry 1 January 2027\\n(2) Front left — 6.0mm' } });
+  const oldDoc = await buildInvoiceDoc(invId, ZZ);
+  check('an old combined block is recognised as one', oldDoc?.combinedBlocks === true,
+    'derived from the data, not stored: a needs block with no measured block');
+  const pdfSrc = readFileSync('lib/invoice-pdf.tsx', 'utf8');
+  check('  …and both renderers keep its original heading',
+    /combinedBlocks \?[\s\S]{0,400}advisory\.heading/.test(pdfSrc)
+    && /combinedBlocks && props\.dueItemsBlock/.test(readFileSync('pages/admin/invoices/[id].tsx', 'utf8')),
+    'the inconsistency between old and new documents is the freeze working, not a thing to tidy');
+  await prisma.invoice.update({ where: { id: invId }, data: { measured_snapshot: '(1) Front left — 6.0mm' } });
+  const freshDoc = await buildInvoiceDoc(invId, ZZ);
+  check('  …while a document with both blocks is not mistaken for an old one',
+    freshDoc?.combinedBlocks === false);
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
@@ -170,6 +217,8 @@ try {
       await step('invoice', () => prisma.invoice.deleteMany({ where: { id: fix.invoice } }));
     }
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
+    await step('tyres', () => prisma.tyreReading.deleteMany({ where: { vehicle_id: fix.veh } }));
+    await step('battery', () => prisma.batteryReading.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('quote versions', () => prisma.quoteVersion.deleteMany({ where: { job_card_id: fix.card } }));
     await step('card items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: fix.card } }));
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));

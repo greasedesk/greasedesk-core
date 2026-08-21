@@ -320,14 +320,72 @@ export function effectiveDueDate(
  *
  * Numbered, one per line, exactly as a garage writes them by hand.
  */
+/**
+ * ── THREE CATEGORIES, THREE HEADINGS ────────────────────────────────────────────────────────────
+ * This was ONE block under "Advisory — not charged for", and it mixed three different kinds of
+ * statement. On a real invoice it read:
+ *
+ *   (1) MOT Expiry 29 August 2027                        ← a fact from DVSA
+ *   (2) Battery — 62% health…, worth watching            ← an advisory
+ *   (3) Wiper blades smearing                            ← an advisory
+ *   (6) Front left — 6.0 / 6.0 / 6.0mm                   ← a measurement
+ *  (10) Battery — 12.48V, 76% charge, 62% health         ← the same battery, measured
+ *
+ * The heading described lines 2 and 3 and misdescribed the other eight. A tread depth is not an
+ * advisory and neither is an MOT date, and the battery appeared twice — once as a judgement and
+ * once as the evidence for it, which read as the same claim made twice.
+ *
+ * So: WHAT YOUR CAR NEEDS (the MOT date at its head, because it IS something the car needs) and
+ * WHAT WE MEASURED. "Sorted on this visit" is the third, built in lib/due-item-closure.
+ *
+ * Numbered independently. A customer reads two short lists, not one long one with a gear change
+ * in the middle.
+ */
+export function printedNeedsBlock(args: {
+  motExpiry: Date | null;
+  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
+}): string | null {
+  const lines: string[] = [];
+  if (args.motExpiry) {
+    lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
+  }
+  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it)}` : it.description);
+  if (!lines.length) return null;
+  return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
+}
+
+/**
+ * WHAT WE MEASURED — the readings, as evidence a customer can check.
+ *
+ * Tyres as TEXT, deliberately: a four-corner table would print prettier and freeze worse, and the
+ * invoice is a document whose job is to reprint identically.
+ *
+ * NULL, not an empty string: nothing measured is not the same as a block that printed empty, and a
+ * reader of the column can tell them apart.
+ */
+export function printedMeasuredBlock(args: {
+  tyreLines?: string[];
+  batteryLine?: string | null;
+}): string | null {
+  const lines = [...(args.tyreLines ?? [])];
+  if (args.batteryLine) lines.push(args.batteryLine);
+  if (!lines.length) return null;
+  return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
+}
+
+/**
+ * ── THE OLD COMBINED BLOCK, KEPT FOR DOCUMENTS THAT WERE MINTED WITH IT ─────────────────────────
+ * Freeze-at-issue governs CONTENT: an invoice issued before 21 August 2026 says what it said, and
+ * its due_items_snapshot holds all three categories in one list. This is how that text was built,
+ * retained so the shape is legible to whoever finds one — NOT called by any live path.
+ *
+ * Renderers tell the two apart by measured_snapshot being NULL, which is what "minted before the
+ * split" looks like in the data. Do not backfill it: the old documents are correct as they stand.
+ */
 export function printedDueItemsBlock(args: {
   motExpiry: Date | null;
   items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
-  /** Pre-rendered tyre lines (lib/tyres::printedTyreLines). TEXT, so they freeze like the rest. */
   tyreLines?: string[];
-  /** The battery test (lib/battery::printedBatteryLine), same argument. NULL when none was taken —
-   *  and null rather than an empty string, so "not tested" is distinguishable from "tested, nothing
-   *  to say". A battery advisory arrives separately, via `items`, like every other finding. */
   batteryLine?: string | null;
 }): string | null {
   const lines: string[] = [];
@@ -335,14 +393,8 @@ export function printedDueItemsBlock(args: {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
   for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it)}` : it.description);
-  // TYRES AS TEXT, deliberately — a four-corner table would print prettier and freeze worse. The
-  // invoice is a document and what matters is that it reprints identically (the B(iii) argument).
   for (const t of args.tyreLines ?? []) lines.push(t);
-  // The MEASUREMENT, after the tyres. Its ADVISORY, if it raised one, is already above among the
-  // findings — this line is the evidence, printed once, where a customer can check it.
   if (args.batteryLine) lines.push(args.batteryLine);
-  // NULL, not an empty string: nothing to say is not the same as a block that printed empty, and a
-  // reader of the column can tell them apart.
   if (!lines.length) return null;
   return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
 }

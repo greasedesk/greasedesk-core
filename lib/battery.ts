@@ -211,7 +211,21 @@ export function batteryAdvisory(n: BatteryNumbers, measuredAt: Date): BatteryAdv
     case 'monitor':
       // NO trailing full stop: this one KEEPS its label, and a description that ends a sentence
       // then has "due at the next service" appended reads as two fragments.
-      return { state, urgent: false, carriesOwnTiming: false, description: `Battery — ${n.sohPct}% health${ratedSuffix(n)}, worth watching` };
+      //
+      // ── AND NO FIGURES, WHICH IS THE SPLIT ──────────────────────────────────────────────────
+      // This said "Battery — 62% health against 760 CCA EN, worth watching" while the measurement
+      // printed the same 62% and the same 760 CCA below it, under a heading that described
+      // neither. Once the two sit under separate headings the advisory is the JUDGEMENT and the
+      // measurement is its evidence; repeating the numbers made it read as one claim stated twice
+      // — on the invoice, on the job card, and on the marketing board row, three times over.
+      //
+      // `replace` and `dead_cell` KEEP theirs: a resting voltage and a seasonal urgency are part
+      // of the judgement, not a restatement of the reading.
+      //
+      // Invoices already issued keep their old wording. Freeze-at-issue governs content, and a
+      // document saying "62% health, worth watching" is correct as it stands — the inconsistency
+      // between old and new documents is the freeze working, not a thing to tidy.
+      return { state, urgent: false, carriesOwnTiming: false, description: 'Battery — worth watching' };
     case 'charging_fault':
       // NOT a battery sale. Said in the words a customer can act on, because the temptation to sell
       // the part in front of you is exactly what this state exists to resist.

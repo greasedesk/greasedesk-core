@@ -134,6 +134,12 @@
   "advisory": {
     "heading": "Advisory — not charged for"
   },
+  "needs": {
+    "heading": "What your car needs"
+  },
+  "measured": {
+    "heading": "What we measured"
+  },
   "workDone": {
     "heading": "Sorted on this visit"
   }

@@ -249,14 +249,38 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
           </View>
         ) : null}
 
-        {doc.dueItemsBlock ? (
+        {/* ── THE OLD SHAPE, RENDERED AS IT WAS ISSUED ──────────────────────────────────────
+            A document minted before 21 Aug 2026 holds all three categories in one list under one
+            heading. Freeze-at-issue governs CONTENT, so it keeps both its text and the heading it
+            was issued with — relabelling it "What your car needs" would put tread depths under a
+            heading that does not describe them, on a document a customer already has. */}
+        {doc.combinedBlocks ? (
           <View style={{ marginTop: 14 }}>
             <Text style={[S.label, { marginBottom: 3 }]}>{t('advisory.heading')}</Text>
-            {doc.dueItemsBlock.split('\n').map((line, i) => (
+            {(doc.dueItemsBlock ?? '').split('\n').map((line, i) => (
               <Text key={i} style={S.muted}>{line}</Text>
             ))}
           </View>
-        ) : null}
+        ) : (
+          <>
+            {doc.dueItemsBlock ? (
+              <View style={{ marginTop: 14 }}>
+                <Text style={[S.label, { marginBottom: 3 }]}>{t('needs.heading')}</Text>
+                {doc.dueItemsBlock.split('\n').map((line, i) => (
+                  <Text key={i} style={S.muted}>{line}</Text>
+                ))}
+              </View>
+            ) : null}
+            {doc.measuredBlock ? (
+              <View style={{ marginTop: 14 }}>
+                <Text style={[S.label, { marginBottom: 3 }]}>{t('measured.heading')}</Text>
+                {doc.measuredBlock.split('\n').map((line, i) => (
+                  <Text key={i} style={S.muted}>{line}</Text>
+                ))}
+              </View>
+            ) : null}
+          </>
+        )}
 
         {doc.footerText ? (
           // Payment terms / footer block (Invoicing tab) — multi-line, verbatim.

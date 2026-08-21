@@ -2499,6 +2499,10 @@ model Invoice {
   /// WHAT THIS VISIT SORTED — findings closed as `fixed` on this card, frozen at issue like the
   /// advisories beside them. NULL means nothing was sorted, which is most visits.
   work_done_snapshot String?
+  /// WHAT WE MEASURED — tread depths and the battery reading, frozen at issue. NULL on an invoice
+  /// minted before 2026-08-21 means the three categories were written as ONE block in
+  /// due_items_snapshot; that is how a renderer tells the shapes apart, so it is never backfilled.
+  measured_snapshot String?
 }
 
 model InvoiceLine {

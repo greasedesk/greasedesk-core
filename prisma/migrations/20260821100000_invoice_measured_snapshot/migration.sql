@@ -1,0 +1,17 @@
+-- WHAT WE MEASURED — the third block, frozen at issue beside the other two.
+--
+-- due_items_snapshot carried three different kinds of statement under one heading that described
+-- only the first: an MOT date (a fact from DVSA), advisories, and MEASUREMENTS — tread depths and
+-- a battery reading. The battery appeared twice in one list, once as a judgement and once as the
+-- evidence for it.
+--
+-- Splitting them needs somewhere for the measurements to live. due_items_snapshot keeps its name
+-- and narrows to what the car NEEDS; this is the readings.
+--
+-- NULL IS LOAD-BEARING AND MUST NOT BE BACKFILLED. On an invoice minted before 21 Aug 2026 it
+-- means "this document was written with all three categories in one block", and that is how the
+-- renderers tell the two shapes apart. Filling it would make an old document claim a structure it
+-- was never issued with, and freeze-at-issue governs content: those documents are correct as they
+-- stand. A NULL here on a NEW invoice means something different and equally honest — nothing was
+-- measured on that visit.
+ALTER TABLE "Invoice" ADD COLUMN "measured_snapshot" TEXT;

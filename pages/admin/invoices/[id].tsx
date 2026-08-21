@@ -81,6 +81,8 @@ type PageProps = {
   /** The frozen due-items block, as printed at mint (lib/due-items::printedDueItemsBlock). */
   dueItemsBlock: string | null;
   workDoneBlock: string | null;
+  measuredBlock: string | null;
+  combinedBlocks: boolean;
   lines: Line[];
   totals: Totals;
   currency: string;
@@ -708,9 +710,22 @@ export default function InvoicePage(props: PageProps) {
             </div>
           )}
 
-          {props.dueItemsBlock && (
+          {/* The old shape keeps its own heading — see lib/invoice-pdf for why. */}
+          {props.combinedBlocks && props.dueItemsBlock && (
             <div className="mt-6 border-t border-line pt-4" data-testid="invoice-due-items">
               <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('advisory.heading')}</p>
+              <p className="text-sm text-muted whitespace-pre-line">{props.dueItemsBlock}</p>
+            </div>
+          )}
+          {!props.combinedBlocks && props.measuredBlock && (
+            <div className="mt-6 border-t border-line pt-4" data-testid="invoice-measured">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('measured.heading')}</p>
+              <p className="text-sm text-muted whitespace-pre-line">{props.measuredBlock}</p>
+            </div>
+          )}
+          {!props.combinedBlocks && props.dueItemsBlock && (
+            <div className="mt-6 border-t border-line pt-4" data-testid="invoice-due-items">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">{t('needs.heading')}</p>
               <p className="text-sm text-muted whitespace-pre-line">{props.dueItemsBlock}</p>
             </div>
           )}
