@@ -93,6 +93,17 @@ try {
   check('the reason a skip happened is a sentence, available to both callers',
     /did not report holding a reading/.test(S.SKIPPED_BLANK_REASON));
 
+  // ── SAY THE GAP OUT LOUD, IN THE GREEN OUTPUT ────────────────────────────────────────────────
+  // Everything above is about a form seeded with NOTHING. A form seeded with STALE VALUES has
+  // wasRecorded legitimately true and overwrites newer data with older — the version of this that
+  // survives BOTH fixes, and the one a reader will assume these ticks cover. A caveat that lives
+  // only in a source comment is not read by the person looking at a green run, so it is asserted
+  // here and printed beside the rest.
+  const src = readFileSync('lib/service-schedule.ts', 'utf8');
+  check('the LOST-UPDATE gap is recorded where classifyEntry is defined',
+    /WHAT THIS DOES NOT COVER/.test(src) && /STALE VALUES/.test(src) && /lost update/.test(src),
+    'a form seeded with stale VALUES still overwrites newer data with older — not covered here, needs a version or an echoed seed value');
+
   check('a row with neither leg is blank, not an error',
     S.isBlank(it('schedule_oil_service'), { dueMonth: null, dueMileage: null })
     && S.refuseSchedule([entry('schedule_oil_service')]).length === 0,
