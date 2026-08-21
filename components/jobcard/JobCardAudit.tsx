@@ -51,7 +51,16 @@ export default function JobCardAudit({ events }: { events: AuditEvent[] }) {
                 {label(e.action)}
                 {e.note && <span className="block text-xs text-muted mt-0.5" data-testid="audit-note">{e.note}</span>}
               </span>
-              <span className="text-muted whitespace-nowrap text-xs">
+              {/* ── suppressHydrationWarning IS THE POINT, NOT A PAPER-OVER ──────────────────────
+                  relTime reads Date.now(), so the server renders "3s ago" and the client hydrates
+                  a second later at "4s ago". React counts that as a mismatch and throws away the
+                  server HTML for the whole subtree — silently in production, and in dev it raises
+                  the error overlay, which is a full-screen element that swallows clicks. It only
+                  bites on events under a minute old, so nobody meets it by hand; a gate that
+                  created audit rows seconds earlier met it on two runs in three.
+                  A timestamp that is legitimately different on the two sides is the case this
+                  attribute exists for. */}
+              <span className="text-muted whitespace-nowrap text-xs" suppressHydrationWarning>
                 {e.actor ? `${e.actor} · ` : ''}{relTime(e.at)}
               </span>
             </li>

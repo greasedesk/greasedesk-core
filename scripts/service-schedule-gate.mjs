@@ -458,6 +458,83 @@ try {
   check('  …and the finding is attributed to the card it was taken on',
     oil?.found_on_job_card_id === card.id, oil?.found_on_job_card_id ?? 'null');
 
+  // ── THE FORM SURVIVES A TAB SWITCH ────────────────────────────────────────────────────────────
+  // 21 Aug: the owner recorded five items on TMBS D13DSK, changed tab, came back to an empty form
+  // and saved it. A blank row means "clear this item", so the save DELETED all five:
+  //   09:22:48 arrival written=5 cleared=0   →   09:23:37 arrival written=0 cleared=5
+  //
+  // THE TAB MUST BE CLICKED, NOT NAVIGATED TO. `?tab=` is a route change: it re-runs SSR and hands
+  // the pane fresh props, which is exactly the thing that HIDES this defect — the gate would pass
+  // against the broken build. The whole bug is the client-side remount, so the only honest path is
+  // the strip button a person presses. This is the counter-example to the shortcut that was
+  // reasonable last time: there, the URL was a more honest test; here, it tests nothing.
+  console.log('\n— the schedule survives a tab switch —');
+  await page.goto(`${BASE}/admin/jobcards/${fix.card}?tab=intake`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="service-schedule"]');
+  await page.fill('[data-testid="schedule-month-schedule_brake_fluid"]', '2029-03');
+  await page.fill('[data-testid="schedule-miles-schedule_pads_front"]', '52000');
+  await page.click('[data-testid="schedule-save"]');
+  await page.waitForSelector('[data-testid="schedule-saved"]');
+
+  const tab = async (k) => {
+    // SETTLE FIRST. Saving fires onSaved → refreshCard, and when that response lands React
+    // re-renders the workspace and DETACHES the tab button mid-click; the retry races the next
+    // render and the click times out on an element that was never unclickable. Probed directly:
+    // the button is visible, enabled, and hit-tests to its own child. The wait is for the paint,
+    // not for the control.
+    await page.waitForLoadState('networkidle');
+    const b = page.locator(`[data-testid="tab-${k}"]`);
+    await b.scrollIntoViewIfNeeded();
+    // ── RETRY THE CLICK, DO NOT WEAKEN IT ───────────────────────────────────────────────────────
+    // This timed out on some runs and not others. Measured in the failing context, the button is
+    // count=1, visible, enabled, stable at a fixed box, and hit-tests to its own child — so it is
+    // not obscured, off-screen or disabled, and it is NOT the scroll-snap strip: the box never
+    // moves. What it is: the save fires onSaved → refreshCard, and when that lands the workspace
+    // re-renders and REPLACES the strip's buttons, so the node Playwright resolved is detached
+    // between resolve and click. Adding diagnostics made it pass — their latency is the tell.
+    //
+    // So: a fresh locator per attempt, each with the full actionability checks. `force: true`
+    // would make it pass every time by skipping exactly the checks that make this a real click,
+    // which is the difference between proving a mechanic can switch tabs and proving nothing.
+    let clicked = false;
+    for (let i = 0; i < 5 && !clicked; i++) {
+      try { await page.locator(`[data-testid="tab-${k}"]`).click({ timeout: 5000 }); clicked = true; }
+      catch { await page.waitForTimeout(300); }
+    }
+    if (!clicked) throw new Error(`could not click the ${k} tab after 5 attempts`);
+    await page.waitForTimeout(400);
+  };
+  await tab('details');
+  check('the pane really did unmount (otherwise this proves nothing)',
+    (await page.locator('[data-testid="service-schedule"]').count()) === 0,
+    'if Intake stayed mounted, coming back would not re-run the seed and the test would be vacuous');
+  await tab('intake');
+  await page.waitForSelector('[data-testid="service-schedule"]');
+
+  const back = {
+    month: await page.inputValue('[data-testid="schedule-month-schedule_brake_fluid"]'),
+    miles: await page.inputValue('[data-testid="schedule-miles-schedule_pads_front"]'),
+  };
+  check('coming back to Intake, the saved schedule is still in the form',
+    back.month === '2029-03' && back.miles === '52000', JSON.stringify(back));
+
+  // The half that cost the readings. An empty form that saves is not a display problem.
+  await page.click('[data-testid="schedule-save"]');
+  await page.waitForSelector('[data-testid="schedule-saved"]');
+  const note = await page.locator('[data-testid="schedule-saved"]').innerText();
+  const kept = await prisma.serviceScheduleReading.findMany({
+    where: { job_card_id: fix.card }, select: { item_key: true, due_mileage: true, due_month: true } });
+  check('  …and saving again CLEARS NOTHING', !/cleared/.test(note), note);
+  check('  …with the rows still in the table afterwards',
+    kept.some((r) => r.item_key === 'schedule_pads_front' && r.due_mileage === 52000)
+    && kept.some((r) => r.item_key === 'schedule_brake_fluid' && r.due_month?.toISOString().slice(0, 7) === '2029-03'),
+    `${kept.length} rows: ${kept.map((r) => r.item_key).join(', ')}`);
+
+  // Put the browser back where the next section inherited it (Completion, loaded at line ~411).
+  // Leaving it on Intake broke the mileage-out checks downstream — a section reading a control
+  // that only exists on another tab, failing for a reason that had nothing to do with its subject.
+  await page.goto(`${BASE}/admin/jobcards/${fix.card}?tab=completion`, { waitUntil: 'domcontentloaded' });
+
   // ── AND THE INVOICE FREEZES WHAT THE PANEL WROTE ─────────────────────────────────────────────
   // A real mint through the real path, so the snapshot is the one a customer would receive.
   check('Completion completes', (await stage('complete')).status === 200);
@@ -506,7 +583,6 @@ try {
     && /20 August 2026/.test(prose(readFileSync('lib/odometer.ts', 'utf8')))
     && /UPPER BOUND/.test(prose(readFileSync('lib/odometer.ts', 'utf8'))),
     'rows written before that date inherit the bound; rows after it do not');
-
 
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));

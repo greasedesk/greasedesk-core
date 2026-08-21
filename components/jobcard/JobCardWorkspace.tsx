@@ -181,6 +181,12 @@ export default function JobCardWorkspace(p: Props) {
     tabsState?: Record<TabKey, TabState>;
     vehicle?: Props['vehicle'];
     owner?: Props['owner'];
+    // The two service-computer reads. They belong here for the same reason the stage flags do:
+    // they change from this screen, and a tab switch UNMOUNTS the pane, so the remount re-seeds
+    // its form from whatever prop it is handed. Left on the SSR value, that prop still says
+    // "nothing recorded" after a save — and a blank schedule form SAVES AS A DELETE.
+    scheduleOnArrival?: Props['scheduleOnArrival'];
+    serviceSchedule?: Props['serviceSchedule'];
   };
   const [ov, setOv] = useState<Overlay>({});
   const eff = {
@@ -198,6 +204,8 @@ export default function JobCardWorkspace(p: Props) {
     tabsState: ov.tabsState ?? p.tabsState,
     vehicle: ov.vehicle ?? p.vehicle,
     owner: ov.owner ?? p.owner,
+    scheduleOnArrival: ov.scheduleOnArrival ?? p.scheduleOnArrival ?? [],
+    serviceSchedule: ov.serviceSchedule ?? p.serviceSchedule ?? [],
   };
   // Client-side twin of the SSR gating inputs (reconciled by refreshCard; server still enforces).
   const clientTabs = (patch: Partial<Overlay>) => computeTabs({
@@ -217,6 +225,7 @@ export default function JobCardWorkspace(p: Props) {
         invoice: d.invoice, events: d.events, booking: d.booking, tabsState: d.tabsState,
         vehicle: d.vehicle, owner: d.owner,
         intakeItems: d.intakeItems, nothingFoundAt: d.nothingFoundAt ?? null,
+        scheduleOnArrival: d.scheduleOnArrival ?? [], serviceSchedule: d.serviceSchedule ?? [],
       });
     } catch { /* quiet */ }
   }
@@ -908,7 +917,7 @@ export default function JobCardWorkspace(p: Props) {
             DEPARTURE reading captured on Completion. Not per-site switchable: no escalation to
             protect. */}
         <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="arrival"
-          recorded={(p.scheduleOnArrival ?? []) as never} motExpiry={eff.vehicle.motExpiry ?? null}
+          recorded={eff.scheduleOnArrival as never} motExpiry={eff.vehicle.motExpiry ?? null}
           onSaved={refreshCard} />
         {/* FINDINGS FIRST — it is the reason the mechanic is at the car, and the MOT read-only
             line rides with it so nobody retypes a DVSA fact. Then tyres, then the photos and video
@@ -967,7 +976,7 @@ export default function JobCardWorkspace(p: Props) {
               Here rather than on Intake because it cannot be known until the work is done, and
               beside mileage-out because they are read in the same breath. */}
           <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="departure"
-            recorded={(p.serviceSchedule ?? []) as never} onArrival={(p.scheduleOnArrival ?? []) as never}
+            recorded={eff.serviceSchedule as never} onArrival={eff.scheduleOnArrival as never}
             motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>

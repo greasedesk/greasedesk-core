@@ -25,7 +25,7 @@
  * It comes from DVSA and already prints as the first line of every invoice advisory block. A row
  * here would print it twice. So it is confirmation that we have it, and it stores nothing.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
 
 export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null };
@@ -56,19 +56,39 @@ const BASIS_LABEL: Record<string, string> = {
 };
 
 export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], motExpiry = null, onSaved }: Props) {
-  const seed: Record<string, { month: string; miles: string }> = {};
-  for (const s of SCHEDULE_ITEMS) {
-    const r = recorded.find((x) => x.key === s.key);
-    // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
-    seed[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
-  }
-  const [rows, setRows] = useState(seed);
+  const seedFrom = (rs: ScheduleRow[]) => {
+    const out: Record<string, { month: string; miles: string }> = {};
+    for (const s of SCHEDULE_ITEMS) {
+      const r = rs.find((x) => x.key === s.key);
+      // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
+      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+    }
+    return out;
+  };
+  const [rows, setRows] = useState(() => seedFrom(recorded));
+  const [dirty, setDirty] = useState(false);
+  // ── SEEDED ONCE IS NOT SEEDED ────────────────────────────────────────────────────────────────
+  // A tab switch UNMOUNTS this pane, so `useState(seed)` runs again on the way back — against
+  // whatever the parent is holding. When the parent held the page-load value, the form came back
+  // EMPTY after a successful save, and saving an empty schedule form DELETES: five readings on a
+  // real card went that way (TMBS D13DSK, 21 Aug). Two halves, both required — the parent
+  // reconciles the prop through /api/jobcard-pane, and this re-seeds when it changes.
+  // `dirty` is the whole safety of it: never overwrite something half-typed.
+  const fingerprint = JSON.stringify(recorded.map((r) => [r.key, r.dueDate, r.dueMileage]));
+  const seenRef = useRef(fingerprint);
+  useEffect(() => {
+    if (dirty || fingerprint === seenRef.current) return;
+    seenRef.current = fingerprint;
+    setRows(seedFrom(recorded));
+  }, [fingerprint, dirty, recorded]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const set = (k: string, patch: Partial<{ month: string; miles: string }>) =>
+  const set = (k: string, patch: Partial<{ month: string; miles: string }>) => {
+    setDirty(true);
     setRows((r) => ({ ...r, [k]: { ...r[k], ...patch } }));
+  };
 
   async function save() {
     setBusy(true); setErr(null); setSaved(null);
@@ -85,6 +105,10 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j?.message ?? 'The schedule didn’t save.'); return; }
       setSaved(j.cleared ? `Saved — ${j.written} recorded, ${j.cleared} cleared.` : `Saved — ${j.written} recorded.`);
+      // What was typed is now what is stored, so this is no longer half-typed work to protect.
+      // Without this the guard would latch on for the life of the mount and the reconciled prop
+      // could never land — the fix would hold for one save and then behave exactly as before.
+      setDirty(false);
       onSaved();
     } catch { setErr('The schedule didn’t save.'); }
     finally { setBusy(false); }

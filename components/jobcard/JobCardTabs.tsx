@@ -41,6 +41,7 @@ export default function JobCardTabs({ tabs, active, onSelect, lockedReason }: Pr
               key={t.key}
               type="button"
               onClick={() => !locked && onSelect(t.key)}
+              data-testid={`tab-${t.key}`}
               disabled={locked}
               title={locked ? lockedReason : undefined}
               aria-current={isActive ? 'step' : undefined}
