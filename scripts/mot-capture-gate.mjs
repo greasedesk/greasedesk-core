@@ -237,7 +237,10 @@ try {
   check('  …and refuses to run across every tenant', /--group=<id> is required/.test(sweep),
     'a sweep across all tenants is a quota question nobody has answered');
   check('  …and refuses when DVSA is not configured', /dvsaConfigured\(\)/.test(sweep));
-  check('it paces itself', /PACE_MS/.test(sweep), 'this is somebody else’s API');
+  // A CALL, not a mention: /PACE_MS/ was true of an `import { PACE_MS }` line whether or not the
+  // sweep ever waited. Found by the scan-shape check in gate-hygiene-gate.
+  check('it paces itself', /await\s+\w*sleep\w*\(\s*PACE_MS|setTimeout\([^)]*PACE_MS/i.test(sweep),
+    'this is somebody else’s API');
   check('the reason it was NOT worth running before is recorded',
     /would have been a treadmill/.test(prose(sweep)) && /hide the trend/.test(prose(sweep)));
   check('and what this gate cannot prove is said out loud',

@@ -80,6 +80,7 @@ check('  …and the module asserts it at BOOT, not just here',
 let survivors = [];
 for (const f of ['lib/diary-day.ts', 'lib/diary-booking.ts', 'lib/dashboard-tiles.ts', 'lib/jobcard-status.ts', 'lib/status-colours.ts', 'lib/invoice-void.ts']) {
   const code = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // @scan-ok: comment-stripped already, and the question really is 'does this file mention it at all'
   if (/OFF_DIARY_STATUSES/.test(code)) survivors.push(f);
 }
 check('OFF_DIARY_STATUSES is retired from CODE everywhere', survivors.length === 0, survivors.join(', ') || 'comments only');

@@ -89,5 +89,70 @@ check('B flags a gate without the preflight', importsPreflight('const x = 1;\n')
 check('C flags a .ts consumer with no harness', touchesTsModule(GOOD_A) && !importsTsHarness("const { p } = await import('../lib/db.ts');\n"));
 check('C does not flag a script that touches no .ts module', !touchesTsModule("import { readFileSync } from 'node:fs';\n"));
 
+// ── RULE F: A SCAN'S TERM MUST BE ANCHORED TO WHAT IT MEANS ────────────────────────────────────
+// Nine times in two days a gate asserted on a BARE IDENTIFIER where it meant a render or a write,
+// and every one was caught by red-proving rather than by the written rule:
+//
+//   /DocumentCredit/.test(src)   true of a file that merely IMPORTS it — deleting the element
+//                                left the check green
+//   /CREDIT_LINE/                first occurrence was the import at the top, above everything
+//   /closed_at/                  banned as a word when the rule was about the WRITE; an orderBy
+//                                tripped it
+//   /reason === 'mot'/           matched the comment explaining that the gate had been removed
+//   /PACE_MS/                    true of `import { PACE_MS }` whether or not anything waited
+//
+// The written discipline is correct and has never once fired at the moment somebody was writing
+// the scan. This is the mechanical version, and it fires where the prose does not.
+//
+// ── DELIBERATELY NARROW ────────────────────────────────────────────────────────────────────────
+// Only a regex that is NOTHING BUT an identifier, tested against a variable holding FILE SOURCE.
+// Matching a word in rendered OUTPUT is legitimate and common — `/Coolant/.test(innerText)` is
+// exactly right — so the haystack is what decides, not the pattern. Nineteen candidates become
+// four when the haystack has to be a readFileSync.
+//
+// A `// @scan-ok: <why>` on the line above waives it, because some source scans genuinely are
+// searching prose. The waiver costs a sentence, which is the point: it makes the author say which
+// kind they meant.
+//
+// ── WHAT THIS DOES NOT CATCH — READ THIS BEFORE YOU TRUST IT ───────────────────────────────────
+// Rule F catches ONE SHAPE of a much larger failure: the bare identifier. It is not a general
+// defence against a scan matching the wrong thing, and finding it green is NOT evidence that a
+// new scan is anchored.
+//
+// Of the nine collisions that motivated it, Rule F would have caught four. It would have sailed
+// straight past:
+//
+//   /reason === 'mot'/     matched the COMMENT explaining that this very gate had been removed.
+//                          Not a bare identifier, so Rule F says nothing.
+//   /closed_at/            banned as a word when the rule was about the WRITE; an orderBy tripped
+//                          it. The haystack was right, the CLAIM was the wrong shape.
+//   a term that appears    in the fixture, the explanation, or twice in the patched file — Rule F
+//                          counts nothing, so a scan matching its own setup still passes.
+//
+// The only thing that reliably catches those is red-proving: break the behaviour the assertion
+// NAMES and watch the assertion go red. Rule F is a floor under the cheapest mistake. It is not
+// a substitute, and a slice that skips the red-proof because Rule F is green has swapped a
+// discipline for a lint.
+const SOURCE_VAR = /(?:const|let)\s+(\w+)\s*=\s*(?:await\s+)?(?:prose\()?\s*(?:rf|readFileSync)\(/g;
+const ID_ONLY = /^\/(?:\\b)?(?:[A-Z][A-Za-z0-9]*|[A-Z][A-Z0-9_]{3,})(?:\\b)?\/[gimsuy]*$/;
+const TEST_CALL = /(\/(?:\\.|\[[^\]]*\]|[^/\n\\])+\/[gimsuy]*)\s*\.test\(\s*(\w+)/g;
+const unanchored = [];
+for (const f of gates) {
+  const src = read(f);
+  const sourceVars = new Set([...src.matchAll(SOURCE_VAR)].map((m) => m[1]));
+  if (!sourceVars.size) continue;
+  const lines = src.split('\n');
+  for (const m of src.matchAll(TEST_CALL)) {
+    if (!sourceVars.has(m[2]) || !ID_ONLY.test(m[1])) continue;
+    const lineNo = src.slice(0, m.index).split('\n').length;
+    if (/@scan-ok:/.test(lines[lineNo - 2] ?? '')) continue;
+    unanchored.push(`${f}:${lineNo}  ${m[1]}.test(${m[2]})`);
+  }
+}
+check('F. no gate asserts a bare identifier against file source', unanchored.length === 0,
+  unanchored.length
+    ? `\n    ${unanchored.join('\n    ')}\n    Anchor it: <Component, {CONSTANT}, an import line, a call — or waive with // @scan-ok: <why>`
+    : 'anchored to a render, a write, or waived with a reason');
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

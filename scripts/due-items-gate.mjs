@@ -133,6 +133,7 @@ check('the panel shows the DVSA MOT expiry read-only', /data-testid="due-items-m
 check('  …labelled as DVSA-sourced, so there is no reason to retype it',
   /dueItems\.motSource/.test(ui2) && /from DVSA, no need to record it/.test(readFileSync('public/locales/en-GB/jobcard.json', 'utf8')));
 check('the description field is still freeform — blocking the string would be theatre',
+  // @scan-ok: searching PROSE on purpose — the claim is that the placeholder does not mention an MOT
   /maxLength=\{500\}/.test(ui2) && !/MOT/i.test(ui2.split('data-testid="due-item-desc"')[0].split('placeholder')[1] ?? ''),
   'the fix is removing the motive, not policing the input');
 

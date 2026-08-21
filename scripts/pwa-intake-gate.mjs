@@ -109,6 +109,7 @@ check('all three numbers are required together', /ok\(v, 0\.1, 30\) && ok\(sc, 0
 check('the rating is both-or-neither on the phone too',
   /ratedCca\.trim\(\) === '' && std === ''/.test(pb));
 check('numeric keypads, not the alphabet', /inputMode="decimal"/.test(pb) && (pb.match(/inputMode="numeric"/g) || []).length >= 3);
+// @scan-ok: a NEGATIVE: an unused import would fail this, never pass it wrongly
 check('no chips on a voltage', !/CHIPS/.test(pb) && /cannot be chipped/.test(prose(pb)),
   'chips would round away the precision that makes the reading evidence');
 check('touch targets stay at 48px', (pb.match(/min-h-\[48px\]/g) || []).length >= 3);
