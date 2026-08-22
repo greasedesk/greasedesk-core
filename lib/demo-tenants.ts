@@ -123,22 +123,23 @@ export function refuseRefresh(
  * self-consistent.
  */
 export function refuseDemoMaintenance(
-  groupId: string,
+  /** The ref the caller named. Keyed on ref for the same reason refuseRefresh is — see the field. */
+  ref: string,
   group: { ref: string | null; is_internal: boolean | null; is_demo: boolean } | null,
 ): RefreshRefusal | null {
-  if (!isListedDemoTenant(groupId)) {
+  if (!isListedDemoTenant(ref)) {
     return {
       code: 'not_listed',
-      message: `${groupId} is a demo tenant but is not declared in lib/demo-tenants::DEMO_TENANTS. `
+      message: `${ref} is a demo tenant but is not declared in lib/demo-tenants::DEMO_TENANTS. `
         + `Maintenance scripts write only to declared demos — which excludes the frozen reference demo, `
         + `deliberately absent from that list.`,
     };
   }
-  if (!group) return { code: 'not_found', message: `${groupId} is listed as a demo tenant but does not exist.` };
+  if (!group) return { code: 'not_found', message: `${ref} is listed as a demo tenant but does not exist.` };
   if (group.is_internal !== true) {
     return {
       code: 'not_internal',
-      message: `${group.ref ?? groupId} is listed but is NOT is_internal. Something has changed since it `
+      message: `${group.ref ?? ref} is listed but is NOT is_internal. Something has changed since it `
         + `was listed — check the tenant before the list.`,
     };
   }

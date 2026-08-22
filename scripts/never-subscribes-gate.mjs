@@ -34,8 +34,15 @@ check('undefined columns are NOT', neverSubscribes({}) === false);
 
 // ── 2. ON THE TENANT THAT BROKE ──────────────────────────────────────────────────────────────────
 console.log('\n— the sales demo, which has no GroupBilling row and never will —');
-const G = 'f3542807-2729-4bc3-8158-9bf7b9d0b353';
-const g = await prisma.group.findUnique({ where: { id: G }, select: { ref: true, is_demo: true, is_internal: true } });
+// BY REF, NEVER A PINNED ID. This held Kingsford's group id, and a refresh REPLACES the tenant
+// rather than emptying it — so the id changed the moment the demo was regenerated and every query
+// below resolved to null, crashing the gate three checks in. The ref is what a refresh preserves;
+// it is the same correction DEMO_TENANTS took, found here by the gate rather than by the grep that
+// went looking for stale seeds and did not think to look for stale ids.
+const DEMO_REF = 'GB-GD2369';
+const g = await prisma.group.findFirst({ where: { ref: DEMO_REF }, select: { id: true, ref: true, is_demo: true, is_internal: true } });
+if (!g) { console.log(`✗ ${DEMO_REF} not found — the sales demo is missing, not merely renumbered`); process.exit(1); }
+const G = g.id;
 const billing = await prisma.groupBilling.findUnique({ where: { group_id: G }, select: { subscription_status: true } });
 check(`${g?.ref} is is_demo=false, is_internal=true`, g?.is_demo === false && g?.is_internal === true);
 check('and genuinely has NO GroupBilling row', billing === null,
@@ -93,11 +100,11 @@ if (real) {
 // ── 7. MAINTENANCE TARGETING: THE FROZEN REFERENCE IS EXCLUDED BY THE LIST ──────────────────────
 console.log('\n— a maintenance script writes only to a declared, still-internal demo —');
 const frozen = await prisma.group.findFirst({ where: { ref: 'GB-GD2236' }, select: { id: true, ref: true, is_internal: true, is_demo: true } });
-check('the frozen reference demo is REFUSED', refuseDemoMaintenance(frozen.id, frozen)?.code === 'not_listed',
+check('the frozen reference demo is REFUSED', refuseDemoMaintenance(frozen.ref, frozen)?.code === 'not_listed',
   'not by an id check — it is simply absent from DEMO_TENANTS, so "listed" already excludes it');
-check('the declared sales demo is ALLOWED', refuseDemoMaintenance(G, { ref: g.ref, is_internal: true, is_demo: false }) === null);
+check('the declared sales demo is ALLOWED', refuseDemoMaintenance(g.ref, { ref: g.ref, is_internal: true, is_demo: false }) === null);
 check('a declared demo that stopped being internal is REFUSED',
-  refuseDemoMaintenance(G, { ref: g.ref, is_internal: false, is_demo: false })?.code === 'not_internal',
+  refuseDemoMaintenance(g.ref, { ref: g.ref, is_internal: false, is_demo: false })?.code === 'not_internal',
   'the list is a claim; is_internal is the fact, checked at the moment of use');
 
 // ── 8. THE LEDGER THE BACKFILL WROTE ───────────────────────────────────────────────────────────

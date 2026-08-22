@@ -66,7 +66,8 @@ try {
   if (!g) throw new Error(`no tenant with ref ${REF}`);
   if (g.is_demo || g.is_internal) {
     // Both conditions checked against the database at the moment of use, via the shared predicate.
-    const refusal = refuseDemoMaintenance(g.id, g);
+    // BY REF, not id: a refresh replaces the tenant and the id changes with it (see DEMO_TENANTS).
+    const refusal = refuseDemoMaintenance(g.ref, g);
     if (refusal) throw new Error(`${REF} (${refusal.code}): ${refusal.message}`);
   }
 
