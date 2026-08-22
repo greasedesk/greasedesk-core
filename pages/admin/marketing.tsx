@@ -378,7 +378,7 @@ export default function MarketingPage({ board }: PageProps) {
   // a car moves to the history and picking a visit moves to the detail, with Back walking out
   // again. Without this the other two panes were unreachable on a phone: their Expand controls
   // live in their own headers, and those headers were hidden.
-  const isWide = () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+  const isWide = () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches;
   const openCar = (id: string) => go({ vehicle: id, card: undefined, pane: isWide() ? undefined : 'history' });
   const closeCar = () => go({ vehicle: undefined, card: undefined, pane: undefined });
   const pickCard = (id: string) => go({ card: id, pane: isWide() ? pane ?? undefined : 'detail' });
@@ -392,25 +392,33 @@ export default function MarketingPage({ board }: PageProps) {
   // At phone width three panes cannot fit, so the layout is one pane with a way back — which is
   // the same thing "expanded" means on a desktop. `pane` carries which one; the ONLY difference is
   // what happens when it is absent, and that is a media query on the default rather than a second
-  // implementation. `lg:` shows all three; below it the classes collapse to whichever is current.
+  // implementation. `xl:` shows all three; below it the classes collapse to whichever is current.
   const shown = pane ?? 'all';
   // WIDTHS ONLY WHEN THREE ARE SHOWING. Expanded, a pane is the whole row and its own width would
-  // fight that — hence `lg:flex-1` and no basis. The lead list is the narrow one: it is a column of
+  // fight that — hence `xl:flex-1` and no basis. The lead list is the narrow one: it is a column of
   // registrations being worked down, not the thing being read.
+  //
+  // ── THE GATE IS xl, AND lg WAS MEASURABLY TOO EARLY ──────────────────────────────────────────
+  // 20rem + 22rem = 672px that cannot yield, because both outer panes are `shrink-0`. At a 1024
+  // viewport the row has 704px to give (1024 less the 256px rail and 64px of page padding), so
+  // after 672 and two 12px gaps the middle pane — the only `flex-1` — was left EIGHT PIXELS wide.
+  // Measured, not reasoned: 8px at 1024, 84px at 1100, 264px at 1280. Three panes rendered and the
+  // one being read was a sliver with a border on it. At xl the same arithmetic gives history 264px
+  // and it grows from there; below it, one pane at a time and the tap-through carries the user.
   const WIDTH: Record<string, string> = {
-    list: 'lg:w-[20rem] lg:shrink-0',
-    history: 'lg:flex-1',
-    detail: 'lg:w-[22rem] lg:shrink-0',
+    list: 'xl:w-[20rem] xl:shrink-0',
+    history: 'xl:flex-1',
+    detail: 'xl:w-[22rem] xl:shrink-0',
   };
   // ── THE ONE DIFFERENCE BETWEEN EXPANDED AND NARROW ───────────────────────────────────────────
   // Same mechanism, same state, one divergence: what `pane` being ABSENT means. Wide, it means all
   // three. Narrow, three cannot fit, so it means the leftmost — the list — and "expand" is how you
-  // reach the others. Getting this wrong hid all three below lg, because `hidden lg:flex` is
+  // reach the others. Getting this wrong hid all three below xl, because `hidden xl:flex` is
   // literally "show nothing until the viewport is wide".
   const paneClass = (mine: string, base: string) =>
     shown === mine ? `flex ${base} flex-1`
       : shown === 'all'
-        ? `${mine === 'list' ? 'flex' : 'hidden'} lg:flex ${base} ${WIDTH[mine]}`
+        ? `${mine === 'list' ? 'flex' : 'hidden'} xl:flex ${base} ${WIDTH[mine]}`
         : 'hidden';
 
   // THE BOARD ITSELF, captured so it can be rendered either as the whole page (no car open) or as
@@ -507,13 +515,13 @@ export default function MarketingPage({ board }: PageProps) {
 
   const backToThree = (
     <button type="button" onClick={unexpand} data-testid="pane-back"
-      className="text-xs underline text-accent lg:inline hidden">Back to three panes</button>
+      className="text-xs underline text-accent xl:inline hidden">Back to three panes</button>
   );
   // On narrow, "back" from an expanded pane returns to the list — which is what `pane` absent means
   // there. From the list itself it closes the car, because there is nowhere further left to go.
   const backToList = (
     <button type="button" onClick={() => (pane ? unexpand() : closeCar())} data-testid="pane-back-narrow"
-      className="text-xs underline text-accent lg:hidden">← Back</button>
+      className="text-xs underline text-accent xl:hidden">← Back</button>
   );
   const Pane = ({ id, title, children }: { id: string; title: string; children: React.ReactNode }) => (
     <section className={`${paneClass(id, 'flex-col min-w-0 min-h-0')} border border-line rounded-xl bg-content`}
@@ -521,11 +529,11 @@ export default function MarketingPage({ board }: PageProps) {
       <div className="flex items-center gap-2 px-3 py-2 border-b border-line shrink-0">
         <h2 className="text-xs font-semibold text-ink flex-1 truncate">{title}</h2>
         {shown === id ? (<>{backToThree}{backToList}</>) : (
-          // EXPAND IS A WIDE-ONLY IDEA. Below lg a pane is already the full width, so the control
+          // EXPAND IS A WIDE-ONLY IDEA. Below xl a pane is already the full width, so the control
           // would promise something it cannot deliver; the way between panes there is tapping
           // through, and the way out is Close in the header above.
           <button type="button" onClick={() => expand(id)} data-testid={`pane-expand-${id}`}
-            className="text-xs underline text-muted hover:text-ink hidden lg:inline">Expand</button>
+            className="text-xs underline text-muted hover:text-ink hidden xl:inline">Expand</button>
         )}
       </div>
       {/* THE ONLY SCROLLING BOX. The shell gives this page a bounded height (AdminLayout's

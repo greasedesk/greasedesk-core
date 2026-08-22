@@ -76,7 +76,7 @@ const TIERS = {
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',
     'observations-gate', 'oil-level-gate', 'quote-invoice-sms-gate', 'service-schedule-gate',
-    'tyre-form-memory-gate', 'phone-capture-timing',
+    'tyre-form-memory-gate', 'phone-capture-timing', 'marketing-call-view-gate',
   ],
 };
 

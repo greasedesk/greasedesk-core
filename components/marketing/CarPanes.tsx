@@ -4,10 +4,21 @@
  * findings, and one card's detail.
  *
  * ── WHAT IS DELIBERATELY NOT HERE ───────────────────────────────────────────────────────────────
- * Declines and values. No finding on any tenant has ever been declined — all 88 are `not_raised` —
- * and DueItemLine, the join that would give a finding a price, has never had a row. A panel built
- * for either would be built against a column with one value in it. What IS shown is what was
- * raised and when, and that nobody has answered: the honest answer to "why am I ringing you".
+ * Declines and values. No finding on any tenant has ever been declined — all 88 were `not_raised`
+ * when this was last counted, on 2026-08-22 — and DueItemLine, the join that would give a finding a
+ * price, has never had a row. A panel built for either would be built against a column with one
+ * value in it. What IS shown is what was raised, WHEN IT IS DUE, what the workshop measured, and
+ * that nobody has answered: the honest answer to "why am I ringing you".
+ *
+ * Severity is absent because there is no severity: VehicleDueItem carries no priority column and no
+ * measured value, and inventing one here would be a second answer to a question the pipeline
+ * already answers by ranking the board. Brake pad depth has no writer, so a pads finding is prose.
+ *
+ * TESTIDS ARE `car-*`, NOT `pane-*`. The <section> that frames each of these in marketing.tsx is
+ * already `data-testid="pane-history"` and `pane-detail`, and naming the content the same made two
+ * elements answer to one id: Playwright's strict mode then throws where a gate expects a boolean,
+ * and a swallowed throw reads as "the pane is hidden". That cost a wrong diagnosis of a layout that
+ * was in fact correct — the frame is the pane, this is what is inside it.
  */
 import React from 'react';
 
@@ -21,11 +32,22 @@ export type CarCustomer = {
 };
 export type CarFinding = {
   id: string; description: string; raisedOn: string;
-  response: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call'; answeredOn: string | null;
+  response: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call';
+  /** The timing sentence, already through `showsDueLabel` server-side. EMPTY when the description
+   *  carries its own timing — the same convention the other three dueLabel callers use. */
+  timing: string;
+};
+export type CarReadings = {
+  tyres: { lines: string[]; measuredOn: string | null; spansVisits: boolean };
+  battery: { line: string; measuredOn: string } | null;
 };
 export type CarDetail = {
   vehicle: { id: string; registration: string; desc: string | null };
   history: CarHistoryCard[]; customer: CarCustomer | null; findings: CarFinding[];
+  /** The newest odometer on record, or null. Server-side input to the timing sentence; carried so
+   *  the measurements block can say what the car was on. */
+  atMiles: number | null;
+  readings: CarReadings;
 };
 
 const money = (p: number, locale: string) =>
@@ -40,7 +62,7 @@ export function CarHistoryPane({ detail, selectedCard, onPick, locale }: {
   const c = detail.customer;
   const unanswered = detail.findings.filter((f) => f.response === 'not_raised');
   return (
-    <div className="space-y-4" data-testid="pane-history">
+    <div className="space-y-4" data-testid="car-history">
       {c && (
         // INC. VAT, SAID OUT LOUD. These are summed from the frozen invoice lines, which are gross
         // — the same figure the customer paid. Revenue reporting is net, and an unlabelled total
@@ -74,12 +96,47 @@ export function CarHistoryPane({ detail, selectedCard, onPick, locale }: {
           <ul className="space-y-1">
             {unanswered.map((f) => (
               <li key={f.id} className="text-xs text-muted flex gap-2" data-testid={`finding-${f.id}`}>
-                <span className="text-ink flex-1">{f.description}</span>
+                <span className="flex-1">
+                  <span className="text-ink">{f.description}</span>
+                  {/* SUPPRESSED, NOT ABSENT. An empty timing means the description already said
+                      when — appending a second answer is what put "…Replace. due at the next
+                      service" on a real invoice. The server decides it; this only renders it. */}
+                  {f.timing && <span className="text-muted" data-testid={`finding-timing-${f.id}`}> — {f.timing}</span>}
+                </span>
                 <span className="tabular-nums whitespace-nowrap">raised {day(f.raisedOn, locale)}</span>
               </li>
             ))}
           </ul>
           <p className="text-[11px] text-muted mt-1.5">Record what they say on the job card.</p>
+        </div>
+      )}
+
+      {(detail.readings.tyres.lines.length > 0 || detail.readings.battery) && (
+        // WHAT WAS MEASURED, IN THE DOCUMENT'S OWN WORDS. Every string here comes from the printed
+        // -advisory chokepoints, so the caller quotes the customer's invoice rather than a second
+        // rendering of the same numbers. On 2026-08-22 TMBS held twenty tread readings and seven
+        // battery tests, and not one of them reached the person doing the ringing.
+        <div className="rounded-xl border border-line bg-surface p-3" data-testid="readings">
+          <p className="text-sm font-semibold text-ink mb-1">What was measured</p>
+          {detail.readings.tyres.lines.length > 0 && (
+            <div data-testid="readings-tyres">
+              <ul className="space-y-0.5">
+                {detail.readings.tyres.lines.map((l) => (
+                  <li key={l} className="text-xs text-ink tabular-nums">{l}</li>
+                ))}
+              </ul>
+              <p className="text-[11px] text-muted mt-0.5">
+                {detail.readings.tyres.spansVisits ? 'Latest per corner, to ' : 'Measured '}
+                {detail.readings.tyres.measuredOn ? day(detail.readings.tyres.measuredOn, locale) : '—'}
+              </p>
+            </div>
+          )}
+          {detail.readings.battery && (
+            <div className={detail.readings.tyres.lines.length > 0 ? 'mt-2' : ''} data-testid="readings-battery">
+              <p className="text-xs text-ink tabular-nums">{detail.readings.battery.line}</p>
+              <p className="text-[11px] text-muted mt-0.5">Measured {day(detail.readings.battery.measuredOn, locale)}</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -118,10 +175,10 @@ export function CarHistoryPane({ detail, selectedCard, onPick, locale }: {
 /** RIGHT — one card, in full. */
 export function CardDetailPane({ card, locale }: { card: CarHistoryCard | null; locale: string }) {
   if (!card) {
-    return <p className="text-sm text-muted italic" data-testid="pane-detail-empty">Pick a visit to see what was done.</p>;
+    return <p className="text-sm text-muted italic" data-testid="car-detail-empty">Pick a visit to see what was done.</p>;
   }
   return (
-    <div className="space-y-3" data-testid="pane-detail">
+    <div className="space-y-3" data-testid="car-detail">
       <div>
         <p className="text-sm font-semibold text-ink">{day(card.date, locale)}</p>
         <p className="text-xs text-muted">
