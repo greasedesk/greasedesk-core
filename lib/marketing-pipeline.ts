@@ -67,7 +67,21 @@ export type LeadSignals = {
   /** Open findings, with what the customer said. */
   findings: Array<{ description: string; response: 'not_raised' | 'declined' | 'agreed_later' | 'wants_call'; dueWithinWindow: boolean; overdue?: boolean }>;
   /** The garage's last contact record for this car, if any. */
-  contact: { state: 'contacted' | 'booked' | 'declined' | 'snoozed'; snoozeUntil: Date | null; spent: boolean } | null;
+  /**
+   * Does the contact record STILL HOLD? True → the garage's answer is current and the car sits in
+   * Later. False → whatever they said has outlived the thing it was about, and the signals speak
+   * again. Named for the state that TRIGGERS the demotion, so the guard below reads without a
+   * negation — the previous name (`spent`) meant the opposite of the expression assigned to it,
+   * and the two `!`s cancelled into a decline that did nothing. See lib/marketing-lists.
+   */
+  contact: { state: 'contacted' | 'booked' | 'declined' | 'snoozed'; snoozeUntil: Date | null; contactStands: boolean } | null;
+  /**
+   * Days to the nearest SERVICE trigger, signed (negative = already passed). NULL when the car has
+   * no dated service hit — including a trigger-band item like "due at the next service", which is
+   * a real reason with no clock to read. Supplied by the board because the dates live on the due
+   * items; motDays above is the same fact for the MOT.
+   */
+  serviceDueDays?: number | null;
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -152,24 +166,74 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
  * expired MOT climbs straight back to the top and the top becomes a graveyard. It pushes down and
  * never up: a car cannot be promoted by having been contacted.
  */
-export function leadStack(s: LeadSignals, now: Date = new Date()): { stack: Stack; reasons: LeadReason[] } {
+/**
+ * ── URGENCY: A NUMBER THAT EXISTS FOR EVERY ROW ────────────────────────────────────────────────
+ * LOWER RINGS SOONER. Ascending is the useful direction, so the sharpest lead is first.
+ *
+ * Two bands, and the boundary is the point:
+ *
+ *   0            A MEASURED FAULT — a failed battery, an illegal tyre, a finding nobody has put
+ *                to the customer. The car has been in and somebody looked at it. That outranks
+ *                every clock, because it is knowledge rather than a calendar.
+ *   1 + |days|   A CLOCK, unsigned. A car expiring tomorrow and one that expired yesterday sit
+ *                next to each other, which is the honest ranking: both are AT the boundary. A car
+ *                144 days expired is a cold lead and sinks accordingly — distance from now in
+ *                either direction is distance from the moment worth ringing about.
+ *   99_999       A dated reason with NO clock ("due at the next service"). Sorts last among dated
+ *                rather than first: we do not know when, and not knowing must not jump the queue.
+ *
+ * Ties are real and left alone — every measured fault is 0, and stable sort keeps them in the
+ * order they were emitted. Ranking a battery against a tyre would be inventing a clinical
+ * judgement this file has no basis for.
+ */
+export const URGENCY_MEASURED = 0;
+export const URGENCY_NO_CLOCK = 99_999;
+const DATED_KINDS = new Set<LeadReasonKind>(['mot_expired', 'mot_due', 'service_due', 'service_overdue']);
+
+export function urgencyOf(reasons: LeadReason[], s: LeadSignals): number {
+  const dated = reasons.filter((r) => DATED_KINDS.has(r.kind));
+  if (!dated.length) return URGENCY_MEASURED;
+  const clocks: number[] = [];
+  if (dated.some((r) => r.kind === 'mot_expired' || r.kind === 'mot_due') && s.motDays != null) clocks.push(s.motDays);
+  if (dated.some((r) => r.kind === 'service_due' || r.kind === 'service_overdue') && s.serviceDueDays != null) clocks.push(s.serviceDueDays);
+  if (!clocks.length) return URGENCY_NO_CLOCK;
+  // The NEAREST clock decides: a car with two triggers is as urgent as its soonest one.
+  return 1 + Math.round(Math.min(...clocks.map((d) => Math.abs(d))));
+}
+
+export function leadStack(s: LeadSignals, now: Date = new Date()): { stack: Stack; reasons: LeadReason[]; urgency: number } {
   const reasons = leadReasons(s, now);
 
-  // A LIVE SNOOZE OR DECLINE OUTRANKS EVERYTHING. `spent` is lib/marketing-lists::isUnactioned's
-  // job — once the trigger it was about has passed, the record stops applying and the signal
-  // speaks again. That is the clock coming round, and it needs nothing scheduled.
+  // A LIVE SNOOZE OR DECLINE OUTRANKS EVERYTHING, while the record still holds. Whether it does is
+  // lib/marketing-lists::contactStands' job — once the trigger it was about has passed, the record
+  // stops applying and the signal speaks again. That is the clock coming round, and it needs
+  // nothing scheduled.
   const c = s.contact;
-  if (c && !c.spent) {
-    if (c.state === 'booked') return { stack: 'later', reasons: [{ kind: 'snoozed', stack: 'later', text: 'Booked in' }, ...reasons] };
-    if (c.state === 'declined') return { stack: 'later', reasons: [{ kind: 'declined', stack: 'later', text: 'Contacted — not this time' }, ...reasons] };
+  // ── A DECLINE IS TERMINAL; A SNOOZE EXPIRES ──────────────────────────────────────────────────
+  // "No" and "not right now" were treated as one thing, spending after the same window, so a
+  // customer who declined was rung again a month later by a board that had forgotten. They are
+  // different sentences: "ask me later" HAS a later, and "no" does not.
+  //
+  // So `contactStands` is not consulted for a decline: no clock, no dueDate, no age. That also
+  // means the `!current.dueDate` branch inside isUnactioned no longer governs declines at all —
+  // it still governs snoozes and bookings, and is deliberately left in place.
+  //
+  // The way back is the garage's, not the clock's: record a different outcome against the car.
+  // Nothing here sweeps or expires it, which is the point.
+  if (c && c.state === 'declined') {
+    return { stack: 'later', reasons: [{ kind: 'declined', stack: 'later', text: 'Contacted — not this time' }, ...reasons], urgency: urgencyOf(reasons, s) };
+  }
+  if (c && c.contactStands) {
+    if (c.state === 'booked') return { stack: 'later', reasons: [{ kind: 'snoozed', stack: 'later', text: 'Booked in' }, ...reasons], urgency: urgencyOf(reasons, s) };
     if (c.state === 'snoozed' && c.snoozeUntil && c.snoozeUntil > now) {
-      return { stack: 'later', reasons: [{ kind: 'snoozed', stack: 'later', text: `Snoozed until ${c.snoozeUntil.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}` }, ...reasons] };
+      return { stack: 'later', reasons: [{ kind: 'snoozed', stack: 'later', text: `Snoozed until ${c.snoozeUntil.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}` }, ...reasons], urgency: urgencyOf(reasons, s) };
     }
   }
 
-  if (reasons.some((r) => r.stack === 'hot')) return { stack: 'hot', reasons };
-  if (reasons.some((r) => r.stack === 'warm')) return { stack: 'warm', reasons };
-  return { stack: 'later', reasons };
+  const urgency = urgencyOf(reasons, s);
+  if (reasons.some((r) => r.stack === 'hot')) return { stack: 'hot', reasons, urgency };
+  if (reasons.some((r) => r.stack === 'warm')) return { stack: 'warm', reasons, urgency };
+  return { stack: 'later', reasons, urgency };
 }
 
 /**

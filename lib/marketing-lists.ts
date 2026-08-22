@@ -238,6 +238,24 @@ export function spentAt(record: Pick<ContactRecord, 'forDate' | 'createdAt'>, wi
  * the new expiry is a year out and the car is not on the list at all — so one comparison covers
  * both, and it self-corrects rather than needing a sweep.
  */
+/**
+ * ── THE SAME FACT, SAID THE OTHER WAY, ONCE ────────────────────────────────────────────────────
+ * `isUnactioned` answers "does this car still need somebody to do something?". Its opposite —
+ * "does the contact record still hold?" — is what decides whether a decline or a snooze pushes a
+ * car down the board, and callers were computing it inline with a `!`.
+ *
+ * One of them got the polarity backwards and it was invisible for exactly the reason inline
+ * negations are: `!isUnactioned(...)` assigned to a field called `spent` reads fluently and means
+ * the opposite of what it says. A car declined today stayed Hot, a live snooze held nothing down,
+ * and a decline started applying a month after it was recorded.
+ *
+ * So the negation lives HERE, once, in a function whose name is the answer. A caller that wants
+ * this fact asks for it by name and cannot get the sign wrong.
+ */
+export function contactStands(current: { dueDate: Date | null }, record: ContactRecord | null, now: Date): boolean {
+  return !isUnactioned(current, record, now);
+}
+
 export function isUnactioned(current: { dueDate: Date | null }, record: ContactRecord | null, now: Date): boolean {
   if (!record) return true;
   if (record.snoozeUntil && record.snoozeUntil > now) return false;

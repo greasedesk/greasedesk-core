@@ -31,7 +31,7 @@
  * and a phone call is not an electronic message — with the phone number visible and the refused
  * channels named. See lib/marketing-lists for the cost of that rule, which is accepted knowingly.
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
@@ -137,7 +137,10 @@ function Row({ row, onDone }: { row: BoardRow; onDone: () => void }) {
   }
   const act = 'text-xs underline text-muted disabled:opacity-50';
   return (
-    <li className="py-2.5 border-b border-line last:border-0" data-testid={`marketing-row-${row.vehicleId}`}>
+    // data-reg so ORDER is assertable by a stable identifier: a gate reading uuids has to map
+    // them back, and the sequence is the thing under test.
+    <li className="py-2.5 border-b border-line last:border-0" data-testid={`marketing-row-${row.vehicleId}`}
+      data-reg={row.registration} data-urgency={row.urgency}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-sm font-semibold text-ink tabular-nums">{row.registration}</span>
         {row.vehicleDesc && <span className="text-xs text-muted">{row.vehicleDesc}</span>}
@@ -283,6 +286,14 @@ function StackRows({ rows, empty, onDone }: { rows: BoardRow[]; empty: string; o
   return <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} onDone={onDone} />)}</ul>;
 }
 
+// Three questions a garage asks of a call list: which car, whose car, how soon.
+const SORTS = [
+  { key: 'registration' as const, label: 'Reg', width: 'w-28' },
+  { key: 'customer' as const, label: 'Customer', width: 'flex-1' },
+  { key: 'urgency' as const, label: 'Urgency', width: 'w-24' },
+];
+type SortKey = typeof SORTS[number]['key'];
+
 const STACKS = [
   { key: 'hot' as const, label: 'Hot', meaning: 'Money available this week. They will say yes.',
     empty: 'Nothing hot right now.' },
@@ -299,9 +310,30 @@ export default function MarketingPage({ board }: PageProps) {
   // should not be thrown back to Hot every time they mark a car — which is what component state
   // would do. It is also the state a gate can drive, rather than a strip it has to click.
   const active = STACKS.find((s) => s.key === router.query.stack)?.key ?? 'hot';
-  const rows = board[active];
+  // ── THE SORT LIVES IN THE URL TOO, BESIDE THE TAB ────────────────────────────────────────────
+  // Same reasoning, same place: recording a contact reloads, and a garage working the list by
+  // customer name should not be thrown back to urgency order every time they mark a car. Nothing
+  // is stored — the value is recomputed each build, so there is nothing to go stale.
+  const sortKey = (SORTS.find((c) => c.key === router.query.sort)?.key ?? 'urgency') as SortKey;
+  const desc = router.query.dir === 'desc';
+  const rows = useMemo(() => {
+    const dir = desc ? -1 : 1;
+    // REGISTRATION BREAKS EVERY TIE. Urgency ties are common — three cars at 1, three at 12 — and
+    // the underlying row order is the vehicles query, which has no ORDER BY. Without this the list
+    // reshuffles between page loads while claiming to be sorted, which is worse than unsorted.
+    return [...board[active]].sort((a, b) => {
+      const by = sortKey === 'registration' ? a.registration.localeCompare(b.registration)
+        : sortKey === 'customer' ? (a.customerName ?? '').localeCompare(b.customerName ?? '')
+        : a.urgency - b.urgency;
+      return by !== 0 ? by * dir : a.registration.localeCompare(b.registration);
+    });
+  }, [board, active, sortKey, desc]);
   const select = (k: string) =>
     router.replace({ pathname: router.pathname, query: { ...router.query, stack: k } }, undefined, { shallow: true });
+  // Click a column to sort by it; click the one already active to reverse it.
+  const sortBy = (k: SortKey) =>
+    router.replace({ pathname: router.pathname,
+      query: { ...router.query, sort: k, dir: sortKey === k && !desc ? 'desc' : 'asc' } }, undefined, { shallow: true });
   const reload = () => window.location.reload();
 
   return (
@@ -309,8 +341,8 @@ export default function MarketingPage({ board }: PageProps) {
       <Head><title>Marketing — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Marketing</h1>
       <p className="text-sm text-muted mb-4">
-        Who to ring, in the order worth ringing them. A car moves down when the customer answers
-        and comes back up when its clock comes round.
+        Who to ring. A car drops to Later when the customer answers — a snooze comes back when its
+        clock comes round; a no stays.
       </p>
 
       {/* ── A COUNT, NOT A VALUE ────────────────────────────────────────────────────────────────
@@ -350,6 +382,25 @@ export default function MarketingPage({ board }: PageProps) {
 
       <section data-testid={`stack-${active}`}>
         <p className="text-xs text-muted mb-2">{STACKS.find((s) => s.key === active)!.meaning}</p>
+        {/* ── THE HEADER IS THE SORT CONTROL ───────────────────────────────────────────────────
+            Three columns only, because these are the three questions a garage asks of a call
+            list: which car, whose car, and how soon. The arrow shows the direction on the active
+            column and nothing on the others, so the current order is readable without clicking. */}
+        {rows.length > 0 && (
+          <div className="flex items-center gap-2 px-1 pb-2 mb-1 border-b border-line" data-testid="sort-strip">
+            {SORTS.map((c) => (
+              <button key={c.key} type="button" onClick={() => sortBy(c.key)}
+                data-testid={`sort-${c.key}`} aria-pressed={sortKey === c.key}
+                className={`text-xs font-medium px-2 py-1 rounded-lg ${c.width} text-left ${
+                  sortKey === c.key ? 'text-ink' : 'text-muted hover:text-ink'}`}>
+                {c.label}
+                <span className="ml-1 tabular-nums opacity-70" data-testid={`sort-dir-${c.key}`}>
+                  {sortKey === c.key ? (desc ? '↓' : '↑') : ''}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         <StackRows rows={rows} empty={STACKS.find((s) => s.key === active)!.empty} onDone={reload} />
       </section>
     </>

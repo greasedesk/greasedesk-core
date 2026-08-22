@@ -13,7 +13,7 @@
  * gate. When value arrives it arrives shaped by financeVisibility server-side, as the diary does.
  */
 import { prisma } from '@/lib/db';
-import { motBand, contactRoute, noContactLabel, isUnactioned, serviceDue, WINDOW_DAYS, type ContactRecord } from '@/lib/marketing-lists';
+import { motBand, contactRoute, noContactLabel, contactStands, serviceDue, WINDOW_DAYS, type ContactRecord } from '@/lib/marketing-lists';
 import { batteryState, type BatteryState } from '@/lib/battery';
 import { leadStack, unansweredPrompt, type Stack, type LeadReason } from '@/lib/marketing-pipeline';
 
@@ -36,6 +36,8 @@ export type BoardRow = {
   dueDate: string | null;
   /** Why it is where it is, strongest first. */
   reasons: LeadReason[];
+  /** Lower rings sooner; 0 is a measured fault. See lib/marketing-pipeline::urgencyOf. */
+  urgency: number;
   stack: Stack;
 };
 
@@ -202,14 +204,26 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
     const contactRec: ContactRecord | null = rec
       ? { reason: 'mot', forDate: rec.for_date, snoozeUntil: rec.snooze_until, createdAt: rec.created_at }
       : null;
-    const spent = rec ? !isUnactioned({ dueDate: v.mot_expiry }, contactRec, now) : false;
+    // WAS `!isUnactioned(...)` ASSIGNED TO `spent`, WHICH MEANT THE OPPOSITE OF ITS NAME.
+    // leadStack applied the demotion while NOT spent, so the sign cancelled the feature: a car
+    // declined today stayed Hot and only dropped to Later once the record had expired.
+    const stands = rec ? contactStands({ dueDate: v.mot_expiry }, contactRec, now) : false;
+
+    // THE NEAREST DATED SERVICE HIT, in signed days. Trigger-band hits carry no date and are
+    // excluded rather than defaulted — "due at the next service" has no clock, and inventing one
+    // would rank it as though somebody had decided a date.
+    const serviceDays = (hits as Array<{ date: Date | null }>)
+      .flatMap((h) => (h.date ? [(h.date.getTime() - now.getTime()) / 86_400_000] : []));
+    const serviceDueDays = serviceDays.length
+      ? serviceDays.reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a))
+      : null;
 
     const band = motBand(v.mot_expiry, now);
     const motDays = v.mot_expiry ? (v.mot_expiry.getTime() - now.getTime()) / 86_400_000 : null;
 
-    const { stack, reasons } = leadStack({
-      motBand: band, motDays, battery, lowestTreadTenths, findings,
-      contact: rec ? { state: rec.state as never, snoozeUntil: rec.snooze_until, spent } : null,
+    const { stack, reasons, urgency } = leadStack({
+      motBand: band, motDays, serviceDueDays, battery, lowestTreadTenths, findings,
+      contact: rec ? { state: rec.state as never, snoozeUntil: rec.snooze_until, contactStands: stands } : null,
     }, now);
 
     if (!reasons.length) continue; // nothing to ring about
@@ -226,7 +240,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       state: rec?.state ?? null, channel: rec?.channel ?? null,
       motCheckedAt: v.mot_checked_at ? v.mot_checked_at.toISOString() : null,
       dueDate: (v.mot_expiry ?? hits.find((h: { date: Date | null }) => h.date)?.date ?? null)?.toISOString().slice(0, 10) ?? null,
-      reasons, stack,
+      reasons, stack, urgency,
     });
   }
 

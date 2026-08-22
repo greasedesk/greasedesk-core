@@ -14,6 +14,7 @@ const { explainIfClientStale } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
+const { chromium } = await import('playwright-core');
 const P = await import('../lib/marketing-pipeline.ts');
 const B = await import('../lib/marketing-board.ts');
 const prisma = new PrismaClient();
@@ -26,6 +27,8 @@ const NOW = new Date('2026-08-21T10:00:00Z');
 const base = { motBand: null, motDays: null, battery: null, lowestTreadTenths: null, findings: [], contact: null };
 
 let fix = null;
+let browser = null;
+const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
@@ -101,20 +104,28 @@ try {
   // ── 3. THE MOVEMENT RULE ─────────────────────────────────────────────────────────────────────
   console.log('\n— what stops Hot becoming a graveyard —');
   const hotDeclined = P.leadStack({ ...base, motBand: 'expired', motDays: -62,
-    contact: { state: 'declined', snoozeUntil: null, spent: false } }, NOW);
+    contact: { state: 'declined', snoozeUntil: null, contactStands: true } }, NOW);
   check('a hot lead contacted and declined drops to Later', hotDeclined.stack === 'later');
   check('  …keeping the reason it was hot, so nobody loses the thread',
     hotDeclined.reasons.some((r) => r.kind === 'mot_expired'));
-  const spent = P.leadStack({ ...base, motBand: 'expired', motDays: -62,
-    contact: { state: 'declined', snoozeUntil: null, spent: true } }, NOW);
-  check('  …and comes back up when its clock comes round', spent.stack === 'hot',
-    'isUnactioned spends the record at read time — nothing scheduled, nothing to sweep');
+  // A DECLINE IS TERMINAL. It used to expire like a snooze, so a customer who said no was rung
+  // again a month later by a board that had forgotten. `contactStands` is not consulted for a
+  // decline at all — no clock, no dueDate, no coming back.
+  const lapsed = P.leadStack({ ...base, motBand: 'expired', motDays: -62,
+    contact: { state: 'declined', snoozeUntil: null, contactStands: false } }, NOW);
+  check('  …and a decline does NOT come back when its clock runs out', lapsed.stack === 'later',
+    'the customer said no; an expiring record is not new information');
+  // The SNOOZE keeps exactly the behaviour the decline is losing — that is the whole distinction.
+  const snoozeLapsed = P.leadStack({ ...base, motBand: 'expired', motDays: -62,
+    contact: { state: 'snoozed', snoozeUntil: new Date('2026-07-01'), contactStands: false } }, NOW);
+  check('  …while a lapsed SNOOZE still lets the signal speak again', snoozeLapsed.stack === 'hot',
+    '"ask me later" has a later; "no" does not');
   const snoozed = P.leadStack({ ...base, motBand: 'due', motDays: 20,
-    contact: { state: 'snoozed', snoozeUntil: new Date('2026-09-30'), spent: false } }, NOW);
+    contact: { state: 'snoozed', snoozeUntil: new Date('2026-09-30'), contactStands: true } }, NOW);
   check('a live snooze holds a car down', snoozed.stack === 'later' && /Snoozed until 30 September/.test(snoozed.reasons[0].text));
   check('being contacted can only push a car DOWN, never up',
     P.leadStack({ ...base, findings: [{ description: 'x', response: 'declined', dueWithinWindow: false }],
-      contact: { state: 'contacted', snoozeUntil: null, spent: false } }, NOW).stack === 'later',
+      contact: { state: 'contacted', snoozeUntil: null, contactStands: true } }, NOW).stack === 'later',
     'a car cannot be promoted by having been rung');
 
   // TIME PROMOTES, and nothing has to notice.
@@ -161,7 +172,7 @@ try {
     data: { group_id: ZZ, registration: 'ZZ76BRD', registration_normalized: 'ZZ76BRD', make: 'Board', model: 'Fixture',
       mot_expiry: new Date('2026-06-01T00:00:00.000Z') }, select: { id: true } });
   await prisma.vehicleOwnership.create({ data: { vehicle_id: veh.id, customer_id: cust.id, is_current: true } });
-  fix = { veh: veh.id, cust: cust.id };
+  fix = { veh: veh.id, cust: cust.id, contactVehicles: [] };
 
   const t0 = Date.now();
   const built = await B.buildBoard(ZZ, NOW);
@@ -187,17 +198,164 @@ try {
   // The clock stays as a coarse backstop, and its limits are stated rather than implied.
   check(`and the board builds quickly on the fixture tenant (${(ms / 1000).toFixed(1)}s)`, ms < 4000,
     'a weak check here by construction — ZZ is small; the structural assertion above is the real one');
+
+  // ── 7. WHAT A RECORDED CONTACT DOES TO A CAR'S PLACEMENT ─────────────────────────────────────
+  // Asserted through buildBoard against REAL MarketingContact rows, because the checks in section 3
+  // hand the flag to leadStack by hand. They prove the demotion RULE and never touch the derivation
+  // that decides which way it points — so the board could disagree with every one of them and they
+  // would all stay green. They did.
+  //
+  // The rows are written by POSTing to /api/marketing-contact, not by prisma.create: the endpoint
+  // derives for_date and snooze_until server-side, and a hand-built row would be testing a shape
+  // no user can produce.
+  console.log('\n— a recorded contact, through the endpoint, against the real board —');
+  const mk = async (reg) => {
+    const v = await prisma.vehicle.create({
+      data: { group_id: ZZ, registration: reg, registration_normalized: reg, make: 'Board', model: 'Contact',
+        mot_expiry: new Date('2026-06-01T00:00:00.000Z') }, select: { id: true } });
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: v.id, customer_id: cust.id, is_current: true } });
+    fix.contactVehicles.push(v.id);
+    return v.id;
+  };
+  // Registration order deliberately OPPOSITE to urgency order, so a sort by one cannot pass by
+  // accidentally producing the other. ZZ76AAA is the stalest MOT and sorts FIRST by reg, LAST by
+  // urgency; ZZ76ZZY is the nearest and does the reverse.
+  const mkDated = async (reg, expiry) => {
+    const v = await prisma.vehicle.create({
+      data: { group_id: ZZ, registration: reg, registration_normalized: reg, make: 'Board', model: 'Sort',
+        mot_expiry: new Date(expiry) }, select: { id: true } });
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: v.id, customer_id: cust.id, is_current: true } });
+    fix.contactVehicles.push(v.id);
+    return v.id;
+  };
+  await mkDated('ZZ76AAA', '2025-01-01T00:00:00.000Z');   // ~600 days expired → high urgency
+  await mkDated('ZZ76ZZY', '2026-08-19T00:00:00.000Z');   // expired 2 days ago → Hot, low urgency
+  // A GENUINE TIE, because the reload check above is vacuous without one: identical urgency is the
+  // only thing that exposes the unordered vehicles query underneath. Created in the order that
+  // would produce the WRONG answer if the tiebreak were dropped.
+  await mkDated('ZZ76TIB', '2026-05-05T00:00:00.000Z');
+  await mkDated('ZZ76TIA', '2026-05-05T00:00:00.000Z');
+
+  const declinedToday = await mk('ZZ76DEC');
+  const snoozedCar = await mk('ZZ76SNZ');
+  const declinedOld = await mk('ZZ76OLD');
+
+  browser = await chromium.launch({ channel: 'chrome' });
+  const contactPage = await (await browser.newContext()).newPage();
+  await contactPage.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await contactPage.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await contactPage.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([contactPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), contactPage.click('button[type="submit"]')]);
+  const record = (vehicleId, state) => contactPage.evaluate(async (b) => {
+    const r = await fetch('/api/marketing-contact', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { vehicleId, reason: 'mot_expired', state, forDate: '2026-06-01' });
+
+  const rDec = await record(declinedToday, 'declined');
+  const rSnz = await record(snoozedCar, 'snoozed');
+  const rOld = await record(declinedOld, 'declined');
+  check('the endpoint records all three', [rDec, rSnz, rOld].every((r) => r.status === 200),
+    JSON.stringify([rDec.status, rSnz.status, rOld.status]));
+  check('  …and the SERVER set the snooze, as it does for a real garage', rSnz.body.snoozeUntil != null,
+    'a snooze with no end is a hide, so the client cannot omit it — the fixture must not either');
+
+  // ONLY THE AGE IS FABRICATED. The row's shape is the endpoint's; created_at cannot be sixty days
+  // old on a row written a second ago, and the whole question for this case is what happens once a
+  // contact has outlived the thing it was about.
+  await prisma.marketingContact.updateMany({ where: { vehicle_id: declinedOld },
+    data: { created_at: new Date(NOW.getTime() - 60 * 86_400_000), for_date: new Date(NOW.getTime() - 60 * 86_400_000) } });
+
+  const after = await B.buildBoard(ZZ, NOW);
+  const whereIs = (reg) => ['hot', 'warm', 'later'].find((k) => after[k].some((r) => r.registration === reg)) ?? 'absent';
+  check('a car declined TODAY drops to Later', whereIs('ZZ76DEC') === 'later',
+    `it is in ${whereIs('ZZ76DEC')} — a garage that recorded "not this time" is looking at the car again`);
+  check('a car snoozed to a future date drops to Later', whereIs('ZZ76SNZ') === 'later',
+    `it is in ${whereIs('ZZ76SNZ')} — the snooze is not holding it down`);
+  check('a car declined 60 DAYS ago STAYS in Later', whereIs('ZZ76OLD') === 'later',
+    `it is in ${whereIs('ZZ76OLD')} — a customer who said no should not resurface because the record aged`);
+  // ── 8. URGENCY, AND THE STRIP THAT SORTS BY IT ───────────────────────────────────────────────
+  console.log('\n— a number that exists for every row —');
+  const U = (reg) => (after.hot.find((r) => r.registration === reg) ?? after.warm.find((r) => r.registration === reg))?.urgency;
+  check('every row on the board carries an urgency, with no nulls',
+    [...after.hot, ...after.warm, ...after.later].every((r) => typeof r.urgency === 'number' && Number.isFinite(r.urgency)),
+    'the value is defined for undated rows too — that was the point of adding it');
+  check('a stale MOT scores higher than a near one', (U('ZZ76AAA') ?? 0) > (U('ZZ76ZZY') ?? 0),
+    `ZZ76AAA=${U('ZZ76AAA')} ZZ76ZZY=${U('ZZ76ZZY')}`);
+  // The bands, proved on the pure function where every input is visible.
+  const measured = P.leadStack({ ...base, battery: 'replace' }, NOW);
+  const dated = P.leadStack({ ...base, motBand: 'due', motDays: 1 }, NOW);
+  check('a measured fault outranks every clock', measured.urgency === P.URGENCY_MEASURED && measured.urgency < dated.urgency,
+    `battery=${measured.urgency} vs an MOT due TOMORROW=${dated.urgency}`);
+  check('  …and expiring tomorrow ranks next to expired yesterday',
+    P.leadStack({ ...base, motBand: 'due', motDays: 1 }, NOW).urgency
+      === P.leadStack({ ...base, motBand: 'expired', motDays: -1 }, NOW).urgency,
+    'unsigned distance from now — both are AT the boundary, which is what makes them worth ringing');
+  check('  …so a car long expired sinks rather than leads',
+    P.leadStack({ ...base, motBand: 'expired', motDays: -274 }, NOW).urgency > dated.urgency,
+    'the visible consequence of the unsigned rule, asserted so it is a decision and not a surprise');
+  check('a dated reason with NO clock sorts last among dated, not first',
+    P.leadStack({ ...base, findings: [{ description: 'x', response: 'not_raised', dueWithinWindow: true, overdue: false }],
+      serviceDueDays: null }, NOW).urgency === P.URGENCY_NO_CLOCK,
+    'not knowing when must not jump the queue');
+
+  console.log('\n— the strip that sorts —');
+  await contactPage.goto(`${BASE}/admin/marketing?stack=hot`, { waitUntil: 'domcontentloaded' });
+  await contactPage.waitForSelector('[data-testid="sort-strip"]');
+  const order = () => contactPage.$$eval('li[data-reg]', (ns) => ns.map((n) => n.getAttribute('data-reg')));
+  const pos = (list, reg) => list.indexOf(reg);
+  const byUrgency = await order();
+  check('the default order is urgency, closest first', pos(byUrgency, 'ZZ76ZZY') < pos(byUrgency, 'ZZ76AAA'),
+    byUrgency.join(' '));
+  check('  …and the strip says so without being clicked',
+    (await contactPage.locator('[data-testid="sort-dir-urgency"]').innerText()).trim() === '↑');
+  await contactPage.click('[data-testid="sort-registration"]');
+  await contactPage.waitForTimeout(300);
+  const byReg = await order();
+  check('clicking Reg sorts by registration', pos(byReg, 'ZZ76AAA') < pos(byReg, 'ZZ76ZZY'), byReg.join(' '));
+  check('  …which is the OPPOSITE of urgency order, so it cannot have passed by coincidence',
+    pos(byUrgency, 'ZZ76AAA') > pos(byUrgency, 'ZZ76ZZY') && pos(byReg, 'ZZ76AAA') < pos(byReg, 'ZZ76ZZY'));
+  await contactPage.click('[data-testid="sort-registration"]');
+  await contactPage.waitForTimeout(300);
+  const reversed = await order();
+  check('clicking it again reverses', pos(reversed, 'ZZ76AAA') > pos(reversed, 'ZZ76ZZY'), reversed.join(' '));
+  check('  …and the sort rides in the URL beside the tab, not in component state',
+    /stack=hot/.test(contactPage.url()) && /sort=registration/.test(contactPage.url()) && /dir=desc/.test(contactPage.url()),
+    contactPage.url());
+  // A RELOAD MUST NOT RESHUFFLE. Urgency ties are common and the underlying query has no ORDER BY,
+  // so without a deterministic tiebreak a "sorted" list quietly reorders between page loads.
+  await contactPage.goto(`${BASE}/admin/marketing?stack=hot`, { waitUntil: 'domcontentloaded' });
+  await contactPage.waitForSelector('[data-testid="sort-strip"]');
+  const again = await order();
+  check('two cars with the SAME urgency exist, or the reload check below proves nothing',
+    U('ZZ76TIA') === U('ZZ76TIB') && U('ZZ76TIA') != null, `TIA=${U('ZZ76TIA')} TIB=${U('ZZ76TIB')}`);
+  check('  …and the tie breaks on registration, not on whatever the query returned',
+    pos(byUrgency, 'ZZ76TIA') < pos(byUrgency, 'ZZ76TIB'),
+    `${byUrgency.join(' ')} — TIB was created FIRST, so insertion order would put it first`);
+  check('the same order comes back on a reload', JSON.stringify(again) === JSON.stringify(byUrgency),
+    `${byUrgency.join(' ')}  vs  ${again.join(' ')}`);
+
+  check('  …and the declined car keeps the reason it was hot for',
+    (after.later.find((r) => r.registration === 'ZZ76DEC')?.reasons ?? []).some((r) => r.kind === 'mot_expired'),
+    'nobody loses the thread of why it was on the list');
 } catch (e) {
   check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
   await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
 } finally {
+  if (browser) await browser.close().catch(() => {});
   if (fix) {
     const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const CONTACT_REGS = ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB'];
+    await step('contacts', () => prisma.marketingContact.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } }));
+    await step('contact edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: { in: fix.contactVehicles ?? [] } } }));
+    await step('contact vehicles', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: { in: CONTACT_REGS } } }));
     await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: 'ZZ76BRD' } }));
     await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: CUST } }));
     check('teardown removed every fixture row (ZZ only)',
       (await prisma.vehicle.count({ where: { group_id: ZZ, registration: 'ZZ76BRD' } })) === 0
+      && (await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB'] } } })) === 0
+      && (await prisma.marketingContact.count({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } })) === 0
       && (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } })) === 0);
   }
 }
