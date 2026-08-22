@@ -503,6 +503,15 @@ export async function generateDemoTenant(opts: {
    */
   demoSubject?: { name: string; phone: string };
   onProgress?: (step: string, detail?: string) => void;
+  /**
+   * THE GROUP ID, THE MOMENT IT EXISTS — before the ~27 minutes of writing that follow.
+   *
+   * A caller's teardown cannot clean up what it cannot name, and the return value arrives only on
+   * success: a gate killed mid-generation had `groupId` still null and its `finally` purged
+   * nothing, which is how two orphaned tenants were left on production. Its own id is the one
+   * thing a caller needs before the slow part, so it is handed over as soon as the row is written.
+   */
+  onGroupCreated?: (groupId: string) => void;
 }): Promise<DemoGenerationResult> {
   const r = rng(opts.seed);
   const now = new Date(opts.now);
@@ -533,6 +542,9 @@ export async function generateDemoTenant(opts: {
     },
     select: { id: true },
   });
+  // Handed over BEFORE anything else is written, so a caller killed at any point after this can
+  // still name what to remove.
+  opts.onGroupCreated?.(group.id);
   const site = await prisma.site.create({
     data: {
       group_id: group.id, site_name: `${TOWN} Workshop`, currency_code: DEMO_CURRENCY, timezone: 'Europe/London',

@@ -1,3 +1,4 @@
+// @gate-timeout: 2700
 /**
  * File: scripts/demo-generation-gate.mjs
  * GENERATE A THROWAWAY DEMO TENANT AND ASSERT THE DASHBOARD'S FIGURES AGREE WITH EACH OTHER —
@@ -50,6 +51,19 @@
  * The tenant is created is_demo (all sends blocked) with demo_expires_at ALREADY IN THE PAST, so if
  * teardown dies the lifecycle cron reaps the leftover instead of it living forever. The destructive
  * step (purge) is scoped by the script to the tenant id THIS RUN created, re-checked against the
+ * ── @gate-timeout: 2700 — 45 MINUTES, AND WHY IT IS NOT THE 300s DEFAULT ───────────────────────
+ * This gate generates a whole tenant. Measured end-to-end on this hardware against Neon eu-west-2:
+ * 1378s, 1541s, 1607s, 1620s — the cost is ~800 job cards at roughly two seconds each, and that is
+ * network depth, not compute (see the loop in lib/demo/generate).
+ *
+ * The default 300s killed it about a fifth of the way in, EVERY run, and a SIGKILL cannot run a
+ * teardown — so the default did not merely fail the gate, it left a tenant behind each time. Two
+ * were found on production on 22 August.
+ *
+ * 2700s is ~1.7x the slowest observation. The headroom is deliberately generous because the two
+ * failures are not symmetric: a timeout that trips early leaves rows on a real database, while one
+ * that trips late only costs the suite some minutes. A genuine hang is still caught.
+ *
  * database, and refused if it is listed in DEMO_TENANTS or is the frozen reference — the standing
  * rule that a destructive e2e asserts its own fixtures are the only candidates in scope.
  */
@@ -82,6 +96,35 @@ check('passes when both sides are empty — absence agreeing with absence', ledg
 console.log('\n— generating the throwaway tenant (the slow part) —');
 const epoch = Date.now();
 let groupId = null;
+
+// ── SIGTERM RUNS THE TEARDOWN; SIGKILL CANNOT, AND THAT IS STATED RATHER THAN HOPED ───────────
+// Node's default SIGTERM handling terminates the process without unwinding, so a `finally` never
+// runs — which is why a Ctrl-C or a harness timeout left a tenant behind even once the id was
+// known. Installing a listener overrides that default and lets the purge complete before exiting.
+//
+// SIGKILL is uncatchable BY DESIGN and the runner sends exactly that at its timeout. With the
+// 2700s declared above that should now only fire on a genuine hang, but "should" is not "cannot":
+// see the sweep note at the foot of this file for what remains open.
+let tearingDown = false;
+const teardownAndExit = async (signal) => {
+  if (tearingDown) return;                    // a second signal must not race the first
+  tearingDown = true;
+  console.log(`\n${signal} — purging the throwaway tenant before exit`);
+  try {
+    if (groupId) {
+      const g = await prisma.group.findUnique({ where: { id: groupId }, select: { ref: true, is_demo: true, is_internal: true } });
+      if (g && g.is_demo === true && g.is_internal === true && !isListedDemoTenant(g.ref) && g.ref !== 'GB-GD2236') {
+        await purgeTenant('generation-gate-signal', groupId);
+        console.log(`  purged ${g.ref}`);
+      } else console.log(`  REFUSED — ${JSON.stringify(g)}`);
+    } else console.log('  no group had been created yet — nothing to purge');
+  } catch (e) { console.log(`  teardown failed: ${String(e?.message ?? e).slice(0, 200)}`); }
+  await prisma.$disconnect().catch(() => {});
+  process.exit(130);
+};
+process.on('SIGTERM', () => { void teardownAndExit('SIGTERM'); });
+process.on('SIGINT', () => { void teardownAndExit('SIGINT'); });
+
 try {
   const gen0 = Date.now();
   const res = await generateDemoTenant({
@@ -92,6 +135,10 @@ try {
     // RFC 2606 .invalid: undeliverable by construction, and epoch-unique so billing_email's
     // uniqueness cannot collide with a previous run that failed before teardown.
     ownerEmail: `generation-gate-${epoch}@example.invalid`,
+    // THE ID, BEFORE THE SLOW PART. `groupId` used to be assigned from the RETURN VALUE, so for the
+    // whole ~25 minutes of writing the finally below had nothing to purge and a killed run left the
+    // tenant on the database. Now it is known from the moment the row exists.
+    onGroupCreated: (id) => { groupId = id; console.log(`  group ${id} — teardown can reach it from here`); },
     ownerName: 'Generation Gate',
     ownerPasswordHash: bcrypt.hashSync(`gate-${epoch}`, 4),
     // ALREADY EXPIRED: if teardown dies, the lifecycle cron purges the leftover.
@@ -175,6 +222,23 @@ try {
       check('teardown purged the throwaway tenant', gone === null, `purge took ${Math.round((Date.now() - p0) / 1000)}s`);
     }
   }
+  // ── WHAT STILL CANNOT BE CLOSED FROM IN HERE ─────────────────────────────────────────────────
+  // With the id known early, a SIGTERM handler, and a 2700s timeout, the remaining ways to leave a
+  // tenant behind are: SIGKILL (the runner's own timeout on a genuine hang), a killed terminal that
+  // sends nothing, a machine or power failure, and a crash inside the teardown itself. None of them
+  // can be caught from this process — a script cannot clean up after being shot.
+  //
+  // The shape that WOULD close it, reported rather than built: a startup sweep, here or in the
+  // runner, deleting abandoned throwaways before a new run begins. It needs no new column, because
+  // the generator already writes one that identifies them precisely —
+  //
+  //     is_internal = true
+  //     AND demo_seed LIKE 'generation-gate-%'      ← only this gate writes that prefix
+  //     AND created_at < now() - interval '1 hour'  ← longer than the slowest run by a wide margin
+  //
+  // That predicate cannot reach Kingsford (`sales-demo-…`) or Marketbridge (`reference15`), which
+  // is why it is worth preferring to a generic "old is_internal demo with no completion marker":
+  // the marker already exists and is specific to the thing that abandons them.
   console.log(`\nRUNTIME: ${Math.round((Date.now() - t0) / 1000)}s total — pre-release only, not per-push`);
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
