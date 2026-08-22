@@ -106,8 +106,60 @@ try {
   })(), 'a figure with no rows is caught; NULL is not mistaken for one');
 
   // ── ROW-LEVEL SANITY ─────────────────────────────────────────────────────────────────────────
-  check('no payment has a negative or zero amount', !payments.some((p) => p.amount_pennies <= 0),
-    payments.filter((p) => p.amount_pennies <= 0).length + ' bad');
+  // ── NEGATIVE IS IMPOSSIBLE; ZERO IS MERELY UNUSUAL ───────────────────────────────────────────
+  // These were one rule (`amount_pennies <= 0`) and they are not one thing. A negative payment
+  // cannot describe anything that happened. A ZERO payment describes something that happens for
+  // real: free diagnostic work, invoiced at £0.00 so the customer holds a document, then marked
+  // paid at the counter. Three of those exist on TMBS (19, 20 and 21 August 2026), written by the
+  // ordinary job-card transition through recordManualPayment. Nothing is wrong with them — the
+  // row is what makes amount_paid_pennies reconcile to the invoice instead of sitting at NULL.
+  //
+  // What a zero payment must NOT be is a zero standing against money that was actually owed. So
+  // the permission is conditional on the invoice, not on the payment: the invoice must itself be
+  // £0.00, and it must HAVE LINES. The line requirement is the load-bearing half — an invoice with
+  // no lines also sums to zero, and that is a mint that went wrong, not a free job.
+  check('no payment has a NEGATIVE amount', !payments.some((p) => p.amount_pennies < 0),
+    payments.filter((p) => p.amount_pennies < 0).length + ' negative');
+
+  const zeroPays = payments.filter((p) => p.amount_pennies === 0);
+  // Lines for the affected invoices ONLY. Adding `lines` to the invoice select above would pull
+  // every line in the database to judge a handful of rows.
+  const zeroInvIds = [...new Set(zeroPays.map((p) => p.invoice_id))];
+  const zeroInvs = zeroInvIds.length
+    ? await prisma.invoice.findMany({ where: { id: { in: zeroInvIds } },
+        select: { id: true, invoice_number: true, group: { select: { ref: true } },
+                  lines: { select: { line_total: true, line_vat: true } } } })
+    : [];
+  const shapeOf = (inv) => ({
+    lineCount: inv.lines.length,
+    grossPennies: inv.lines.reduce((a, l) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0),
+  });
+  /** PURE. A zero payment stands only against an invoice that is itself zero and has lines. */
+  const zeroStands = (shape) => shape != null && shape.lineCount > 0 && shape.grossPennies === 0;
+
+  const shapes = new Map(zeroInvs.map((i) => [i.id, { ...shapeOf(i), label: `${i.group.ref}/${i.invoice_number}` }]));
+  const badZero = zeroPays.filter((p) => !zeroStands(shapes.get(p.invoice_id)));
+  console.log(`   zero-amount payments: ${zeroPays.length}, all against £0.00 invoices carrying lines: ${zeroPays.length - badZero.length}`);
+  check('a zero payment stands only against a £0.00 invoice that has lines', badZero.length === 0,
+    badZero.length
+      ? badZero.map((p) => { const sh = shapes.get(p.invoice_id);
+          return `${sh?.label ?? p.invoice_id}: ${sh ? `${sh.lineCount} lines, gross ${gbp(sh.grossPennies)}` : 'invoice missing'}`; }).join(' | ')
+      : `${zeroPays.length} zero payment(s), every one against a £0.00 invoice with lines`);
+
+  // THE PERMISSION MUST STILL REFUSE. Both shapes the relaxation could have let through, run
+  // through the SAME predicate the real rows go through — a rule that permits everything would
+  // pass the population check above on any database, including one with a real defect in it.
+  check('  …and a zero against a £120 invoice is still refused',
+    !zeroStands({ lineCount: 1, grossPennies: 12000 }));
+  check('  …as is a zero against an invoice with NO LINES',
+    !zeroStands({ lineCount: 0, grossPennies: 0 }),
+    'sums to zero for the wrong reason — a mint that produced no document');
+  check('  …while a zero against a £0.00 invoice with lines is allowed',
+    zeroStands({ lineCount: 2, grossPennies: 0 }));
+  check('  …and an invoice the payment cannot even resolve is refused', !zeroStands(undefined));
+  // ABSOLUTE ON PURPOSE, where the payment rule above is now conditional: a zero refund has no
+  // real-world referent — you cannot hand back nothing — whereas a zero payment records the
+  // settlement of a genuinely free job.
   check('no refund has a negative or zero amount', !refunds.some((r) => r.amount_pennies <= 0));
   check('every payment status is one we know',
     payments.every((p) => ['succeeded', 'processing', 'canceled', 'failed', 'requires_action'].includes(p.status)),
