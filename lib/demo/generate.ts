@@ -41,7 +41,7 @@ import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
   STREETS, SEASONAL_INDEX, WEEKDAY_SHARE, START_HOUR_SHARE,
-  RETURN_INTERVAL_MONTHS, COMEBACK_RATE_PCT, NEGATIVE_LINE_RATE_PCT,
+  RETURN_INTERVAL_MONTHS, COMEBACK_RATE_PCT, NEGATIVE_LINE_RATE_PCT, WORKSHOP,
 } from '@/lib/demo/profile';
 import { localityFor } from '@/lib/demo/locality';
 import { refuseDemoSubject, demoSubjectColumns } from '@/lib/demo/demo-subject';
@@ -707,7 +707,35 @@ export async function generateDemoTenant(opts: {
   const visitsPerCustomer = Math.max(1, DEMO_SPEC.historyMonths / RETURN_INTERVAL_MONTHS);
   const customerCount = Math.max(30, Math.round(estJobs / visitsPerCustomer));
 
-  const fleet: Array<{ customerId: string; vehicleId: string; accountIdx: number | null }> = [];
+  /**
+   * WHICH MOT BAND THIS CAR IS IN, by index. Dates are relative to `now`, so a regeneration
+   * produces a board that is current on the day it runs rather than one that ages into nonsense.
+   * Bands, in order: the expired few, then the ones due inside the board's window, then everything
+   * else far out — with a slice carrying no MOT date at all, because a real fleet has cars the
+   * garage has never MOT'd and the board must cope with them.
+   */
+  const day = 86_400_000;
+  const EXPIRED_TOTAL = WORKSHOP.motExpired + WORKSHOP.motExpiredContacted;
+  const motFieldsFor = (i: number): { mot_expiry?: Date; mot_checked_at?: Date } => {
+    const out: { mot_expiry?: Date; mot_checked_at?: Date } = {};
+    if (i < WORKSHOP.motExpired + WORKSHOP.motExpiredContacted) {
+      // Spread across the last seven months: "expired yesterday" and "expired in March" are
+      // different conversations and the board words them differently. The first block is Hot; the
+      // block right after it carries the recorded contacts and therefore sits in Later.
+      out.mot_expiry = new Date(now.getTime() - Math.round(4 + r() * 200) * day);
+    } else if (i < EXPIRED_TOTAL + WORKSHOP.motDueSoon) {
+      out.mot_expiry = new Date(now.getTime() + Math.round(2 + r() * 27) * day);
+    } else if (r() < WORKSHOP.motExpiryShare) {
+      out.mot_expiry = new Date(now.getTime() + Math.round(95 + r() * 255) * day);
+    }
+    // else: no MOT date at all.
+    if (out.mot_expiry && i % Math.max(1, Math.floor(customerCount / WORKSHOP.motChecked)) === 0) {
+      out.mot_checked_at = new Date(now.getTime() - Math.round(1 + r() * 20) * day);
+    }
+    return out;
+  };
+
+  const fleet: Array<{ customerId: string; vehicleId: string; accountIdx: number | null; mileage: number }> = [];
   for (let i = 0; i < customerCount; i++) {
     // The first few are TRADE ACCOUNTS. Named as businesses, on terms, and given far more work
     // below — so on the customer list they read as the garage's biggest names rather than as
@@ -743,21 +771,42 @@ export async function generateDemoTenant(opts: {
     });
     const v = pickVehicle(r, now.getUTCFullYear(), () => fromQuantiles(r, DISTRIBUTIONS.vehicleAgeYears));
     const identity = await prisma.vehicleIdentity.create({ data: { group_id: group.id }, select: { id: true } });
+    const vehMileage = Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100;
     const reg = `${pick(r, ['AB', 'CD', 'EF', 'GH', 'KL', 'MN'])}${String(10 + Math.floor(r() * 64)).padStart(2, '0')} ${pick(r, ['XAB', 'YCD', 'ZEF', 'PGH', 'RJK'])}`;
     const veh = await prisma.vehicle.create({
       data: {
         group_id: group.id, identity_id: identity.id, registration: reg,
         registration_normalized: reg.replace(/\s/g, '').toUpperCase(),
         make: v.make, model: v.model, year: v.year, fuel_type: v.fuel,
-        mileage_at_create: Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100,
+        mileage_at_create: vehMileage,
+        // ── MOT, ON THE ROW WE ARE ALREADY WRITING ────────────────────────────────────────────
+        // Two columns folded into an existing create rather than an update afterwards: an extra
+        // await here would cost one round trip per car, which on a 615-car fleet is two and a half
+        // minutes for two dates. The BAND is chosen by index, not by chance, because the point is
+        // an exact number of expired cars — a probability would give a different Hot stack every
+        // time and occasionally give a wall.
+        ...motFieldsFor(i),
       },
       select: { id: true },
     });
     // The OWNERSHIP EDGE is the owner of record (car-first re-root) — Vehicle.customer_id is
     // retired and deliberately left unwritten.
     await prisma.vehicleOwnership.create({ data: { vehicle_id: veh.id, customer_id: cust.id, is_current: true, valid_from: historyFrom } });
-    fleet.push({ customerId: cust.id, vehicleId: veh.id, accountIdx });
+    // The car's own mileage rides along. Findings have to be placed AHEAD of it — the first version
+    // used a flat 30,000 and most of the fleet had already passed it, so effectiveDueDate reported
+    // alreadyPassed and seven cars arrived in Hot as `service_overdue` that should have been Warm.
+    fleet.push({ customerId: cust.id, vehicleId: veh.id, accountIdx, mileage: vehMileage });
   }
+
+  // ── THE WORKSHOP RECORD — FOUR BULK WRITES, OUTSIDE THE LOOP ─────────────────────────────────
+  // Everything the marketing board reads that the money history does not produce. None of these
+  // tables requires a job_card_id, which is what makes this possible: they need group + vehicle and
+  // their own measurements, so they do not have to be threaded through the per-card loop that costs
+  // two seconds a card. Four createMany calls, four round trips, for the whole fleet.
+  //
+  // Counts come from WORKSHOP in the profile and are ABSOLUTE — see the note there for why a rate
+  // is the wrong instrument. Cars are chosen by INDEX, not by chance: the point is a Hot stack of a
+  // known size, and a probability would give a different one on every generation.
 
   /**
    * WHO IS THIS JOB FOR? Retail customers come back about once a year; an account comes in most
@@ -893,9 +942,16 @@ export async function generateDemoTenant(opts: {
   say('writing', `${planned.length} historic + ${forward.length} forward`);
   planned.sort((a, b) => a.start.getTime() - b.start.getTime());
   let invoices = 0, liftIdx = 0;
+  const seenOdometer = new Map<string, number>();
   for (const [n, job] of planned.entries()) {
     if (n % 50 === 0) say('writing', `${n}/${planned.length}`);
     const pair = pickOwner();
+    // THE HIGHEST READING THIS CAR HAS. The board projects service dates from the LATEST card's
+    // odometer, not from Vehicle.mileage_at_create — the two are independent draws — so a finding
+    // placed ahead of mileage_at_create can still be behind the car. Recorded here as a Map update
+    // rather than queried back afterwards.
+    const cardOdometer = Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100;
+    if (cardOdometer > (seenOdometer.get(pair.vehicleId) ?? 0)) seenOdometer.set(pair.vehicleId, cardOdometer);
     const usesMotBay = job.lines.some((l) => l.description === 'MOT test');
     const card = await prisma.jobCard.create({
       data: {
@@ -908,7 +964,7 @@ export async function generateDemoTenant(opts: {
         start_at: job.start, booking_duration_minutes: job.durationMinutes,
         end_at: new Date(job.start.getTime() + job.durationMinutes * 60_000),
         scheduled_date: dayStart(job.start),
-        odometer_in: Math.round(fromQuantiles(r, DISTRIBUTIONS.vehicleMileage) / 100) * 100,
+        odometer_in: cardOdometer,
       },
       select: { id: true },
     });
@@ -1056,6 +1112,140 @@ export async function generateDemoTenant(opts: {
     }
     invoices += 1;
   }
+
+  // ── THE WORKSHOP RECORD — AFTER THE CARDS, SO FINDINGS SIT AHEAD OF THE ODOMETER ────────────
+  // Placed here rather than beside the vehicle loop because due_mileage has to be ahead of what
+  // the BOARD reads, and the board reads the latest card's odometer_in. Written against
+  // mileage_at_create instead, six cars arrived in Hot as `service_overdue` — the findings were
+  // behind the car by the time its history existed.
+  say('workshop record');
+  // ── BLOCKS, ALLOCATED FROM A RUNNING CURSOR, NOT FROM HAND-WRITTEN OFFSETS ───────────────────
+  // The first version wrote the offsets out by hand and every one of them collided with an MOT
+  // band: the findings covered all four expired cars AND ten of the due-soon ones, so seven Hot
+  // rows read identically, and the contacts landed on the expired cars and emptied Hot into Later.
+  // A cursor makes the blocks disjoint by construction — the arithmetic cannot drift out of step
+  // with the counts above it, which is exactly how it went wrong.
+  let cursor = 0;
+  const take = (count: number) => {
+    const slice = fleet.slice(cursor, cursor + count);
+    cursor += count;
+    return slice;
+  };
+  const hotExpired = take(WORKSHOP.motExpired);                 // Hot: expired, nobody has rung
+  const contactedExpired = take(WORKSHOP.motExpiredContacted);  // Later: expired, and answered
+  // FINDINGS DELIBERATELY OVERLAP THE DUE-SOON BAND. On TMBS the cars carrying findings are mostly
+  // cars that already have an MOT lead — a garage looks the car over when it is in. Overlapping
+  // here keeps Warm the size it should be instead of doubling it with rows that carry nothing but
+  // an unanswered finding. What must NOT overlap is the expired block above.
+  const findingCars = fleet.slice(cursor, cursor + WORKSHOP.findingCars);
+  cursor += WORKSHOP.motDueSoon;                                // step over the whole due-soon band
+  const batteryReplaceCars = take(WORKSHOP.batteryReplace);     // Hot
+  const batteryRetestCars = take(WORKSHOP.batteryRetest);       // Warm
+  const tyreVehiclesAll = take(WORKSHOP.tyreCars);              // one below the limit, rest healthy
+
+  // FINDINGS. `customer_response` is not_raised on every one, exactly as TMBS's 29 open items are:
+  // the unanswered backlog IS the thing the board exists to surface, and a demo that pre-answers
+  // them removes the reason the Hot stack is ever empty. The basis mix keeps `next_service` items
+  // that carry no date — those land in the trigger band with no projected date, which is the
+  // untidiest and most realistic corner of the real data.
+  const FINDING_SHAPES = [
+    { description: 'Front discs lipped — advise replacement', basis: 'mileage' as const, milesAhead: 4000 },
+    { description: 'Rear pads low', basis: 'whichever_first' as const, milesAhead: 3000, daysAhead: 120 },
+    { description: 'Aircon needs regassing', basis: 'next_service' as const },
+    { description: 'Slight play in nearside track rod end', basis: 'next_service' as const },
+    { description: 'Coolant below the minimum mark', basis: 'date' as const, daysAhead: 90 },
+    { description: 'Wiper blades smearing', basis: 'next_service' as const },
+  ];
+  const dueItems = findingCars.flatMap((car, n) =>
+    Array.from({ length: WORKSHOP.findingsPerCar }, (_, k) => {
+      const shape = FINDING_SHAPES[(n + k) % FINDING_SHAPES.length];
+      // The first few cars carry findings that fall INSIDE the board's window; the rest sit beyond
+      // it, so the fleet has a backlog without every one of them being this week's phone call.
+      const soon = n < WORKSHOP.findingsDueCars;
+      const daysAhead = soon ? 5 + k * 4 : (shape.daysAhead ?? 200);
+      return {
+        group_id: group.id, vehicle_id: car.vehicleId,
+        description: shape.description,
+        due_basis: shape.basis,
+        due_date: shape.basis === 'mileage' || shape.basis === 'next_service'
+          ? null : new Date(now.getTime() + daysAhead * day),
+        // AHEAD OF THIS CAR, not a flat figure the fleet has already driven past. A soon car is
+        // within the window; the rest are a year or more out.
+        due_mileage: shape.basis === 'date' || shape.basis === 'next_service'
+          ? null
+          : Math.round(((seenOdometer.get(car.vehicleId) ?? car.mileage)
+              + (soon ? (shape.milesAhead ?? 1000) : 12000 + n * 400)) / 100) * 100,
+        due_date_precision: 'day' as const,
+        timing_in_description: false,
+        customer_response: 'not_raised' as const,
+        created_at: new Date(now.getTime() - Math.round(10 + r() * 200) * day),
+      };
+    }));
+
+  // BATTERIES. Two that failed and two the test could not settle — the second pair is the one worth
+  // having, because it is the case the board must word as a retest rather than as a battery.
+  const batteries = [
+    ...batteryReplaceCars.map(({ vehicleId }) => ({
+      group_id: group.id, vehicle_id: vehicleId,
+      // CHARGED AND UNHEALTHY. The first attempt used 11,900mV / 42% / 51% — plausible-looking, and
+      // batteryState calls it `retest`, because low charge AND low health together is the case it
+      // refuses to guess about. A battery that is genuinely finished tests healthy-charge and
+      // failing-health; checked against the classifier rather than eyeballed.
+      voltage_mv: 12_500, soc_pct: 85, soh_pct: 48, rated_cca: 640, cca_standard: 'EN' as const,
+      measured_at: new Date(now.getTime() - Math.round(2 + r() * 40) * day),
+    })),
+    ...batteryRetestCars.map(({ vehicleId }) => ({
+      group_id: group.id, vehicle_id: vehicleId,
+      // Low charge and low health TOGETHER: batteryState refuses to guess between a dying battery
+      // and a charging fault, and that refusal is the reason this row is in the demo at all.
+      voltage_mv: 12_150, soc_pct: 55, soh_pct: 62, rated_cca: 600, cca_standard: 'EN' as const,
+      measured_at: new Date(now.getTime() - Math.round(2 + r() * 40) * day),
+    })),
+  ];
+
+  // TYRES. Four corners each, three readings across each tread — the inside edge lower than the
+  // rest on one car, which is the alignment story the three-reading capture exists to tell.
+  const CORNERS = ['front_left', 'front_right', 'rear_left', 'rear_right'] as const;
+  const tyres = tyreVehiclesAll.flatMap(({ vehicleId }, n) =>
+    CORNERS.map((corner, c) => {
+      const illegal = n < WORKSHOP.tyreIllegal && c === 0;
+      const base = illegal ? 14 : 30 + ((n + c) % 5) * 8;
+      return {
+        group_id: group.id, vehicle_id: vehicleId, corner, type: 'summer_standard' as const,
+        depth_outer_tenths: base,
+        depth_centre_tenths: base + 2,
+        // The inside edge wears first when the alignment is out — a second job, found by measuring
+        // three points instead of one.
+        depth_inner_tenths: Math.max(12, base - (n % 3 === 0 ? 9 : 1)),
+        measured_at: new Date(now.getTime() - Math.round(2 + r() * 60) * day),
+      };
+    }));
+
+  // CONTACTS, so Later is not empty on a fresh generation. A decline is terminal and a snooze
+  // expires — both states need to be visible or the stack looks like a bin.
+  const declinedCars = contactedExpired.slice(0, WORKSHOP.contactsDeclined).map((f) => f.vehicleId);
+  const snoozedCars = contactedExpired.slice(WORKSHOP.contactsDeclined,
+    WORKSHOP.contactsDeclined + WORKSHOP.contactsSnoozed).map((f) => f.vehicleId);
+  const contacts = [
+    ...declinedCars.map((vehicleId) => ({
+      group_id: group.id, vehicle_id: vehicleId, reason: 'mot_expired', state: 'declined' as const,
+      for_date: new Date(now.getTime() - 30 * day),
+      created_at: new Date(now.getTime() - Math.round(3 + r() * 20) * day),
+    })),
+    ...snoozedCars.map((vehicleId) => ({
+      group_id: group.id, vehicle_id: vehicleId, reason: 'mot_due', state: 'snoozed' as const,
+      for_date: new Date(now.getTime() + 20 * day),
+      snooze_until: new Date(now.getTime() + 25 * day),
+      created_at: new Date(now.getTime() - Math.round(1 + r() * 5) * day),
+    })),
+  ];
+
+  await prisma.vehicleDueItem.createMany({ data: dueItems });
+  await prisma.batteryReading.createMany({ data: batteries });
+  await prisma.tyreReading.createMany({ data: tyres });
+  await prisma.marketingContact.createMany({ data: contacts });
+  say('workshop record', `${dueItems.length} findings · ${batteries.length} batteries · ${tyres.length} tyre readings · ${contacts.length} contacts`
+    + ` · ${hotExpired.length} expired uncontacted, ${contactedExpired.length} expired and answered`);
 
   // ── THE LOST WORK ────────────────────────────────────────────────────────────────────────────
   // Quotes that never became jobs: the declines, and the larger pile nobody ever answered. Sized

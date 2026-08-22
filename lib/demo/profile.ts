@@ -310,6 +310,57 @@ export const START_HOUR_SHARE = {
 /** How often a customer comes back. The 4-month window saw 17.1% return at least once;
  *  the generator needs the INTERVAL, not the rate, because the same interval produces a very
  *  different rate over 12 months than over 4. */
+/**
+ * ── THE WORKSHOP RECORD: WHAT THE MARKETING BOARD READS ────────────────────────────────────────
+ * The money history above is a whole tenant and produces an EMPTY board, because the board reads
+ * none of it: it reads MOT dates, open findings, battery and tyre measurements, and contacts.
+ *
+ * ABSOLUTE COUNTS, NOT RATES, and that is the whole calibration. TMBS runs a Hot stack of 9 against
+ * 225 cars — a 4% rate. Applying 4% to a 615-car demo fleet gives 25, which is a wall rather than a
+ * morning's phone calls. What a garage recognises is a short list against a large fleet, so these
+ * are fixed counts that do not grow with the fleet.
+ *
+ * MEASURED FROM TMBS on 2026-08-22, then scaled DOWN to keep Hot in single figures:
+ *   MOT expiry present  94.2% · mot_checked_at 1.8% · open due items 3.1% of cars (mean 4.1 each)
+ *   battery 3.1% · tyre 2.2% (4 readings each) · marketing contacts 0.4%
+ *   MOT days-from-now: expired 5 · 0–30 18 · 30–90 31 · 90+ 158
+ */
+export const WORKSHOP = {
+  /** Share of the fleet carrying an MOT date at all. The rest are cars we have never MOT'd. */
+  motExpiryShare: 0.95,
+  /** Cars whose MOT has already gone AND nobody has rung yet. These are the Hot stack. */
+  motExpired: 4,
+  /**
+   * FURTHER expired cars, reserved for the contacts below. Separate because the first version put
+   * the contacts on the Hot cars: a decline is terminal, so three of the four expired cars dropped
+   * straight into Later and Hot lost the leads it exists to show. A contact needs a car with a
+   * reason behind it, so these are expired too — just not the same ones.
+   */
+  motExpiredContacted: 3,
+  /** Cars due inside the board's 30-day window. Drives Warm. */
+  motDueSoon: 18,
+  /** Cars where somebody has re-checked DVSA. Cosmetic — it shows the check has been used. */
+  motChecked: 11,
+
+  /** Cars carrying open findings, and how many each. TMBS averages 4.1. */
+  findingCars: 14,
+  findingsPerCar: 4,
+  /** Of those, cars whose findings fall inside the due window (Warm, or Hot when overdue). */
+  findingsDueCars: 4,
+
+  /** Batteries that failed outright — Hot. */
+  batteryReplace: 2,
+  /** Batteries the test could not settle — Warm, and worded as a retest, never as a battery. */
+  batteryRetest: 2,
+  /** Cars with a full set of tyre readings, and how many of those are below the legal limit. */
+  tyreCars: 14,
+  tyreIllegal: 1,
+
+  /** Contacts already recorded, so Later is not empty on a fresh generation. */
+  contactsDeclined: 2,
+  contactsSnoozed: 1,
+} as const;
+
 export const RETURN_INTERVAL_MONTHS = 11;
 
 /** Rework. A comeback is £0 revenue with the parts cost still landing (lib/comeback). */
