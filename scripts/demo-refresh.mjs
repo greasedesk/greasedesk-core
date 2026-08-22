@@ -119,14 +119,27 @@ const epoch = Date.now();
 // about four seconds in. So the new tenant is built under names nobody is using and takes the real
 // ones in the swap.
 //
-// The NAME is distinguishable too, not just the emails. Two tenants called "Kingsford Motor
-// Company" in the superadmin list is precisely the shared-identifier problem that made the
-// Gateholm purge resolve by ref: the wrong one is invisible, not merely unlabelled.
+// ── THE NAME IS *NOT* STAGED, AND THAT IS THE CORRECTION ────────────────────────────────────
+// The first build gave the staging tenant a distinguishable name, to avoid two "Kingsford Motor
+// Company" rows in the superadmin list — the shared-identifier problem that made the Gateholm
+// purge resolve by ref. Right instinct, wrong column.
+//
+// group_name is FROZEN INTO EVERY INVOICE AT MINT (company_name_snapshot, and the trading name
+// beside it), inside the generation that runs before any swap. It is not a live setting that can
+// be moved afterwards: the first run produced 800 invoices all reading "Kingsford Motor Company
+// (staging 1787406411137)", and a snapshot is not rewritable — that is the whole point of freezing
+// it. A demo whose every document carries a build artefact is not a demo.
+//
+// So the replacement is generated under the REAL name and the two tenants are told apart by the
+// things that never reach a document: `ref` (the staging one takes the next sequence value) and
+// `billing_email`. The Gateholm risk was choosing the wrong tenant to DESTROY, and that is already
+// closed by construction — the purge targets `target.id`, captured before generation began, so it
+// cannot resolve by name even if it wanted to.
 const stagingEmail = `demo+staging-${epoch}@greasedesk.com`;
-const stagingName = `${DEMO_NAME} (staging ${epoch})`;
+const stagingName = DEMO_NAME;
 
 console.log(`\nSTAGING IDENTITY (the new tenant is built under these, then takes the real ones)`);
-console.log(`  name          ${stagingName}`);
+console.log(`  name          ${stagingName}   (the REAL name — it is frozen into every invoice at mint)`);
 console.log(`  billing_email ${stagingEmail}`);
 console.log(`  owner email   ${stagingEmail}`);
 console.log(`  ref           (natural sequence value)`);
@@ -230,6 +243,14 @@ const chargeable = invs.filter((i) => i.series === 'chargeable').map((i) => Numb
 const dupes = chargeable.length - new Set(chargeable).size;
 const gaps = chargeable.length ? chargeable[chargeable.length - 1] - chargeable[0] + 1 - chargeable.length : 0;
 ok('the chargeable series is gapless with no duplicates', dupes === 0 && gaps === 0, `${dupes} duplicate(s), ${gaps} gap(s) across ${chargeable.length}`);
+
+// THE NAME ON THE DOCUMENTS, not on the group row. Checked here because it CANNOT be corrected
+// later: it is frozen at mint, and the first build shipped 800 invoices carrying a staging name
+// that the swap had no way to reach. A group row can be renamed; eight hundred snapshots cannot.
+const wrongName = await prisma.invoice.count({
+  where: { group_id: fresh.groupId, NOT: { company_name_snapshot: DEMO_NAME } } });
+ok('every invoice snapshot carries the real company name', wrongName === 0,
+  wrongName ? `${wrongName} of ${invs.length} carry something else` : `${invs.length} invoices, all "${DEMO_NAME}"`);
 
 if (problems.length) {
   console.log(`\nVERIFICATION FAILED (${problems.length}). NOTHING HAS MOVED.`);
