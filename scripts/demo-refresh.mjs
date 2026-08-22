@@ -77,7 +77,7 @@ if (CREATE) {
   console.log(`\ncreated ${g.ref}  is_demo=${g.is_demo}  is_internal=${g.is_internal}  phone=${g.phone}`);
   console.log(`owner login: ${DEMO_OWNER}`);
   console.log(`\nADD THIS TO lib/demo-tenants::DEMO_TENANTS, or refresh will refuse it:\n`);
-  console.log(`  { id: '${res.groupId}', ref: '${g.ref}', purpose: 'Shared sales demo — reps get their own User rows here.' },`);
+  console.log(`  { ref: '${g.ref}', purpose: 'Shared sales demo — reps get their own User rows here.' },`);
   await prisma.$disconnect();
   process.exit(0);
 }
@@ -87,7 +87,7 @@ if (!ref) { console.log('Usage: --create, or --group=<ref> [--apply]'); await pr
 
 // Resolve BY REF, never findFirst-by-name: groups legitimately share names.
 const target = await prisma.group.findFirst({ where: { ref }, select: { id: true, ref: true, group_name: true, is_internal: true, is_demo: true } });
-const refusal = refuseRefresh(target?.id ?? ref, target);
+const refusal = refuseRefresh(ref, target);
 if (refusal) {
   console.log(`REFUSING (${refusal.code})\n\n  ${refusal.message}\n`);
   console.log(`Declared demo tenants: ${DEMO_TENANTS.length ? DEMO_TENANTS.map((t) => t.ref).join(', ') : '(none yet — run --create)'}`);
@@ -264,7 +264,7 @@ if (problems.length) {
 // identity starts moving, so this is the last honest moment to ask whether it is still a thing we
 // are allowed to touch — someone may have cleared is_internal while the generator ran.
 const stillTarget = await prisma.group.findFirst({ where: { ref: target.ref }, select: { id: true, ref: true, group_name: true, is_internal: true, is_demo: true } });
-const stillRefused = refuseRefresh(stillTarget?.id ?? target.ref, stillTarget);
+const stillRefused = refuseRefresh(target.ref, stillTarget);
 if (stillRefused || stillTarget.id !== target.id) {
   console.log(`\nREFUSING AT THE SWAP (${stillRefused?.code ?? 'target moved'}) — the target changed while generating.`);
   console.log(`Nothing moved. ${target.ref} is intact; staging tenant ${fresh.groupId} is orphaned and purgeable by id.`);
@@ -310,7 +310,9 @@ try {
 const finalGroup = await prisma.group.findUnique({ where: { id: fresh.groupId }, select: { ref: true, group_name: true, billing_email: true, is_internal: true, is_demo: true } });
 console.log(`\nDONE. ${finalGroup.ref}  "${finalGroup.group_name}"  is_demo=${finalGroup.is_demo} is_internal=${finalGroup.is_internal}`);
 console.log(`owner login: ${finalGroup.billing_email}`);
-console.log(`\nTHE GROUP ID HAS CHANGED. Update lib/demo-tenants::DEMO_TENANTS or the next refresh refuses:\n`);
-console.log(`  { id: '${fresh.groupId}', ref: '${finalGroup.ref}', purpose: 'Shared sales demo — reps get their own User rows here.' },`);
+// NO LIST EDIT. DEMO_TENANTS is keyed by `ref`, and the swap above carried the ref onto the new
+// group — so the entry that authorised this run still names the tenant that came out of it. The id
+// changed, as it must, and nothing depends on it.
+console.log(`\ngroup id is now ${fresh.groupId} (changed, as it always does — nothing to edit: DEMO_TENANTS is keyed by ref).`);
 await prisma.$disconnect();
 process.exit(0);

@@ -22,7 +22,7 @@ const APPLY = process.argv.includes('--apply');
 if (!ref) { console.log('Usage: --group=<ref> [--apply]'); process.exit(2); }
 
 const g = await prisma.group.findFirst({ where: { ref }, select: { id: true, ref: true, group_name: true, is_internal: true } });
-const refusal = refuseDemoSubject(g?.id ?? ref, isListedDemoTenant(g?.id ?? ''), g, SUBJECT);
+const refusal = refuseDemoSubject(g?.id ?? ref, isListedDemoTenant(g?.ref), g, SUBJECT);
 if (refusal) { console.log(`REFUSING (${refusal.code})\n\n  ${refusal.message}`); await prisma.$disconnect(); process.exit(2); }
 
 // The customer with the MOST RECENT job card: the demo needs a subject that already has something

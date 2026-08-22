@@ -77,18 +77,30 @@ console.log('\n— on the tenant itself —');
  * So the property is REACHABILITY, not a particular number: at least one customer this tenant can
  * actually text. That is what makes the demo work, and it survives the demo being used.
  */
-const here = DEMO_TENANTS.map((t) => t.id);
+// THE ONE PLACE THAT STILL NEEDS IDS. DEMO_TENANTS is keyed by ref (it has to be — the id changes
+// on every refresh), and these queries filter on group_id. Resolved in ONE round trip for the whole
+// list rather than one per tenant.
+const listedRefs = DEMO_TENANTS.map((t) => t.ref);
+const listedGroups = await prisma.group.findMany({ where: { ref: { in: listedRefs } }, select: { id: true, ref: true } });
+const idByRef = new Map(listedGroups.map((g) => [g.ref, g.id]));
+// A listed ref with no group is a stale entry, and saying so beats querying `group_id: undefined`
+// and reporting a clean pass over nothing.
 for (const t of DEMO_TENANTS) {
+  if (!idByRef.has(t.ref)) check(`${t.ref} is listed but does not exist`, false, 'stale DEMO_TENANTS entry');
+}
+const here = listedGroups.map((g) => g.id);
+for (const t of DEMO_TENANTS.filter((x) => idByRef.has(x.ref))) {
+  const tId = idByRef.get(t.ref);
   const reachable = await prisma.customer.findMany({
-    where: { group_id: t.id, phone_e164: { not: null }, NOT: { phone_e164: { startsWith: '447700900' } } },
+    where: { group_id: tId, phone_e164: { not: null }, NOT: { phone_e164: { startsWith: '447700900' } } },
     select: { name: true, phone_e164: true },
   });
   check(`${t.ref} has at least one customer it can actually text`, reachable.length >= 1,
     reachable.map((c) => `${c.name} ${c.phone_e164}`).join(', ') || 'NONE — the SMS demo cannot complete');
   // DISCRIMINATING: the same query over the drama range finds the other 618, so "at least one" is
   // not satisfied by the query simply matching everything.
-  const drama = await prisma.customer.count({ where: { group_id: t.id, phone_e164: { startsWith: '447700900' } } });
-  const total = await prisma.customer.count({ where: { group_id: t.id } });
+  const drama = await prisma.customer.count({ where: { group_id: tId, phone_e164: { startsWith: '447700900' } } });
+  const total = await prisma.customer.count({ where: { group_id: tId } });
   check(`  and the bulk stay unroutable — ${drama} of ${total} on the drama range`, drama === total - reachable.length,
     'a demo that could text its whole customer list is a demo that can text a stranger');
 }

@@ -25,9 +25,22 @@
  */
 
 export type DemoTenant = {
-  /** Group id. */
-  id: string;
-  /** Human ref, for messages — never used for lookup (groups legitimately share names). */
+  /**
+   * THE IDENTITY, and the only one. Was the group id, which went stale on every refresh: a refresh
+   * REPLACES the tenant rather than emptying it, so the id changes and this list stopped matching
+   * the moment the operation it authorises succeeded. That cost two hand-edits per refresh — the
+   * list had to point at the LIVE tenant before a run could start and at the NEW one after it
+   * finished, with the second id unknowable until 27 minutes of generation had passed. Forget
+   * either and the tool refuses its own target.
+   *
+   * `ref` is precisely what a refresh PRESERVES: it is @unique, sequence-allocated, and the swap
+   * carries it from the old row to the new one. Keying on it makes the list survive the operation.
+   *
+   * The counter-argument, stated because it is real: an id cannot be renamed and a ref can. But
+   * nothing in the product writes `ref` — the sequence default assigns it and demo-refresh moves
+   * it — and being listed is only ever HALF the authority. `is_internal`, read from the database
+   * at the moment of use, is the other half and is unaffected by this.
+   */
   ref: string;
   /** Why this tenant exists, so a stale entry can be recognised as stale. */
   purpose: string;
@@ -41,11 +54,16 @@ export type DemoTenant = {
  * at it would destroy the recording set.
  */
 export const DEMO_TENANTS: readonly DemoTenant[] = [
-  { id: 'a656fcba-41ab-4bae-998d-5dc3b7284488', ref: 'GB-GD2369', purpose: 'Shared sales demo — reps get their own User rows here.' },
+  { ref: 'GB-GD2369', purpose: 'Shared sales demo — reps get their own User rows here.' },
 ];
 
-export const isListedDemoTenant = (groupId: string): boolean =>
-  DEMO_TENANTS.some((t) => t.id === groupId);
+/**
+ * Callers pass the group's OWN ref, read from the database — every one of them already holds a
+ * freshly-read group row, so this needs no query of its own. Passing a ref a human typed would
+ * check a different question; the point is what the row says now.
+ */
+export const isListedDemoTenant = (ref: string | null | undefined): boolean =>
+  !!ref && DEMO_TENANTS.some((t) => t.ref === ref);
 
 export type RefreshRefusal = { code: string; message: string };
 
@@ -57,25 +75,29 @@ export type RefreshRefusal = { code: string; message: string };
  * `group` is what the database says NOW, not what the caller claims.
  */
 export function refuseRefresh(
-  groupId: string,
+  /** The ref the operator named. Compared against the LIST; the row below is the second condition. */
+  ref: string,
   group: { id: string; ref: string | null; is_internal: boolean | null; is_demo: boolean } | null,
 ): RefreshRefusal | null {
-  if (!isListedDemoTenant(groupId)) {
+  if (!isListedDemoTenant(ref)) {
     return {
       code: 'not_listed',
-      message: `${groupId} is not a declared demo tenant. Refresh destroys a tenant's records, so the `
+      message: `${ref} is not a declared demo tenant. Refresh destroys a tenant's records, so the `
         + `target must be listed in lib/demo-tenants::DEMO_TENANTS — it is never taken from the caller.`,
     };
   }
+  // REACHABLE NOW, AND IT WAS NOT BEFORE. Keyed by id, a caller with no group row had nothing to
+  // pass but the ref, which never matched an id — so a listed-but-missing tenant reported
+  // `not_listed` and this branch could not be reached. Keyed by ref the two are told apart.
   if (!group) {
-    return { code: 'not_found', message: `${groupId} is listed as a demo tenant but does not exist. Remove the stale entry.` };
+    return { code: 'not_found', message: `${ref} is listed as a demo tenant but does not exist. Remove the stale entry.` };
   }
   // THE SECOND CONDITION, checked against the database at the moment of use. A list entry is a
   // claim; this is the fact that makes it true.
   if (group.is_internal !== true) {
     return {
       code: 'not_internal',
-      message: `${group.ref ?? groupId} is listed as a demo tenant but is NOT is_internal. Something has `
+      message: `${group.ref ?? ref} is listed as a demo tenant but is NOT is_internal. Something has `
         + `changed since it was listed. Refusing to destroy its records — check the tenant before the list.`,
     };
   }

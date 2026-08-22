@@ -165,7 +165,7 @@ try {
     console.log('\n— teardown —');
     const g = await prisma.group.findUnique({ where: { id: groupId }, select: { ref: true, is_demo: true, is_internal: true } });
     const safe = g && g.is_demo === true && g.is_internal === true
-      && !isListedDemoTenant(groupId) && g.ref !== 'GB-GD2236';
+      && !isListedDemoTenant(g.ref) && g.ref !== 'GB-GD2236';
     if (!safe) {
       check('REFUSING TEARDOWN — the target no longer looks like this run\'s throwaway', false, JSON.stringify(g));
     } else {
