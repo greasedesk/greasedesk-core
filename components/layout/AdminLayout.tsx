@@ -57,6 +57,21 @@ const visibleNavItems = navItems.filter((item) => item.ready);
 
 interface AdminLayoutProps {
   children: React.ReactNode;
+  /**
+   * ── A BOUNDED BOX, FOR PAGES WHOSE PANES SCROLL THEMSELVES ────────────────────────────────────
+   * Off by default: the shell is `min-h-screen` and the whole document scrolls, which is right for
+   * every page that is a column of content.
+   *
+   * A page with independently-scrolling panes needs the opposite — a box of known height to fill.
+   * It cannot compute that height itself: a `calc(100vh - …)` would have to know whether this
+   * tenant is showing DemoBanner, BillingBanner or the WorkshopNudge, all of which sit inside
+   * <main> above the content and vary in height. So the browser computes it — the banners take
+   * their natural size and the content div takes `flex-1 min-h-0`, which is the remainder.
+   *
+   * `min-h-0` is the load-bearing part. Without it a flex child refuses to shrink below its own
+   * content, and the panes push past the viewport instead of scrolling inside it.
+   */
+  fullHeight?: boolean;
 }
 
 const navLink = (active: boolean) =>
@@ -126,7 +141,7 @@ function NavList({
   );
 }
 
-export default function AdminLayout({ children }: AdminLayoutProps) {
+export default function AdminLayout({ children, fullHeight = false }: AdminLayoutProps) {
   // THE SHELL OWNS THE PILL COUNT. It used to arrive as a prop from /admin/messages, which forced
   // that page to mount its own AdminLayout inside this persistent one — two shells, two nav
   // columns. It also meant the pill appeared ONLY on the Messages page, the one place you don't
@@ -182,7 +197,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const siteQuery = typeof router.query.site === 'string' ? router.query.site : '';
 
   return (
-    <div className="min-h-screen bg-content text-ink flex">
+    <div className={`${fullHeight ? 'h-screen overflow-hidden' : 'min-h-screen'} bg-content text-ink flex`}>
       {/* --- Desktop sidebar (dark rail) --- */}
       {/* ── A FLEX COLUMN, NOT AN ABSOLUTE FOOTER ────────────────────────────────────────────
           The bottom block used to be `absolute bottom-4` inside this `overflow-y-auto` box. An
@@ -218,7 +233,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       </aside>
 
       {/* --- Main content area (light workspace) --- */}
-      <main className="flex-1 flex flex-col min-w-0 bg-content">
+      <main className="flex-1 flex flex-col min-w-0 min-h-0 bg-content">
         {/* Mobile header */}
         {/* Exact h-14 (56px): the job-card tab strip sticks at top-14 directly beneath it. */}
         <header className="bg-sidebar border-b border-sidebar-line h-14 px-3 md:hidden flex justify-between items-center sticky top-0 z-30">
@@ -244,7 +259,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             page rather than something only Settings → Licence ever showed. */}
         <DemoBanner />
         <BillingBanner />
-        <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
+        <div className={`flex-1 p-4 sm:p-6 lg:p-8 ${fullHeight ? 'min-h-0 overflow-hidden' : ''}`}>{children}</div>
       </main>
 
       {/* --- Mobile menu overlay --- */}

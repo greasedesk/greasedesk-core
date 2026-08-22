@@ -61,6 +61,17 @@ function RefCapture({ refValue, ready }: { refValue: unknown; ready: boolean }) 
   return null;
 }
 
+/**
+ * Does this page want the shell's BOUNDED box? A page may answer with `true`, or with a predicate
+ * over the query — the marketing board is a normal scrolling column until `?vehicle=` opens its
+ * panes, and only then does it need a box of known height to fill. A static `true` would change
+ * how the page sits before anything has been opened.
+ */
+function resolveFullHeight(Component: unknown, query: Record<string, unknown>): boolean {
+  const fh = (Component as { fullHeight?: boolean | ((q: Record<string, unknown>) => boolean) }).fullHeight;
+  return typeof fh === 'function' ? fh(query) === true : fh === true;
+}
+
 function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   const useAdminShell = router.pathname.startsWith('/admin') && router.pathname !== '/admin/login';
   // The consent banner shows ONLY on the public marketing site — never a wall in front of the tenant app
@@ -76,7 +87,7 @@ function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
       <ConsentProvider initialRecord={initialConsent} region={region}>
         <NavProvider value={nav}>
           <RefCapture refValue={router.query.ref} ready={router.isReady} />
-          {useAdminShell ? <AdminLayout>{page}</AdminLayout> : page}
+          {useAdminShell ? <AdminLayout fullHeight={resolveFullHeight(Component, router.query)}>{page}</AdminLayout> : page}
           {!isAppRoute && <ConsentBanner />}
         </NavProvider>
       </ConsentProvider>

@@ -34,8 +34,12 @@ const walk = (dir) => readdirSync(dir).flatMap((f) => {
 const pages = walk('pages/admin');
 
 console.log('\n— the shell is mounted once, in _app —');
+// PIN THE RULE, NOT THE SPELLING. This matched the exact expression, so adding a PROP to the
+// shell — `<AdminLayout fullHeight={…}>` — read as "the shell is no longer mounted in _app". The
+// rule is that the mount is conditional on useAdminShell and falls back to the bare page.
+const appSrc = readFileSync('pages/_app.tsx', 'utf8');
 check('_app wraps every /admin route except login',
-  /useAdminShell \? <AdminLayout>\{page\}<\/AdminLayout> : page/.test(readFileSync('pages/_app.tsx', 'utf8')));
+  /useAdminShell\s*\?\s*<AdminLayout[\s>][\s\S]{0,200}?<\/AdminLayout>\s*:\s*page/.test(appSrc));
 
 // The RENDER, not the import: a page may legitimately mention the name in a comment saying not to.
 const wrappers = pages.filter((p) => /<AdminLayout[\s>]/.test(readFileSync(p, 'utf8')));

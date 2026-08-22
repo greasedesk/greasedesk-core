@@ -31,7 +31,7 @@
  * and a phone call is not an electronic message — with the phone number visible and the refused
  * channels named. See lib/marketing-lists for the cost of that rule, which is accepted knowingly.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
@@ -40,6 +40,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { buildBoard, type Board, type BoardRow } from '@/lib/marketing-board';
 import { WINDOW_DAYS } from '@/lib/marketing-lists';
+import { CarHistoryPane, CardDetailPane, type CarDetail } from '@/components/marketing/CarPanes';
 import { checkedLabel } from '@/lib/mot-refresh';
 
 type PageProps = { board: Board };
@@ -64,7 +65,7 @@ const CHANNEL_SUFFIX: Record<string, string> = { sms: ' by text', email: ' by em
  * recorded a contact saying the call was about its MOT. The row already knows what it is: its own
  * strongest reason, the same one printed on the line the caller is reading.
  */
-function Row({ row, onDone }: { row: BoardRow; onDone: () => void }) {
+function Row({ row, onDone, onOpen, selected }: { row: BoardRow; onDone: () => void; onOpen?: (id: string) => void; selected?: boolean }) {
   const [busy, setBusy] = useState(false);
   // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
   // Every other action here ends in a full reload, which is right for them: recording a contact is
@@ -142,7 +143,12 @@ function Row({ row, onDone }: { row: BoardRow; onDone: () => void }) {
     <li className="py-2.5 border-b border-line last:border-0" data-testid={`marketing-row-${row.vehicleId}`}
       data-reg={row.registration} data-urgency={row.urgency}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-sm font-semibold text-ink tabular-nums">{row.registration}</span>
+        {/* THE REGISTRATION IS THE WAY IN. A whole-row click would swallow the actions already on
+            it — Contacted, Booked, Declined, the DVSA check — so only the reg opens the car. */}
+        <button type="button" onClick={() => onOpen?.(row.vehicleId)} data-testid={`open-car-${row.vehicleId}`}
+          className={`text-sm font-semibold tabular-nums text-left ${selected ? 'text-accent underline' : 'text-ink hover:underline'}`}>
+          {row.registration}
+        </button>
         {row.vehicleDesc && <span className="text-xs text-muted">{row.vehicleDesc}</span>}
         <span className="text-sm text-ink">{row.customerName ?? 'No owner recorded'}</span>
         {/* ALWAYS SHOWN. No opt-out covers a phone call. */}
@@ -277,13 +283,13 @@ function Row({ row, onDone }: { row: BoardRow; onDone: () => void }) {
  * ONE STACK'S ROWS. The heading and the count moved to the tab strip, which is now where a garage
  * reads the shape of the day without clicking — "Hot (6) · Warm (19) · Later (0)".
  */
-function StackRows({ rows, empty, onDone }: { rows: BoardRow[]; empty: string; onDone: () => void }) {
+function StackRows({ rows, empty, onDone, onOpen, selectedVehicle }: { rows: BoardRow[]; empty: string; onDone: () => void; onOpen?: (id: string) => void; selectedVehicle?: string | null }) {
   // AN EMPTY TAB SAYS WHY, not just that it is empty. On a tabbed board this matters more than it
   // did stacked: you land on Hot, and if it is empty that is the whole screen. See the prompt in
   // the summary above, which is the sentence that turns it from "this does nothing" into "here is
   // what makes it work".
   if (!rows.length) return <p className="text-sm text-muted italic" data-testid="stack-empty">{empty}</p>;
-  return <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} onDone={onDone} />)}</ul>;
+  return <ul>{rows.map((r) => <Row key={r.vehicleId} row={r} onDone={onDone} onOpen={onOpen} selected={selectedVehicle === r.vehicleId} />)}</ul>;
 }
 
 // Three questions a garage asks of a call list: which car, whose car, how soon.
@@ -336,14 +342,94 @@ export default function MarketingPage({ board }: PageProps) {
       query: { ...router.query, sort: k, dir: sortKey === k && !desc ? 'desc' : 'asc' } }, undefined, { shallow: true });
   const reload = () => window.location.reload();
 
-  return (
+  // ── THE CALL VIEW ─────────────────────────────────────────────────────────────────────────────
+  // `?vehicle=` is the switch. Absent, this page is exactly what it was: one column, the document
+  // scrolls, nothing below runs. Present, the board becomes the left pane of three.
+  const vehicleId = typeof router.query.vehicle === 'string' ? router.query.vehicle : null;
+  const cardId = typeof router.query.card === 'string' ? router.query.card : null;
+  const pane = typeof router.query.pane === 'string' ? router.query.pane : null;
+  const [detail, setDetail] = useState<CarDetail | null>(null);
+  const [detailFor, setDetailFor] = useState<string | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+
+  // ON DEMAND, AND NOT THROUGH getServerSideProps. A shallow route change does not re-run the
+  // server props, which is the point: opening a car must not rebuild the board. Two queries behind
+  // one endpoint, fetched when the selection changes and not before.
+  useEffect(() => {
+    if (!vehicleId) { setDetail(null); setDetailFor(null); return; }
+    if (detailFor === vehicleId) return;
+    let live = true;
+    setDetailErr(null);
+    fetch(`/api/marketing-car?vehicleId=${encodeURIComponent(vehicleId)}`, { cache: 'no-store' })
+      .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.message ?? 'Could not load that car.'); return r.json(); })
+      .then((d) => { if (!live) return; setDetail(d); setDetailFor(vehicleId); })
+      .catch((e) => { if (live) setDetailErr(String(e.message ?? e)); });
+    return () => { live = false; };
+  }, [vehicleId, detailFor]);
+
+  const go = (patch: Record<string, string | undefined>) => {
+    const q: Record<string, string> = { ...(router.query as Record<string, string>) };
+    for (const [k, v] of Object.entries(patch)) { if (v == null) delete q[k]; else q[k] = v; }
+    router.replace({ pathname: router.pathname, query: q }, undefined, { shallow: true });
+  };
+  // ── WIDE SHOWS, NARROW WALKS ─────────────────────────────────────────────────────────────────
+  // The same URL state either way; what differs is what a click DEFAULTS to. Wide, opening a car
+  // shows all three panes and there is nothing to choose. Narrow, only one pane fits — so opening
+  // a car moves to the history and picking a visit moves to the detail, with Back walking out
+  // again. Without this the other two panes were unreachable on a phone: their Expand controls
+  // live in their own headers, and those headers were hidden.
+  const isWide = () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+  const openCar = (id: string) => go({ vehicle: id, card: undefined, pane: isWide() ? undefined : 'history' });
+  const closeCar = () => go({ vehicle: undefined, card: undefined, pane: undefined });
+  const pickCard = (id: string) => go({ card: id, pane: isWide() ? pane ?? undefined : 'detail' });
+  const expand = (p: string) => go({ pane: p });
+  const unexpand = () => go({ pane: undefined });
+
+  const selectedCard = detail?.history.find((h) => h.cardId === cardId)
+    ?? (cardId ? null : detail?.history[0] ?? null);
+
+  // ── ONE MECHANISM FOR EXPANDED AND FOR NARROW ────────────────────────────────────────────────
+  // At phone width three panes cannot fit, so the layout is one pane with a way back — which is
+  // the same thing "expanded" means on a desktop. `pane` carries which one; the ONLY difference is
+  // what happens when it is absent, and that is a media query on the default rather than a second
+  // implementation. `lg:` shows all three; below it the classes collapse to whichever is current.
+  const shown = pane ?? 'all';
+  // WIDTHS ONLY WHEN THREE ARE SHOWING. Expanded, a pane is the whole row and its own width would
+  // fight that — hence `lg:flex-1` and no basis. The lead list is the narrow one: it is a column of
+  // registrations being worked down, not the thing being read.
+  const WIDTH: Record<string, string> = {
+    list: 'lg:w-[20rem] lg:shrink-0',
+    history: 'lg:flex-1',
+    detail: 'lg:w-[22rem] lg:shrink-0',
+  };
+  // ── THE ONE DIFFERENCE BETWEEN EXPANDED AND NARROW ───────────────────────────────────────────
+  // Same mechanism, same state, one divergence: what `pane` being ABSENT means. Wide, it means all
+  // three. Narrow, three cannot fit, so it means the leftmost — the list — and "expand" is how you
+  // reach the others. Getting this wrong hid all three below lg, because `hidden lg:flex` is
+  // literally "show nothing until the viewport is wide".
+  const paneClass = (mine: string, base: string) =>
+    shown === mine ? `flex ${base} flex-1`
+      : shown === 'all'
+        ? `${mine === 'list' ? 'flex' : 'hidden'} lg:flex ${base} ${WIDTH[mine]}`
+        : 'hidden';
+
+  // THE BOARD ITSELF, captured so it can be rendered either as the whole page (no car open) or as
+  // the left pane of three. One definition, so the stack tabs, the sort strip and the row actions
+  // are the same thing in both — not a narrow copy that drifts.
+  // THE HEADING IS PAGE CHROME, NOT BOARD. In the pane the section header already says "Who to
+  // ring", so repeating the h1 and the subtitle under it spends a third of a 320px column saying
+  // what the label above it says.
+  const heading = (
     <>
-      <Head><title>Marketing — GreaseDesk</title></Head>
       <h1 className="text-xl font-semibold text-ink mb-1">Marketing</h1>
       <p className="text-sm text-muted mb-4">
         Who to ring. A car drops to Later when the customer answers — a snooze comes back when its
         clock comes round; a no stays.
       </p>
+    </>
+  );
+  const board_ = (
+    <>
 
       {/* ── A COUNT, NOT A VALUE ────────────────────────────────────────────────────────────────
           What replaced "£1,214 of work due", which was four cars times the tenant's average job
@@ -401,11 +487,86 @@ export default function MarketingPage({ board }: PageProps) {
             ))}
           </div>
         )}
-        <StackRows rows={rows} empty={STACKS.find((s) => s.key === active)!.empty} onDone={reload} />
+        <StackRows rows={rows} empty={STACKS.find((s) => s.key === active)!.empty} onDone={reload}
+          onOpen={openCar} selectedVehicle={vehicleId} />
       </section>
     </>
   );
+
+  // A URL WITH NO ?vehicle= RENDERS EXACTLY THE ABOVE. No bounded box, no panes, no fetch — the
+  // page it has always been. Everything below is additive and unreachable until a car is opened.
+  if (!vehicleId) {
+    return (
+      <>
+        <Head><title>Marketing — GreaseDesk</title></Head>
+        {heading}
+        {board_}
+      </>
+    );
+  }
+
+  const backToThree = (
+    <button type="button" onClick={unexpand} data-testid="pane-back"
+      className="text-xs underline text-accent lg:inline hidden">Back to three panes</button>
+  );
+  // On narrow, "back" from an expanded pane returns to the list — which is what `pane` absent means
+  // there. From the list itself it closes the car, because there is nowhere further left to go.
+  const backToList = (
+    <button type="button" onClick={() => (pane ? unexpand() : closeCar())} data-testid="pane-back-narrow"
+      className="text-xs underline text-accent lg:hidden">← Back</button>
+  );
+  const Pane = ({ id, title, children }: { id: string; title: string; children: React.ReactNode }) => (
+    <section className={`${paneClass(id, 'flex-col min-w-0 min-h-0')} border border-line rounded-xl bg-content`}
+      data-testid={`pane-${id}`} data-expanded={shown === id}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-line shrink-0">
+        <h2 className="text-xs font-semibold text-ink flex-1 truncate">{title}</h2>
+        {shown === id ? (<>{backToThree}{backToList}</>) : (
+          // EXPAND IS A WIDE-ONLY IDEA. Below lg a pane is already the full width, so the control
+          // would promise something it cannot deliver; the way between panes there is tapping
+          // through, and the way out is Close in the header above.
+          <button type="button" onClick={() => expand(id)} data-testid={`pane-expand-${id}`}
+            className="text-xs underline text-muted hover:text-ink hidden lg:inline">Expand</button>
+        )}
+      </div>
+      {/* THE ONLY SCROLLING BOX. The shell gives this page a bounded height (AdminLayout's
+          fullHeight), so each pane scrolls itself rather than the document scrolling all three. */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">{children}</div>
+    </section>
+  );
+
+  return (
+    <>
+      <Head><title>{detail?.vehicle.registration ?? 'Marketing'} — GreaseDesk</title></Head>
+      <div className="h-full flex flex-col min-h-0" data-testid="call-view">
+        <div className="flex items-baseline gap-3 mb-2 shrink-0">
+          <h1 className="text-lg font-semibold text-ink">{detail?.vehicle.registration ?? 'Loading…'}</h1>
+          {detail?.vehicle.desc && <span className="text-sm text-muted">{detail.vehicle.desc}</span>}
+          <button type="button" onClick={closeCar} data-testid="close-car"
+            className="text-xs underline text-accent ml-auto">Close</button>
+        </div>
+        {detailErr && <p className="text-sm text-danger mb-2" data-testid="call-view-error">{detailErr}</p>}
+        <div className="flex-1 min-h-0 flex gap-3">
+          <Pane id="list" title="Who to ring">
+            {board_}
+          </Pane>
+          <Pane id="history" title={detail ? `${detail.vehicle.registration} — history` : 'History'}>
+            {detail
+              ? <CarHistoryPane detail={detail} selectedCard={selectedCard?.cardId ?? null} onPick={pickCard} locale="en-GB" />
+              : <p className="text-sm text-muted italic">Loading…</p>}
+          </Pane>
+          <Pane id="detail" title="This visit">
+            <CardDetailPane card={selectedCard} locale="en-GB" />
+          </Pane>
+        </div>
+      </div>
+    </>
+  );
 }
+
+// The bounded shell ONLY when the panes are open — see AdminLayout's fullHeight. A static `true`
+// would change how the plain board sits before anybody has opened a car.
+(MarketingPage as unknown as { fullHeight: (q: Record<string, unknown>) => boolean })
+  .fullHeight = (q) => typeof q.vehicle === 'string' && q.vehicle.length > 0;
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
