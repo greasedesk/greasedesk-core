@@ -90,6 +90,13 @@ export type AuditAction =
   | 'intake_report.sent'
   // The CUSTOMER's own tap on an intake report — attributed to the magic link, never to a user.
   | 'due_item.customer_answered'
+  // The GARAGE writing down what the customer said, usually on the phone. A SEPARATE action from
+  // the tap above, and deliberately so: DueItemCustomerAnswer is the customer's own record and a
+  // garage-entered answer must never be written there — it would make AnswerDivergence compare a
+  // garage entry against itself and always report `diverged: false`, losing "they tapped no, then
+  // rang and changed their mind", which is the one thing that type exists to surface. The item
+  // carries the working answer; this log carries who said so and when.
+  | 'due_item.garage_answered'
   | 'due_item.found'
   | 'due_item.closed'
   | 'refund.requested'

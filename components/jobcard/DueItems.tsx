@@ -92,6 +92,29 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
   // "the customer refused it" on the car's permanent history.
   const [closing, setClosing] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  // ── RECORDING WHAT THEY SAID, AFTER THE FACT ─────────────────────────────────────────────────
+  // The create form asks for a response at the car, before anyone has spoken to the customer, so
+  // `not raised yet` is the honest answer then — and it is what all 88 findings on the platform
+  // say, because until now nothing could change one afterwards. The answer arrives on the phone.
+  //
+  // NO DEFAULT and no pre-selection, for the same reason the create form has none: a default here
+  // would look like an answer somebody gave. `not_raised` is absent by construction — the server
+  // refuses it too (lib/due-items::refuseResponse), because a finding cannot be un-asked.
+  const [answering, setAnswering] = useState<string | null>(null);
+  async function respond(id: string, response: 'declined' | 'agreed_later' | 'wants_call') {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/due-items', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'respond', id, response }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.message || t('dueItems.saveError')); return; }
+      setAnswering(null);
+      await reload();
+    } finally { setBusy(false); }
+  }
+
   async function close(id: string, kind: ClosedKind) {
     setBusy(true);
     try {
@@ -99,7 +122,7 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         // jobCardId ALWAYS, not only for `fixed`: it is true of every closure made from a card,
         // and the server is what insists on it for the one kind that cannot do without it.
-        body: JSON.stringify({ id, closedKind: kind, closedReason: note.trim() || undefined, jobCardId }),
+        body: JSON.stringify({ action: 'close', id, closedKind: kind, closedReason: note.trim() || undefined, jobCardId }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(d?.message || t('dueItems.saveError')); return; }
@@ -148,7 +171,29 @@ export default function DueItems({ jobCardId, items: seed, canEdit, motExpiry }:
               <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${it.customerResponse === 'declined' ? 'bg-warn-soft text-warn' : 'bg-surface border border-line text-muted'}`}>
                 {t(`dueItems.response.${it.customerResponse}`)}
               </span>
-              {canEdit && closing !== it.id && (
+              {canEdit && answering !== it.id && closing !== it.id && (
+                <button type="button" disabled={busy} onClick={() => { setAnswering(it.id); }}
+                  className="text-xs underline text-accent disabled:opacity-50" data-testid={`due-item-answer-${it.id}`}>
+                  {it.customerResponse === 'not_raised' ? 'Record their answer' : 'Change'}
+                </button>
+              )}
+              {canEdit && answering === it.id && (
+                <span className="flex items-center gap-1.5 flex-wrap" data-testid={`due-item-answers-${it.id}`}>
+                  {/* THE SAME THREE WORDS THE CREATE FORM USES, minus "not raised": you cannot
+                      un-ask a question. Order matches the create form so the vocabulary reads the
+                      same in both places. */}
+                  {([['declined', 'They declined'], ['agreed_later', 'Wants it later'], ['wants_call', 'Asked for a call']] as const).map(([k, label]) => (
+                    <button key={k} type="button" disabled={busy} onClick={() => respond(it.id, k)}
+                      data-testid={`due-item-answer-${k}-${it.id}`}
+                      className="text-xs rounded-lg border border-line bg-surface px-2 py-1 text-ink disabled:opacity-50">
+                      {label}
+                    </button>
+                  ))}
+                  <button type="button" disabled={busy} onClick={() => setAnswering(null)}
+                    className="text-xs underline text-muted">Cancel</button>
+                </span>
+              )}
+              {canEdit && closing !== it.id && answering !== it.id && (
                 <button type="button" disabled={busy} onClick={() => { setClosing(it.id); setNote(''); }}
                   data-testid={`due-item-close-${it.id}`}
                   className="ml-auto text-xs text-muted hover:text-ink underline">{t('dueItems.close')}</button>

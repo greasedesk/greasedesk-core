@@ -22,7 +22,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
 import { refuseClosure, closureFields } from '@/lib/due-item-closure';
-import { refuseDueItem, responseAtFor, openDueItemsForVehicle, closureOffersForCard, type DueBasis, type DueItemResponse } from '@/lib/due-items';
+import { refuseDueItem, responseAtFor, refuseResponse, openDueItemsForVehicle, closureOffersForCard, type DueBasis, type DueItemResponse } from '@/lib/due-items';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'GET' && req.method !== 'PUT') {
@@ -79,8 +79,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true, linked: true });
   }
 
-  // ── CLOSE ─────────────────────────────────────────────────────────────────────────────────────
+  // ── PATCH: TWO NAMED INTENTS, NEVER INFERRED ──────────────────────────────────────────────────
+  // `action` is REQUIRED and explicit. The alternative — branching on which fields arrived — means
+  // a body that forgets `closedKind` silently performs the other operation, and both of these
+  // write to the same row. One is "this is finished"; the other is "the customer said something".
+  // A caller that does not say which it means is refused rather than guessed at.
   if (req.method === 'PATCH') {
+    const action = (req.body || {}).action as string | undefined;
+    if (action !== 'close' && action !== 'respond') {
+      return res.status(400).json({ code: 'bad_action', message: "Say which this is: action must be 'close' or 'respond'." });
+    }
+    if (action === 'respond') {
+      const { id, response } = (req.body || {}) as { id?: string; response?: string };
+      if (!id) return res.status(400).json({ message: 'id is required.' });
+      const refusal = refuseResponse(response as never);
+      if (refusal) return res.status(400).json({ code: refusal.code, message: refusal.message });
+
+      // THE SAME RESOLUTION THE CLOSE PATH USES: by id AND group, with the site derived from the
+      // car's most recent card so visibility is checked against a real location.
+      const item = await prisma.vehicleDueItem.findFirst({
+        where: { id, group_id: groupId },
+        select: { id: true, customer_response: true, description: true, vehicle_id: true,
+                  vehicle: { select: { job_cards: { select: { site_id: true }, take: 1, orderBy: { created_at: 'desc' } } } } },
+      });
+      if (!item) return res.status(404).json({ message: 'Item not found.' });
+      const rSite = item.vehicle?.job_cards?.[0]?.site_id ?? null;
+      const rVis = await getVisibility(user.id as string);
+      if (rSite && !canAccessSite(rVis, rSite)) return res.status(403).json({ message: 'You do not have access to this vehicle’s location.' });
+
+      const at = new Date();
+      await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await tx.vehicleDueItem.update({
+          where: { id },
+          // response_at moves WITH the answer — an answer is an event, and the pair must not drift.
+          data: { customer_response: response as DueItemResponse, response_at: at },
+        });
+        // KEYED ON THE ITEM, following the closure path: a finding answered a year later belongs to
+        // the car's history, and the card it was found on may be long gone. FROM and TO both, so the
+        // append-only log carries the sequence of changes and an answer stays reversible.
+        await writeAudit(tx, {
+          groupId, userId: user.id as string,
+          entity: 'VehicleDueItem', entityId: id,
+          action: 'due_item.garage_answered',
+          diff: { from: item.customer_response, to: response, at: at.toISOString(), description: item.description },
+        });
+      });
+      return res.status(200).json({ ok: true, response, respondedAt: at.toISOString() });
+    }
     // ── A CLOSURE NOW SAYS WHY, AND THE KIND IS REQUIRED ────────────────────────────────────────
     // This accepted an OPTIONAL closedReason and the only caller sent neither it nor a card, so
     // every human closure through the job card wrote closed_reason NULL and closed_job_card_id

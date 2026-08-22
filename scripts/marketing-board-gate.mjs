@@ -335,6 +335,76 @@ try {
   check('the same order comes back on a reload', JSON.stringify(again) === JSON.stringify(byUrgency),
     `${byUrgency.join(' ')}  vs  ${again.join(' ')}`);
 
+  // ── 9. THE GARAGE RECORDS THE ANSWER, AND THE CAR MOVES ──────────────────────────────────────
+  // Every finding on every tenant is `not_raised` — 88 of them — because nothing can change one
+  // after it is created. The two API writers set the response at CREATE, at the car, before anyone
+  // has spoken to the customer; the only thing that can change it afterwards is the customer's own
+  // tap on an intake report, and one report has ever been sent.
+  //
+  // Driven through the REAL PATCH endpoint, not by writing rows: the question is whether the
+  // endpoint moves the car, and a hand-written update would prove only that the board reads a
+  // column.
+  console.log('\n— a garage-recorded answer moves the car —');
+  const answerCar = await mk('ZZ76ANS');
+  // MOT four days out, so the car sits in WARM on its own. Whatever the finding does has to be
+  // visible against that: "leaves the car's other reasons standing" needs another reason to stand.
+  await prisma.vehicle.update({ where: { id: answerCar }, data: { mot_expiry: new Date(NOW.getTime() + 4 * 86_400_000) } });
+  const finding = await prisma.vehicleDueItem.create({
+    data: { group_id: ZZ, vehicle_id: answerCar, description: 'Rear discs corroded',
+      due_basis: 'mileage', due_mileage: 90000, due_date_precision: 'day',
+      timing_in_description: false, customer_response: 'not_raised' },
+    select: { id: true } });
+
+  const respond = (response) => contactPage.evaluate(async (b) => {
+    const r = await fetch('/api/due-items', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { action: 'respond', id: finding.id, response });
+
+  const stackOf = async (reg) => {
+    const b = await B.buildBoard(ZZ, NOW);
+    const k = ['hot', 'warm', 'later'].find((x) => b[x].some((r) => r.registration === reg));
+    const row = k ? b[k].find((r) => r.registration === reg) : null;
+    return { stack: k ?? 'absent', reasons: (row?.reasons ?? []).map((r) => r.kind), urgency: row?.urgency };
+  };
+
+  check('the car starts in Warm, unanswered', (await stackOf('ZZ76ANS')).stack === 'warm',
+    JSON.stringify(await stackOf('ZZ76ANS')));
+
+  const rAgreed = await respond('agreed_later');
+  const afterAgreed = await stackOf('ZZ76ANS');
+  check('agreed_later puts the car in Hot', rAgreed.status === 200 && afterAgreed.stack === 'hot',
+    `${rAgreed.status} → ${JSON.stringify(afterAgreed)}`);
+
+  const rDeclined = await respond('declined');
+  const afterDeclined = await stackOf('ZZ76ANS');
+  check('declined takes it OUT of Hot', rDeclined.status === 200 && afterDeclined.stack !== 'hot',
+    `${rDeclined.status} → ${JSON.stringify(afterDeclined)}`);
+  // THE DISTINCTION THIS SLICE IS ABOUT. A declined FINDING removes one job from consideration; a
+  // declined CONTACT is terminal for the whole car. The MOT must still be standing here.
+  // TIED TO THE TRANSITION HAVING HAPPENED. On its own this passes whenever the car is in Warm —
+  // including when the PATCH did nothing at all and the car never moved, which is how it read green
+  // against an endpoint that rejected every request.
+  const declinedInDb = (await prisma.vehicleDueItem.findUnique({ where: { id: finding.id }, select: { customer_response: true } }))?.customer_response;
+  check('  …and the car\'s other reasons still stand', declinedInDb === 'declined' && afterDeclined.reasons.includes('mot_due'),
+    `stored=${declinedInDb}, reasons: ${afterDeclined.reasons.join(',')} — a declined finding is not a declined car`);
+
+  const rCall = await respond('wants_call');
+  const afterCall = await stackOf('ZZ76ANS');
+  check('wants_call produces a reason of its own', rCall.status === 200 && afterCall.reasons.some((k) => /call/.test(k)),
+    `${rCall.status} → ${JSON.stringify(afterCall)}`);
+  check('  …and it is HOT — the customer asked to be rung', afterCall.stack === 'hot', afterCall.stack);
+
+  const rRevert = await respond('not_raised');
+  // THE STATUS IS NOT ENOUGH. Before the respond action existed this read 400 `bad_kind` — "Say why
+  // this is being closed" — because every PATCH fell through to the CLOSE branch. Green, for a
+  // refusal that had nothing to do with the answer. The refusal has to be ABOUT the revert.
+  check('reverting to not_raised is REFUSED', rRevert.status === 400 && rRevert.body?.code === 'bad_response',
+    `${rRevert.status} ${JSON.stringify(rRevert.body).slice(0, 140)} — "we never asked" after you did ask is a false statement`);
+  const stillCall = await prisma.vehicleDueItem.findUnique({ where: { id: finding.id }, select: { customer_response: true, response_at: true } });
+  check('  …and the answer is unchanged by the refusal', stillCall.customer_response === 'wants_call' && stillCall.response_at != null,
+    JSON.stringify(stillCall));
+
   check('  …and the declined car keeps the reason it was hot for',
     (after.later.find((r) => r.registration === 'ZZ76DEC')?.reasons ?? []).some((r) => r.kind === 'mot_expired'),
     'nobody loses the thread of why it was on the list');
@@ -345,7 +415,8 @@ try {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
     const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
-    const CONTACT_REGS = ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB'];
+    const CONTACT_REGS = ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB', 'ZZ76ANS'];
+    await step('findings', () => prisma.vehicleDueItem.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } }));
     await step('contacts', () => prisma.marketingContact.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } }));
     await step('contact edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: { in: fix.contactVehicles ?? [] } } }));
     await step('contact vehicles', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: { in: CONTACT_REGS } } }));
@@ -354,7 +425,7 @@ try {
     await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: CUST } }));
     check('teardown removed every fixture row (ZZ only)',
       (await prisma.vehicle.count({ where: { group_id: ZZ, registration: 'ZZ76BRD' } })) === 0
-      && (await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB'] } } })) === 0
+      && (await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB', 'ZZ76ANS'] } } })) === 0
       && (await prisma.marketingContact.count({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } })) === 0
       && (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } })) === 0);
   }

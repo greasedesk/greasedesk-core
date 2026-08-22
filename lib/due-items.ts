@@ -455,6 +455,32 @@ export type CustomerAnswer = 'yes' | 'no' | 'call_me';
  * this", and the estimate still goes out and comes back through acceptQuote like any other. That is
  * why yes maps to `agreed_later` and never to anything that reads as agreement to a figure.
  */
+/**
+ * ── AN ANSWER CAN BE CORRECTED; IT CANNOT BE UNASKED ───────────────────────────────────────────
+ * Answers change — "they tapped no, then rang and changed their mind" is the normal shape, and
+ * AnswerDivergence exists to show exactly that. So a garage may move a finding between the three
+ * real answers as often as the customer changes their mind.
+ *
+ * `not_raised` is not one of them. It is the only value that leaves `response_at` null, and it
+ * means "nobody has put this to the customer" — which stops being true the moment somebody does.
+ * Allowing a revert would let a mis-tap erase the fact that the conversation happened, and the
+ * board would count the car as an unanswered lead again. Record a different answer instead.
+ */
+export type ResponseRefusal = { code: 'bad_response'; message: string };
+const REAL_ANSWERS: readonly DueItemResponse[] = ['declined', 'agreed_later', 'wants_call'];
+
+export function refuseResponse(response: DueItemResponse | undefined | null): ResponseRefusal | null {
+  if (!response || !REAL_ANSWERS.includes(response)) {
+    return {
+      code: 'bad_response',
+      message: response === 'not_raised'
+        ? 'A finding cannot go back to "not raised" — somebody has already asked. Record what they said instead.'
+        : 'Say what the customer said: declined, agreed for later, or wants a call.',
+    };
+  }
+  return null;
+}
+
 export const GARAGE_VIEW_OF: Record<CustomerAnswer, 'declined' | 'agreed_later' | 'wants_call'> = {
   yes: 'agreed_later',
   no: 'declined',

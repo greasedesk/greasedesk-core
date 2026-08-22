@@ -40,14 +40,14 @@ export type Stack = 'hot' | 'warm' | 'later';
  * a component — one place to read when somebody asks why a car is at the top.
  */
 export type LeadReasonKind =
-  | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked' | 'service_overdue'
+  | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked' | 'service_overdue' | 'wants_call'
   | 'mot_due' | 'service_due' | 'unanswered' | 'battery_retest'
   | 'declined' | 'snoozed' | 'distant';
 
 /** The set, as VALUES — MarketingContact.reason is checked against exactly this, in the database
  *  and at the endpoint, so a contact can say what the call was really about. */
 export const LEAD_REASON_KINDS: LeadReasonKind[] = [
-  'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked', 'service_overdue',
+  'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked', 'service_overdue', 'wants_call',
   'mot_due', 'service_due', 'unanswered', 'battery_retest',
   'declined', 'snoozed', 'distant',
 ];
@@ -111,6 +111,25 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   if (s.lowestTreadTenths != null && s.lowestTreadTenths < LEGAL_MIN_TENTHS) {
     out.push({ kind: 'tyre_illegal', stack: 'hot', text: `Tyre at ${(s.lowestTreadTenths / 10).toFixed(1)}mm — below the legal limit` });
   }
+  // ── THEY ASKED TO BE RUNG ────────────────────────────────────────────────────────────────────
+  // `wants_call` was in the type union and nowhere else: not in `agreed`, not in `unanswered`, not
+  // in `declined`. The one answer that literally means "ring me" produced no reason at all, and
+  // survived into the board only if its finding happened to fall in the due window. It was
+  // unreachable in practice — only the customer report can set it, and one report has ever been
+  // sent — so nothing caught it.
+  //
+  // It belongs in the MEASURED band with the failed batteries and the illegal tyre, and for the
+  // same reason: it is knowledge, not a calendar. Somebody said the words.
+  //
+  // It is not in DATED_KINDS, so on a car whose only reason is this one, urgencyOf returns 0 and it
+  // ranks above every clock — where a customer who asked to be phoned belongs. On a car that ALSO
+  // has an MOT date the nearest clock still decides, exactly as it does for a failed battery: the
+  // measured band is what a row falls back to when nothing on it is dated, not an override.
+  const wantsCall = s.findings.filter((f) => f.response === 'wants_call');
+  if (wantsCall.length) {
+    out.push({ kind: 'wants_call', stack: 'hot',
+      text: `${plural(wantsCall.length, 'job', 'jobs')} they asked to be called about — ${wantsCall[0].description}` });
+  }
   const agreed = s.findings.filter((f) => f.response === 'agreed_later');
   if (agreed.length) {
     out.push({ kind: 'agreed_not_booked', stack: 'hot',
@@ -136,7 +155,10 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   // was missing here only because serviceDue dropped `alreadyPassed`, so nothing downstream could
   // see the difference. A car months past its service is not a car due in three weeks, and it was
   // sitting in the same stack.
-  const live = s.findings.filter((f) => f.dueWithinWindow && f.response !== 'declined');
+  // wants_call is excluded here too: it already has its own reason above, and a car should not
+  // read "1 job due" AND "1 job they asked to be called about" for the same finding — the same
+  // duplication the battery had on the invoice, the card and this row.
+  const live = s.findings.filter((f) => f.dueWithinWindow && f.response !== 'declined' && f.response !== 'wants_call');
   const overdue = live.filter((f) => f.overdue);
   const dueSoon = live.filter((f) => !f.overdue);
   if (overdue.length) {
