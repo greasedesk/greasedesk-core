@@ -41,7 +41,7 @@ export type DemoTenant = {
  * at it would destroy the recording set.
  */
 export const DEMO_TENANTS: readonly DemoTenant[] = [
-  { id: 'f3542807-2729-4bc3-8158-9bf7b9d0b353', ref: 'GB-GD2369', purpose: 'Shared sales demo — reps get their own User rows here.' },
+  { id: 'a656fcba-41ab-4bae-998d-5dc3b7284488', ref: 'GB-GD2369', purpose: 'Shared sales demo — reps get their own User rows here.' },
 ];
 
 export const isListedDemoTenant = (groupId: string): boolean =>
