@@ -5,6 +5,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. Throwaway rows, removed here.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock, closureOffer, closureOffersForCard } = await import('../lib/due-items.ts');
@@ -372,7 +373,7 @@ check('the reasoning is recorded where the next reader will be', /never stored, 
 console.log('\n— throwaway fixtures on ZZ Gate Garage —');
 let fix = null;
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ94 DUE', registration_normalized: 'ZZ94DUE' }, select: { id: true } });
   const card = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'draft' }, select: { id: true } });
   fix = { vehId: veh.id, cardId: card.id, itemIds: [] };
@@ -412,10 +413,14 @@ try {
   // when the world does. This burns one number from ZZ's own warranty sequence — deliberate, and
   // the reason the warranty series is used rather than the chargeable one.
   console.log('\n— mint, then move both facts —');
-  const site2 = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  // ONE SITE, AND `site2` WAS NEVER A SECOND ONE. This used to re-run the same ZZ lookup and bind
+  // the result to a name that reads like a distinctness fixture — a second site, deliberately
+  // different from the first. It never was: the query was identical, nothing asserted the two
+  // differed, and the only thing the name achieved was to make a reader think the freeze was being
+  // proven across sites when it is being proven across TIME. Reusing `site` says what is true.
   const veh2 = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ88 FRZ', registration_normalized: 'ZZ88FRZ', mot_expiry: new Date('2027-09-22T00:00:00Z') }, select: { id: true } });
-  const cust2 = await prisma.customer.create({ data: { group_id: ZZ, site_id: site2.id, name: 'Freeze Fixture' }, select: { id: true } });
-  const card2 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site2.id, customer_id: cust2.id, vehicle_id: veh2.id, status: 'in_progress', is_comeback: true }, select: { id: true } });
+  const cust2 = await prisma.customer.create({ data: { group_id: ZZ, site_id: site.id, name: 'Freeze Fixture' }, select: { id: true } });
+  const card2 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, customer_id: cust2.id, vehicle_id: veh2.id, status: 'in_progress', is_comeback: true }, select: { id: true } });
   fix.cardId2 = card2.id; fix.vehId2 = veh2.id; fix.custId2 = cust2.id;
   await prisma.jobCardItem.create({ data: { job_card_id: card2.id, item_type: 'labour', description: 'gate: freeze', qty: 1, unit_price: 0, vat_rate: 0 } });
   const keeper = await prisma.vehicleDueItem.create({

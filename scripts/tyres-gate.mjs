@@ -9,6 +9,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const T = await import('../lib/tyres.ts');
@@ -84,7 +85,7 @@ check('the mint freezes the tyre lines with everything else', /tyreLines: printe
 console.log('\n— on ZZ —');
 let fix = null;
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ79 TYG', registration_normalized: 'ZZ79TYG' }, select: { id: true } });
   const card = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'draft', odometer_in: 50000 }, select: { id: true } });
   fix = { veh: veh.id, card: card.id };

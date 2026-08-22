@@ -11,6 +11,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { INTAKE_ITEMS, INTAKE_SWITCH, intakeItemDone, intakeItemStates, intakeOutstanding, SKIP_REASON_CHIPS, DIAG_SCAN_SLOT } = await import('../lib/intake-items.ts');
@@ -109,7 +110,7 @@ check('a skip with an empty reason is still a skip', /reason: \(reason \?\? ''\)
 console.log('\n— on ZZ: the affirmative, and a finding that contradicts it —');
 let fix = null;
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ90 INT', registration_normalized: 'ZZ90INT' }, select: { id: true } });
   const card = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'draft' }, select: { id: true } });
   fix = { vehId: veh.id, cardId: card.id };

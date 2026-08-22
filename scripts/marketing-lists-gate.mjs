@@ -8,7 +8,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -154,7 +154,7 @@ try {
   // edge threw halfway through, `fix` was still null, the finally block did nothing, and two
   // vehicles and a customer were left on ZZ. Register each row the moment it exists.
   fix = { vehicles: [], customer: null };
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const expired = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76MK1', make: 'Mkt', model: 'Expired', mot_expiry: day(-6) }, select: { id: true } });
   fix.vehicles.push(expired.id);
   const soon = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76MK2', make: 'Mkt', model: 'Soon', mot_expiry: day(9) }, select: { id: true } });

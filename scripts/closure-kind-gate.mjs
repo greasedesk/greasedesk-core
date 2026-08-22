@@ -15,7 +15,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -83,7 +83,7 @@ try {
 
   // ── 3. THROUGH THE REAL PATH, ONTO A REAL DOCUMENT ───────────────────────────────────────────
   console.log('\n— topped up, and the invoice says so —');
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900777' }, select: { id: true } });
   const veh = await prisma.vehicle.create({
@@ -137,15 +137,24 @@ try {
     return { status: r.status, body: await r.json().catch(() => ({})) };
   }, body);
 
-  const noKind = await patch({ id: coolant.id });
+  // ── `action` IS THE FIRST THING THE ENDPOINT ASKS FOR ────────────────────────────────────────
+  // Every PATCH below carries it. It was added when the garage gained a way to record what the
+  // customer SAID as well as a way to close a finding, and this gate was left behind as a caller
+  // that predates the discriminator — so all four closures came back 400 and seven checks failed
+  // describing something else. The product's two callers both send it; only the gate did not.
+  const noAction = await patch({ id: coolant.id, closedKind: 'fixed', jobCardId: card.id });
+  check('a PATCH that does not say which act it is, is refused', noAction.status === 400
+    && noAction.body?.code === 'bad_action', JSON.stringify(noAction));
+
+  const noKind = await patch({ action: 'close', id: coolant.id });
   check('the endpoint refuses a closure with no kind', noKind.status === 400,
     'the shape the old UI sent, now impossible');
-  const noCard = await patch({ id: coolant.id, closedKind: 'fixed' });
+  const noCard = await patch({ action: 'close', id: coolant.id, closedKind: 'fixed' });
   check('  …and a `fixed` with no card', noCard.status === 400 && /visit/.test(noCard.body?.message ?? ''),
     noCard.body?.message);
 
-  check('we sorted the coolant', (await patch({ id: coolant.id, closedKind: 'fixed', closedReason: 'Topped up', jobCardId: card.id })).status === 200);
-  check('the customer declined the discs', (await patch({ id: declined.id, closedKind: 'declined', jobCardId: card.id })).status === 200);
+  check('we sorted the coolant', (await patch({ action: 'close', id: coolant.id, closedKind: 'fixed', closedReason: 'Topped up', jobCardId: card.id })).status === 200);
+  check('the customer declined the discs', (await patch({ action: 'close', id: declined.id, closedKind: 'declined', jobCardId: card.id })).status === 200);
 
   const rows = await prisma.vehicleDueItem.findMany({ where: { vehicle_id: veh.id },
     select: { description: true, closed_kind: true, closed_reason: true, closed_job_card_id: true } });

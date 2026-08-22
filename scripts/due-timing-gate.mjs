@@ -13,6 +13,7 @@
  * It also proves freeze-at-issue on the one document that can prove it. Fixtures on ZZ only.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
@@ -99,7 +100,7 @@ try {
 
   // ── 6. THE ORDERING HALF ─────────────────────────────────────────────────────────────────────
   console.log('\n— fixing the sentence and leaving the row wrong would be the symptom —');
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76TIM2', make: 'Timing', model: 'Fixture' }, select: { id: true } });
   const card = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'draft' }, select: { id: true } });
   fix = { veh: veh.id, card: card.id };

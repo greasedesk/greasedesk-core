@@ -16,7 +16,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -94,7 +94,7 @@ try {
 
   // ── 4. END TO END: CORRECT A CAR, RE-ISSUE, READ THE DOCUMENT ────────────────────────────────
   console.log('\n— a document corrected after issue —');
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900999' }, select: { id: true } });
   const veh = await prisma.vehicle.create({

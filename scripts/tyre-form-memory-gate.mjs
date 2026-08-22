@@ -21,7 +21,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -41,7 +41,7 @@ try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
   if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900654' }, select: { id: true } });
   const veh = await prisma.vehicle.create({
     data: { group_id: ZZ, registration: REG, registration_normalized: REG, make: 'Tyre', model: 'Memory' }, select: { id: true } });

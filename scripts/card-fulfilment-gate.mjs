@@ -13,6 +13,7 @@
  * a true record of something that happened.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 import { Prisma } from '@prisma/client';
@@ -33,7 +34,7 @@ const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 
 const fixtures = [];
 async function invoiceFixture(label, unitPrice) {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ, is_owner: true }, select: { id: true } });
   const cu = await prisma.customer.create({ data: { group_id: ZZ, name: `${STAMP} ${label}` }, select: { id: true } });
   const idt = await prisma.vehicleIdentity.create({ data: { group_id: ZZ }, select: { id: true } });

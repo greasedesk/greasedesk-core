@@ -6,6 +6,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. Throwaway rows, created and removed here.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
@@ -56,7 +57,7 @@ check('a no-show revokes the customer link, in the same tx as the cancel path',
 console.log('\n— throwaway fixtures on ZZ Gate Garage —');
 let fix = null;
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const resource = await prisma.resource.findFirst({ where: { site_id: site.id }, select: { id: true } });
   const cust = await prisma.customer.create({
     data: { group_id: ZZ, site_id: site.id, name: 'NoShow Gate Fixture', phone: '07700 900999', phone_e164: '447700900999' },

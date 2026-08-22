@@ -23,7 +23,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -40,7 +40,7 @@ const D = (o, c, i) => ({ outer: o, centre: c, inner: i });
 let fix = null, browser = null;
 
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76VIS', make: 'Visible', model: 'Fixture' }, select: { id: true } });
   const card = await prisma.jobCard.create({
     data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'in_progress', stage_details_done: true, odometer_in: 50000 },

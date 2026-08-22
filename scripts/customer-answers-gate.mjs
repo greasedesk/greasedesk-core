@@ -11,6 +11,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
+const { zzSite } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { GARAGE_VIEW_OF, answerDivergence, recordCustomerAnswer, latestCustomerAnswers } = await import('../lib/due-items.ts');
@@ -62,7 +63,7 @@ check('the customer table is append-only by intent', /APPEND-ONLY/.test(model));
 console.log('\n— on ZZ: the full sequence —');
 let fix = null;
 try {
-  const site = await prisma.site.findFirst({ where: { group_id: ZZ }, select: { id: true } });
+  const site = await zzSite(prisma);
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ86 ANS', registration_normalized: 'ZZ86ANS' }, select: { id: true } });
   const card = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id, status: 'draft' }, select: { id: true } });
   const item = await prisma.vehicleDueItem.create({

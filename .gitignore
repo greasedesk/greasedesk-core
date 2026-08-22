@@ -36,8 +36,12 @@ yarn-error.log*
 public/pdfjs/
 .commission-gate-tmp/
 
-# throwaway gate/verify scripts (run from repo dir for node_modules resolution)
-_*.mjs
+# THROWAWAY gate/verify scripts only (run from the repo dir for node_modules resolution).
+# `_tmp-`, NOT `_*`: the old pattern also swallowed scripts/_gate-preflight.mjs, _ts.mjs,
+# _ts-hook.mjs and _gate-retry.mjs — the shared helpers that 86, 81, 2 and 3 gates import.
+# Every committed gate depended on files that were not in the repo, so a fresh clone could
+# not run a single one. Name a throwaway `_tmp-<what>.mjs` and it stays ignored.
+_tmp-*.mjs
 .vercel
 
 # The gate runner writes results here as it goes, so a run can resume. Local state.
