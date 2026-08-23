@@ -163,7 +163,16 @@
     "lookupVpic": "Filled from the VIN decoder — colour and mileage aren’t in a VIN, add them yourself.",
     "vinInvalid": "A VIN is 17 characters, letters and numbers, no I, O or Q.",
     "noShowHistory": "⚠ {{count}} no-show(s) on record for this customer ({{dates}}).",
-    "dueItems": "This car also needs: {{list}}"
+    "dueItems": "This car also needs: {{list}}",
+    "openCardsOne": "⚠ This car already has an open job card.",
+    "openCardsMany": "⚠ This car already has {{count}} open job cards.",
+    "openCardLine": "{{status}} · {{when}}{{lift}}{{invoice}}",
+    "openCardOnLift": " · {{lift}}",
+    "openCardInvoiced": " · invoice raised",
+    "openCardBooked": "booked {{date}}",
+    "openCardUnbooked": "created {{date}}, not in the diary",
+    "openCardOpen": "Open it",
+    "openCardsHint": "Book anyway if this is a separate visit."
   },
   "menu": {
     "hint": "Right-click (or long-press) the diary to book a job or add a note.",

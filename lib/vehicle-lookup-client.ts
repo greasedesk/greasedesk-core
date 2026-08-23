@@ -14,6 +14,7 @@
  * against its own inputs — the merge policy lives with the form, which alone knows what the user has
  * already typed, and a manual correction must never be clobbered by pressing Look up again.
  */
+import type { OpenCardSummary } from '@/lib/duplicate-cards';
 import { normalizeReg } from '@/lib/vehicle-identity';
 
 export type LookupVehicleFields = {
@@ -28,7 +29,10 @@ export type VehicleLookupResult =
       /** Owner's missed bookings, present only on a records hit with history (null = none or unknown). */
       noShows?: { count: number; dates: string[] } | null;
       /** Open due items on this car (null = none, or a non-records hit). */
-      dueItems?: Array<{ id: string; description: string; dueBasis: string; dueDate: string | null; dueMileage: number | null; customerResponse: string }> | null }
+      dueItems?: Array<{ id: string; description: string; dueBasis: string; dueDate: string | null; dueMileage: number | null; customerResponse: string }> | null;
+      /** Cards already open for this car — see lib/duplicate-cards for which statuses count.
+       *  Empty array when there are none; absent only from the DVSA branch, which has no cards. */
+      openCards?: OpenCardSummary[] | null }
   | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
@@ -67,6 +71,7 @@ export async function lookupVehicleByReg(
           // Open findings on this car — present only on a records hit (DVSA knows the car, not
           // what we found on it last March).
           dueItems: Array.isArray(data.dueItems) && data.dueItems.length ? data.dueItems : null,
+          openCards: Array.isArray(data.openCards) ? data.openCards : null,
           mot: null,
         };
       }

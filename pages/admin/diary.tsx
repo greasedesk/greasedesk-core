@@ -41,6 +41,7 @@ import { formatMoney } from '@/lib/format-money';
 import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
+import type { OpenCardSummary } from '@/lib/duplicate-cards';
 import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
@@ -743,7 +744,7 @@ export default function DiaryPage(props: PageProps) {
               {/* Mobile-only. Opens the SAME CreateDialog/create path as the grid gesture, blank: date
                   pre-set to the viewed day, no default lift/time (pickWhen). */}
               {canManage && (
-                <button onClick={() => setCreate({ date: anchor, startAt: '', mode: 'job', pickWhen: true })}
+                <button onClick={() => setCreate({ date: anchor, startAt: '', mode: 'job', pickWhen: true })} data-testid="diary-new-job"
                   className="shrink-0 text-sm font-semibold bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5">
                   {t('addBooking')}
                 </button>
@@ -1107,7 +1108,7 @@ export default function DiaryPage(props: PageProps) {
       {create && (
         <CreateDialog
           info={create} siteId={siteId} resources={resources} defaultResourceId={create.resourceId ?? null}
-          vehicleIdLabel={vehicleIdLabel} vehicleLookupProvider={vehicleLookupProvider}
+          vehicleIdLabel={vehicleIdLabel} vehicleLookupProvider={vehicleLookupProvider} locale={locale}
           onClose={() => setCreate(null)} onDone={() => { setCreate(null); refresh(); }}
         />
       )}
@@ -1130,12 +1131,14 @@ export default function DiaryPage(props: PageProps) {
 }
 
 // ---- create dialogue (module scope so inputs don't remount on keystroke) ----
-function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLabel, vehicleLookupProvider, onClose, onDone }: {
+function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLabel, vehicleLookupProvider, locale, onClose, onDone }: {
   // pickWhen = opened WITHOUT cell context (the mobile toolbar "+ Add booking"): date pre-set to the
   // viewed day, but the user picks the start time AND the lift — no fabricated defaults. Same dialog,
   // same /api/jobcard path as the grid gesture; the grid path is untouched.
   info: { date: string; startAt: string; mode: 'job' | 'note'; resourceId?: string; pickWhen?: boolean };
   siteId: string; resources: ResourceCol[]; defaultResourceId: string | null;
+  /** The tenant's locale, for the one date this dialog renders — the open-card warning's day. */
+  locale: string;
   // Country-shaped: what the plate is CALLED, and whether a lookup provider exists at all.
   vehicleIdLabel: string; vehicleLookupProvider: LookupProviderName;
   onClose: () => void; onDone: () => void;
@@ -1151,6 +1154,12 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // job fields — Registration + Customer anchor the card; the rest are OPTIONAL (capture-if-available so
   // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
+  // Cleared with each lookup, like noShows and dueItems, so a warning never outlives the car it was about.
+  const [openCards, setOpenCards] = useState<OpenCardSummary[] | null>(null);
+  /** YYYY-MM-DD → the tenant's own short date. UTC throughout, like every other date on this page:
+   *  a booked day is a calendar fact and must not shift by timezone at the reader. */
+  const dayLabel = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
   // DVSA's MOT facts from the lookup. Held, not shown: this is a booking form, and these are the
   // car's record rather than anything the person booking should be editing. See the reversal note
   // in the lookup handler for why they are kept at all.
@@ -1174,6 +1183,11 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // customer it belongs to.
   const [noShows, setNoShows] = useState<{ count: number; dates: string[] } | null>(null);
   // OPEN FINDINGS on this car — surfaced at the moment the slot is being agreed, which is when
+  // CLIENT-ONLY, and deliberately so. This lives inside one form fill, between the lookup and the
+  // submit; nothing survives the dialog closing. A dismissal that outlived it would be a fact about
+  // the DATA ("someone looked and it's fine"), and lib/intake-items is explicit that those are
+  // stored — "never a browser dismissal — a banner that comes back teaches people dismissal does
+  // not work here". This is not that: it is a warning shown once, at the moment of the decision.
   // "it also needs discs" turns a half-hour booking into a bigger one. Cleared per lookup, same
   // as the no-show warning, so it never outlives the car it belongs to.
   const [dueItems, setDueItems] = useState<Array<{ id: string; description: string }> | null>(null);
@@ -1219,6 +1233,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     setLookBusy(false);
     setNoShows(r.ok ? (r.noShows ?? null) : null);
     setDueItems(r.ok ? (r.dueItems ?? null) : null);
+    setOpenCards(r.ok ? (r.openCards ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
     if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
     // Fill BLANKS ONLY — a manual correction is never clobbered.
@@ -1334,6 +1349,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                   Irish vehicle, so 'none' hides the button rather than offering a dead end. */}
               <div className="flex items-center gap-2">
                 <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={12} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+                  data-testid="create-reg"
                   onChange={(e) => setReg(normalizeReg(e.target.value) || '')}
                   onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); lookupVehicle(); } }} />
                 {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
@@ -1353,6 +1369,39 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                 <p className="text-[11px] mt-1 font-semibold text-warn" data-testid="no-show-history">
                   {t('create.noShowHistory', { count: noShows.count, dates: noShows.dates.slice(0, 3).join(', ') })}
                 </p>
+              )}
+              {/* ── ALREADY ON THE BOARD ─────────────────────────────────────────────────────────
+                  NEVER BLOCKS. A garage genuinely does sometimes want a second card, and a booking
+                  form that refuses is worse than one that duplicates — the duplicate is visible and
+                  fixable, the refusal sends someone to a workaround. So: say what exists, offer to
+                  open it, and leave the submit exactly as it was. */}
+              {openCards && openCards.length > 0 && (
+                <div className="mt-1.5 rounded-lg border border-warn/40 bg-warn/5 p-2" data-testid="duplicate-warning">
+                  <p className="text-[11px] font-semibold text-warn">
+                    {openCards.length === 1 ? t('create.openCardsOne') : t('create.openCardsMany', { count: openCards.length })}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {openCards.map((c, i) => (
+                      <li key={c.id} className="text-[11px] text-ink flex items-baseline gap-2 flex-wrap">
+                        <span>
+                          {t('create.openCardLine', {
+                            status: t(`status.${c.status}`, { defaultValue: c.status }),
+                            // BOOKED DAY when there is one, creation day when there is not — an
+                            // unbooked card is still a duplicate, it just has no slot to name.
+                            when: c.bookedFor
+                              ? t('create.openCardBooked', { date: dayLabel(c.bookedFor) })
+                              : t('create.openCardUnbooked', { date: dayLabel(c.createdOn) }),
+                            lift: c.lift ? t('create.openCardOnLift', { lift: c.lift }) : '',
+                            invoice: c.hasInvoice ? t('create.openCardInvoiced') : '',
+                          })}
+                        </span>
+                        <a href={`/admin/jobcards/${c.id}`} data-testid={`duplicate-open-${i}`}
+                          className="underline text-accent">{t('create.openCardOpen')}</a>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[11px] text-muted mt-1">{t('create.openCardsHint')}</p>
+                </div>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -1395,7 +1444,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                 the job card, kept off this high-frequency booking path. */}
             {/* Owner — Customer required; Phone + Email optional. Lands on the current owner via the edge. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupOwner')}</div>
-            <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} value={cust} onChange={(e) => setCust(e.target.value)} /></div>
+            <div><label className={labelCls}>{t('create.customer')}</label><input className={inputCls} data-testid="create-customer" value={cust} onChange={(e) => setCust(e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelCls}>{t('create.phone')}</label>
@@ -1413,12 +1462,12 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
             {pickWhen && (
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>{t('create.date')}</label><input className={inputCls} type="date" value={whenDate} onChange={(e) => setWhenDate(e.target.value)} /></div>
-                <div><label className={labelCls}>{t('create.startTime')}</label><input className={inputCls} type="time" value={whenTime} onChange={(e) => setWhenTime(e.target.value)} /></div>
+                <div><label className={labelCls}>{t('create.startTime')}</label><input className={inputCls} data-testid="create-time" type="time" value={whenTime} onChange={(e) => setWhenTime(e.target.value)} /></div>
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>{t('create.lift')}</label>
-                <select className={inputCls} value={liftId} onChange={(e) => setLiftId(e.target.value)}>
+                <select className={inputCls} data-testid="create-lift" value={liftId} onChange={(e) => setLiftId(e.target.value)}>
                   {pickWhen && <option value="">{t('create.pickLift')}</option>}
                   {resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
@@ -1426,7 +1475,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
               {durationField}
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={createJob} disabled={busy || !canSubmit} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
+              <button onClick={createJob} disabled={busy || !canSubmit} data-testid="create-submit" className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2.5 text-sm disabled:opacity-50">{busy ? t('create.working') : t('create.createJob')}</button>
               <button onClick={onClose} className="text-muted hover:text-ink px-3 text-sm">{t('create.cancel')}</button>
             </div>
           </div>

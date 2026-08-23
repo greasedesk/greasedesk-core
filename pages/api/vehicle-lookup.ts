@@ -7,6 +7,7 @@
  * caller's sites (they can create cards here; reading a reg they can book is the same tier).
  */
 import { openDueItemsForVehicle } from '@/lib/due-items';
+import { OPEN_FOR_DUPLICATE, openCardSummary, type OpenCardRow } from '@/lib/duplicate-cards';
 import { noShowHistory } from '@/lib/no-show';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
@@ -48,6 +49,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // the moment somebody is booking the car in, which is exactly when "it also needs discs" turns
   // a slot into a bigger job. Same chokepoint the card reads (lib/due-items).
   const dueItems = await openDueItemsForVehicle(prisma, user.group_id, vehicle.id);
+  // OPEN CARDS RIDE ALONG for the third time and the same reason as the two above: this fires at
+  // the moment somebody is about to give this car a slot, which is the only moment "it already has
+  // one" is worth saying. LX13ZPO ran two open cards for four days because nothing asked here.
+  // Which statuses count is lib/duplicate-cards, not a list written out at this call site.
+  const openCards = (await prisma.jobCard.findMany({
+    where: { group_id: user.group_id, vehicle_id: vehicle.id, status: { in: OPEN_FOR_DUPLICATE as never } },
+    orderBy: { created_at: 'asc' },
+    select: { id: true, created_at: true, status: true, start_at: true,
+              resource: { select: { name: true } }, invoice: { select: { id: true } } },
+  })) as unknown as OpenCardRow[];
 
   return res.status(200).json({
     found: true,
@@ -59,5 +70,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     owner: { name: owner?.name ?? '', phone: owner?.phone ?? '', email: owner?.email ?? '' },
     noShows,
     dueItems,
+    openCards: openCards.map(openCardSummary),
   });
 }

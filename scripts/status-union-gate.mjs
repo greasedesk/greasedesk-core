@@ -51,6 +51,7 @@ console.log('\n— membership lists go through statusSubset (bare arrays opt out
 for (const [file, name] of [
   ['lib/jobcard-status.ts', 'FREES_THE_SLOT'],
   ['lib/jobcard-status.ts', 'HIDDEN_FROM_DIARY'],
+  ['lib/duplicate-cards.ts', 'OPEN_FOR_DUPLICATE'],
   ['lib/quotes-list.ts', 'QUOTE_CLOSED_CARD_STATUSES'],
   ['lib/wip.ts', 'WIP_STATUSES'],
 ]) {
