@@ -274,10 +274,27 @@ export function dueLabel(
     // needs a projection, and that is effectiveDueDate's job.
     case 'whichever_first': {
       const when2 = item.dueDate ? when(item.dueDate) : 'a date';
-      // Past tense throughout once it has fired, or the sentence argues with itself.
-      if (exactly) return `due now, at ${miles} — or by ${when2}, whichever came first`;
+      // ── ONCE ONE LEG HAS FIRED, THE OTHER IS NOT THEREBY IN THE PAST ─────────────────────────
+      // This used to read `was due at 68,120 miles or by October 2027, whichever came first`, and
+      // the reasoning was sound as far as it went: `was due …` beside `whichever comes first` is a
+      // sentence arguing with itself. Backdating BOTH legs bought that agreement with a claim the
+      // function is in no position to make.
+      //
+      // It has no clock. `atMiles` is the only comparison input, deliberately — see the note on the
+      // parameter — so a passed MILEAGE leg is knowable and a passed DATE leg is not. Saying the
+      // date "came first" asserts it has been and gone. On TMBS that printed "was due at 1,000
+      // miles or by July 2027" against a car that had never been near either figure: a date eleven
+      // months away, in the past tense, on a customer's document.
+      //
+      // So the either/or closes when it is answered. The leg that fired takes the past tense; the
+      // other is stated as a fact of the SCHEDULE — "also set for October 2027" — which is true
+      // whether or not that date has passed. Present-tense "whichever comes first" would be the
+      // same error mirrored: re-opening a question the mileage has already settled.
+      if (exactly) return `due now, at ${miles}, also set for ${when2}`;
       return past
-        ? `${overdueBy}due at ${miles} or by ${when2}, whichever came first`
+        ? `${overdueBy}due at ${miles}, also set for ${when2}`
+        // STILL A QUESTION, so both legs stay open and the wording is untouched. Four gates pin
+        // this string; it is the state the change is careful NOT to reach.
         : `due at ${miles} or by ${when2}, whichever comes first`;
     }
   }

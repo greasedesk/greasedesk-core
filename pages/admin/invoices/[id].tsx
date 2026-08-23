@@ -78,7 +78,10 @@ type PageProps = {
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
-  /** The frozen due-items block, as printed at mint (lib/due-items::printedDueItemsBlock). */
+  /** The frozen due-items block, as printed at mint — `printedNeedsBlock`, via
+   *  invoice-issue's computeNarrativeBlocks, stored as Invoice.due_items_snapshot. This said
+   *  `printedDueItemsBlock`, which is a near-duplicate the invoice path does not call: that one
+   *  also folds in tyre and battery lines, which the product keeps separate in measuredBlock. */
   dueItemsBlock: string | null;
   workDoneBlock: string | null;
   measuredBlock: string | null;

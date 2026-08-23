@@ -94,9 +94,31 @@ check('with NO reading supplied the wording is exactly what it always was',
 check('a car short of the target still reads as ahead of it', dueLabel(PADS, 67000) === 'due at 68,120 miles');
 check('a car PAST it says by how much', dueLabel(PADS, 68360) === 'overdue by 240 miles — was due at 68,120 miles',
   'the same 240 the dash shows as -240, so the paperwork and the car agree');
-check('  …and whichever_first goes past tense with it',
-  dueLabel(OIL, 68360) === 'overdue by 240 miles — was due at 68,120 miles or by October 2027, whichever came first',
-  '"whichever comes first" beside "was due" would be a sentence arguing with itself');
+// ── ONE LEG FIRED, AND THE OTHER IS NOT THEREBY IN THE PAST ───────────────────────────────────
+// The half of the old rationale that stands: `was due …` beside `whichever comes first` IS a
+// sentence arguing with itself, and that is why this was changed in the first place.
+//
+// What backdating BOTH legs did instead was buy agreement with a false claim. This function has no
+// clock — `atMiles` is its only comparison input, deliberately, because the frozen invoice path
+// must not silently acquire an overdue date between printings. So it knows the MILEAGE target has
+// passed and knows NOTHING about the date. "was due … or by October 2027, whichever came first"
+// asserts a date eleven months away has been and gone; on TMBS it produced "was due at 1,000 miles
+// or by July 2027" on a car that had never been near either reading.
+//
+// The resolution is to stop holding both legs open once one has fired: report the leg that DID
+// fire in the past tense, and state the other as a fact of the schedule with no claim about
+// whether it has been reached. Present-tense "whichever comes first" would be the same mistake
+// pointing the other way — it would re-open a question the mileage has already answered.
+check('  …and the date leg is NOT dragged into the past with it',
+  dueLabel(OIL, 68360) === 'overdue by 240 miles — was due at 68,120 miles, also set for October 2027',
+  'October 2027 is in the future; the old wording said it "came first" and this function has no clock to know otherwise');
+check('  …and the same on the exact-target boundary',
+  dueLabel({ ...OIL }, 68120) === 'due now, at 68,120 miles, also set for October 2027',
+  'the boundary case backdated the date leg too — same defect, one branch along');
+check('  …while an unfired whichever_first is untouched, both legs open',
+  dueLabel(OIL) === 'due at 68,120 miles or by October 2027, whichever comes first'
+  && dueLabel(OIL, 67000) === 'due at 68,120 miles or by October 2027, whichever comes first',
+  'the rule still stands while it is still a question — this change is only about what happens after it is answered');
 check('EXACTLY on the target is due, not overdue', dueLabel(PADS, 68120) === 'due now, at 68,120 miles',
   '"overdue by 0 miles" is not a sentence; effectiveDueDate still ranks it as passed, which is the ordering, not the words');
 check('the DATE leg is deliberately left alone',
