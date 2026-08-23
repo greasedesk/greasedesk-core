@@ -2343,6 +2343,23 @@ model JobCardItem {
   labour_outsourced Boolean  @default(false) // inherited from the product at save — frozen per-line (re-flagging a product never rewrites history)
   created_at        DateTime @default(now())
 
+  /// THE ESTIMATOR'S ORDER, zero-based, as the rows sat on the form when it was saved.
+  ///
+  /// It exists because created_at cannot express it. The quote save writes every line in one
+  /// createMany and Postgres now() is the TRANSACTION timestamp, so all of a card's lines share one
+  /// created_at — measured on TMBS as 144 of 144 cards with two or more lines. The freeze ordered by
+  /// that column and stamped InvoiceLine.position from the result, which made the printed order of a
+  /// customer's invoice a tie-break nobody chose.
+  ///
+  /// NULL MEANS THE ROW PREDATES THIS COLUMN AND ITS ORDER IS UNKNOWN. Not "defaults to created_at"
+  /// — created_at is what could not answer the question. There is no backfill: the only orders
+  /// available to one would be that tie or the surrogate id, and writing either would record a
+  /// decision nobody made as though somebody had. Rows written before 2026-08-23 keep the ordering
+  /// they have always had, which is arbitrary, and say so by being null.
+  ///
+  /// A card is all-null or all-set, never mixed: a save rewrites every line on the card together.
+  position Int?
+
   // Origin hook: which catalogue item pre-filled this line (for the future per-item margin lens).
   // SetNull so archiving/deleting the catalogue item never breaks a historic line.
   catalogue_item_id String?

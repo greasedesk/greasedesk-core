@@ -1,0 +1,12 @@
+-- THE ESTIMATOR'S ORDER, which created_at could not express.
+--
+-- The quote save writes a card's lines in one createMany, and Postgres now() is the transaction
+-- timestamp, so every line on a card shares one created_at: measured as 144 of 144 TMBS cards with
+-- two or more lines. The invoice freeze ordered by that column and stamped InvoiceLine.position from
+-- whatever row order came back, so the printed order of a customer's document was an undefined tie.
+--
+-- NULLABLE, NO BACKFILL, AND NO DEFAULT. Null means the row predates the column and its order is
+-- unknown. A backfill could only order by the tie itself or by the surrogate id, and either would
+-- record an arbitrary order as though it had been chosen. Existing rows keep exactly the ordering
+-- they have today; the freeze falls back to created_at when position is null.
+ALTER TABLE "JobCardItem" ADD COLUMN "position" INTEGER;

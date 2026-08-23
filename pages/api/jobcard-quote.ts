@@ -228,6 +228,10 @@ export async function performEstimateSave(args: {
   // Effective per-line values to store (mirror the compute flooring).
   const rows = inputs.map((it, i) => ({
     job_card_id: jobCardId,
+    // THE ESTIMATOR'S ORDER, from the row index of the payload — which is the order the form was in
+    // when Save was pressed. created_at cannot carry it: every row here lands in one createMany and
+    // shares one transaction timestamp. See the schema note on JobCardItem.position.
+    position: i,
     item_type: it.item_type,
     description: resolved[i].description,
     qty: new Prisma.Decimal(Math.max(0, it.qty)),

@@ -485,7 +485,15 @@ export async function snapshotInvoiceLines(
   const items = (await tx.jobCardItem.findMany({
     where: { job_card_id: invoice.job_card_id },
     select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true, vat_amount: true, catalogue_item_id: true, labour_hours: true, labour_outsourced: true },
-    orderBy: { created_at: 'asc' },
+    // ── POSITION FIRST, created_at ONLY AS THE FALLBACK ────────────────────────────────────────
+    // ONE query, no sorting in code. `nulls: 'last'` is stated rather than left to Postgres's ASC
+    // default, because the whole defect being fixed here was an ordering nobody had written down.
+    //
+    // A card is all-null (written before JobCardItem.position existed) or all-set (written since),
+    // never mixed — a save rewrites every line together. So the first key orders new cards by what
+    // the estimator arranged, and collapses to a no-op on old ones, where created_at then produces
+    // exactly the ordering those cards have always had.
+    orderBy: [{ position: { sort: 'asc', nulls: 'last' } }, { created_at: 'asc' }],
   })) as any[];
   if (!items.length) return;
 
