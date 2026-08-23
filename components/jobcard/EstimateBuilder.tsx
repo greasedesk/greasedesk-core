@@ -21,6 +21,9 @@ import { lineFlags, toPlausible } from '@/lib/line-plausibility';
 import { CODES_DATALIST, CodesDatalist, CodeField, LineCard, LineSection, inputCls, labelCls } from '@/components/estimate/EstimateShell';
 
 export type EstimateLine = {
+  /** The row this line already IS on the card, absent on a new one. Sent back on save so the
+   *  server updates in place instead of recreating — which is what lets a DueItemLine survive. */
+  id?: string;
   item_type: QuoteItemType; // 'labour' | 'part' | 'misc'
   description: string;
   qty: string;        // hours (labour) / quantity (parts)
@@ -220,7 +223,10 @@ export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () =>
 
 const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
   const { t } = useTranslation('jobcard');
-  const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: uid() })));
+  // SEEDED FROM THE SERVER ID where the line already exists. _uid is still just React's key — its
+  // job is focus retention across a keystroke — but keying it to the real row means a re-render
+  // cannot silently detach a line from the row it represents. A NEW row has no id and mints one.
+  const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: l.id ?? uid() })));
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
@@ -358,7 +364,12 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // TERMINAL: the estimate is frozen. Mark the draft CLEAN so the autosave stops re-arming —
+        // TERMINAL FOR THIS DRAFT — two different 409s now reach here. `invoice_frozen` means the
+        // estimate can no longer change at all; `line_gone` means somebody else moved it while this
+        // form was open. Both want the same handling: stop re-arming the autosave, because retrying
+        // an identical payload fails identically, and show the server's sentence, which says which
+        // it was and what to do about it.
+        // Mark the draft CLEAN so the autosave stops re-arming —
         // it only skips when `snap === lastSavedRef.current`, so a failed save previously left the
         // component permanently dirty and every later keystroke queued another doomed write.
         if (res.status === 409) {

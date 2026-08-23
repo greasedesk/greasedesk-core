@@ -24,6 +24,9 @@ import { computeQuoteTotals, poundsToPennies, penniesToPounds, QuoteLineInput, c
 const TYPES: ItemType[] = ['labour', 'part', 'misc', 'fixed'];
 
 type IncomingLine = {
+  /** The line this row IS, when it already exists. Absent = a new row. A CLAIM, never trusted:
+   *  see the intersect in the write below. */
+  id?: string;
   item_type?: string; description?: string; qty?: number | string;
   unit_price?: number | string; unit_cost?: number | string; vatable?: boolean;
   catalogue_item_id?: string | null; // origin hook (tenant-validated below)
@@ -82,6 +85,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (e: any) {
     if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
+    // 409, NOT 400: the payload is well formed and the card moved underneath it. 400 would tell the
+    // estimator they got it wrong, and in the PWA's outbox 400 is TERMINAL — a queued save answered
+    // 400 is deleted, not retried. This one is worth coming back to.
+    if (e?.message?.startsWith('CONFLICT:')) {
+      return res.status(409).json({ code: e.code ?? 'conflict', message: e.message.slice('CONFLICT:'.length) });
+    }
     console.error('quote save error:', e);
     return res.status(500).json({ message: 'Failed to save estimate.' });
   }
@@ -175,6 +184,17 @@ export async function performEstimateSave(args: {
   };
 
   // Validate + normalise lines, resolving unit_cost SERVER-SIDE (client cost ignored entirely).
+  // ── IDS ARE CLAIMS ────────────────────────────────────────────────────────────────────────────
+  // Collected here, checked for internal consistency here, and INTERSECTED against the card's own
+  // ids inside the transaction below. A payload that names one row twice is malformed: without
+  // this the second update silently overwrites the first and the card ends a line short with no
+  // error at all.
+  const claimed: Array<string | null> = items.map((raw) => (typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : null));
+  const named = claimed.filter((x): x is string => x !== null);
+  if (new Set(named).size !== named.length) {
+    throw new Error('VALIDATION:The same line was sent twice.');
+  }
+
   const inputs: QuoteLineInput[] = [];
   const resolved: Array<{ description: string; catalogueItemId: string | null; outsourced: boolean; labourHours: Prisma.Decimal | null }> = [];
   for (const raw of items) {
@@ -261,19 +281,31 @@ export async function performEstimateSave(args: {
     if (costWritable) {
       const prior = (await tx.jobCardItem.findMany({
         where: { job_card_id: jobCardId },
-        select: { item_type: true, description: true, unit_cost: true, catalogue_item_id: true },
+        select: { id: true, item_type: true, description: true, unit_cost: true, catalogue_item_id: true },
         orderBy: { created_at: 'asc' },
       })) as any[];
+      // ── BY ID WHERE THERE IS ONE ─────────────────────────────────────────────────────────────
+      // (item_type, description) was the only identity a line had, and it cannot tell two
+      // identical lines apart: first-occurrence-wins meant a cost change on the SECOND of two
+      // matching rows was diffed against the FIRST's cost and reported from the wrong number. The
+      // description fallback stays for rows the client did not claim — an add has no prior anyway,
+      // and a client that sends no ids at all still gets the behaviour it had.
       const key = (t: string, d: string) => `${t}||${String(d ?? '').trim()}`;
+      const priorById = new Map<string, number | null>();
       const priorCost = new Map<string, number | null>();
-      for (const p0 of prior) if (!priorCost.has(key(p0.item_type, p0.description))) {
-        priorCost.set(key(p0.item_type, p0.description), p0.unit_cost == null ? null : Number(p0.unit_cost));
+      for (const p0 of prior) {
+        priorById.set(p0.id, p0.unit_cost == null ? null : Number(p0.unit_cost));
+        if (!priorCost.has(key(p0.item_type, p0.description))) {
+          priorCost.set(key(p0.item_type, p0.description), p0.unit_cost == null ? null : Number(p0.unit_cost));
+        }
       }
       for (let i = 0; i < rows.length; i++) {
         if (resolved[i].catalogueItemId) continue;            // catalogue-inherited, not typed
         if (inputs[i].item_type === 'labour') continue;       // labour carries no parts cost
         const k = key(String(rows[i].item_type), resolved[i].description);
-        const before = priorCost.has(k) ? priorCost.get(k)! : null;
+        const cid = claimed[i];
+        const before = cid !== null && priorById.has(cid) ? priorById.get(cid)!
+          : (priorCost.has(k) ? priorCost.get(k)! : null);
         const after = rows[i].unit_cost == null ? null : Number(rows[i].unit_cost);
         if (before === after) continue;                       // unchanged — nothing to say
         await writeAudit(tx, {
@@ -288,8 +320,45 @@ export async function performEstimateSave(args: {
         });
       }
     }
-    await tx.jobCardItem.deleteMany({ where: { job_card_id: jobCardId } });
-    if (rows.length) await tx.jobCardItem.createMany({ data: rows });
+    /**
+     * ── IN PLACE, SO A LINE HAS AN IDENTITY THAT SURVIVES ────────────────────────────────────
+     * This was `deleteMany` + `createMany`. Every id changed on every save, and DueItemLine —
+     * the join from a finding to the line that answered it — is onDelete: Cascade, so every link
+     * on the card died with it. That is why the table has never held a row worth keeping.
+     *
+     * THE CARD'S OWN IDS ARE THE AUTHORITY. Read inside the transaction and intersected with what
+     * the client claimed; a claim outside that set is never written. That makes a cross-card or
+     * cross-tenant id structurally impossible to act on rather than something caught by a check
+     * someone could forget to write.
+     *
+     * AN UNKNOWN CLAIM IS A 409, NOT AN ADD. Two people editing, one removes a line, the other
+     * saves against it: treating that as an add silently resurrects a deleted line. Refusing says
+     * the estimate moved underneath, which is true and is the only thing we actually know.
+     *
+     * REMOVAL IS AN EXPLICIT SET DIFFERENCE. It used to be implicit in delete-all; a line the
+     * estimator deleted reaching a customer's invoice is the failure that matters most here, so
+     * it is now one statement that says what it does.
+     */
+    const existing = (await tx.jobCardItem.findMany({
+      where: { job_card_id: jobCardId }, select: { id: true },
+    })) as Array<{ id: string }>;
+    const onCard = new Set(existing.map((r) => r.id));
+    const ghosts = named.filter((id) => !onCard.has(id));
+    if (ghosts.length) {
+      const e = new Error('CONFLICT:This estimate changed while you were editing it. Reload the card and make the change again.');
+      (e as Error & { code?: string }).code = 'line_gone';
+      throw e;
+    }
+    const keeping = new Set(named);
+    const gone = existing.filter((r) => !keeping.has(r.id)).map((r) => r.id);
+    if (gone.length) await tx.jobCardItem.deleteMany({ where: { id: { in: gone } } });
+    for (let i = 0; i < rows.length; i++) {
+      const id = claimed[i];
+      // ADDS MINT SERVER-SIDE. A client that chooses primary keys is a client that can collide
+      // with one, and `id` is absent on a new row precisely so it has nothing to choose.
+      if (id === null) await tx.jobCardItem.create({ data: rows[i] });
+      else await tx.jobCardItem.update({ where: { id }, data: rows[i] });
+    }
     await tx.jobCard.update({
       where: { id: jobCardId },
       data: {

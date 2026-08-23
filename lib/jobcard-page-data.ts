@@ -71,7 +71,10 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // was never loaded, so the switch read `undefined` and the item could never be prompted.
       site: { select: { ...INTAKE_PROMPT_SELECT, intake_offer_dismissed_at: true } },
       vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
-      items: { orderBy: { created_at: 'asc' } },
+      // POSITION FIRST, created_at as the fallback — the same ordering the invoice freeze uses, so
+      // the builder shows the estimator what the document will print. created_at alone is a tie:
+      // every line on a card is written in one statement and shares the transaction's timestamp.
+      items: { orderBy: [{ position: { sort: 'asc', nulls: 'last' } }, { created_at: 'asc' }] },
       // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
       // (source customer vs this card's customer, compared by ID at render).
       duplicated_from: { select: { id: true, customer_id: true, customer: { select: { name: true } }, vehicle: { select: { registration: true } } } },
@@ -394,6 +397,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const promos: PromoLite[] = !priceVisible ? [] : promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
+    // CARRIED so the save can claim it back — see EstimateLine.id.
+    id: it.id,
     item_type: it.item_type,
     description: it.description ?? '',
     qty: String(num(it.qty)),

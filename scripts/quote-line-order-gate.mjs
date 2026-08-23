@@ -59,7 +59,12 @@ try {
   // and refuseBayWrite then refuses the quote endpoint — correctly. Two questions, two cards.
   const card2 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id,
     customer_id: cust.id, status: 'in_progress' }, select: { id: true } });
-  fix = { cust: cust.id, veh: veh.id, card: card.id, card2: card2.id };
+  // A FOURTH CARD for the identity work. card2 is invoiced by section 5 and refuseBayWrite then
+  // refuses the quote endpoint — correctly. One card per question, or a later section inherits an
+  // earlier one's end state and fails for a reason that has nothing to do with its subject.
+  const card4 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id,
+    customer_id: cust.id, status: 'in_progress' }, select: { id: true } });
+  fix = { cust: cust.id, veh: veh.id, card: card.id, card2: card2.id, card4: card4.id };
 
   const saveQuote = async (descriptions) => {
     const { saveQuoteLines } = await import('../lib/quote-save.ts').catch(() => ({ saveQuoteLines: null }));
@@ -143,11 +148,13 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  const saveVia = (lines) => page.evaluate(async (b) => {
+  const saveOn = (cardId, lines) => page.evaluate(async (b) => {
     const r = await fetch('/api/jobcard-quote', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin', body: JSON.stringify(b) });
     return { status: r.status, body: await r.json().catch(() => ({})) };
-  }, { jobCardId: card2.id, vatRate: 20, items: lines });
+  }, { jobCardId: cardId, vatRate: 20, items: lines });
+  const saveVia = (lines) => saveOn(card2.id, lines);
+  const saveId = (lines) => saveOn(card4.id, lines);
   const s1 = await saveVia(priced);
   check('the estimate saves through the real endpoint', s1.status === 200, `${s1.status} ${JSON.stringify(s1.body).slice(0, 90)}`);
   const auditBefore = await prisma.auditLog.count({ where: { entity_id: card2.id, action: 'quote.cost_entered' } });
@@ -211,7 +218,118 @@ try {
   check('  …positioned densely from zero, exactly as before',
     JSON.stringify(legacy.map((l) => l.position)) === '[0,1,2]', JSON.stringify(legacy.map((l) => l.position)));
 
-  // ── 7. THE JUNE GOLDEN IS UNMOVED — VERIFIED, NOT REISSUED ───────────────────────────────────
+  // ── 7. A LINE KEEPS ITS IDENTITY ACROSS A SAVE ───────────────────────────────────────────────
+  // The claim the whole exercise exists for. Today the save deletes every row and recreates it, so
+  // every id changes and anything referencing one is gone.
+  console.log('\n— a line survives a save —');
+  const idLines = [
+    { item_type: 'part', description: 'QLO keep me', qty: 1, unit_price: 30, unit_cost: 10, vatable: true },
+    { item_type: 'part', description: 'QLO keep me too', qty: 1, unit_price: 40, unit_cost: 12, vatable: true },
+  ];
+  await saveId(idLines);
+  const firstPass = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id },
+    orderBy: { position: 'asc' }, select: { id: true, description: true, created_at: true } });
+  check('two lines saved', firstPass.length === 2, String(firstPass.length));
+  const withIds = firstPass.map((r, i) => ({ ...idLines[i], id: r.id }));
+  // Re-save the SAME lines, now claiming their ids.
+  const rs = await saveId(withIds);
+  check('the re-save is accepted', rs.status === 200, `${rs.status} ${JSON.stringify(rs.body).slice(0, 80)}`);
+  const secondPass = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id },
+    orderBy: { position: 'asc' }, select: { id: true, description: true, created_at: true } });
+  check('the ids are the same rows, not new ones',
+    JSON.stringify(secondPass.map((r) => r.id)) === JSON.stringify(firstPass.map((r) => r.id)),
+    `${firstPass.map((r) => r.id.slice(0, 8)).join(',')} → ${secondPass.map((r) => r.id.slice(0, 8)).join(',')}`);
+  check('  …and created_at is untouched, so they were updated not replaced',
+    JSON.stringify(secondPass.map((r) => r.created_at.toISOString())) === JSON.stringify(firstPass.map((r) => r.created_at.toISOString())));
+
+  // ── 8. A SURVIVING LINE KEEPS ITS DueItemLine LINK ───────────────────────────────────────────
+  // DueItemLine.job_card_item is onDelete: Cascade, so a delete-and-recreate silently destroys
+  // every link on the card. This is why the table has never had a row worth keeping.
+  console.log('\n— and so does what points at it —');
+  const finding = await prisma.vehicleDueItem.create({ data: {
+    group_id: ZZ, vehicle_id: veh.id, found_on_job_card_id: card4.id, description: 'QLO finding for linking',
+    due_basis: 'next_service', customer_response: 'not_raised', created_by: 'quote-line-order-gate' }, select: { id: true } });
+  fix.finding = finding.id;
+  const linkRes = await page.evaluate(async (b) => {
+    const r = await fetch('/api/due-items', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { dueItemId: finding.id, jobCardItemId: secondPass[0].id });
+  check('a finding links to a line', linkRes.status === 200 && linkRes.body.linked === true, JSON.stringify(linkRes));
+  check('  …and the link row exists', (await prisma.dueItemLine.count({ where: { due_item_id: finding.id } })) === 1);
+  await saveId(withIds);
+  check('THE LINK SURVIVES A SAVE',
+    (await prisma.dueItemLine.count({ where: { due_item_id: finding.id, job_card_item_id: secondPass[0].id } })) === 1,
+    'the cascade destroys it whenever the save recreates the row');
+
+  // ── 9. THE REFUSALS ──────────────────────────────────────────────────────────────────────────
+  // Ids are CLAIMS. Each of these is 200 against an implementation that ignores them, which is
+  // exactly what today's does — so all four are red before the change and none is vacuous.
+  console.log('\n— an id is a claim, not a fact —');
+  const dup = await saveId([{ ...idLines[0], id: secondPass[0].id }, { ...idLines[1], id: secondPass[0].id }]);
+  check('a payload claiming one id twice is refused', dup.status === 400, `${dup.status} ${dup.body?.code ?? ''}`);
+
+  const otherCard = await saveId([{ ...idLines[0], id: (await prisma.jobCardItem.findFirst({
+    where: { job_card_id: card.id }, select: { id: true } }))?.id }]);
+  check('an id belonging to another card on this tenant is refused', otherCard.status === 400 || otherCard.status === 409,
+    `${otherCard.status} ${otherCard.body?.code ?? ''}`);
+
+  // CROSS-TENANT, read-only: a TMBS line id is SENT, never written to. The write is scoped to the
+  // ZZ card in the body, so a permissive implementation cannot reach TMBS — asserted below rather
+  // than assumed, because "it cannot" is the sort of claim that expires.
+  const tmbsLine = await prisma.jobCardItem.findFirst({
+    where: { job_card: { group_id: '854d38e7-6dd4-4836-af61-a0d169639a78' } },
+    select: { id: true, description: true, unit_price: true } });
+  const foreign = await saveId([{ ...idLines[0], id: tmbsLine.id }]);
+  check('an id from another TENANT is refused', foreign.status === 400 || foreign.status === 409 || foreign.status === 404,
+    `${foreign.status} ${foreign.body?.code ?? ''}`);
+  const tmbsAfter = await prisma.jobCardItem.findUnique({ where: { id: tmbsLine.id },
+    select: { description: true, unit_price: true, job_card_id: true } });
+  check('  …and the TMBS line is untouched, whatever the answer was',
+    tmbsAfter?.description === tmbsLine.description && String(tmbsAfter?.unit_price) === String(tmbsLine.unit_price),
+    'the write is scoped to the card in the body; this asserts it rather than trusting it');
+
+  const ghost = await saveId([{ ...idLines[0], id: '00000000-0000-4000-8000-000000000000' }]);
+  check('an id that no longer exists is a 409, not a silent add', ghost.status === 409,
+    `${ghost.status} ${ghost.body?.code ?? ''} — the estimate changed underneath, which is the lost-update case`);
+
+  // ── 10. THE COST AUDIT TELLS TWO IDENTICAL LINES APART ───────────────────────────────────────
+  // Keyed by (item_type, description) today, first occurrence wins, so a change to the SECOND of
+  // two identical lines is compared against the FIRST's cost and reported wrong.
+  console.log('\n— two lines that read the same —');
+  const twin = (cost) => ({ item_type: 'part', description: 'QLO twin', qty: 1, unit_price: 50, unit_cost: cost, vatable: true });
+  await saveId([twin(40), twin(90)]);
+  const twinRows = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id, description: 'QLO twin' },
+    orderBy: { position: 'asc' }, select: { id: true } });
+  check('two identical descriptions are two rows', twinRows.length === 2, String(twinRows.length));
+  const auditWas = await prisma.auditLog.count({ where: { entity_id: card4.id, action: 'quote.cost_entered' } });
+  await saveId([{ ...twin(40), id: twinRows[0].id }, { ...twin(125), id: twinRows[1].id }]);
+  const twinAudit = await prisma.auditLog.findMany({ where: { entity_id: card4.id, action: 'quote.cost_entered' },
+    orderBy: { created_at: 'desc' }, take: 2, select: { diff_json: true } });
+  const fresh = twinAudit.slice(0, (await prisma.auditLog.count({ where: { entity_id: card4.id, action: 'quote.cost_entered' } })) - auditWas);
+  check('changing the SECOND twin writes one row', fresh.length === 1, `${fresh.length} rows`);
+  check('  …reporting ITS old cost, not the first twin\'s',
+    Number(fresh[0]?.diff_json?.from) === 90 && Number(fresh[0]?.diff_json?.to) === 125,
+    `${JSON.stringify(fresh[0]?.diff_json)} — 40 would be the first twin's, which is the blind spot`);
+
+  // ── 11. WHAT "MATERIAL" MEANS IS UNCHANGED BY ANY OF THIS ────────────────────────────────────
+  // Pure, and green both sides: the bag comparison never looked at rows as identities. Asserted
+  // because position now moves on a reorder and in-place edits are about to exist.
+  console.log('\n— the customer sees values, not rows —');
+  const V = await import('../lib/quote-version.ts');
+  const base = [{ description: 'A', qty: 1, unit_price: 10, vat_rate: 20 },
+                { description: 'B', qty: 2, unit_price: 20, vat_rate: 20 }];
+  check('a pure reorder is immaterial', V.quoteMateriallyUnchanged(base, [base[1], base[0]], true),
+    'position changes, the customer document does not');
+  check('swapping two descriptions in place is immaterial',
+    V.quoteMateriallyUnchanged(base, [{ ...base[0], description: 'B', qty: 2, unit_price: 20 },
+                                      { ...base[1], description: 'A', qty: 1, unit_price: 10 }], true),
+    'the same bag arrives in different rows — the offer is unchanged');
+  check('  …while a real price change is NOT immaterial',
+    !V.quoteMateriallyUnchanged(base, [base[0], { ...base[1], unit_price: 21 }], true),
+    'the discriminating half — without it the two above pass on a broken comparison');
+
+  // ── 12. THE JUNE GOLDEN IS UNMOVED — VERIFIED, NOT REISSUED ──────────────────────────────────
   console.log('\n— and June has not moved —');
   const june = await prisma.invoice.count({ where: { group_id: '854d38e7-6dd4-4836-af61-a0d169639a78',
     date_issued: { gte: new Date('2026-06-01'), lt: new Date('2026-07-01') } } });
@@ -228,8 +346,10 @@ try {
       await step(`${k} lines`, () => prisma.invoiceLine.deleteMany({ where: { invoice_id: fix[k] } }));
       await step(k, () => prisma.invoice.deleteMany({ where: { id: fix[k] } }));
     }
-    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3].filter(Boolean) } } }));
-    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3].filter(Boolean) } } }));
+    await step('links', () => prisma.dueItemLine.deleteMany({ where: { group_id: ZZ } }));
+    await step('finding', () => fix.finding ? prisma.vehicleDueItem.deleteMany({ where: { id: fix.finding } }) : null);
+    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
+    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
     await step('edge', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
     await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, id: fix.cust } }));
@@ -242,7 +362,7 @@ try {
     try {
       const left = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } })
         + await prisma.customer.count({ where: { group_id: ZZ, id: fix.cust } })
-        + await prisma.jobCard.count({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3].filter(Boolean) } } });
+        + await prisma.jobCard.count({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } });
       check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
     } catch (e) {
       check('teardown removed every fixture row (ZZ only)', false,
