@@ -233,10 +233,21 @@ try {
     await step('edge', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
     await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, id: fix.cust } }));
-    const left = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } })
-      + await prisma.customer.count({ where: { group_id: ZZ, id: fix.cust } })
-      + await prisma.jobCard.count({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3].filter(Boolean) } } });
-    check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
+    // ── THE VERIFICATION MUST NOT BE THE THING THAT CRASHES ──────────────────────────────────
+    // It was. A Neon blip mid-run (P1017, "Server has closed the connection") threw out of this
+    // count, out of the finally, and killed the process before the summary line — so the gate
+    // reported no count at all and, worse, said nothing about whether the fixtures had gone. They
+    // had: every delete above is wrapped in step() and all of them had succeeded. The one
+    // unwrapped statement was the one asserting the deletes worked.
+    try {
+      const left = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } })
+        + await prisma.customer.count({ where: { group_id: ZZ, id: fix.cust } })
+        + await prisma.jobCard.count({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3].filter(Boolean) } } });
+      check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
+    } catch (e) {
+      check('teardown removed every fixture row (ZZ only)', false,
+        `COULD NOT VERIFY — ${String(e?.message ?? e).split('\n')[0].slice(0, 80)}. The deletes are step()-wrapped and logged above; check ZZ for ${REG} by hand.`);
+    }
   }
   const f = out.filter((x) => x === 'F').length;
   console.log(`\n${f} failures of ${out.length}`);
