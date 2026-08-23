@@ -1570,6 +1570,16 @@ model VehicleDueItem {
   /// left" means from where the car is now, and after the work that is the odometer it leaves on.
   countdown_miles Int?
 
+  /// HOW that reading was transcribed — see ScheduleReadingMode. Written ONLY by the schedule
+  /// form's departure writer (pages/api/service-schedule), from what the SERVER resolved.
+  ///
+  /// NULL means "not written by the schedule form" — NOT "target" — and here that is the common
+  /// case by construction, not an omission: of the rows carrying a due_mileage today, 19 came from
+  /// the hand-typed findings form (which has no countdown notion at all) and 12 from the schedule.
+  /// A tyre-derived target is a wear projection nobody transcribed, so the question has no answer
+  /// for it. Only the schedule path can fill this in. Nothing reads it yet.
+  mode ScheduleReadingMode?
+
   /// THREE-STATE, and there is NO default: the capture surface must make someone choose, or a
   /// mechanic tapping through at speed would silently record every finding as `not_raised` and
   /// `declined` — the only one that is a lead — would never appear.
@@ -1860,6 +1870,21 @@ model MarketingContact {
 /// Shaped like TyreReading and BatteryReading, with one deliberate difference: job_card_id is NOT
 /// NULL and cascades. A tyre depth outlives its card because it is about the car; this does not,
 /// because without the visit there is no reading.
+/// WHICH CONVENTION THE SCREEN WAS SHOWING when a garage transcribed a service computer.
+///
+/// `countdown_miles` records what was typed and `due_mileage` what it resolved to, but neither can
+/// say what a NULL countdown means: "the garage typed an absolute target" and "this row predates
+/// the countdown column" are the same null. Every mileage-bearing row written before 2026-08-23 is
+/// the second, and all of them read as intervals typed into a target-mode box.
+///
+/// `unknown` exists so that question has an answer other than a guess. Two values would be a
+/// boolean, and a boolean cannot say "nobody recorded which".
+enum ScheduleReadingMode {
+  target
+  countdown
+  unknown
+}
+
 model ServiceScheduleReading {
   id          String @id @default(uuid())
   group_id    String
@@ -1894,6 +1919,15 @@ model ServiceScheduleReading {
   /// NULL means the garage entered an absolute target, which is a different thing from a countdown
   /// of zero (a service due at exactly this reading).
   countdown_miles Int?
+
+  /// HOW the reading above was transcribed — see ScheduleReadingMode. Written ONLY by the schedule
+  /// form's writer (pages/api/service-schedule), from what the SERVER resolved, never from what a
+  /// client claimed: the same rule the due_mileage/countdown_miles pair already lives under.
+  ///
+  /// NULL means "not written by the schedule form" — NOT "target". Rows predating this column are
+  /// null and stay null: a backfill to `unknown` would write a value where absence already says it,
+  /// and would be indistinguishable from a garage that actively chose it. Nothing reads it yet.
+  mode ScheduleReadingMode?
 
   recorded_by String?
   recorded_at DateTime @default(now())

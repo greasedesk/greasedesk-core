@@ -132,6 +132,18 @@ try {
     S.classifyEntry(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: -240, wasRecorded: true }) === 'record');
   check('  …while a genuinely empty row still is blank',
     S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: null }));
+  // ── A MODE IS NOT A LEG ───────────────────────────────────────────────────────────────────────
+  // `mode` says HOW a reading was transcribed, not that there was one. If it ever reaches isBlank's
+  // inputs, a row carrying nothing but a mode stops being blank — and a blank row is a request to
+  // CLEAR, so the failure is a deletion that silently does not happen. isBlank is the predicate
+  // added after five real readings were destroyed; this keeps the new column out of it.
+  check('  …and a row carrying ONLY a mode is still blank',
+    S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: null, mode: 'countdown' }),
+    'a mode is metadata about a reading, never a reading');
+  check('  …which is the same answer with no mode at all',
+    S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: null })
+    === S.isBlank(padsItem, { dueMonth: null, dueMileage: null, countdownMiles: null, mode: 'target' }),
+    'adding the column must not move this predicate in either direction');
 
   check('a row with neither leg is blank, not an error',
     S.isBlank(it('schedule_oil_service'), { dueMonth: null, dueMileage: null })
@@ -281,6 +293,44 @@ try {
     (await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: 999999, countdownMiles: -240 }], 'arrival')).body.written === 1
     && (await prisma.serviceScheduleReading.findFirst({ where: { job_card_id: card.id, item_key: 'schedule_pads_rear' }, select: { due_mileage: true } }))?.due_mileage === 59760,
     'a client sending both had its target replaced, never merged — the stored pair cannot disagree');
+
+  // ── THE MODE IS THE SERVER'S ACCOUNT OF WHAT IT DID ───────────────────────────────────────────
+  // Same rule the pair above already lives under, extended to the third column: a client that says
+  // one thing and sends another must not have its claim stored. Read through raw SQL on purpose —
+  // before the column exists this reports a NAMED failure instead of throwing on an unknown Prisma
+  // field and taking the rest of the run with it.
+  //
+  // ON schedule_pads_rear THROUGHOUT, and the last write restores the (-240, 59760) pair the block
+  // above left. A first draft used schedule_oil_service and broke three downstream checks that read
+  // its arrival value — the arrival table is shared fixture state and a mode check has no business
+  // moving it.
+  const modeOf = async (itemKey) => {
+    try {
+      const r = await prisma.$queryRawUnsafe(
+        'SELECT mode::text AS mode FROM "ServiceScheduleReading" WHERE job_card_id = $1 AND item_key = $2',
+        card.id, itemKey);
+      return r.length ? (r[0].mode ?? 'NULL') : 'NO ROW';
+    } catch (e) { return `NO COLUMN: ${String(e.message).split('\n').filter(Boolean).pop()?.slice(0, 60)}`; }
+  };
+  check('the countdown save above recorded the mode the SERVER resolved',
+    (await modeOf('schedule_pads_rear')) === 'countdown', await modeOf('schedule_pads_rear'));
+
+  const asTarget = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: 71000, countdownMiles: null }], 'arrival');
+  check('  …and a target save records target', asTarget.body.written === 1
+    && (await modeOf('schedule_pads_rear')) === 'target', await modeOf('schedule_pads_rear'));
+
+  // THE CONTRADICTION: the client claims one convention and sends the other's payload. The stored
+  // mode must describe the PAYLOAD, because that is what produced due_mileage. This also puts the
+  // row back to (-240, 59760) for everything downstream.
+  const lying = await post([{ key: 'schedule_pads_rear', dueMonth: null, dueMileage: null, countdownMiles: -240, mode: 'target' }], 'arrival');
+  check('a client claiming target while sending a countdown is overwritten',
+    lying.body.written === 1 && (await modeOf('schedule_pads_rear')) === 'countdown',
+    `claimed target, sent a countdown, stored ${await modeOf('schedule_pads_rear')}`);
+  const lyingRow = await prisma.serviceScheduleReading.findFirst({
+    where: { job_card_id: card.id, item_key: 'schedule_pads_rear' }, select: { due_mileage: true, countdown_miles: true } });
+  check('  …and the pair it describes is the one the server derived, unchanged from above',
+    lyingRow?.countdown_miles === -240 && lyingRow?.due_mileage === 59760,
+    JSON.stringify(lyingRow));
 
   // ── "NOT YET" IS A DIFFERENT ANSWER FROM "NOT EVER" ──────────────────────────────────────────
   // The departure stage has no odometer_out on this card, which is the ordinary state of a card

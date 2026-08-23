@@ -99,6 +99,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     e.dueMileage = r.dueMileage;   // whatever the client put here is replaced, never merged
   }
 
+  // ── THE MODE IS THIS FUNCTION'S ACCOUNT OF WHAT IT DID ──────────────────────────────────────
+  // Derived from the payload AFTER resolution, never read off the request. A client claiming
+  // `target` while sending a countdown gets `countdown` stored, for the same reason its target was
+  // replaced above: the three columns describe one act and must not be able to disagree.
+  //
+  // Only rows with a mileage leg get a mode at all — a date-only row was not transcribed under
+  // either convention, and stamping one would invent a fact. Null means "not written by the
+  // schedule form", which is also what every row predating the column means.
+  const modeFor = (e: ScheduleEntry & { item: ScheduleItem }): 'target' | 'countdown' | null => {
+    if (!legsFor(e.item.basis).mileage) return null;
+    if (e.countdownMiles != null) return 'countdown';
+    return e.dueMileage != null ? 'target' : null;
+  };
+
   const refusals = refuseSchedule(paired);
   if (refusals.length) return res.status(400).json({ message: refusals[0].message, refusals });
 
@@ -124,6 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // NULL when the garage typed a target. Not zero — a countdown of zero is a real reading
           // ("due at exactly this mileage") and must not be confused with "no countdown was read".
           countdown_miles: legs.mileage ? (e.countdownMiles ?? null) : null,
+          mode: modeFor(e),
           recorded_by: user.id as string,
           recorded_at: new Date(),
         };
@@ -181,6 +196,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         due_date_precision: 'month' as const,
         due_mileage: legs.mileage ? (e.dueMileage ?? null) : null,
         countdown_miles: legs.mileage ? (e.countdownMiles ?? null) : null,
+        mode: modeFor(e),
         // The description says WHAT and the basis says WHEN — no timing in the words.
         timing_in_description: false,
       };
