@@ -199,3 +199,41 @@ export async function zzSite(prisma) {
   }
   return { id: canonical.id };
 }
+
+// ── IS THE DEV SERVER ACTUALLY SERVING THE PAGE WE ARE ABOUT TO DRIVE? ───────────────────────────
+
+/**
+ * WARM THE ROUTE, THEN SAY WHETHER IT ANSWERS.
+ *
+ * `next dev` compiles pages on demand and disposes them when inactive, and the recompile window
+ * serves 404s. Four gates went red that way in one afternoon — battery, counter-payment,
+ * client-freshness and marketing-lists — each truncating mid-run and passing alone a minute later,
+ * because running it alone hits a route the previous run left warm. Three of the four died as
+ * `page.waitForSelector: Timeout` on a page that was never served; only client-freshness said what
+ * had happened, and only because it happens to fetch a URL and check the status first.
+ *
+ * next.config now holds pages for an hour, which should stop this at the cause. This is the second
+ * half: a gate should not be able to fail that way SILENTLY again.
+ *
+ * IT WARMS RATHER THAN ASSERTING COLD, deliberately. A preflight that fails the run on one
+ * transient 404 trades a confusing red for a different confusing red. Three attempts over ~9s is
+ * far longer than a compile window and far shorter than the 25-30s selector timeouts it replaces —
+ * so a genuinely broken server still fails, by name, in a third of the time and with the reason.
+ *
+ * Returns rather than throws, because the caller owns its own check() and its own wording.
+ */
+export async function serverReady(pathname = '/admin/login', base = process.env.GATE_BASE ?? 'http://localhost:3000') {
+  let status = 0;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(`${base}${pathname}`, { signal: AbortSignal.timeout(8000) });
+      status = r.status;
+      // Drain the body: an unread response can leave the socket half-open, and the next request
+      // then waits on a connection the server thinks is still in use.
+      await r.text().catch(() => '');
+      if (status === 200) return { ok: true, status, attempts: attempt };
+    } catch { status = 0; }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
+  }
+  return { ok: false, status, attempts: 3 };
+}

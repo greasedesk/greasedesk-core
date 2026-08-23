@@ -27,6 +27,7 @@
  * vacuous.
  */
 import './_gate-preflight.mjs';
+const { serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { receivedInPeriod } = await import('../lib/payments.ts');
@@ -130,6 +131,11 @@ try {
 
   // ── THE REAL CLICK ─────────────────────────────────────────────────────────────────────────
   console.log('\n— marked paid at the counter, through the UI —');
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext()).newPage();
   await page.goto(`${B}/admin/login`, { waitUntil: 'domcontentloaded' });

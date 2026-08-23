@@ -8,7 +8,7 @@
  * says so — the failure mode is a plausible advisory, not an error.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
@@ -216,6 +216,11 @@ try {
   // the third surface, and it was flagged unproven twice before being closed — the pure rules can
   // be perfect while the panel never renders, and reading the JSX proves only that the file has it.
   console.log('\n— the battery form, on the page a service advisor uses —');
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const dPage = await (await browser.newContext()).newPage();
   await dPage.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });

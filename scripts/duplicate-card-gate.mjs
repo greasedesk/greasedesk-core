@@ -35,7 +35,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. LX13ZPO is not touched.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
@@ -120,6 +120,11 @@ try {
   for (const s of ['invoiced', 'paid', 'done', 'cancelled', 'no_show']) await mkCard(B, s, true);
   const C = await mkCar(REGS[2]); await mkCard(C, 'draft', true); await mkCard(C, 'accepted', true);
 
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
   await page.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });

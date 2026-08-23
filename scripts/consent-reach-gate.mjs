@@ -24,6 +24,7 @@
  * preconditions pass and the button renders without any real charge being possible.
  */
 import './_gate-preflight.mjs';
+const { serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');
@@ -74,6 +75,11 @@ try {
   linkId = link.id;
   const payUrl = link.url.replace(/^https?:\/\/[^/]+/, B);
 
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
 
   for (const [label, width, height] of VIEWPORTS) {

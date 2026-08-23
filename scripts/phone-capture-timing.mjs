@@ -16,7 +16,7 @@
  *                    a mileage basis. Not "every tyre split": that car goes on a ramp, not a form.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -61,6 +61,11 @@ try {
   // scenario gets a fresh one; see run().
   fix = { veh: veh.id, card: card.id, current: card.id, extraCards: [], site: site.id };
 
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const ctx = await browser.newContext({
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,

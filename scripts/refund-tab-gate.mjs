@@ -23,6 +23,7 @@
  * correctly refuses a refunded invoice — which is the real sequence a customer experiences.
  */
 import './_gate-preflight.mjs';
+const { serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { computeTabs, TAB_KEYS, NON_STAGE_TABS } = await import('../lib/jobcard-tabs.ts');
@@ -126,6 +127,11 @@ try {
   const amount = Math.round(pay.amount_pennies / 4); // a PARTIAL — the ordinary workshop case
 
   console.log(`\n— recording ${P(amount)} back on ${pay.invoice.invoice_number}, dated ${iso} —`);
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();

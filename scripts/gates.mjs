@@ -210,7 +210,22 @@ for (const g of plan) {
     console.log(`SKIP  ${g.padEnd(32)} needs a server on ${missing.join(', ')}`);
   } else {
     const res = await run(g);
-    results[g] = { ...res, tier: tierOf(g), log: undefined };
+    // ── THE TAIL IS KEPT FOR RED GATES ONLY ──────────────────────────────────────────────────
+    // `firstFailure` is the FIRST ✗ line, capped at 110 characters, and for a gate that dies that
+    // line is its catch-all: "run completed — page.waitForSelector: Timeout 30000ms exceeded" says
+    // nothing about which selector, on which page, after which check. Four flakes in one afternoon
+    // each had to be reproduced by hand to be understood, and reproducing them alone is exactly
+    // what makes them pass.
+    //
+    // Green gates keep today's shape: 4KB × 78 to explain nothing is not a trade worth making.
+    // Red and timed-out gates keep the tail — typically 3-12 of them, a few tens of KB.
+    //
+    // WHAT THE TAIL IS: the last 4KB of the child's stdout and stderr, MERGED (run() appends both
+    // to one buffer). It is gate output, so it may contain tenant data — registrations, customer
+    // names, a magic-link token in a URL. This file is gitignored and never leaves the machine,
+    // which is the only reason keeping it is acceptable; it is a local debugging artefact, not
+    // something to copy into an issue without reading it first.
+    results[g] = { ...res, tier: tierOf(g), log: res.code === 0 ? undefined : res.log };
     const state = res.code === 0 ? 'ok  ' : 'RED ';
     console.log(`${state}  ${g.padEnd(32)} ${String(res.seconds).padStart(6)}s  ${res.failures != null ? `${res.failures} of ${res.assertions}` : ''}`);
     if (res.code !== 0 && res.firstFailure) console.log(`        ${res.firstFailure}`);

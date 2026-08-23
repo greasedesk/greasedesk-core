@@ -14,6 +14,7 @@
  * job card uses selectTab, which only runs from the tab strip's onSelect. Same convention.
  */
 import './_gate-preflight.mjs';
+const { serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { TAB_KEYS, NON_STAGE_TABS, TAB_STAGE, computeTabs } = await import('../lib/jobcard-tabs.ts');
@@ -91,6 +92,11 @@ try {
   await prisma.messageThread.update({ where: { id: threadId }, data: { unread_count: 3 } });
 
   const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext()).newPage();
   await page.goto(`${B}/admin/login`, { waitUntil: 'domcontentloaded' });

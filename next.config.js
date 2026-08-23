@@ -5,6 +5,31 @@ const { i18n } = require('./next-i18next.config');
 
 const nextConfig = {
   reactStrictMode: true,
+  /**
+   * ── DEV ONLY, AND IT EXISTS BECAUSE OF FOUR FALSE RED GATES ──────────────────────────────────
+   * `next dev` compiles pages on demand and DISPOSES them again once inactive — 15s by default,
+   * holding 2 (Next 14). The dispose/recompile window serves 404s, and a long gate run walks
+   * dozens of routes, so /admin/login is disposed and rebuilt over and over. Measured on one test
+   * server during a single afternoon of tier runs: 381 × `GET /admin/login 404`, 750 × `GET
+   * /api/auth/session 404`, and `Could not find files for /admin/login in .next/build-manifest.json`.
+   *
+   * A gate landing in one of those windows either fails its own status check — client-freshness
+   * said "the dev server answers before we touch anything — HTTP 404" — or waits 25-30s for a
+   * selector on a page that was never served, which is how battery, counter-payment and
+   * messages-tab died mid-run and passed on their own a minute later. Four flakes, one cause, and
+   * every one of them cost a re-run to disbelieve.
+   *
+   * 3600s comfortably outlives the longest tier: core measured 1646-1695s, a full run 1864-1899s.
+   * 24 pages held rather than 2, because the count is what stops eviction during the walk.
+   *
+   * NO EFFECT ON PRODUCTION. `onDemandEntries` is read only by the dev server's page loader; a
+   * `next build` compiles every route ahead of time and never disposes anything. This trades dev
+   * memory — a few dozen compiled pages held for an hour — for a dev server that answers.
+   */
+  onDemandEntries: {
+    maxInactiveAge: 3600 * 1000,
+    pagesBufferLength: 24,
+  },
   i18n, // locale routing (en-GB only for now) — see next-i18next.config.js
   // Dead pre-NextAuth routes deleted 2026-07-12 — bookmark-safe redirects to the real surfaces.
   // Next preserves the query string by default, so /login?callbackUrl=… carries through.

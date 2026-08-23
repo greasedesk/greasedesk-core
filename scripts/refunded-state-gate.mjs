@@ -7,6 +7,7 @@
  * the £50 had gone back. Nothing on the page was wrong except the only thing the reader cared about.
  */
 import './_gate-preflight.mjs';
+const { serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundState, hasRefund } = await import('../lib/invoice-refund-state.ts');
@@ -148,6 +149,11 @@ const R = (amount, at) => ({ amount_pennies: amount, collected_at: D(at) });
   pay2Id = p2.id;
   await prisma.$transaction(async (tx) => { await reconcileInvoice(tx, openId); });
 
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   const browser = await (await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs')).chromium.launch({ channel: 'chrome' });
   try {
     const page = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();

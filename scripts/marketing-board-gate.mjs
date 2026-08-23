@@ -10,7 +10,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
@@ -240,6 +240,11 @@ try {
   const snoozedCar = await mk('ZZ76SNZ');
   const declinedOld = await mk('ZZ76OLD');
 
+  // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
+  // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
+  // say so — see serverReady in _gate-preflight.
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome' });
   const contactPage = await (await browser.newContext()).newPage();
   await contactPage.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
