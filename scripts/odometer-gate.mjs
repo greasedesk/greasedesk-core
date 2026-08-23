@@ -13,7 +13,7 @@ import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const {
   normaliseOdometer, mileageRate, projectMileageDate, dedupeForDisplay,
-  recordOdometerReadings, readingsForVehicle, MIN_SPAN_DAYS,
+  recordOdometerReadings, readingsForVehicle, MIN_SPAN_DAYS, READING_SOURCE_ORDER,
 } = await import('../lib/odometer.ts');
 const { readFileSync } = await import('node:fs');
 
@@ -125,6 +125,43 @@ try {
   check('our own reading coexists with the MOT on the same date', all.length === 3,
     'source is part of the key — "DVSA says" and "we read it" are different facts');
   check('  …and a rate now spans both', mileageRate(all).ok === true);
+
+  // ── A SHARED DATE MUST NOT BE A COIN FLIP ────────────────────────────────────────────────────
+  // This check found it: 1 of 30 in a core run, green on its own. readingsForVehicle ordered by
+  // reading_date alone and mileageRate sorted by date alone, so on the SAME date the two rows sat
+  // in whatever order Postgres happened to return — and Array.sort being stable preserved it.
+  // Whichever landed last decided the answer: 110,250 last is a clean rate, 110,000 last is
+  // `endpoints_disagree`, because the last reading then reads as a step backwards.
+  //
+  // ASSERTED ON THE ORDERING, NOT ON THE RATE. The rate is the symptom and it is 50/50; feeding
+  // the SAME readings in both possible arrival orders and demanding the same answer fails every
+  // time while the tie is undefined, and passes every time once it is not.
+  const d1 = new Date('2024-06-01'), d2 = new Date('2025-06-01');
+  const motFirst = [{ date: d1, miles: 100000, source: 'mot' }, { date: d2, miles: 110000, source: 'mot' }, { date: d2, miles: 110250, source: 'visit' }];
+  const visitFirst = [{ date: d1, miles: 100000, source: 'mot' }, { date: d2, miles: 110250, source: 'visit' }, { date: d2, miles: 110000, source: 'mot' }];
+  check('the rate does not depend on the order the rows arrived in',
+    mileageRate(motFirst).ok === mileageRate(visitFirst).ok,
+    `arrived mot-last: ${JSON.stringify(mileageRate(visitFirst))} · visit-last: ${JSON.stringify(mileageRate(motFirst))}`);
+  check('  …and both say a rate spans them',
+    mileageRate(motFirst).ok === true && mileageRate(visitFirst).ok === true,
+    'a visit reading is the better-attested endpoint, so it sorts last and the pair reads as a climb');
+  // AND THE QUERY ITSELF, ten times: a tiebreak in the pure sort with none in the orderBy would
+  // still hand every other reader an undefined order.
+  const lasts = new Set();
+  for (let i = 0; i < 10; i++) {
+    const rows = await readingsForVehicle(prisma, ZZ, veh);
+    const onTheDay = rows.filter((r) => r.date.toISOString().slice(0, 10) === '2025-06-01');
+    lasts.add(onTheDay[onTheDay.length - 1]?.source ?? 'none');
+  }
+  check('the query puts the visit reading last on a shared date, every time',
+    lasts.size === 1 && lasts.has('visit'), `saw ${[...lasts].join(', ')} across 10 queries`);
+  // THE PRISMA orderBy CAN ONLY SAY 'source: asc'. That expresses the rank because 'mot' < 'visit'
+  // alphabetically — a coincidence, not a design. A third source named between them would leave the
+  // query and the pure sort disagreeing, which is the same undefined order one level along.
+  const ranked = Object.entries(READING_SOURCE_ORDER).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+  check('the alphabet still agrees with the source rank',
+    JSON.stringify(ranked) === JSON.stringify([...ranked].sort()),
+    `rank order ${ranked.join(' < ')} vs alphabetical ${[...ranked].sort().join(' < ')} — the orderBy can only express the alphabet`);
   check('a zero or negative reading is dropped, not stored',
     (await recordOdometerReadings(prisma, { groupId: ZZ, vehicleId: veh, source: 'visit', readings: [{ date: '2025-07-01', miles: 0 }] })) === 0);
 } catch (e) {

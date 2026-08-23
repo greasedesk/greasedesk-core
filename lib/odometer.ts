@@ -123,8 +123,41 @@ export type MileageRate =
  * Every failure returns a reason rather than a number: a projected reminder date built on an
  * invented rate is worse than no date, because it looks like a decision somebody made.
  */
+/**
+ * ── ON THE SAME DATE, THE VISIT READING SORTS LAST ─────────────────────────────────────────────
+ * A visit reading is keyed off the dash by the garage, with the car in front of them. An MOT figure
+ * is transcribed onto a certificate and may be rounded, or taken before the test rather than after.
+ * Same date, so neither is more recent — but the visit one is the better-attested endpoint, and
+ * only the endpoints set the rate.
+ *
+ * WHY IT IS A RULE AND NOT AN ACCIDENT: it used to be neither. `mileageRate` sorted by date alone
+ * and readingsForVehicle ordered by reading_date alone, so two readings sharing a date sat in
+ * whatever order Postgres returned — and Array.sort being stable preserved it. A car with an MOT
+ * and a visit on one day got a clean rate or `endpoints_disagree` depending on the run: 110,250
+ * last is a climb, 110,000 last reads as a step backwards. odometer-gate caught it as 1 of 30 in a
+ * tier run while passing on its own, which is what an undefined order looks like from outside.
+ *
+ * The rank is the source of truth, NOT the alphabet. `mot` < `visit` alphabetically, which is why
+ * the Prisma `orderBy` below can express this at all — a coincidence worth naming, because a third
+ * source whose name sorted between them would silently split the two orderings. odometer-gate
+ * asserts the two agree.
+ */
+export const READING_SOURCE_ORDER: Record<string, number> = { mot: 0, visit: 1 };
+const sourceRank = (s?: string): number => READING_SOURCE_ORDER[s ?? ''] ?? 0;
+
+/**
+ * TOTAL, so the pure function has no undefined pairs left. Date, then source, then miles — the last
+ * of those is unreachable for stored rows (recordOdometerReadings collapses same-day same-source
+ * readings, so the pair cannot exist in the database) and is here so an arbitrary array passed by a
+ * caller sorts the same way twice.
+ */
+export const compareReadings = (a: OdometerReading, b: OdometerReading): number =>
+  a.date.getTime() - b.date.getTime()
+  || sourceRank(a.source) - sourceRank(b.source)
+  || a.miles - b.miles;
+
 export function mileageRate(readings: OdometerReading[]): MileageRate {
-  const sorted = [...readings].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const sorted = [...readings].sort(compareReadings);
   if (sorted.length < 2) return { ok: false, reason: 'too_few', readings: sorted.length };
   const first = sorted[0], last = sorted[sorted.length - 1];
   const spanDays = Math.round((last.date.getTime() - first.date.getTime()) / 86_400_000);
@@ -307,7 +340,11 @@ export async function readingsForVehicle(
   if (!vehicleId) return [];
   const rows = (await (db as Db).vehicleOdometerReading.findMany({
     where: { group_id: groupId, vehicle_id: vehicleId },
-    orderBy: { reading_date: 'asc' },
+    // THE SAME ORDER THE PURE SORT USES — see compareReadings. Both, because a tiebreak in one
+    // and not the other leaves every reader of the other with an undefined order. `source: 'asc'`
+    // expresses the rank only because 'mot' < 'visit' alphabetically; the rank is the rule and
+    // odometer-gate asserts the two cannot drift apart.
+    orderBy: [{ reading_date: 'asc' }, { source: 'asc' }, { miles: 'asc' }],
     select: { reading_date: true, miles: true, source: true },
   })) as Array<{ reading_date: Date; miles: number; source: string }>;
   return rows.map((r) => ({ date: r.reading_date, miles: r.miles, source: r.source }));
