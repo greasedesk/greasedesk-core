@@ -216,6 +216,30 @@ export function isBlank(item: ScheduleItem, e: Pick<ScheduleEntry, 'dueMonth' | 
  * absent-odometer path is the common one on Completion, not a corner, and it has to read as the
  * next thing to do rather than as a rejection.
  */
+/**
+ * ── COUNTDOWN-ONLY, AND WHAT THAT RESTS ON ─────────────────────────────────────────────────────
+ * The capture forms no longer offer a choice. A MINI cluster shows distance REMAINING — "1,240 mi",
+ * or "-240 mi" with "Service overdue" — and the box now means that and nothing else, on the desktop
+ * and on the phone.
+ *
+ * THE EVIDENCE, AND ITS LIMIT. Every mileage figure the live tenant has ever recorded sits BELOW
+ * its own car's reading: 54 of 54 on 2026-08-24, reading as intervals typed into a target-mode box.
+ * That is decisive about TMBS and about MINIs. It is NOT decisive about every garage — this file
+ * used to say "other computers show the target", and three of those 54 (31,000 / 37,000 / 36,000
+ * on a vehicle check and a pad set) are absurd as intervals and may be exactly that: a genuine
+ * target, typed correctly, by someone reading a screen that showed one.
+ *
+ * SO THE ENDPOINT KEEPS ITS `dueMileage` PATH. pages/api/service-schedule still accepts an absolute
+ * target and stores it verbatim with mode `target`. Nothing in the UI sends one, but the path is
+ * live for two reasons: a PWA capture queued before this change replays through it, and a tenant
+ * whose computers show targets is one client change away from being served rather than stranded.
+ * Removing it would make that a schema decision instead of a UI one.
+ *
+ * A ROW WRITTEN BEFORE ANY OF THIS shows a countdown DERIVED from its stored target and the car's
+ * current reading — never blank. Blank is the one thing it must not show: a blank row the form was
+ * seeded with is a CLEAR, so an empty box here would delete every historical reading on the next
+ * save. That is the D13DSK failure, and the derivation round-trips exactly.
+ */
 export type CountdownRefusal = { code: 'no_odometer' | 'before_zero'; message: string };
 export type CountdownResolution = { ok: true; dueMileage: number } | { ok: false } & CountdownRefusal;
 

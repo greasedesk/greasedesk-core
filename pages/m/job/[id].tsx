@@ -538,7 +538,7 @@ export default function MobileJobCard() {
 
               {/* THE SERVICE COMPUTER, BEFORE ANYTHING IS TOUCHED. */}
               {job && (
-                <PhoneServiceSchedule jobCardId={job.id}
+                <PhoneServiceSchedule jobCardId={job.id} countFrom={job.vehicle.mileageIn}
                   recorded={(job.scheduleOnArrival ?? []) as never}
                   motExpiry={job.motExpiry ?? null} onQueued={load} />
               )}

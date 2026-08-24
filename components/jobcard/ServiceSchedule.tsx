@@ -67,23 +67,38 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   // and never the odometer the service falls due at. Other computers show the target. The panel
   // asks which, once, because a given car's screen uses one convention for all of its items; and
   // a bare "240" is otherwise ambiguous between "due at 240" and "240 to go".
-  type Unit = 'target' | 'countdown';
-  const seededUnit: Unit = recorded.some((r) => r.countdownMiles != null) ? 'countdown' : 'target';
-  const shownFor = (r: ScheduleRow | undefined, u: Unit) =>
-    u === 'countdown'
-      ? (r?.countdownMiles != null ? String(r.countdownMiles) : '')
-      : (r?.dueMileage != null ? String(r.dueMileage) : '');
-  const seedFrom = (rs: ScheduleRow[], u: Unit) => {
+  /**
+   * MILES REMAINING, AND THERE IS NO OTHER OPTION. The toggle is gone: a service computer shows
+   * distance remaining, and offering a second convention is what let 54 rows across the live tenant
+   * store an interval as though it were a target — "due at 14,000 miles" on a car reading 117,735.
+   *
+   * A ROW THAT PREDATES THE COUNTDOWN COLUMN STILL HAS TO SHOW SOMETHING, and blank is the one
+   * thing it must not show: a blank row the form was seeded with is a CLEAR, so displaying nothing
+   * here would delete every historical reading on the next save. That is the exact failure that
+   * destroyed five readings on D13DSK. So the countdown is DERIVED from the stored target and the
+   * current reading, which round-trips exactly — countFrom + (due − countFrom) is due — and shows
+   * the honest figure, however absurd: a target of 14,000 on a car at 115,964 reads as −101,964,
+   * which is what the stored data actually says.
+   */
+  const shownFor = (r: ScheduleRow | undefined) => {
+    if (r?.countdownMiles != null) return String(r.countdownMiles);
+    if (r?.dueMileage != null && countFrom != null) return String(r.dueMileage - countFrom);
+    return '';
+  };
+  const seedFrom = (rs: ScheduleRow[]) => {
     const out: Record<string, { month: string; miles: string }> = {};
     for (const s of SCHEDULE_ITEMS) {
       const r = rs.find((x) => x.key === s.key);
       // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
-      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownFor(r, u) };
+      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownFor(r) };
     }
     return out;
   };
-  const [unit, setUnit] = useState<Unit>(seededUnit);
-  const [rows, setRows] = useState(() => seedFrom(recorded, seededUnit));
+  /** The target a row arrived with, kept so a row we cannot express as a countdown — no reading to
+   *  count from — is sent back UNCHANGED rather than as a blank the writer would read as a clear. */
+  const seededDue: Record<string, number | null> = {};
+  for (const s of SCHEDULE_ITEMS) seededDue[s.key] = recorded.find((x) => x.key === s.key)?.dueMileage ?? null;
+  const [rows, setRows] = useState(() => seedFrom(recorded));
   const [dirty, setDirty] = useState(false);
   // WHAT THE FORM WAS HANDED, kept beside what it now holds. The save reports this per row so the
   // writer can tell "I emptied it" from "I never had it" — see classifyEntry. Derived from the
@@ -101,10 +116,9 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   useEffect(() => {
     if (dirty || fingerprint === seenRef.current) return;
     seenRef.current = fingerprint;
-    setUnit(seededUnit);
-    setRows(seedFrom(recorded, seededUnit));
+    setRows(seedFrom(recorded));
     setHeld(new Set(recorded.map((r) => r.key)));
-  }, [fingerprint, dirty, recorded, seededUnit]);
+  }, [fingerprint, dirty, recorded]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -121,24 +135,6 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
     ? 'Record the mileage in first — a countdown needs a reading to count from.'
     : 'Record the mileage out first — a countdown needs a reading to count from.';
 
-  // Switching CONVERTS what is already typed rather than silently changing what it means: 68,120
-  // as a target is -240 as a countdown from 68,360, and leaving the digits alone would turn one
-  // into a service due 136,480 miles away. Only reachable when the reading is known, because the
-  // countdown option is disabled without it.
-  const switchUnit = (u: Unit) => {
-    if (u === unit || countFrom == null) return;
-    setDirty(true);
-    setUnit(u);
-    setRows((r) => {
-      const out = { ...r };
-      for (const s of SCHEDULE_ITEMS) {
-        const n = numeric(r[s.key].miles);
-        out[s.key] = { ...r[s.key], miles: n == null ? '' : String(u === 'countdown' ? n - countFrom : countFrom + n) };
-      }
-      return out;
-    });
-  };
-
   const set = (k: string, patch: Partial<{ month: string; miles: string }>) => {
     setDirty(true);
     setRows((r) => ({ ...r, [k]: { ...r[k], ...patch } }));
@@ -150,10 +146,17 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
       const entries = SCHEDULE_ITEMS.map((s) => ({
         key: s.key,
         dueMonth: rows[s.key].month.trim() || null,
-        // ONE OF THE TWO, NEVER BOTH. In countdown mode the server derives the target — sending a
-        // target as well would invite the two to disagree, and the stored pair has to be arithmetic.
-        dueMileage: unit === 'target' ? numeric(rows[s.key].miles) : null,
-        countdownMiles: unit === 'countdown' ? numeric(rows[s.key].miles) : null,
+        // ALWAYS A COUNTDOWN — the server derives the target, so the stored pair is arithmetic and
+        // cannot disagree. The one exception is a card with no reading to count from: there the
+        // mileage box is disabled, and the row goes back with the target it ARRIVED with so a save
+        // of the date leg cannot silently blank a mileage nobody touched.
+        // WITH NO READING TO COUNT FROM, two different rows go two different ways. One the user
+        // TYPED into is sent as a countdown and the server refuses it — 409, "record the mileage
+        // first", which is a next step rather than a rejection and is retryable in the outbox.
+        // One they did not touch goes back with the target it ARRIVED with, so saving the date leg
+        // on a card with no mileage-out cannot silently blank a reading nobody was asked about.
+        dueMileage: countdownUsable || numeric(rows[s.key].miles) != null ? null : seededDue[s.key],
+        countdownMiles: numeric(rows[s.key].miles),
         wasRecorded: held.has(s.key),
       }));
       const r = await fetch('/api/service-schedule', {
@@ -208,27 +211,21 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
           everything on it. Defaults to `target` so nothing changes for a garage whose computer
           shows targets — and to `countdown` when the row was SAVED as one, so it reopens the way
           it was entered. */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap" data-testid="schedule-unit">
-        <span className="text-xs text-muted">The computer shows</span>
-        {([['target', 'a due mileage'], ['countdown', 'miles remaining']] as const).map(([u, label]) => (
-          <button key={u} type="button" disabled={!canEdit || (u === 'countdown' && !countdownUsable)}
-            onClick={() => switchUnit(u)} data-testid={`schedule-unit-${u}`}
-            title={u === 'countdown' && !countdownUsable ? noReadingYet : undefined}
-            className={`px-2.5 py-1 rounded-lg border text-xs font-medium ${
-              unit === u ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'
-            } ${u === 'countdown' && !countdownUsable ? 'opacity-50 cursor-not-allowed' : ''}`}>
-            {label}
-          </button>
-        ))}
-        {!countdownUsable && (
-          // A NEXT STEP, NOT A REJECTION. The empty mileage-out box is deliberate, so on Completion
-          // this is the ordinary case and reads as the thing to do rather than something gone wrong.
-          <span className="text-xs text-muted" data-testid="schedule-no-reading">{noReadingYet}</span>
-        )}
-        {countdownUsable && unit === 'countdown' && (
+      {/* ── WHAT THE BOX MEANS, STATED ONCE ────────────────────────────────────────────────────
+          There used to be a toggle here — "a due mileage" or "miles remaining" — because some
+          service computers show a target. It is gone: two conventions on one form is how 54 rows
+          on the live tenant came to hold an interval as a target, and nothing on the row said
+          which had been meant. One convention, said out loud, and the arithmetic shown per row. */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap" data-testid="schedule-units-note">
+        <span className="text-xs text-muted">Miles remaining, as the computer shows them</span>
+        {countdownUsable ? (
           <span className="text-xs text-muted" data-testid="schedule-count-from">
             counting from <strong className="text-ink tabular-nums">{countFrom!.toLocaleString('en-GB')}</strong>
           </span>
+        ) : (
+          // A NEXT STEP, NOT A REJECTION. The empty mileage-out box is the ordinary state of a card
+          // mid-job, so this reads as the thing to do rather than as something gone wrong.
+          <span className="text-xs text-muted" data-testid="schedule-no-reading">{noReadingYet}</span>
         )}
       </div>
 
@@ -247,15 +244,13 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
                   data-testid={`schedule-month-${s.key}`} className={field} />
               ) : <span />}
               {legs.mileage ? (
-                <input inputMode={unit === 'countdown' ? 'text' : 'numeric'} value={row.miles} disabled={!canEdit}
-                  placeholder={unit === 'countdown' ? 'miles left' : 'miles'}
+                <input inputMode="text" value={row.miles} disabled={!canEdit}
+                  placeholder="miles remaining"
                   // A LEADING MINUS IS DATA HERE. It used to be stripped, so a mechanic copying
                   // "-240" off the cluster got 240 — a service due at 240 miles, silently. The
                   // minus is only meaningful against a countdown, so a target still cannot take one.
                   onChange={(e) => set(s.key, {
-                    miles: (unit === 'countdown'
-                      ? e.target.value.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '')
-                      : e.target.value.replace(/[^\d]/g, '')).slice(0, 8),
+                    miles: e.target.value.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '').slice(0, 8),
                   })}
                   data-testid={`schedule-miles-${s.key}`} className={`${field} w-28`} />
               ) : <span />}
@@ -267,7 +262,7 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
                 {/* THE ARITHMETIC, SHOWN. A wrong odometer is otherwise invisible until a customer
                     is reminded at a mileage the car passed months ago; here it is one glance.
                     Advisory only — the SERVER does the conversion that gets stored. */}
-                {unit === 'countdown' && legs.mileage && countFrom != null && (() => {
+                {legs.mileage && countFrom != null && (() => {
                   const n = numeric(row.miles);
                   if (n == null) return null;
                   const target = countFrom + n;

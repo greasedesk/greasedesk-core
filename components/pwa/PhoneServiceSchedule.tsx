@@ -27,9 +27,21 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
+
+/**
+ * WHAT THE BOX SHOWS. The countdown as recorded, or — for a row written before the countdown
+ * column — the one implied by its stored target and the car's reading. Never blank when a target
+ * exists: a blank row the form was seeded with is a CLEAR, and showing nothing here would delete
+ * every historical reading on the next save. Same rule as the desktop panel, deliberately.
+ */
+const shownMiles = (r: { dueMileage: number | null; countdownMiles?: number | null } | undefined, countFrom?: number | null) => {
+  if (r?.countdownMiles != null) return String(r.countdownMiles);
+  if (r?.dueMileage != null && countFrom != null) return String(r.dueMileage - countFrom);
+  return '';
+};
 import { enqueueSchedule } from '@/lib/pwa-outbox';
 
-export type PhoneScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null };
+export type PhoneScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null; countdownMiles?: number | null };
 
 /** What the row records, said on the row — the same three words as the desktop. */
 const BASIS_LABEL: Record<string, string> = {
@@ -38,8 +50,13 @@ const BASIS_LABEL: Record<string, string> = {
   whichever_first: 'whichever comes first',
 };
 
-export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpiry = null, onQueued }: {
+export default function PhoneServiceSchedule({ jobCardId, recorded = [], countFrom = null, motExpiry = null, onQueued }: {
   jobCardId: string;
+  /** The car's mileage-in, which a countdown counts FROM. Null until somebody records it — the
+   *  server then answers 409 (retryable in the outbox) rather than storing a raw number. Needed
+   *  here too so a row written before the countdown column still shows its mileage leg: without it
+   *  the box goes blank while the month stays, and a whichever_first row is refused as incomplete. */
+  countFrom?: number | null;
   /** What this visit already recorded, so the form opens on it rather than blank. */
   recorded?: PhoneScheduleRow[];
   /** DVSA, read-only. NULL when we have no MOT date for this car. */
@@ -52,7 +69,7 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
   for (const s of SCHEDULE_ITEMS) {
     const r = recorded.find((x) => x.key === s.key);
     // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
-    seed[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+    seed[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownMiles(r, countFrom) };
   }
   const [rows, setRows] = useState(seed);
   const [queued, setQueued] = useState(false);
@@ -72,7 +89,7 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
     const fresh: Record<string, { month: string; miles: string }> = {};
     for (const it of SCHEDULE_ITEMS) {
       const r = recorded.find((x) => x.key === it.key);
-      fresh[it.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: r?.dueMileage != null ? String(r.dueMileage) : '' };
+      fresh[it.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownMiles(r, countFrom) };
     }
     setRows(fresh);
     setHeld(new Set(recorded.map((r) => r.key)));
@@ -88,7 +105,11 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
     const entries = SCHEDULE_ITEMS.map((s) => ({
       key: s.key,
       dueMonth: rows[s.key].month.trim() || null,
-      dueMileage: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d]/g, '')) : null,
+      // MILES REMAINING, ALWAYS — the phone is at the car, reading the cluster. The server resolves
+      // it against odometer-in; a card with no reading yet comes back 409, which is NOT terminal in
+      // the outbox, so the capture waits for the mileage rather than being thrown away.
+      dueMileage: null,
+      countdownMiles: rows[s.key].miles.trim() ? Number(rows[s.key].miles.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '')) : null,
       wasRecorded: held.has(s.key),
     }));
     await enqueueSchedule({ jobCardId, entries });
@@ -96,7 +117,7 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
     // the next save may well be composed before the queue has moved — on a phone in a bay, quite
     // likely offline the whole time. Advancing it at enqueue is what makes a clear typed two
     // minutes later reach the writer as a clear.
-    setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null).map((x) => x.key)));
+    setHeld(new Set(entries.filter((x) => x.dueMonth != null || x.dueMileage != null || x.countdownMiles != null).map((x) => x.key)));
     setQueued(true);
     onQueued?.();
   }
@@ -149,7 +170,7 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], motExpi
                 ) : <span />}
                 {legs.mileage ? (
                   <input inputMode="numeric" value={row.miles} placeholder="miles"
-                    onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d]/g, '').slice(0, 7) })}
+                    onChange={(e) => set(s.key, { miles: e.target.value.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '').slice(0, 8) })}
                     data-testid={`phone-schedule-miles-${s.key}`} className={`${field} text-right`} />
                 ) : <span />}
               </div>
