@@ -44,7 +44,8 @@ import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { dvsaLookup, dvsaConfigured } = await import('../lib/dvsa.ts');
 const { recordOdometerReadings, mileageRate } = await import('../lib/odometer.ts');
-const { motFieldsToWrite } = await import('../lib/dvsa.ts');
+const { motVerifiedWrite } = await import('../lib/dvsa.ts');
+const { writeAudit } = await import('../lib/audit.ts');
 const prisma = new PrismaClient();
 
 const args = process.argv.slice(2);
@@ -75,13 +76,14 @@ const vehicles = await prisma.vehicle.findMany({
 
 console.log(`\n  ${WRITE ? 'WRITING' : 'DRY RUN'} — ${group.group_name}, ${vehicles.length} vehicles, ${PACE_MS}ms apart\n`);
 
-let looked = 0, missed = 0, gotExpiry = 0, gotReadings = 0, readingRows = 0, errors = 0;
+let looked = 0, missed = 0, gotExpiry = 0, gotReadings = 0, readingRows = 0, errors = 0, stamped = 0;
 const perCar = [];
 let rateAfter = 0;
 const rateRefused = {};
 const anomalies = [];
 const corrected = [];
 const now = new Date();
+const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
 // What each car ALREADY has, so the projection is "after the sweep", not "from DVSA alone".
 const existingReadings = new Map();
 for (const v of vehicles) {
@@ -108,10 +110,15 @@ for (const v of vehicles) {
 
   // REFRESH, NOT FILL — see lib/dvsa::motFieldsToWrite. Counted separately, because "gained a date
   // we never had" and "corrected a date that had gone stale" are different facts about the fleet.
-  const write = motFieldsToWrite(
+  // THE ANSWER IS THE FACT, NOT THE CHANGE — lib/dvsa::motVerifiedWrite. For 225 of 227 TMBS cars
+  // DVSA confirms exactly what we hold, so the movement is empty and the VERIFICATION is the whole
+  // result. Storing only movements is what left 210 correct dates reading as never checked.
+  const verified = motVerifiedWrite(
     { mot_expiry: v.mot_expiry ?? null, last_mot_mileage: v.last_mot_mileage ?? null, last_mot_date: v.last_mot_date ?? null },
     data,
+    new Date(),
   );
+  const write = verified ?? {};
   if (write.mot_expiry) {
     if (v.mot_expiry) {
       corrected.push({
@@ -123,8 +130,35 @@ for (const v of vehicles) {
       });
     } else gotExpiry += 1;
   }
-  if (Object.keys(write).length && WRITE) {
-    await prisma.vehicle.update({ where: { id: v.id }, data: write });
+  // Unconditional once DVSA answered: an empty movement is still a check, and `verified` is never
+  // null on this line — the miss returned above. A car DVSA has no record of never reaches here.
+  if (verified) {
+    stamped += 1;
+    const movedFields = Object.keys(verified).filter((k) => k !== 'mot_checked_at');
+    if (WRITE) {
+      // ONE TRANSACTION PER CAR — the stamp and the row that explains it land together or not at
+      // all. A stamp with no row is the state this whole change exists to remove, and it would be
+      // silently recreated by a write that succeeded next to an audit that failed.
+      await prisma.$transaction(async (tx) => {
+        await tx.vehicle.update({ where: { id: v.id }, data: verified });
+        await writeAudit(tx, {
+          groupId: GROUP, userId: null, action: 'vehicle.mot_swept', entity: 'vehicle', entityId: v.id,
+          diff: {
+            registration: v.registration,
+            // WHAT MOVED, or that nothing did. Both are stated rather than one being inferred from
+            // the absence of the other — an empty `fields` on a row that never says `verified`
+            // reads as a failed write.
+            moved: movedFields.length > 0,
+            fields: movedFields,
+            before: { mot_expiry: iso(v.mot_expiry), last_mot_mileage: v.last_mot_mileage ?? null, last_mot_date: iso(v.last_mot_date) },
+            after: { mot_expiry: iso(verified.mot_expiry ?? v.mot_expiry), last_mot_mileage: verified.last_mot_mileage ?? v.last_mot_mileage ?? null, last_mot_date: iso(verified.last_mot_date ?? v.last_mot_date) },
+            verified: true,
+            checked_at: verified.mot_checked_at.toISOString(),
+            via: 'DVSA bulk sweep (scripts/dvsa-backfill)',
+          },
+        });
+      });
+    }
   }
   // PER-CAR, because a mean hides the shape. A fleet of nines and a fleet of twos-and-fifteens
   // average the same and mean completely different things for a rate.
@@ -200,6 +234,8 @@ console.log(`\n  looked up          ${looked}`);
 console.log(`  no DVSA record     ${missed}`);
 console.log(`  errors             ${errors}`);
 console.log(`  MOT dates to gain  ${gotExpiry}   (blank before)`);
+console.log(`  VERIFIED (stamped) ${stamped}   (DVSA answered — mot_checked_at written even where nothing moved)`);
+console.log(`  NOT stamped        ${missed}   (no DVSA record or lookup failed — nothing is recorded about these)`);
 console.log(`  MOT dates to FIX   ${corrected.length}   (stale — the sweep used to skip these entirely)`);
 for (const c of corrected) {
   const tag = c.wasExpired && !c.stillExpired ? 'was EXPIRED, now current'

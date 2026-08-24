@@ -140,6 +140,31 @@ export function motFieldsToWrite(current: MotFieldsNow, incoming: DvsaVehicle | 
   return out;
 }
 
+/**
+ * THE ANSWER IS THE FACT, NOT THE CHANGE — what to write when a lookup came back.
+ *
+ * motFieldsToWrite says what MOVED. This says what to RECORD, which is a different question: DVSA
+ * confirming a date we already hold is a verification, and an empty write is the most common shape
+ * a verification takes. 227 TMBS cars had been swept and refreshed on 19 Aug 2026, and 210 of them
+ * still read as never verified afterwards, because the sweep stored only the movements. The dates
+ * were right the whole time; nothing said so, and "is this current?" stayed unanswerable for 98%
+ * of the fleet on data that was in fact current.
+ *
+ * A MISS RECORDS NOTHING. Not the fields, and not the stamp — dvsaLookup returns null for a 404, a
+ * 403, a 429, a timeout, a malformed body and an unconfigured credential alike, and none of those
+ * is evidence about the car. Returns null so the caller writes nothing at all rather than an empty
+ * update, which keeps "we did not ask" and "we asked and learned nothing" distinguishable in the
+ * database instead of only in the code.
+ *
+ * PURE. `at` is a parameter rather than a `new Date()` so a gate can pin the stamp it expects.
+ */
+export function motVerifiedWrite(
+  current: MotFieldsNow, incoming: DvsaVehicle | null, at: Date,
+): (MotFieldWrite & { mot_checked_at: Date }) | null {
+  if (!incoming) return null; // no answer — the one case that records nothing
+  return { ...motFieldsToWrite(current, incoming), mot_checked_at: at };
+}
+
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   // Env presence — NAMES/booleans only, never values.

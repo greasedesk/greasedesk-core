@@ -29,6 +29,15 @@ export type AuditAction =
   // rather than vehicle.edited: nobody edited anything, and a trail that says a human did would
   // send the next reader looking for a person who does not exist.
   | 'vehicle.mot_refresh'
+  // The BULK sweep (scripts/dvsa-backfill), one row per car DVSA answered for — including the
+  // cars where nothing moved, which is 225 of 227 on TMBS. That is the deliberate difference from
+  // vehicle.mot_refresh, which audits only the CHANGE because mot_checked_at already holds the
+  // "we looked" fact. It does not hold it for long: the column carries only the LATEST check, so
+  // the next sweep overwrites the evidence that this one ever ran. A confirmation is the sweep's
+  // main product and the only place its history can live is here. No row for a miss — a car DVSA
+  // has no record of yields no fact about that car, and userId is null because no human pressed
+  // anything.
+  | 'vehicle.mot_swept'
   // An MOT reminder actually went to a customer, from the marketing list. Distinct from the
   // Contacted button, which records that a human did something we did not do.
   | 'marketing.sent'
