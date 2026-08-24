@@ -16,6 +16,7 @@ import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus, isBookedCard, stagesRemaining } from '@/lib/jobcard-status';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
+import { refreshMotForMint } from '@/lib/mot-mint-refresh';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { validatePaymentDate, effectiveIssueDate } from '@/lib/invoice';
 import { sendInvoiceEmail } from '@/lib/invoice-email-send';
@@ -136,6 +137,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  // ── VERIFY THE MOT EXPIRY BEFORE IT BECOMES A CLAIM ──────────────────────────────────────────
+  // The invoice's needs block prints this date, read live at mint and frozen with everything else,
+  // so until now it was only as current as whenever somebody last happened to look. LB14FJX printed
+  // 2026-09-20 when DVSA had said 2027-09-20 since the car was tested — on the very visit being
+  // invoiced, at that card's own odometer-out.
+  //
+  // OUTSIDE THE TRANSACTION, DELIBERATELY. The mint runs in a tx and an HTTP call inside one holds a
+  // pooled Neon connection open across somebody else's network. So it happens here, writes the
+  // vehicle row, and the mint then reads what is there — the freeze needs no change at all.
+  //
+  // NOTHING HERE CAN STOP A GARAGE BILLING. Every failure — 404, 403, 429, timeout, unconfigured
+  // credential — writes nothing, stamps nothing, and lets the mint proceed on the stored value,
+  // which is exactly the behaviour that preceded this. See lib/mot-mint-refresh.
+  let motRefresh: Awaited<ReturnType<typeof refreshMotForMint>> | null = null;
+  if (to === 'invoiced') {
+    const forMot = await prisma.jobCard.findUnique({
+      where: { id: jobCardId },
+      select: { vehicle: { select: { id: true, registration: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } } },
+    });
+    if (forMot?.vehicle?.registration) motRefresh = await refreshMotForMint(prisma, forMot.vehicle);
+  }
+
   // Apply the transition + its side effects atomically.
   //  - invoiced: mint the invoice (once — sticky via Invoice.job_card_id @unique). The mint runs in
   //    THIS tx, so if anything fails the sequence increment rolls back too (no gap, no burned number).
@@ -201,6 +224,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } else {
             await issueInvoiceForCard(tx, jobCardId, scope.groupId); // mints + FREEZES the lines (freeze-at-issue)
             await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.minted' });
+            // THE DOCUMENT SAYS SOMETHING DIFFERENT FROM WHAT THE CARD WAS SHOWING A SECOND AGO,
+            // and that is worth being able to explain later. Only when the expiry actually MOVED:
+            // "DVSA agrees with what we hold" is the common case and needs no row.
+            if (motRefresh?.expiryChanged) {
+              await writeAudit(tx, {
+                groupId: scope.groupId, userId: scope.userId, jobCardId, action: 'invoice.mot_refreshed',
+                diff: { from: motRefresh.expiryChanged.from, to: motRefresh.expiryChanged.to,
+                        fields: motRefresh.written, via: 'DVSA at mint, before the freeze' },
+              });
+            }
           }
         }
       } else if (to === 'paid') {

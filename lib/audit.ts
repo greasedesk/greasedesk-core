@@ -35,6 +35,10 @@ export type AuditAction =
   | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
   | 'comeback.cleared'      // comeback flag removed
   | 'invoice.minted'
+  // DVSA moved the expiry between the card being looked at and the document being frozen. Only
+  // written when it actually CHANGED — "DVSA agrees with what we hold" is the common case and
+  // needs no row. Distinct from vehicle.mot_refresh, which is somebody pressing the button.
+  | 'invoice.mot_refreshed'
   | 'invoice.warranty_minted' // comeback £0 invoice from the warranty series
   | 'invoice.vin_skipped'     // minted without a VIN on the card (pre-mint backstop skip)
   | 'invoice.mileage_skipped' // minted without a mileage on the card
