@@ -186,6 +186,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           customerId = ownerId ?? (await newCustomer()).id;
         } else {
           customerId = (await newCustomer()).id;
+          // ── WHERE THESE MOT FACTS CAME FROM, RECORDED ────────────────────────────────────────
+          // They arrive as REQUEST-BODY PARAMS, already fetched by the browser's registration
+          // lookup. The server cannot tell a real DVSA hit from a hand-typed vehicle except by
+          // whether they arrived — so mot_checked_at is stamped only when they did. A false
+          // verification is harder to find than a missing one: a missing stamp is a null anybody
+          // can count, and a false one looks exactly like a real check.
+          //
+          // KNOWN LIMIT (not fixable server-side): "DVSA answered and the car has no MOT yet"
+          // arrives identically to "no lookup ran" — both are an absent motExpiry. A brand-new car
+          // therefore gets no stamp though it was genuinely checked. Closing that needs the client
+          // to send an explicit asked-flag; until it does, this stays deliberately cautious.
+          const motExpiry = dateOrNull(body.motExpiry);
+          const lastMotMileage = intOrNull(body.lastMotMileage);
+          const lastMotDate = dateOrNull(body.lastMotDate);
+          const motLookupAnswered = motExpiry !== null || lastMotMileage !== null || lastMotDate !== null;
           const createdVehicle = await tx.vehicle.create({
             data: {
               group_id: groupId,
@@ -201,9 +216,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               fuel_type: body.fuel?.trim() || null,
               year: intOrNull(body.year),
               engine_cc: intOrNull(body.engineCc),
-              mot_expiry: dateOrNull(body.motExpiry),
-              last_mot_mileage: intOrNull(body.lastMotMileage),
-              last_mot_date: dateOrNull(body.lastMotDate),
+              mot_expiry: motExpiry,
+              last_mot_mileage: lastMotMileage,
+              last_mot_date: lastMotDate,
+              // Honest-null: no fields, no claim of a check.
+              mot_checked_at: motLookupAnswered ? new Date() : null,
               mileage_at_create: mileage,
             },
             select: { id: true },
