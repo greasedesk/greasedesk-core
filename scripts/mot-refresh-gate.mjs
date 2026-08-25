@@ -112,9 +112,17 @@ try {
 
   // ── 4. ON THE SERVED PAGE ────────────────────────────────────────────────────────────────────
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700900456' }, select: { id: true } });
+  // ── DATED RELATIVE TO THE CLOCK, NEVER PINNED TO A DAY ───────────────────────────────────────
+  // This was new Date('2026-08-25'): the future when it was written, the past by the next morning.
+  // motBand compares against a TIMESTAMP, not a day — `if (expiry < now) return 'expired'` — so at
+  // 00:00 the car left the `due` stack for `expired`, and the gate spent 25s waiting for a row that
+  // had moved to another tab. It had been green the evening before. The BAND is the property under
+  // test; the date is only how the fixture reaches it, so the date must follow the clock.
+  const MOT_DUE = new Date(Date.now() + 30 * 86_400_000);
+  const MOT_DUE_ISO = MOT_DUE.toISOString().slice(0, 10);
   const veh = await prisma.vehicle.create({
     data: { group_id: ZZ, registration: REG, registration_normalized: REG, make: 'Fixture', model: 'Refresh',
-      year: 2015, mot_expiry: new Date('2026-08-25T00:00:00.000Z') },
+      year: 2015, mot_expiry: MOT_DUE },
     select: { id: true },
   });
   fix = { veh: veh.id, cust: cust.id };
@@ -154,7 +162,7 @@ try {
     'mot_checked_at is a fact about data received, never about a button pressed');
   const stamped = await prisma.vehicle.findUnique({ where: { id: veh.id }, select: { mot_checked_at: true, mot_expiry: true } });
   check('  …and nothing was written to the car', stamped?.mot_checked_at === null
-    && stamped?.mot_expiry?.toISOString().slice(0, 10) === '2026-08-25', JSON.stringify(stamped));
+    && stamped?.mot_expiry?.toISOString().slice(0, 10) === MOT_DUE_ISO, JSON.stringify(stamped));
 
   // THE ROW DID NOT MOVE. This is the whole of "keep your place in a list you are working".
   check('the row is still there, in the same band, saying what it said',

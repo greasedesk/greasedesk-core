@@ -95,9 +95,21 @@ try {
   // missing-address wording is proven against.
   const cust = await prisma.customer.create({
     data: { group_id: ZZ, name: CUST, phone: '07700 900456', phone_e164: '+447700900456' }, select: { id: true } });
+  // ── DATED RELATIVE TO THE CLOCK, NEVER PINNED TO A DAY ───────────────────────────────────────
+  // This was new Date('2026-08-25'): the future when it was written, the past by the next morning.
+  // motBand compares against a TIMESTAMP — `if (expiry < now) return 'expired'` — so at midnight the
+  // car left the `due` stack for `expired` and this gate waited 25s for a row that had moved tabs.
+  // The later update to 2026-07-01 stays pinned on purpose: it is meant to be EXPIRED, and a date
+  // in the past cannot cross back.
+  //
+  // MOT_DUE_LABEL is derived from the same value, so the sentence the panel must print cannot drift
+  // from the fixture that produces it. Asserting the rule, not a literal that has to be re-typed.
+  const MOT_DUE = new Date(Date.now() + 30 * 86_400_000);
+  const MOT_DUE_LABEL = new Intl.DateTimeFormat('en-GB',
+    { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(MOT_DUE);
   const veh = await prisma.vehicle.create({
     data: { group_id: ZZ, registration: REG, registration_normalized: REG, make: 'Fixture', model: 'Send',
-      year: 2015, mot_expiry: new Date('2026-08-25T00:00:00.000Z') },
+      year: 2015, mot_expiry: MOT_DUE },
     select: { id: true },
   });
   fix = { veh: veh.id, cust: cust.id };
@@ -139,9 +151,10 @@ try {
   await row.locator('[data-testid="marketing-send-open"]').click();
   await row.locator('[data-testid="marketing-send-panel"]').waitFor({ timeout: 25000 });
   const preview = (await row.locator('[data-testid="marketing-send-preview"]').textContent() ?? '').trim();
-  check('the panel shows the words that will arrive', /ZZ76SND/.test(preview) && /25 August 2026/.test(preview), preview);
+  check('the panel shows the words that will arrive',
+    /ZZ76SND/.test(preview) && preview.includes(MOT_DUE_LABEL), `${preview}  [expected ${MOT_DUE_LABEL}]`);
   check('  …rendered by the server, so they cannot differ from what is sent',
-    /ZZ Gate Garage: your MOT on ZZ76SND runs out 25 August 2026/.test(preview),
+    preview.includes(`ZZ Gate Garage: your MOT on ZZ76SND runs out ${MOT_DUE_LABEL}`),
     'the panel does not assemble its own copy of the sentence');
   check('  …with the cost stated in texts, not septets alone',
     /of 160/.test(await row.locator('[data-testid="marketing-send-cost"]').textContent() ?? ''));
