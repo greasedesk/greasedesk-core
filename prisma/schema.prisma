@@ -1777,6 +1777,10 @@ enum CcaStandard {
   DIN
   JIS
   IEC
+  /// "The label does not say" — the honest answer for most UK batteries, whose labels print a
+  /// rating and name no standard. NOT a sixth way of rating one: it is the absence of one, said
+  /// out loud, so lib/battery::ratingsComparable can refuse a comparison on it.
+  UNSTATED
 }
 
 /// A BATTERY TEST — three numbers off the tester, and the denominator the third was computed from.

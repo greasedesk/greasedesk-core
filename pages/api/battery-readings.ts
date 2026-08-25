@@ -86,17 +86,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vis = await getVisibility(user.id as string);
   if (!canAccessSite(vis, card.site_id)) return res.status(403).json({ message: 'You do not have access to this job card’s location.' });
 
-  const out = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const r = await recordBatteryReading(tx, {
-      groupId, vehicleId: card.vehicle_id, jobCardId: card.id, measuredBy: user.id as string,
-      reading: { voltageMv, socPct: b.socPct as number, sohPct: b.sohPct as number, ratedCca, ccaStandard: ccaStandard as CcaStandard | null },
+  // ── A THROW MUST STILL BE AN ANSWER ─────────────────────────────────────────────────────────
+  // Without this the transaction below threw straight past Next's handler and the caller got an
+  // HTML error page with a 500. Every deliberate refusal on this route returns JSON with a message;
+  // the one unplanned failure returned markup, so a client doing `await r.json()` got a parse error
+  // on top of it. That is how a six-member TS list against a five-member database enum stayed
+  // invisible for as long as it did.
+  //
+  // ── AND IT MUST SAY WHETHER TO COME BACK ────────────────────────────────────────────────────
+  // PrismaClientValidationError is DETERMINISTIC: the shape of the request cannot satisfy the
+  // schema, so the identical retry cannot succeed. 400 says so, and 400 is terminal in the phone's
+  // outbox (public/sw.js TERMINAL_STATUSES) — the queued capture stops burning eight attempts over
+  // two hours against something that will never work. Everything else keeps 500 and stays
+  // RETRYABLE, because a dropped connection must not be mistaken for bad input and discarded.
+  let out;
+  try {
+    out = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const r = await recordBatteryReading(tx, {
+        groupId, vehicleId: card.vehicle_id, jobCardId: card.id, measuredBy: user.id as string,
+        reading: { voltageMv, socPct: b.socPct as number, sohPct: b.sohPct as number, ratedCca, ccaStandard: ccaStandard as CcaStandard | null },
+      });
+      await writeAudit(tx, {
+        groupId, userId: user.id as string, jobCardId: card.id,
+        action: 'battery.recorded',
+        diff: { voltageMv, socPct: b.socPct, sohPct: b.sohPct, ratedCca, ccaStandard, state: r.state, advisory: r.advisory },
+      });
+      return r;
     });
-    await writeAudit(tx, {
-      groupId, userId: user.id as string, jobCardId: card.id,
-      action: 'battery.recorded',
-      diff: { voltageMv, socPct: b.socPct, sohPct: b.sohPct, ratedCca, ccaStandard, state: r.state, advisory: r.advisory },
-    });
-    return r;
-  });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientValidationError) {
+      console.error('[battery-readings] schema rejected the request', String(e?.message ?? e).slice(0, 400));
+      return res.status(400).json({
+        message: 'That reading could not be saved — one of its values is not one this system accepts. Check the CCA standard and try again.',
+        code: 'invalid_for_schema',
+      });
+    }
+    console.error('[battery-readings] write failed', String((e as Error)?.message ?? e).slice(0, 400));
+    return res.status(500).json({ message: 'The reading could not be saved. Please try again.', code: 'write_failed' });
+  }
   return res.status(200).json({ ok: true, ...out });
 }

@@ -1,0 +1,11 @@
+-- UNSTATED — "the battery label does not say", which is what most UK labels do.
+--
+-- lib/battery has offered this for as long as the field has existed and both capture forms list
+-- it; the enum never gained it, so choosing it produced a PrismaClientValidationError, a 500
+-- carrying an HTML error page, and a phone outbox row that retried for two hours before failing.
+--
+-- NO DATA MIGRATION. Zero rows carry it (it could never be written) and no CHECK constraint
+-- enumerates the standards — the CHECK on this table enforces the rated_cca/cca_standard pairing,
+-- which is unaffected by a new member. Additive and reversible only by rewriting the type, so it
+-- is deliberately the smallest possible change.
+ALTER TYPE "CcaStandard" ADD VALUE 'UNSTATED';

@@ -354,12 +354,12 @@ export async function recordBatteryReading(
     create: {
       group_id: args.groupId, vehicle_id: args.vehicleId, job_card_id: args.jobCardId,
       voltage_mv: n.voltageMv, soc_pct: n.socPct, soh_pct: n.sohPct,
-      rated_cca: n.ratedCca ?? null, cca_standard: (n.ccaStandard ?? null) as never,
+      rated_cca: n.ratedCca ?? null, cca_standard: n.ccaStandard ?? null,
       measured_at: at, measured_by: args.measuredBy,
     },
     update: {
       voltage_mv: n.voltageMv, soc_pct: n.socPct, soh_pct: n.sohPct,
-      rated_cca: n.ratedCca ?? null, cca_standard: (n.ccaStandard ?? null) as never,
+      rated_cca: n.ratedCca ?? null, cca_standard: n.ccaStandard ?? null,
       measured_at: at, measured_by: args.measuredBy,
     },
   });
