@@ -49,6 +49,12 @@ type Props = {
    * same tab in no fixed order, and mileage-out is deliberately empty by default.
    */
   countFrom?: number | null;
+  /**
+   * THE ODOMETER THE ARRIVAL ROWS WERE READ AGAINST. A target-only arrival row has to become a
+   * countdown against the reading it was taken with — not against the departure one, which a test
+   * drive has already moved. Separate from countFrom precisely because the two differ.
+   */
+  arrivalCountFrom?: number | null;
   /** DVSA, read-only. NULL when we have no MOT date for this car. */
   motExpiry?: string | null;
   onSaved: () => void;
@@ -61,7 +67,7 @@ const BASIS_LABEL: Record<string, string> = {
   whichever_first: 'whichever comes first',
 };
 
-export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], countFrom = null, motExpiry = null, onSaved }: Props) {
+export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = [], onArrival = [], countFrom = null, arrivalCountFrom = null, motExpiry = null, onSaved }: Props) {
   // ── WHAT THE SCREEN SHOWS, NOT WHAT THE MODEL STORES ─────────────────────────────────────────
   // A MINI cluster shows distance REMAINING — "1,240 mi", or "-240 mi" with "Service overdue" —
   // and never the odometer the service falls due at. Other computers show the target. The panel
@@ -85,12 +91,41 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
     if (r?.dueMileage != null && countFrom != null) return String(r.dueMileage - countFrom);
     return '';
   };
+  /**
+   * ── CARRIED FORWARD FROM ARRIVAL ─────────────────────────────────────────────────────────────
+   * A countdown is still TRUE at departure when the work was not done: a service computer chunks
+   * in large steps at range, so a test drive does not move the displayed figure. Retyping it was
+   * transcription of a number already on the screen one line below.
+   *
+   * THE COUNTDOWN IS CARRIED, NOT RECOMPUTED. Re-deriving from the stored target would silently
+   * shrink it by (mileage out − mileage in). A target-only arrival row therefore becomes a
+   * countdown against ARRIVAL's odometer — the reading it was actually taken with.
+   *
+   * A DEPARTURE ROW ALWAYS WINS: this only fills keys with nothing recorded.
+   *
+   * THE MILES LEG IS ONLY SEEDED WHEN THERE IS SOMETHING TO COUNT FROM. With no mileage-out the
+   * server refuses a countdown (409, "record the mileage first") — correctly — and seeding one
+   * would turn a row nobody touched into a save the whole panel could not complete.
+   */
+  const carriedFor = (key: string): { month: string; miles: string } | null => {
+    if (stage !== 'departure') return null;
+    if (recorded.some((x) => x.key === key)) return null;
+    const a = onArrival.find((x) => x.key === key);
+    if (!a) return null;
+    const cd = a.countdownMiles != null ? a.countdownMiles
+      : (a.dueMileage != null && arrivalCountFrom != null ? a.dueMileage - arrivalCountFrom : null);
+    const month = storedDateToMonth(a.dueDate) ?? '';
+    const miles = cd != null && countFrom != null ? String(cd) : '';
+    return month === '' && miles === '' ? null : { month, miles };
+  };
   const seedFrom = (rs: ScheduleRow[]) => {
     const out: Record<string, { month: string; miles: string }> = {};
     for (const s of SCHEDULE_ITEMS) {
       const r = rs.find((x) => x.key === s.key);
       // Back to YYYY-MM: the stored 1st is an artefact of the column, not something to show.
-      out[s.key] = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownFor(r) };
+      const mine = { month: storedDateToMonth(r?.dueDate) ?? '', miles: shownFor(r) };
+      const carried = r ? null : carriedFor(s.key);
+      out[s.key] = carried ?? mine;
     }
     return out;
   };
@@ -103,6 +138,13 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   // WHAT THE FORM WAS HANDED, kept beside what it now holds. The save reports this per row so the
   // writer can tell "I emptied it" from "I never had it" — see classifyEntry. Derived from the
   // seed and re-derived with it, NEVER from the inputs: the inputs are what the question is about.
+  // ── SEEDED KEYS STAY OUT OF `held`, AND THAT IS THE WHOLE SAFETY OF THE CARRY-FORWARD ────────
+  // `held` becomes `wasRecorded`, which answers ONE question: did the server hand this form a
+  // DEPARTURE reading for this key. A carried-forward value is a suggestion this component made,
+  // so answering yes would be the client lying about what it was given — and classifyEntry would
+  // read an emptied suggestion as an ERASURE. lib/service-schedule.ts:292 names exactly this case
+  // ("a form seeded with STALE VALUES rather than none") as the one wasRecorded does not cover.
+  // It is covered here by construction: derived from `recorded`, never from the seeded rows.
   const [held, setHeld] = useState(() => new Set(recorded.map((r) => r.key)));
   // ── SEEDED ONCE IS NOT SEEDED ────────────────────────────────────────────────────────────────
   // A tab switch UNMOUNTS this pane, so `useState(seed)` runs again on the way back — against
@@ -111,7 +153,13 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   // real card went that way (TMBS D13DSK, 21 Aug). Two halves, both required — the parent
   // reconciles the prop through /api/jobcard-pane, and this re-seeds when it changes.
   // `dirty` is the whole safety of it: never overwrite something half-typed.
-  const fingerprint = JSON.stringify(recorded.map((r) => [r.key, r.dueDate, r.dueMileage, r.countdownMiles ?? null]));
+  // onArrival is in here because it is now a SEED, not just a hint: correcting the arrival reading
+  // and coming back to Completion must re-seed. `dirty` still guards anything half-typed.
+  const fingerprint = JSON.stringify([
+    recorded.map((r) => [r.key, r.dueDate, r.dueMileage, r.countdownMiles ?? null]),
+    onArrival.map((r) => [r.key, r.dueDate, r.dueMileage, r.countdownMiles ?? null]),
+    countFrom, arrivalCountFrom,
+  ]);
   const seenRef = useRef(fingerprint);
   useEffect(() => {
     if (dirty || fingerprint === seenRef.current) return;
@@ -274,6 +322,14 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
                     </em>
                   );
                 })()}
+                {/* CARRIED FORWARD, AND SAYING SO. A seeded value must not read as a measurement
+                    somebody took at the end of the job — it is last-seen data offered for
+                    confirmation, and it still needs Save. It disappears once the row is stored,
+                    because `recorded` then has it and carriedFor returns null. */}
+                {carriedFor(s.key) && (
+                  <em className="not-italic block text-[11px] text-amber-700 dark:text-amber-500"
+                    data-testid={`schedule-carried-${s.key}`}>carried forward from arrival — not yet confirmed</em>
+                )}
                 {stage === 'departure' && (() => {
                   const a = onArrival.find((x) => x.key === s.key);
                   if (!a) return null;

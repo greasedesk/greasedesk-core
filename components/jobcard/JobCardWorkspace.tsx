@@ -978,7 +978,8 @@ export default function JobCardWorkspace(p: Props) {
               beside mileage-out because they are read in the same breath. */}
           <ServiceSchedule jobCardId={p.jobCardId} canEdit={p.canOperate && !inactive} stage="departure"
             recorded={eff.serviceSchedule as never} onArrival={eff.scheduleOnArrival as never}
-            countFrom={eff.vehicle.mileageOut} motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
+            countFrom={eff.vehicle.mileageOut} arrivalCountFrom={eff.vehicle.mileageIn}
+            motExpiry={eff.vehicle.motExpiry ?? null} onSaved={refreshCard} />
           <div className="flex justify-end"><StageComplete stage="complete" label={t('tab.completion')} /></div>
         </div>
       )}
@@ -1653,10 +1654,10 @@ function MileageOut(props: { jobCardId: string; initial: number | null; canEdit:
   // the number so a consumer cannot mistake an assumption for a reading.
   const [val, setVal] = useState(props.initial != null ? String(props.initial) : '');
   const delta = props.mileageIn != null && val !== '' && Number.isFinite(Number(val)) ? Number(val) - props.mileageIn : null;
-  async function save() {
+  async function save(value: string = val) {
     props.setBusy('mileage'); props.setErr(null);
     try {
-      const res = await fetch('/api/jobcard-odometer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: props.jobCardId, odometerOut: val }) });
+      const res = await fetch('/api/jobcard-odometer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: props.jobCardId, odometerOut: value }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { props.setErr(data?.message || t('action.error')); return; }
       props.onDone();
@@ -1674,12 +1675,27 @@ function MileageOut(props: { jobCardId: string; initial: number | null; canEdit:
           Came in on <strong className="text-ink tabular-nums">{props.mileageIn.toLocaleString(props.locale)}</strong>
         </p>
       )}
+      {/* ── A TAP, NOT A PREFILL ────────────────────────────────────────────────────────────────
+          A car driven in and straight back out has not moved, and making somebody retype the
+          figure they can see two lines up is how a real reading gets guessed at instead. But the
+          BOX stays empty: a value sitting in a field is accepted by tabbing past it, and a tap is
+          an act. The two are different in intent and identical in what they record — same
+          endpoint, same value, no marker. "Confirmed the same" and "typed the same number" are
+          the same claim about the car, and storing them differently would invent a second kind of
+          odometer reading. Absent when there is no arrival figure: nothing to confirm. */}
+      {props.mileageIn != null && props.canEdit && (
+        <button type="button" disabled={props.busy !== null} data-testid="mileage-same-as-in"
+          onClick={() => { const v = String(props.mileageIn); setVal(v); void save(v); }}
+          className="mb-3 text-xs font-semibold rounded-lg px-3 py-2 border border-line text-ink hover:bg-accent-soft disabled:opacity-50">
+          Same as it came in — {props.mileageIn.toLocaleString(props.locale)}
+        </button>
+      )}
       <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
         <div className="flex-1">
           <input type="number" min="0" className={inputCls} value={val} disabled={!props.canEdit || props.busy !== null} onChange={(e) => setVal(e.target.value)} placeholder={t('completion.mileageOut')} data-testid="mileage-out-input" />
           {delta != null && delta >= 0 && <p className="text-xs text-muted mt-1">{t('completion.delta', { miles: delta.toLocaleString(props.locale) })}</p>}
         </div>
-        <button disabled={!props.canEdit || props.busy !== null} onClick={save} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('completion.saveMileage')}</button>
+        <button disabled={!props.canEdit || props.busy !== null} onClick={() => save()} className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('completion.saveMileage')}</button>
       </div>
     </div>
   );
