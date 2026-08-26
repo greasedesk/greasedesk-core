@@ -128,6 +128,10 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       due_items_snapshot: true,
       measured_snapshot: true,
+      // NOT SELECTED until 26 Aug 2026, while the return below read `inv.work_done_snapshot` — so
+      // it resolved `undefined ?? null` and every renderer saw null. The PDF and the screen both
+      // have a work-done section and neither has ever shown one. One live invoice carries a block.
+      work_done_snapshot: true,
       payment_method_snapshot: true,
       lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
       site: { select: { currency_code: true, locale: true } },

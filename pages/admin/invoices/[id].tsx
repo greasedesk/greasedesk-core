@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import type { GetServerSideProps } from 'next';
 import { useTranslation } from 'next-i18next';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
@@ -801,7 +802,14 @@ function DatePaidEditor({ invoiceId, initial, t, onSaved }: { invoiceId: string;
   );
 }
 
-export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
+// ── TYPED AGAINST Props, WHICH IS THE ACTUAL FIX ──────────────────────────────────────────────
+// This was `async (ctx: any)`, so the returned `props` was never checked against the component's
+// Props and the page compiled with THREE required props missing: measuredBlock, workDoneBlock and
+// combinedBlocks. The PDF printed WHAT WE MEASURED and the screen showed nothing, because the data
+// was fetched, returned by buildInvoiceDoc, and dropped one line before it would have been used.
+// Declared separately rather than inline because withI18n takes an untyped GetServerSideProps and
+// would widen it straight back to `any`.
+const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return { redirect: { destination: '/admin/login', permanent: false } };
@@ -885,7 +893,16 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       company: doc.company,
       customer: doc.customer,
       vehicle: doc.vehicle,
+      // ALL FOUR, and the type above now enforces it. The PDF reads `doc.*` directly; this page
+      // has to copy each field across the SSR boundary by hand, which is the one hop the shared
+      // builder cannot protect — and the hop where three of them were lost.
       dueItemsBlock: doc.dueItemsBlock ?? null,
+      workDoneBlock: doc.workDoneBlock ?? null,
+      measuredBlock: doc.measuredBlock ?? null,
+      // DERIVED, never stored: a document with a needs block and no measured block was minted when
+      // the two were one list. Undefined here made `!combinedBlocks` always true, so a pre-split
+      // document rendered under "What your car needs" — correct text, wrong heading.
+      combinedBlocks: doc.combinedBlocks,
       lines: doc.lines.map(({ description, qty, unitPricePennies, vatRate, netPennies }) => ({ description, qty, unitPricePennies, vatRate, netPennies })),
       totals: doc.totals,
       currency: doc.currency,
@@ -896,4 +913,5 @@ export const getServerSideProps = withI18n(['invoice'])(async (ctx: any) => {
       jobCardId: doc.jobCardId,
     },
   };
-});
+};
+export const getServerSideProps = withI18n(['invoice'])(invoiceSsp);
