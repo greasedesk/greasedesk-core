@@ -811,9 +811,16 @@ try {
   await prisma.$transaction(async (tx) => { invId = await issueInvoiceForCard(tx, card.id, ZZ); }, { timeout: 30000 });
   fix.invoice = invId;
   const snap = (await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true } }))?.due_items_snapshot ?? '';
-  check('the invoice froze the line the PANEL produced',
-    /Next oil service due at 88,000 miles or by May 2028, whichever comes first/.test(snap), snap.slice(0, 200));
-  check('  …and the mileage-only row beside it', /Rear brake pads due at 77,000 miles/.test(snap));
+  // ── THE COUNTDOWN AS TYPED, NOT THE TARGET WE WORKED OUT ─────────────────────────────────────
+  // These pinned "due at 88,000 miles" and "due at 77,000 miles" — the absolutes reached by adding
+  // the typed countdown to the 61,000 departure reading. lib/due-items::printedDueLabel now prints
+  // what the garage actually read off the cluster, because the customer's dash shows the countdown
+  // and the absolute was arithmetic to the mile on a figure the computer had already rounded. The
+  // TYPED numbers are 27,000 and 16,000; the panel's own checks above still pin the stored targets,
+  // which have not moved. The board keeps the absolute — see the note on printedDueLabel.
+  check('the invoice froze the countdown the PANEL was given',
+    /Next oil service due in 27,000 miles or by May 2028, whichever comes first/.test(snap), snap.slice(0, 400));
+  check('  …and the mileage-only row beside it', /Rear brake pads due in 16,000 miles/.test(snap), snap.slice(0, 400));
   check('  …with the MOT once, from the car', (snap.match(/MOT Expiry/g) ?? []).length === 1
     && /30 November 2026/.test(snap));
   check('  …and no arrival figure anywhere in it', !/60,000/.test(snap),

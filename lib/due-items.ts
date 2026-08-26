@@ -234,7 +234,8 @@ function britishDate(iso: string): string {
  * One line of human text for a due item's timing — the same words on every surface.
  */
 export function dueLabel(
-  item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision'>,
+  // countdownMiles rides along so ONE item shape serves both labels — dueLabel ignores it.
+  item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision' | 'countdownMiles'>,
   /**
    * ── OVERDUE IS A FACT ABOUT THE MILEAGE LEG ONLY, AND ON PURPOSE ─────────────────────────────
    * The car's reading, when the caller has one. "Due at 68,120 miles" is true of a car sitting on
@@ -362,6 +363,53 @@ export function effectiveDueDate(
 }
 
 // ── THE PRINTED BLOCK ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * WHAT THE DASH SAID, for a document that freezes the moment it said it.
+ *
+ * dueLabel prints "due at 99,767 miles" — a figure nobody read, reached by adding a countdown to an
+ * odometer. A service computer chunks in large steps at range, so that absolute is arithmetic to
+ * the mile on a number that was already rounded when we saw it, and it is not what the customer's
+ * dash shows. When the garage transcribed a countdown, the document prints the countdown.
+ *
+ * ── WHY THIS IS NOT A FLAG ON dueLabel ──────────────────────────────────────────────────────────
+ * A countdown is true AT THE MOMENT IT WAS READ. An invoice freezes that moment; the marketing
+ * board is read weeks later against a car that has since been driven, where "due in 37,000 miles"
+ * describes an odometer the car has left behind. The absolute stays true however long a board row
+ * sits there. Two names, one rule each — dueLabel says where the car will be, this says what the
+ * dash said — because a boolean parameter reads as formatting at the call site and would be passed
+ * from the wrong place. Same distinction dueLabel already draws for the date leg.
+ *
+ * ── ONE LIVE CALLER, AND THAT IS THE WHOLE SURFACE ──────────────────────────────────────────────
+ * printedNeedsBlock. printedMeasuredBlock takes no due items at all — it is tyre and battery
+ * readings — and printedDueItemsBlock is the pre-split builder kept to describe old documents.
+ *
+ * DELEGATES for every other case, so there is exactly one wording to maintain:
+ *   · no countdown         — 19 live rows, all on the demo tenant. Deriving one by subtracting the
+ *                            departure odometer from a target nobody read off a cluster would
+ *                            manufacture the very figure this exists to stop manufacturing.
+ *   · the target has fired — a countdown for a passed target is negative, and "due in -240 miles"
+ *                            is not a sentence. dueLabel's "overdue by 240 miles" already IS the
+ *                            countdown, said positively.
+ *   · date, next_service   — no mileage leg to express.
+ */
+export function printedDueLabel(
+  item: Pick<OpenDueItem, 'dueBasis' | 'dueDate' | 'dueMileage' | 'dueDatePrecision' | 'countdownMiles'>,
+  atMiles?: number | null,
+): string {
+  const cd = item.countdownMiles;
+  const past = atMiles != null && item.dueMileage != null && atMiles >= item.dueMileage;
+  if (cd == null || past) return dueLabel(item, atMiles);
+  const miles = `${cd.toLocaleString('en-GB')} miles`;
+  const when = (iso: string) => (item.dueDatePrecision === 'month' ? britishMonth(iso) : britishDate(iso));
+  switch (item.dueBasis) {
+    case 'mileage': return `due in ${miles}`;
+    case 'whichever_first':
+      return `due in ${miles} or by ${item.dueDate ? when(item.dueDate) : 'a date'}, whichever comes first`;
+    default: return dueLabel(item, atMiles);
+  }
+}
+
 /**
  * The lines that go on the invoice — and, frozen, into Invoice.due_items_snapshot at mint.
  *
@@ -403,13 +451,13 @@ export function printedNeedsBlock(args: {
   /** The car's reading, so a target it has already passed does not print as still ahead of it.
    *  NULL when unknown — the wording then stays exactly as it was. */
   atMiles?: number | null;
-  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision'>>;
+  items: Array<Pick<OpenDueItem, 'description' | 'dueBasis' | 'dueDate' | 'dueMileage' | 'timingInDescription' | 'dueDatePrecision' | 'countdownMiles'>>;
 }): string | null {
   const lines: string[] = [];
   if (args.motExpiry) {
     lines.push(`MOT Expiry ${args.motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`);
   }
-  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${dueLabel(it, args.atMiles)}` : it.description);
+  for (const it of args.items) lines.push(showsDueLabel(it) ? `${it.description} ${printedDueLabel(it, args.atMiles)}` : it.description);
   if (!lines.length) return null;
   return lines.map((l, i) => `(${i + 1}) ${l}`).join('\n');
 }

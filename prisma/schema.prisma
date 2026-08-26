@@ -1573,9 +1573,13 @@ model VehicleDueItem {
   /// HOW that reading was transcribed — see ScheduleReadingMode. Written ONLY by the schedule
   /// form's departure writer (pages/api/service-schedule), from what the SERVER resolved.
   ///
-  /// NULL means "not written by the schedule form" — NOT "target" — and here that is the common
-  /// case by construction, not an omission: of the rows carrying a due_mileage today, 19 came from
-  /// the hand-typed findings form (which has no countdown notion at all) and 12 from the schedule.
+  /// NULL means "not written by the schedule form" — NOT "target". Measured 26 Aug 2026, after the
+  /// schedule re-read migration: of 37 rows carrying a due_mileage across every tenant, 18 have a
+  /// countdown and 19 do not. ALL 18 are on TMBS and all 18 came from the schedule form — that
+  /// tenant is now fully covered. ALL 19 uncovered rows are on Kingsford, the demo tenant, whose
+  /// rows were generated as targets. The earlier note here said "19 from the hand-typed findings
+  /// form and 12 from the schedule"; that stopped being true and nothing made it say so, which is
+  /// why this one carries the date it was taken.
   /// A tyre-derived target is a wear projection nobody transcribed, so the question has no answer
   /// for it. Only the schedule path can fill this in. Nothing reads it yet.
   mode ScheduleReadingMode?

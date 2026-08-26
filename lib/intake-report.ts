@@ -137,6 +137,14 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
     description: i.description,
     // EMPTY when the description already says when — the same rule as the invoice block, asked
     // through the same predicate rather than re-derived here.
+    //
+    // ── dueLabel, NOT printedDueLabel, AND THE ODOMETERS ARE WHY ─────────────────────────────
+    // This report is about the visit, so a countdown would look like the right thing to print.
+    // It is not: this prints at `odometer_in`, and a countdown was recorded against
+    // `odometer_out` — the departure reading, because "240 miles left" counts from where the car
+    // is when it goes. Printing one here would state a countdown against the wrong end of the
+    // visit. The invoice block can use it because that block is built at mint, from the departure
+    // reading. Change this only by also changing which odometer the report prints against.
     timing: showsDueLabel(i) ? dueLabel(i, card.odometer_in ?? null) : '',
     answered: answers.get(i.id)?.answer ?? null,
   }));
