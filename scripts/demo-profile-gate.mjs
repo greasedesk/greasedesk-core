@@ -25,6 +25,10 @@
  * Run after every extraction. It is READ-ONLY against the tenant and writes nothing.
  */
 import './_gate-preflight.mjs';
+// The determinism checks below import lib/demo/profile-order.ts, so the TS resolver has to be
+// registered — gate-hygiene rule C. It happened to work without this because the dynamic import
+// resolves late, which is exactly the kind of accident the rule exists to stop relying on.
+import './_ts.mjs';
 import { PrismaClient } from '@prisma/client';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
