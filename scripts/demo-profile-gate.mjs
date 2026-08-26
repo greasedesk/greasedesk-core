@@ -126,6 +126,42 @@ try {
   check('the extractor is DETERMINISTIC — two runs against the same tenant agree', a === b,
     `${a.slice(0, 16)} vs ${b.slice(0, 16)}`);
 
+  // ── AND DETERMINISTIC BY CONSTRUCTION, NOT BY LUCK ──────────────────────────────────────────
+  // The check above ran green for months and then failed once, with two hashes that differed while
+  // every emitted VALUE was identical. LINE_TYPE_MIX was `Object.entries(typeCount)` with no sort,
+  // and a JS object with non-integer string keys iterates in INSERTION order — which came from a
+  // findMany with no orderBy. Postgres promises no order without one; it just usually gives the
+  // same one, until a bulk insert-and-delete moves the heap. The failing run came straight after
+  // demo-generation-gate spent 1,520s creating and removing a demo tenant.
+  //
+  // Running the extractor twice cannot PROVE this: it only ever sees one row order per run. So the
+  // rule is proven directly, on the pure function, against two orders that really differ.
+  const { orderedShares } = await import('../lib/demo/profile-order.ts');
+  const one = { fixed: 501, part: 310, labour: 189 };
+  const other = { labour: 189, part: 310, fixed: 501 };   // same counts, opposite insertion order
+  const pct = (n) => n;
+  check('the same counts in a different row order emit identically',
+    JSON.stringify(orderedShares(one, pct)) === JSON.stringify(orderedShares(other, pct)),
+    JSON.stringify(orderedShares(other, pct)));
+  // THE DISCRIMINATING HALF. Without it a helper that returned a constant would pass the check
+  // above, and so would one that happened to agree on this particular pair. This proves the two
+  // orders are genuinely distinguishable — that the check can fail at all.
+  const naive = (c) => JSON.stringify(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v])));
+  check('  …and those two orders DO differ without the rule', naive(one) !== naive(other),
+    'the defect exactly as it was — same values, different bytes');
+  check('  …ties break on the key, so equal counts are still a total order',
+    JSON.stringify(orderedShares({ b: 5, a: 5 }, pct)) === JSON.stringify(orderedShares({ a: 5, b: 5 }, pct)),
+    JSON.stringify(orderedShares({ b: 5, a: 5 }, pct)));
+
+  // The class, not just the instance: an unordered read is what fed the insertion order.
+  const ex = readFileSync('scripts/demo-profile-extract.mjs', 'utf8');
+  const reads = [...ex.matchAll(/\.findMany\(\{/g)].length;
+  const ordered = [...ex.matchAll(/\.findMany\(\{ orderBy:/g)].length;
+  check('every read in the extractor is ordered', reads > 0 && reads === ordered,
+    `${ordered} of ${reads} findMany calls carry an orderBy`);
+  check('  …and the mix is emitted through the rule, not a bare Object.entries',
+    /orderedShares\(typeCount/.test(ex) && !/Object\.entries\(typeCount\)/.test(ex));
+
   const drifted = a !== committed;
   // The DIFF ITSELF, not a reconstructed key→value map. An earlier version regexed `"key": number`
   // out of both files and paired them by key, which silently paired ARRAY INDICES and reported

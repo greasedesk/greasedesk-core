@@ -29,8 +29,11 @@
  *   node scripts/demo-profile-extract.mjs            # writes lib/demo/profile.ts
  *   node scripts/demo-profile-extract.mjs --stdout   # prints, writes nothing
  */
+import './_ts.mjs';
 import { PrismaClient } from '@prisma/client';
 import { writeFileSync } from 'node:fs';
+// The emitted key order is a RULE, not a formatting choice — see the file for why it moved.
+const { orderedShares } = await import('../lib/demo/profile-order.ts');
 
 
 // ── THE AUTHORED HALF OF THE PROFILE ─────────────────────────────────────────────────────────────
@@ -298,7 +301,7 @@ const ARCHETYPES = [
   { key: 'valet',          title: 'Valet',                             match: /valet/ },
 ];
 
-const invoices = await prisma.invoice.findMany({
+const invoices = await prisma.invoice.findMany({ orderBy: { id: 'asc' },
   where: { group_id: TMBS },
   select: {
     id: true, series: true, issued_at: true, date_issued: true, job_card_id: true,
@@ -378,7 +381,7 @@ for (const l of allLines) typeCount[l.item_type ?? 'null'] = (typeCount[l.item_t
 const weekday = [0, 0, 0, 0, 0, 0, 0];
 for (const i of win) weekday[eff(i).getUTCDay()] += 1;
 
-const cards = await prisma.jobCard.findMany({
+const cards = await prisma.jobCard.findMany({ orderBy: { id: 'asc' },
   where: { group_id: TMBS },
   select: { start_at: true, booking_duration_minutes: true, is_comeback: true, customer_id: true },
 });
@@ -392,7 +395,7 @@ const meanDurationH = durations.reduce((a, b) => a + b, 0) / durations.length / 
 const meanChargedH = perJob.reduce((a, b) => a + b.hours, 0) / perJob.length;
 
 // ── return interval + comebacks ─────────────────────────────────────────────────────────────────
-const cardById = new Map((await prisma.jobCard.findMany({ where: { group_id: TMBS }, select: { id: true, customer_id: true } })).map((c) => [c.id, c]));
+const cardById = new Map((await prisma.jobCard.findMany({ orderBy: { id: 'asc' }, where: { group_id: TMBS }, select: { id: true, customer_id: true } })).map((c) => [c.id, c]));
 const visits = {};
 for (const i of win) {
   const cid = cardById.get(i.job_card_id)?.customer_id;
@@ -418,7 +421,7 @@ const windowMonths = 4;
 const meanIntervalMonths = Math.round((windowMonths / visitsPerWindow) * 10) / 10;
 
 const mileage = win.map((i) => i.vehicle_mileage_snapshot).filter((m) => m != null).map(Number);
-const vehicles = await prisma.vehicle.findMany({ where: { group_id: TMBS }, select: { year: true } });
+const vehicles = await prisma.vehicle.findMany({ orderBy: { id: 'asc' }, where: { group_id: TMBS }, select: { year: true } });
 const years = vehicles.map((v) => v.year).filter(Boolean).map(Number);
 const nowYear = 2026;
 const ages = years.map((y) => nowYear - y);
@@ -456,7 +459,7 @@ export const FOOTPRINT_RATIO = ${Math.round((meanDurationH / meanChargedH) * 100
 
 /** Line composition, as a share of all lines. */
 export const LINE_TYPE_MIX = ${JSON.stringify(
-  Object.fromEntries(Object.entries(typeCount).map(([k, v]) => [k, pct1(v / allLines.length)])), null, 2)} as const;
+  orderedShares(typeCount, (v) => pct1(v / allLines.length)), null, 2)} as const;
 
 /** Invoices by weekday, Sunday-first. Derived from the invoice's EFFECTIVE date — job-card
  *  created_at is when the owner typed it in (weekend catch-up sessions), not when work happened. */
