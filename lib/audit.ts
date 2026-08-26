@@ -28,6 +28,11 @@ export type AuditAction =
   // DVSA moved a car's MOT date, through the per-row check on the marketing list. Its OWN action
   // rather than vehicle.edited: nobody edited anything, and a trail that says a human did would
   // send the next reader looking for a person who does not exist.
+  // THE DIAGNOSTIC SCAN, CONFIRMED — and its correction. Two actions rather than one with a flag,
+  // because AuditLog is append-only and a mis-tap must leave both events readable: the tick
+  // happened, and so did the undo. Same pair as intake.nothing_found / nothing_found_cleared.
+  | 'intake.diag_scan'
+  | 'intake.diag_scan_cleared'
   | 'vehicle.mot_refresh'
   // The BULK sweep (scripts/dvsa-backfill), one row per car DVSA answered for — including the
   // cars where nothing moved, which is 225 of 227 on TMBS. That is the deliberate difference from

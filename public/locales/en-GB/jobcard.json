@@ -463,6 +463,8 @@
     "nothingFound": "Nothing found",
     "recordFinding": "Record a finding",
     "undoNothingFound": "undo “nothing found”",
+    "diagScanDone": "Scan run and sent",
+    "undoDiagScan": "Undo",
     "skip": "Skip",
     "skipConfirm": "Skip this",
     "cancel": "Cancel",

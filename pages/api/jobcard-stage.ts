@@ -19,7 +19,7 @@ import { canAccessSite } from '@/lib/admin-guard';
 import { isStageKey, STAGE_COLUMN, isSkippableStage, SKIP_COLUMN, JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, tabForStage, detailsMinDataMet } from '@/lib/jobcard-tabs';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-import { INTAKE_PROMPT_SELECT, promptSwitches, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
+import { INTAKE_PROMPT_SELECT, promptSwitches, intakeItemStates } from '@/lib/intake-items';
 import { escalateOutstandingIntake } from '@/lib/intake-escalation';
 import { writeAudit } from '@/lib/audit';
 
@@ -131,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const full = await prisma.jobCard.findUnique({
         where: { id: jobCardId },
         select: {
-          odometer_in: true, intake_nothing_found_at: true,
+          odometer_in: true, intake_nothing_found_at: true, diag_scan_at: true,
           vehicle: { select: { vin: true, registration: true, make: true, model: true } },
           site: { select: INTAKE_PROMPT_SELECT },
         },
@@ -160,7 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           odometerIn: full?.odometer_in ?? null,
           vin: full?.vehicle?.vin ?? null,
           hasIntakeVideo: media.some((m: { media_type: string | null }) => m.media_type === 'video'),
-          hasDiagScanPhoto: media.some((m: { slot: string | null }) => m.slot === DIAG_SCAN_SLOT),
+          diagScanAt: full?.diag_scan_at ?? null,
           oilLevelAt: oilRow?.created_at ?? null,
         },
         promptSwitches(full?.site as Record<string, unknown> | null),

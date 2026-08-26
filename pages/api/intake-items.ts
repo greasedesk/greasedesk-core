@@ -33,12 +33,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = user.group_id as string;
 
   const { jobCardId, action, item, reason, level } = (req.body || {}) as
-    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found' | 'oil_level' | 'dismiss_offer'; item?: IntakeItem; reason?: string; level?: string };
+    { jobCardId?: string; action?: 'nothing_found' | 'skip' | 'undo_nothing_found' | 'oil_level' | 'dismiss_offer' | 'diag_scan' | 'undo_diag_scan'; item?: IntakeItem; reason?: string; level?: string };
   if (!jobCardId) return res.status(400).json({ message: 'jobCardId is required.' });
 
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: groupId },
-    select: { id: true, site_id: true, vehicle_id: true, intake_nothing_found_at: true, ...BAY_WRITE_SELECT },
+    select: { id: true, site_id: true, vehicle_id: true, intake_nothing_found_at: true, diag_scan_at: true, ...BAY_WRITE_SELECT },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
   const vis = await getVisibility(user.id as string);
@@ -67,6 +67,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.jobCard.update({ where: { id: jobCardId }, data: { intake_nothing_found_at: null, intake_nothing_found_by: null } });
       await writeAudit(tx, { groupId, userId: user.id as string, jobCardId, action: 'intake.nothing_found_cleared' });
+    });
+    return res.status(200).json({ ok: true });
+  }
+
+  // ── THE DIAGNOSTIC SCAN, CONFIRMED ──────────────────────────────────────────────────────────────
+  // A TICK, NOT AN UPLOAD. The scan runs on an external tool and its report is emailed elsewhere,
+  // so there is no artefact for us to hold — the old rule asked for a photo slot nothing ever
+  // wrote, which is why this item could only ever be skipped. Columns rather than an audit-derived
+  // date, because this one carries an AUTHOR and must be undoable: the same shape as
+  // intake_nothing_found_at/_by, and the same reason.
+  //
+  // IDEMPOTENT: ticking twice keeps the FIRST time. A second tap is not a second scan, and moving
+  // the timestamp would rewrite when somebody says they looked.
+  if (action === 'diag_scan') {
+    if (card.diag_scan_at) return res.status(200).json({ ok: true, at: card.diag_scan_at });
+    const at = new Date();
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.jobCard.update({ where: { id: jobCardId }, data: { diag_scan_at: at, diag_scan_by: user.id as string } });
+      await writeAudit(tx, { groupId, userId: user.id as string, jobCardId, action: 'intake.diag_scan' });
+    });
+    return res.status(200).json({ ok: true, at });
+  }
+
+  // Undo, for the mis-tap. The audit keeps both events; only the current state changes.
+  if (action === 'undo_diag_scan') {
+    if (!card.diag_scan_at) return res.status(200).json({ ok: true });
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.jobCard.update({ where: { id: jobCardId }, data: { diag_scan_at: null, diag_scan_by: null } });
+      await writeAudit(tx, { groupId, userId: user.id as string, jobCardId, action: 'intake.diag_scan_cleared' });
     });
     return res.status(200).json({ ok: true });
   }

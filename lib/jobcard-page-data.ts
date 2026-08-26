@@ -11,7 +11,7 @@
  */
 import { latestTyres, latestBattery } from '@/lib/vehicle-condition';
 import { SCHEDULE_KEYS } from '@/lib/service-schedule';
-import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferIntakePrompts, intakeItemStates, DIAG_SCAN_SLOT } from '@/lib/intake-items';
+import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferIntakePrompts, intakeItemStates } from '@/lib/intake-items';
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
@@ -163,12 +163,14 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // INTAKE ARTEFACTS — what the four prompts derive their done-states FROM. Counted, not fetched:
     // the states need to know whether a video and a scan photo exist, never their contents.
     (async () => {
-      const [video, scan, onCard] = await Promise.all([
+      // The scan photo count is GONE: nothing ever wrote that slot, so this counted a population
+      // that could not exist and cost a query per card load to do it. The confirmation lives on the
+      // card row, which is already loaded.
+      const [video, onCard] = await Promise.all([
         prisma.jobCardPhoto.count({ where: { job_card_id: cardId, stage: 'intake', media_type: 'video' } }),
-        prisma.jobCardPhoto.count({ where: { job_card_id: cardId, stage: 'intake', slot: DIAG_SCAN_SLOT } }),
         prisma.vehicleDueItem.count({ where: { group_id: groupId, found_on_job_card_id: cardId } }),
       ]);
-      return { hasIntakeVideo: video > 0, hasDiagScanPhoto: scan > 0, dueItemCount: onCard };
+      return { hasIntakeVideo: video > 0, dueItemCount: onCard };
     })(),
     // The most recent skip per item, from the audit log — a skip is an event, never a column.
     prisma.auditLog.findMany({
@@ -434,7 +436,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       odometerIn: row.odometer_in ?? null,
       vin: row.vehicle?.vin ?? null,
       hasIntakeVideo: intakeFacts.hasIntakeVideo,
-      hasDiagScanPhoto: intakeFacts.hasDiagScanPhoto,
+      diagScanAt: (row as { diag_scan_at?: Date | null }).diag_scan_at ?? null,
       oilLevelAt: oilRow?.created_at ?? null,
     },
     promptSwitches(row.site as Record<string, unknown> | null),

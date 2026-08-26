@@ -136,6 +136,16 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
                     </button>
                   </>
                 )}
+                {/* A TICK, NOT AN UPLOAD. The scan runs on an external tool and its report is
+                    emailed elsewhere; asking for a photo of a screen was what made this item
+                    impossible to complete. Beside Skip, so the two honest answers sit together. */}
+                {it.item === 'diag_scan' && !it.done && (
+                  <button type="button" disabled={busy !== null} onClick={() => post({ action: 'diag_scan' }, 'ds')}
+                    data-testid="intake-diag-scan-done"
+                    className="text-sm font-semibold bg-ok-soft text-ok rounded-lg px-3 py-2 disabled:opacity-50">
+                    {t('intake.diagScanDone')}
+                  </button>
+                )}
                 {!it.skipped && (
                   <button type="button" disabled={busy !== null} onClick={() => { setSkipOpen(it.item); setReason(''); }}
                     data-testid={`intake-skip-${it.item}`}
@@ -144,6 +154,14 @@ export default function IntakeChecklist({ jobCardId, items, canEdit, nothingFoun
                   </button>
                 )}
               </span>
+            )}
+
+            {/* Undoable for the same reason the findings affirmative is: a mis-tap must not be
+                permanent, and the audit keeps both events. */}
+            {canEdit && it.item === 'diag_scan' && it.done && (
+              <button type="button" disabled={busy !== null} onClick={() => post({ action: 'undo_diag_scan' }, 'undo-ds')}
+                data-testid="intake-undo-diag-scan"
+                className="ml-auto text-xs text-muted hover:text-ink underline">{t('intake.undoDiagScan')}</button>
             )}
 
             {/* The affirmative is undoable — a mis-tap must not be permanent, and the audit keeps both. */}

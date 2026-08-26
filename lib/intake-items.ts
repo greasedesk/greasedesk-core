@@ -118,8 +118,6 @@ export function shouldOfferIntakePrompts(site: {
 export const anyPromptEnabled = (switches: Record<string, boolean>): boolean =>
   INTAKE_ITEMS.some((i) => switches[INTAKE_SWITCH[i]] === true);
 
-/** The photo slot that satisfies the diagnostic-scan item — a photo of the scanner screen. */
-export const DIAG_SCAN_SLOT = 'diag_scan';
 
 /** Everything the done-states are derived FROM. Gathered by the caller; this file stays pure. */
 export type IntakeFacts = {
@@ -128,7 +126,10 @@ export type IntakeFacts = {
   odometerIn: number | null;
   vin: string | null;
   hasIntakeVideo: boolean;
-  hasDiagScanPhoto: boolean;
+  /** When the scan was CONFIRMED — JobCard.diag_scan_at. Was `hasDiagScanPhoto`, a photo slot
+   *  nothing ever wrote: the scan runs on an external tool and its report goes out by email, so
+   *  there is no artefact to hold. NULL = nobody has ticked it. */
+  diagScanAt: Date | null;
   /** The level recorded on THIS card, whatever it was. NULL = nobody looked yet.
    *  A reading of `between` satisfies the item exactly as `below_min` does — the item is "did you
    *  check", not "was there a problem", which is the same reason "nothing found" is an artefact. */
@@ -152,7 +153,8 @@ export function intakeItemDone(item: IntakeItem, f: IntakeFacts): boolean {
     case 'findings': return f.dueItemCount > 0 || f.nothingFoundAt != null;
     case 'mileage_vin': return f.odometerIn != null && !!f.vin?.trim();
     case 'walkaround': return f.hasIntakeVideo;
-    case 'diag_scan': return f.hasDiagScanPhoto;
+    // A CONFIRMATION, NOT A CAPTURE — see IntakeFacts.diagScanAt.
+    case 'diag_scan': return f.diagScanAt != null;
     // ANY recorded level, including a healthy one. The affirmative IS the artefact here — there is
     // no version of this item satisfied only by finding something wrong.
     case 'oil_level': return f.oilLevelAt != null;

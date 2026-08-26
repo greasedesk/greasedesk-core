@@ -111,12 +111,25 @@ export default function PhoneIntakeChecklist({ jobCardId, items, nothingFoundAt,
                     data-testid="ph-nothing-found"
                     className="min-h-[44px] px-3 text-sm font-semibold bg-ok-soft text-ok rounded-lg">Nothing found</button>
                 )}
+                {/* A TICK, NOT AN UPLOAD — the scan runs on an external tool and its report is
+                    emailed elsewhere. This is the surface it will actually be confirmed on: the
+                    scanner is at the car, and so is the phone. */}
+                {it.item === 'diag_scan' && (
+                  <button type="button" disabled={busy !== null} onClick={() => post({ action: 'diag_scan' }, 'ds')}
+                    data-testid="intake-diag-scan-done"
+                    className="min-h-[44px] px-3 text-sm font-semibold bg-ok-soft text-ok rounded-lg">Scan run and sent</button>
+                )}
                 {!it.skipped && (
                   <button type="button" disabled={busy !== null} onClick={() => { setSkipOpen(it.item); setReason(''); }}
                     data-testid={`ph-skip-${it.item}`}
                     className="min-h-[44px] px-3 text-sm bg-surface border border-line text-muted rounded-lg">Skip</button>
                 )}
               </div>
+            )}
+            {it.done && it.item === 'diag_scan' && (
+              <button type="button" disabled={busy !== null} onClick={() => post({ action: 'undo_diag_scan' }, 'undo-ds')}
+                data-testid="intake-undo-diag-scan"
+                className="mt-1 text-xs text-muted underline">undo “scan run and sent”</button>
             )}
             {it.done && it.item === 'findings' && nothingFoundAt && (
               <button type="button" disabled={busy !== null} onClick={() => post({ action: 'undo_nothing_found' }, 'undo')}

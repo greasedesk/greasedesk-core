@@ -2228,6 +2228,16 @@ model JobCard {
   // Photo stages are SOFT gates: complete OR skipped advances the spine (capture can't be enforced).
   // A skip is a first-class audited event (actor + timestamp + optional reason in the audit diff).
   // Details has NO skip — it's a data gate, not a capture stage.
+  /// THE DIAGNOSTIC SCAN WAS RUN AND ITS REPORT SENT ON — a confirmation, not a capture: the scan
+  /// happens on an external tool and the report is emailed elsewhere, so there is no artefact here
+  /// to point at. NULL means nobody has ticked it, which is the only honest reading of a card that
+  /// predates the tick as well as one where the scan was never done — we cannot tell those apart
+  /// and must not pretend to. Undoable, so a mis-tap clears both columns; the AuditLog keeps the
+  /// tick and the correction. Same shape as intake_nothing_found_at/_by.
+  diag_scan_at           DateTime?
+  /// The user who ticked it. NULL exactly when diag_scan_at is null — set and cleared together.
+  diag_scan_by           String?
+
   stage_intake_skipped   Boolean @default(false)
   stage_injob_skipped    Boolean @default(false)
   stage_complete_skipped Boolean @default(false)

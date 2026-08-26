@@ -20,7 +20,7 @@ const { readFileSync } = await import('node:fs');
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
-const NONE = { dueItemCount: 0, nothingFoundAt: null, odometerIn: null, vin: null, hasIntakeVideo: false, hasDiagScanPhoto: false };
+const NONE = { dueItemCount: 0, nothingFoundAt: null, odometerIn: null, vin: null, hasIntakeVideo: false, diagScanAt: null };
 const ALL_ON = Object.fromEntries(INTAKE_ITEMS.map((i) => [INTAKE_SWITCH[i], true]));
 
 // ── 1. THE CLEAN CAR ────────────────────────────────────────────────────────────────────────────
@@ -42,14 +42,18 @@ check('mileage_vin needs BOTH', intakeItemDone('mileage_vin', { ...NONE, odomete
   && intakeItemDone('mileage_vin', { ...NONE, odometerIn: 100, vin: 'X' }) === true);
 check('a blank VIN string does not count', intakeItemDone('mileage_vin', { ...NONE, odometerIn: 100, vin: '   ' }) === false);
 check('walkaround needs the video', intakeItemDone('walkaround', { ...NONE, hasIntakeVideo: true }) === true);
-check('diag_scan needs the scan photo', intakeItemDone('diag_scan', { ...NONE, hasDiagScanPhoto: true }) === true);
+// A CONFIRMATION, NOT A CAPTURE. This pinned a JobCardPhoto slot that nothing ever wrote — 0 rows
+// across every tenant — so the item could only ever be skipped and the manager's escalation named
+// it on every card. The scan runs on an external tool and its report is emailed elsewhere.
+check('diag_scan needs the tick', intakeItemDone('diag_scan', { ...NONE, diagScanAt: new Date() }) === true);
+check('  …and an unticked scan is not done', intakeItemDone('diag_scan', NONE) === false);
 
 // ── 3. A SKIP IS SPENT WHEN THE THING IS DONE ──────────────────────────────────────────────────
 console.log('\n— done wins over a historical skip —');
 const skipped = { diag_scan: { reason: 'Equipment fault' } };
 const beforeDoing = intakeItemStates(NONE, ALL_ON, skipped).find((s) => s.item === 'diag_scan');
 check('skipped and not done → skipped', beforeDoing.skipped === true && beforeDoing.skipReason === 'Equipment fault');
-const afterDoing = intakeItemStates({ ...NONE, hasDiagScanPhoto: true }, ALL_ON, skipped).find((s) => s.item === 'diag_scan');
+const afterDoing = intakeItemStates({ ...NONE, diagScanAt: new Date() }, ALL_ON, skipped).find((s) => s.item === 'diag_scan');
 check('skipped at 09:30, DONE at 10:00 → simply done', afterDoing.done === true && afterDoing.skipped === false,
   'a spent skip must not follow the card around');
 
@@ -68,7 +72,7 @@ check(`a mechanic who never opened the tab leaves all ${INTAKE_ITEMS.length} out
   `${neverOpened.length} of ${INTAKE_ITEMS.length} — catching only the one who pressed skip would miss the commoner case`);
 // EVERY item satisfied — oilLevelAt included, which this fixture was missing for the same reason
 // as the count above: it was written before the dipstick existed.
-const cleanCar = intakeOutstanding(intakeItemStates({ ...NONE, nothingFoundAt: new Date(), odometerIn: 1, vin: 'X', hasIntakeVideo: true, hasDiagScanPhoto: true, oilLevelAt: new Date() }, ALL_ON, {}));
+const cleanCar = intakeOutstanding(intakeItemStates({ ...NONE, nothingFoundAt: new Date(), odometerIn: 1, vin: 'X', hasIntakeVideo: true, diagScanAt: new Date(), oilLevelAt: new Date() }, ALL_ON, {}));
 check('a fully-done clean car reports NOTHING — no email at all', cleanCar.length === 0,
   'the escalation must be silent when the workshop did its job');
 
@@ -131,7 +135,7 @@ try {
     '"nothing found" alongside real findings says two things at once');
   check('  …and the writer does that itself, not by hand here',
     /intake_nothing_found_at: null/.test(readFileSync('pages/api/due-items.ts', 'utf8')));
-  const facts = { dueItemCount: 1, nothingFoundAt: null, odometerIn: null, vin: null, hasIntakeVideo: false, hasDiagScanPhoto: false };
+  const facts = { dueItemCount: 1, nothingFoundAt: null, odometerIn: null, vin: null, hasIntakeVideo: false, diagScanAt: null };
   check('and the item is STILL done — via the finding, not the affirmative', intakeItemDone('findings', facts) === true);
   await prisma.vehicleDueItem.delete({ where: { id: item.id } });
 
