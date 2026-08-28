@@ -31,6 +31,10 @@ export type AuditAction =
   // THE DIAGNOSTIC SCAN, CONFIRMED — and its correction. Two actions rather than one with a flag,
   // because AuditLog is append-only and a mis-tap must leave both events readable: the tick
   // happened, and so did the undo. Same pair as intake.nothing_found / nothing_found_cleared.
+  // The tenant's marketing settings changed — which cars the call board offers and for how long a
+  // snooze holds. Its own action because it changes what a WHOLE BOARD shows, and the next person
+  // wondering why a stack emptied should find the answer rather than infer it.
+  | 'settings.marketing'
   | 'intake.diag_scan'
   | 'intake.diag_scan_cleared'
   | 'vehicle.mot_refresh'

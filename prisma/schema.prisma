@@ -296,6 +296,17 @@ model Group {
   // Per-tenant leave-type colour overrides (type→hex; defaults = Okabe–Ito in lib/leave-types;
   // admin-remappable for colour-blind accessibility). Read via resolveLeaveColours only.
   leave_type_colours        Json?
+  /// Show cars whose quote has lapsed on the marketing board. An OFF SWITCH for something that is
+  /// on, not an opt-in — the opposite polarity from Site.intake_prompt_*, deliberately: a lapsed
+  /// quote is a lead every garage has, where a diagnostic scan is equipment some garages lack.
+  marketing_expired_quotes  Boolean @default(true)
+  /// How long a snooze lasts, in days. NULL = never set, so lib/marketing-lists::SNOOZE_DAYS
+  /// applies — NOT "zero days" and not "30". Writing 30 here for everyone would make a deliberate
+  /// choice of 30 indistinguishable from nobody having been asked, for ever.
+  marketing_snooze_days     Int?
+  /// Days BEFORE expiry at which a live quote moves from Warm to Hot. NULL = only on expiry, which
+  /// is a real answer rather than a stand-in for 0: it says "we never want it early".
+  marketing_quote_hot_days  Int?
   status_colours            Json? // diary job-status band → curated-palette hex (lib/status-colours); null keys fall back to defaults. One palette per tenant (a mechanic moving sites shouldn't relearn colours).
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
   tax_label                 String   @default("VAT")

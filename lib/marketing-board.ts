@@ -114,7 +114,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   // seconds. Query depth is the latency currency on this stack (lhr1 → Neon eu-west-2), and a
   // page nobody waits for is a page nobody opens. Everything the loop needs is fetched here and
   // grouped in memory.
-  const [allItems, allCards, edges, quoteVersions] = await Promise.all([
+  const [allItems, allCards, edges, quoteVersions, verbalCards, group] = await Promise.all([
     prisma.vehicleDueItem.findMany({
       where: { group_id: groupId, vehicle_id: { in: ids }, closed_at: null },
       orderBy: { created_at: 'desc' },
@@ -144,6 +144,19 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       },
       orderBy: [{ job_card_id: 'asc' }, { version: 'desc' }],
     }),
+    // VERBAL QUOTES — a card marked `quoted` that never minted a version. 86% of quoting on the
+    // live tenant is verbal, so this is not an edge case; it is most of the book.
+    prisma.jobCard.findMany({
+      where: { group_id: groupId, vehicle_id: { in: ids }, status: 'quoted', quoteVersions: { none: {} } },
+      select: { vehicle_id: true, created_at: true },
+      orderBy: { created_at: 'asc' },
+    }),
+    // The tenant's marketing settings. Nullable columns stay null here — the pipeline and
+    // lib/marketing-lists own the fallbacks, so "unset" never becomes a number on the way through.
+    prisma.group.findUnique({
+      where: { id: groupId },
+      select: { marketing_expired_quotes: true, marketing_quote_hot_days: true },
+    }),
   ]);
 
   // ── WHICH QUOTES HAVE LAPSED, ASKED OF lib/quotes-list ───────────────────────────────────────
@@ -160,17 +173,41 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   // its list bounds this too.
   const latestPerCard = new Map<string, (typeof quoteVersions)[number]>();
   for (const v of quoteVersions) if (!latestPerCard.has(v.job_card_id)) latestPerCard.set(v.job_card_id, v);
-  const quoteByVehicle = new Map<string, { expiredAt: Date; alsoLapsed: number }>();
+  type QuoteLead = { kind: 'live' | 'expired' | 'verbal'; ageDays: number; alsoLapsed: number; days: number | null };
+  const quoteByVehicle = new Map<string, QuoteLead>();
+  const dayp = (from: Date) => Math.max(0, Math.round((now.getTime() - from.getTime()) / 86_400_000));
+  /** The strongest quote on a car wins the row: lapsed beats live, and within each the nearer clock.
+   *  A verbal quote yields to anything that was actually sent — it has no clock to compare. */
+  const better = (a: QuoteLead, b: QuoteLead | undefined) => {
+    if (!b) return true;
+    const rank = (x: QuoteLead) => (x.kind === 'expired' ? 0 : x.kind === 'live' ? 1 : 2);
+    if (rank(a) !== rank(b)) return rank(a) < rank(b);
+    if (a.days == null || b.days == null) return a.ageDays > b.ageDays; // verbal: oldest leads
+    return Math.abs(a.days) < Math.abs(b.days);
+  };
   for (const v of latestPerCard.values()) {
     if ((QUOTE_CLOSED_CARD_STATUSES as readonly string[]).includes(v.job_card.status)) continue;
-    if (deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now) !== 'expired') continue;
+    const state = deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now);
+    // AWAITING AND EXPIRED ONLY. accepted/accepted_booked are won, declined was answered, and
+    // needs_resending is deliberately OUT: its own comment says "the customer was never told", which
+    // may well be the strongest lead of all — but there are zero instances on any tenant today, and
+    // designing a lead type against no evidence is how a board fills up with rows nobody asked for.
+    if (state !== 'awaiting' && state !== 'expired') continue;
     const vid = v.job_card.vehicle_id;
-    const expiredAt = quoteExpiry(v.sent_at);
+    const days = Math.round((quoteExpiry(v.sent_at).getTime() - now.getTime()) / 86_400_000);
+    const lead: QuoteLead = { kind: state === 'expired' ? 'expired' : 'live', ageDays: dayp(v.sent_at), alsoLapsed: 0, days };
     const cur = quoteByVehicle.get(vid);
-    // THE OLDEST leads the row; the rest are counted, not listed.
-    if (!cur) quoteByVehicle.set(vid, { expiredAt, alsoLapsed: 0 });
-    else if (expiredAt < cur.expiredAt) quoteByVehicle.set(vid, { expiredAt, alsoLapsed: cur.alsoLapsed + 1 });
-    else cur.alsoLapsed += 1;
+    if (better(lead, cur)) quoteByVehicle.set(vid, { ...lead, alsoLapsed: (cur?.alsoLapsed ?? 0) + (cur && cur.kind === 'expired' ? 1 : 0) });
+    else if (lead.kind === 'expired' && cur) cur.alsoLapsed += 1;
+  }
+  // ── VERBAL QUOTES: A LEAD WITH NO CLOCK ──────────────────────────────────────────────────────
+  // Somebody asked the price, so it is a lead. Nothing was sent, so there is no expiry to count to
+  // and no honest way to promote it — it stays Warm for ever, ranked by the card's own age, which
+  // is a measured fact rather than an invented deadline. Only cards with NO version at all: a card
+  // that later minted one is covered above.
+  for (const c of verbalCards) {
+    if (quoteByVehicle.has(c.vehicle_id)) continue;
+    quoteByVehicle.set(c.vehicle_id, { kind: 'verbal', ageDays: dayp(c.created_at), alsoLapsed: 0, days: null });
   }
   const owners = await prisma.customer.findMany({
     where: { id: { in: [...new Set(edges.map((e) => e.customer_id))] } },
@@ -263,7 +300,10 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
     const { stack, reasons, urgency } = leadStack({
       motBand: band, motDays, serviceDueDays, battery, lowestTreadTenths, findings,
       contact: rec ? { state: rec.state as never, snoozeUntil: rec.snooze_until, contactStands: stands } : null,
-      quoteExpired: quoteByVehicle.get(v.id) ?? null,
+      quote: quoteByVehicle.get(v.id) ?? null,
+      quoteDays: quoteByVehicle.get(v.id)?.days ?? null,
+      showExpiredQuotes: group?.marketing_expired_quotes ?? true,
+      quoteHotDays: group?.marketing_quote_hot_days ?? null,
     }, now);
 
     if (!reasons.length) continue; // nothing to ring about

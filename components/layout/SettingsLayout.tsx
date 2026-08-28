@@ -55,6 +55,17 @@ const TABS: TopTab[] = [
     name: 'Invoicing', key: 'invoicing', href: '/admin/settings/invoicing', adminOnly: true,
     match: ['/admin/settings/invoicing'],
   },
+  {
+    /**
+     * ── MARKETING — TENANT-WIDE, WHICH IS WHY IT IS A TAB AND NOT A LOCATION BLOCK ────────────
+     * The board is per-TENANT: buildBoard takes a groupId and scopes nothing by site. So these are
+     * Group columns and belong here, beside Invoicing. The intake prompts look similar and are the
+     * opposite — Site columns, edited inline per location on Locations & Resources — and putting
+     * these there would make the board's settings look site-scoped when they are not.
+     */
+    name: 'Marketing', key: 'marketing', href: '/admin/settings/marketing', adminOnly: true,
+    match: ['/admin/settings/marketing'],
+  },
   /**
    * ── ACCOUNT — WHO YOU ARE, WHAT YOU PAY, WHO LOOKS AFTER YOU ──────────────────────────────────
    * Was "Licence & Subscriptions", which described one of the three things now under it.

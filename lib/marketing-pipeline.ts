@@ -41,7 +41,7 @@ export type Stack = 'hot' | 'warm' | 'later';
  */
 export type LeadReasonKind =
   | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked' | 'service_overdue' | 'wants_call'
-  | 'quote_expired'
+  | 'quote_expired' | 'quote_open'
   | 'mot_due' | 'service_due' | 'unanswered' | 'battery_retest'
   | 'declined' | 'snoozed' | 'distant';
 
@@ -49,7 +49,7 @@ export type LeadReasonKind =
  *  and at the endpoint, so a contact can say what the call was really about. */
 export const LEAD_REASON_KINDS: LeadReasonKind[] = [
   'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked', 'service_overdue', 'wants_call',
-  'quote_expired',
+  'quote_expired', 'quote_open',
   'mot_due', 'service_due', 'unanswered', 'battery_retest',
   'declined', 'snoozed', 'distant',
 ];
@@ -103,7 +103,18 @@ export type LeadSignals = {
    * in the sentence is that leak wearing different clothes. Putting the value back means routing
    * the board through financeVisibility, which is its own slice.
    */
-  quoteExpired?: { expiredAt: Date; alsoLapsed: number } | null;
+  quote?: { kind: 'live' | 'expired' | 'verbal'; ageDays: number; alsoLapsed: number } | null;
+  /**
+   * DAYS TO EXPIRY, signed: positive while the quote is live, negative once it has lapsed. NULL for
+   * a VERBAL quote, which has no sent_at and therefore no expiry to count to — exactly the shape
+   * motDays and serviceDueDays already use, and the reason urgencyOf returns URGENCY_NO_CLOCK for
+   * it without a new constant.
+   */
+  quoteDays?: number | null;
+  /** Group.marketing_expired_quotes. Default TRUE — an off switch, not an opt-in. */
+  showExpiredQuotes?: boolean;
+  /** Group.marketing_quote_hot_days. NULL = only on expiry. */
+  quoteHotDays?: number | null;
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -161,14 +172,39 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   // the lead has gone, not when something becomes urgent. A quote that lapsed 17 days ago is not
   // more urgent than one that lapsed 8 days ago — the same argument the file already makes for
   // wants_call, which is knowledge rather than a calendar.
-  if (s.quoteExpired) {
-    const days = Math.max(0, Math.round((now.getTime() - s.quoteExpired.expiredAt.getTime()) / 86_400_000));
-    // THREE WAYS, because "expired 0 days ago" is not a sentence and neither is "1 days".
-    const when = days === 0 ? 'expired today' : `expired ${plural(days, 'day', 'days')} ago`;
-    const more = s.quoteExpired.alsoLapsed > 0 ? ` (${s.quoteExpired.alsoLapsed} more lapsed)` : '';
-    out.push({ kind: 'quote_expired', stack: 'hot',
-      text: `Quote ${when} — they never said no${more}` });
+  if (s.quote) {
+    const q = s.quote;
+    const lapsed = q.kind === 'expired';
+    const more = q.alsoLapsed > 0 ? ` (${q.alsoLapsed} more lapsed)` : '';
+    // THE SWITCH IS ABOUT LAPSED QUOTES, not about quoting: a garage that turns it off still sees
+    // its live quotes. Off means "do not chase the ones that ran out", which is the only thing a
+    // garage would actually want to silence.
+    const suppressed = lapsed && s.showExpiredQuotes === false;
+    // EARLY PROMOTION. marketing_quote_hot_days is days BEFORE expiry at which a live quote goes
+    // Hot; null means only on expiry, which degenerates to exactly the behaviour that shipped.
+    const early = !lapsed && q.kind === 'live' && s.quoteHotDays != null
+      && s.quoteDays != null && s.quoteDays <= s.quoteHotDays;
+    if (!suppressed) {
+      // FOUR STATES, FOUR SENTENCES — and each says the thing that makes it actionable. Three-way
+      // day wording throughout, because "0 days ago" and "1 days" are not sentences.
+      const ago = (n: number) => (n === 0 ? 'today' : `${plural(n, 'day', 'days')} ago`);
+      const text = q.kind === 'verbal'
+        ? `Quoted verbally ${ago(q.ageDays)} — never sent`
+        : lapsed
+          ? `Quote expired ${ago(Math.abs(Math.round(s.quoteDays ?? 0)))} — they never said no${more}`
+          : early
+            ? `Quote expires in ${plural(Math.round(s.quoteDays as number), 'day', 'days')} — no answer yet${more}`
+            : `Quote sent ${ago(q.ageDays)} — no answer yet${more}`;
+      // ── THE KIND IS THE QUOTE'S STATE; THE STACK IS ITS URGENCY ────────────────────────────
+      // Two axes, kept independent. An early-promoted live quote is Hot and still OPEN, so it is
+      // quote_open in the hot stack — one kind spanning both states meant a garage ringing about a
+      // quote sent yesterday had the call recorded as `quote_expired`. The behaviour was right and
+      // the label was a lie, which is the kind of wrong that survives: nothing looks broken and the
+      // contact history quietly stops meaning what it says.
+      out.push({ kind: lapsed ? 'quote_expired' : 'quote_open', stack: lapsed || early ? 'hot' : 'warm', text });
+    }
   }
+
   const agreed = s.findings.filter((f) => f.response === 'agreed_later');
   if (agreed.length) {
     out.push({ kind: 'agreed_not_booked', stack: 'hot',
@@ -249,7 +285,7 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
  */
 export const URGENCY_MEASURED = 0;
 export const URGENCY_NO_CLOCK = 99_999;
-const DATED_KINDS = new Set<LeadReasonKind>(['mot_expired', 'mot_due', 'service_due', 'service_overdue']);
+const DATED_KINDS = new Set<LeadReasonKind>(['mot_expired', 'mot_due', 'service_due', 'service_overdue', 'quote_expired', 'quote_open']);
 
 export function urgencyOf(reasons: LeadReason[], s: LeadSignals): number {
   const dated = reasons.filter((r) => DATED_KINDS.has(r.kind));
@@ -257,6 +293,11 @@ export function urgencyOf(reasons: LeadReason[], s: LeadSignals): number {
   const clocks: number[] = [];
   if (dated.some((r) => r.kind === 'mot_expired' || r.kind === 'mot_due') && s.motDays != null) clocks.push(s.motDays);
   if (dated.some((r) => r.kind === 'service_due' || r.kind === 'service_overdue') && s.serviceDueDays != null) clocks.push(s.serviceDueDays);
+  // A QUOTE'S CLOCK RUNS BOTH WAYS: to expiry while it is live, since expiry once it has lapsed.
+  // Math.abs below collapses the two, which is safe only because the STACK is decided first —
+  // everything Warm is ahead of its expiry and everything Hot is past it, so the two can never
+  // meet inside one list.
+  if (dated.some((r) => r.kind === 'quote_expired' || r.kind === 'quote_open') && s.quoteDays != null) clocks.push(s.quoteDays);
   if (!clocks.length) return URGENCY_NO_CLOCK;
   // The NEAREST clock decides: a car with two triggers is as urgent as its soonest one.
   return 1 + Math.round(Math.min(...clocks.map((d) => Math.abs(d))));

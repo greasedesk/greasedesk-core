@@ -46,10 +46,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A TRIGGER-BAND CAR HAS NO DATE, so the record needs one anyway to be spendable. A month out is
   // the same horizon as the list itself: contacted about a car with no clock, ask again next month.
   const at = new Date();
-  const forAt = forDate ? new Date(`${forDate}T00:00:00.000Z`) : new Date(at.getTime() + SNOOZE_DAYS * 86_400_000);
+  // ── THE TENANT'S SNOOZE, OR THE PLATFORM'S ───────────────────────────────────────────────────
+  // Group.marketing_snooze_days is NULLABLE and null means NEVER SET, not zero — so SNOOZE_DAYS
+  // stays the fallback rather than being copied into every tenant at migration time, which would
+  // make a deliberate choice of 30 and nobody-having-been-asked identical for ever. Resolved once,
+  // used by both reads below, so the "ask again" date and the snooze cannot come from different
+  // numbers on the same request.
+  const g = await prisma.group.findUnique({ where: { id: groupId }, select: { marketing_snooze_days: true } });
+  const snoozeDays = g?.marketing_snooze_days ?? SNOOZE_DAYS;
+  const forAt = forDate ? new Date(`${forDate}T00:00:00.000Z`) : new Date(at.getTime() + snoozeDays * 86_400_000);
   if (Number.isNaN(forAt.getTime())) return res.status(400).json({ message: 'That date does not look right.' });
   // A snooze with no end is a hide — so the SERVER sets it and the client cannot omit it.
-  const snoozeUntil = state === 'snoozed' ? new Date(at.getTime() + SNOOZE_DAYS * 86_400_000) : null;
+  const snoozeUntil = state === 'snoozed' ? new Date(at.getTime() + snoozeDays * 86_400_000) : null;
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.marketingContact.upsert({
