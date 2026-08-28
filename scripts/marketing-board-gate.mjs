@@ -414,7 +414,15 @@ try {
     (after.later.find((r) => r.registration === 'ZZ76DEC')?.reasons ?? []).some((r) => r.kind === 'mot_expired'),
     'nobody loses the thread of why it was on the list');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  // ── SAY WHAT THREW, NOT JUST THAT SOMETHING DID ───────────────────────────────────────────────
+  // This printed `e.message` alone. On 28 Aug it failed once inside the core tier, having passed
+  // four times standalone, and the detail was EMPTY — an error whose message is blank told nobody
+  // anything, and the run was unreproducible with no evidence left behind. The constructor name and
+  // the first stack frame cost nothing and are the difference between a diagnosis and a shrug.
+  const kind = e?.constructor?.name ?? typeof e;
+  const where = String(e?.stack ?? '').split('\n')[1]?.trim() ?? 'no frame';
+  const msg = String(e?.message ?? e) || '(empty message)';
+  check('gate run completed', false, `${kind}: ${msg}`.slice(0, 240) + ` @ ${where}`.slice(0, 120));
   await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
 } finally {
   if (browser) await browser.close().catch(() => {});
