@@ -41,6 +41,7 @@ export type Stack = 'hot' | 'warm' | 'later';
  */
 export type LeadReasonKind =
   | 'mot_expired' | 'battery_replace' | 'tyre_illegal' | 'agreed_not_booked' | 'service_overdue' | 'wants_call'
+  | 'quote_expired'
   | 'mot_due' | 'service_due' | 'unanswered' | 'battery_retest'
   | 'declined' | 'snoozed' | 'distant';
 
@@ -48,6 +49,7 @@ export type LeadReasonKind =
  *  and at the endpoint, so a contact can say what the call was really about. */
 export const LEAD_REASON_KINDS: LeadReasonKind[] = [
   'mot_expired', 'battery_replace', 'tyre_illegal', 'agreed_not_booked', 'service_overdue', 'wants_call',
+  'quote_expired',
   'mot_due', 'service_due', 'unanswered', 'battery_retest',
   'declined', 'snoozed', 'distant',
 ];
@@ -82,6 +84,26 @@ export type LeadSignals = {
    * items; motDays above is the same fact for the MOT.
    */
   serviceDueDays?: number | null;
+  /**
+   * THE OLDEST QUOTE THAT LAPSED WITH NO ANSWER, and what it was worth. NULL when nothing was sent,
+   * when every sent quote was answered, or when the card has since closed.
+   *
+   * THE FACT, NOT THE DERIVATION — no sent_at, no status, no MAGIC_LINK_DAYS here. The board asks
+   * lib/quotes-list::deriveQuoteStatus what "expired" means, exactly as the Quotes tab does, so the
+   * two surfaces cannot disagree about which quotes have lapsed. Same discipline as motBand.
+   *
+   * `alsoLapsed` is how many OTHER quotes on this car have lapsed, so the row can name the oldest
+   * and count the rest rather than listing them.
+   */
+  /**
+   * NO MONEY HERE, and that is a decision rather than an omission. The value is the sharpest thing
+   * about this lead — but marketing-board-gate holds the board to carrying no money FIELD at all
+   * ("not a gated field — no field. There is nothing to leak"), written after the board rendered
+   * £1,214 to a STANDARD mechanic with no check. reason.text renders unconditionally, so a figure
+   * in the sentence is that leak wearing different clothes. Putting the value back means routing
+   * the board through financeVisibility, which is its own slice.
+   */
+  quoteExpired?: { expiredAt: Date; alsoLapsed: number } | null;
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -129,6 +151,23 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   if (wantsCall.length) {
     out.push({ kind: 'wants_call', stack: 'hot',
       text: `${plural(wantsCall.length, 'job', 'jobs')} they asked to be called about — ${wantsCall[0].description}` });
+  }
+  // ── THEY ASKED THE PRICE AND NEVER ANSWERED ──────────────────────────────────────────────────
+  // The best lead on the board: you know what they wanted, you know what it costs, and they never
+  // said no. It belongs beside agreed_not_booked — the same shape one step earlier.
+  //
+  // NOT IN DATED_KINDS, deliberately, so urgencyOf returns URGENCY_MEASURED and it ranks above
+  // every clock. An expired quote has no clock AHEAD of it, only one behind: its age says how cold
+  // the lead has gone, not when something becomes urgent. A quote that lapsed 17 days ago is not
+  // more urgent than one that lapsed 8 days ago — the same argument the file already makes for
+  // wants_call, which is knowledge rather than a calendar.
+  if (s.quoteExpired) {
+    const days = Math.max(0, Math.round((now.getTime() - s.quoteExpired.expiredAt.getTime()) / 86_400_000));
+    // THREE WAYS, because "expired 0 days ago" is not a sentence and neither is "1 days".
+    const when = days === 0 ? 'expired today' : `expired ${plural(days, 'day', 'days')} ago`;
+    const more = s.quoteExpired.alsoLapsed > 0 ? ` (${s.quoteExpired.alsoLapsed} more lapsed)` : '';
+    out.push({ kind: 'quote_expired', stack: 'hot',
+      text: `Quote ${when} — they never said no${more}` });
   }
   const agreed = s.findings.filter((f) => f.response === 'agreed_later');
   if (agreed.length) {

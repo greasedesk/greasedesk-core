@@ -15,6 +15,7 @@
 import { prisma } from '@/lib/db';
 import { motBand, contactRoute, noContactLabel, contactStands, serviceDue, WINDOW_DAYS, type ContactRecord } from '@/lib/marketing-lists';
 import { batteryState, type BatteryState } from '@/lib/battery';
+import { deriveQuoteStatus, quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
 import { leadStack, unansweredPrompt, type Stack, type LeadReason } from '@/lib/marketing-pipeline';
 
 export type BoardRow = {
@@ -113,7 +114,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   // seconds. Query depth is the latency currency on this stack (lhr1 → Neon eu-west-2), and a
   // page nobody waits for is a page nobody opens. Everything the loop needs is fetched here and
   // grouped in memory.
-  const [allItems, allCards, edges] = await Promise.all([
+  const [allItems, allCards, edges, quoteVersions] = await Promise.all([
     prisma.vehicleDueItem.findMany({
       where: { group_id: groupId, vehicle_id: { in: ids }, closed_at: null },
       orderBy: { created_at: 'desc' },
@@ -132,7 +133,45 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       where: { vehicle_id: { in: ids }, is_current: true },
       select: { vehicle_id: true, customer_id: true },
     }),
+    // ── ONE TOP-LEVEL READ, NOT A NESTED INCLUDE ─────────────────────────────────────────────
+    // A `quoteVersions` include on the vehicle select above would run per vehicle across the whole
+    // fleet. Query depth is latency currency on lhr1, and this is one pass reduced to a Map.
+    prisma.quoteVersion.findMany({
+      where: { group_id: groupId, job_card: { vehicle_id: { in: ids } } },
+      select: {
+        job_card_id: true, version: true, status: true, sent_at: true,
+        job_card: { select: { vehicle_id: true, status: true } },
+      },
+      orderBy: [{ job_card_id: 'asc' }, { version: 'desc' }],
+    }),
   ]);
+
+  // ── WHICH QUOTES HAVE LAPSED, ASKED OF lib/quotes-list ───────────────────────────────────────
+  // deriveQuoteStatus is the same function the Quotes tab uses, so the board cannot disagree with
+  // it about what "expired" means — and MAGIC_LINK_DAYS stays in one place. A second copy of 14 is
+  // how two surfaces start drifting.
+  //
+  // LATEST VERSION PER CARD ONLY: a superseded v1 is not a lead, its successor is the live quote.
+  // The orderBy above puts the highest version first, so the first row per card wins.
+  //
+  // AND THE CARD MUST STILL BE OPEN. AP16RGX's quote lapsed and its card is `paid` — the work was
+  // done. Telling somebody to ring a customer about work they have already paid for is the worst
+  // call this board could make, so the same QUOTE_CLOSED_CARD_STATUSES the Quotes tab uses to bound
+  // its list bounds this too.
+  const latestPerCard = new Map<string, (typeof quoteVersions)[number]>();
+  for (const v of quoteVersions) if (!latestPerCard.has(v.job_card_id)) latestPerCard.set(v.job_card_id, v);
+  const quoteByVehicle = new Map<string, { expiredAt: Date; alsoLapsed: number }>();
+  for (const v of latestPerCard.values()) {
+    if ((QUOTE_CLOSED_CARD_STATUSES as readonly string[]).includes(v.job_card.status)) continue;
+    if (deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now) !== 'expired') continue;
+    const vid = v.job_card.vehicle_id;
+    const expiredAt = quoteExpiry(v.sent_at);
+    const cur = quoteByVehicle.get(vid);
+    // THE OLDEST leads the row; the rest are counted, not listed.
+    if (!cur) quoteByVehicle.set(vid, { expiredAt, alsoLapsed: 0 });
+    else if (expiredAt < cur.expiredAt) quoteByVehicle.set(vid, { expiredAt, alsoLapsed: cur.alsoLapsed + 1 });
+    else cur.alsoLapsed += 1;
+  }
   const owners = await prisma.customer.findMany({
     where: { id: { in: [...new Set(edges.map((e) => e.customer_id))] } },
     select: { id: true, name: true, phone: true, phone_e164: true, email: true, sms_opt_out: true, email_opt_out: true },
@@ -224,6 +263,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
     const { stack, reasons, urgency } = leadStack({
       motBand: band, motDays, serviceDueDays, battery, lowestTreadTenths, findings,
       contact: rec ? { state: rec.state as never, snoozeUntil: rec.snooze_until, contactStands: stands } : null,
+      quoteExpired: quoteByVehicle.get(v.id) ?? null,
     }, now);
 
     if (!reasons.length) continue; // nothing to ring about

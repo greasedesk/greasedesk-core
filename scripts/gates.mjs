@@ -71,7 +71,7 @@ const TIERS = {
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
-    'mot-sweep-stamp-gate', 'enum-drift-gate', 'printed-countdown-gate', 'invoice-blocks-gate',
+    'mot-sweep-stamp-gate', 'enum-drift-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate',
   ],
   slow: [
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
