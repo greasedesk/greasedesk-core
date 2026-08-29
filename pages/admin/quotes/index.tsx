@@ -20,7 +20,7 @@ import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
-import { listQuotes, quoteFilterCounts, QUOTE_FILTERS, isQuoteFilter, DEFAULT_QUOTE_FILTER, type QuoteFilter, type QuoteRow } from '@/lib/quotes-list';
+import { listQuotes, quoteFilterCounts, QUOTE_FILTERS, isQuoteFilter, DEFAULT_QUOTE_FILTER, draftPill, draftAgeLabel, quoteValuePennies, quotesTotalPennies, type QuoteFilter, type QuoteRow } from '@/lib/quotes-list';
 import { formatMoney } from '@/lib/format-money';
 import { PROVENANCE_LABEL } from '@/lib/acceptance-provenance';
 import { withI18n } from '@/lib/gssp-i18n';
@@ -40,6 +40,9 @@ type Props = {
 };
 
 const LABELS: Record<QuoteFilter, string> = {
+  // NOT SENT YET — our word for it is "draft", but the customer-facing fact is that nothing has
+  // gone out. First, because it needs the most doing.
+  not_sent: 'Not sent yet',
   awaiting: 'Awaiting response',
   accepted: 'Accepted',
   declined: 'Declined',
@@ -51,6 +54,8 @@ const LABELS: Record<QuoteFilter, string> = {
 };
 
 const TONE: Record<QuoteFilter, string> = {
+  // Amber with expired and needs_resending: all three mean there is no live offer with the customer.
+  not_sent: 'bg-warn-soft text-warn',
   awaiting: 'bg-accent-soft text-accent',
   accepted: 'bg-ok-soft text-ok',
   declined: 'bg-surface-muted text-muted',
@@ -113,7 +118,11 @@ export default function QuotesPage(props: Props) {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
-        {QUOTE_FILTERS.map((f) => (
+        {/* NOT SENT YET HIDES WHEN EMPTY. A draft is rare — 2 of 278 cards on the live tenant —
+            so a permanent first tab reading (0) would be a cost on every visit for a state that is
+            usually absent. It appears when there is something to do and disappears when there is
+            not. Every other tab stays put: they are the shape of the screen. */}
+        {QUOTE_FILTERS.filter((f) => f !== 'not_sent' || props.counts.not_sent > 0 || props.filter === 'not_sent').map((f) => (
           <button key={f} onClick={() => go(f)}
             className={`text-sm rounded-lg px-3 py-1.5 border transition ${
               props.filter === f ? 'bg-accent text-white border-accent' : 'bg-surface border-line text-ink hover:bg-surface-muted'}`}>
@@ -152,10 +161,20 @@ export default function QuotesPage(props: Props) {
                     <Link href={`/admin/jobcards/${r.jobCardId}`} className="grid grid-cols-[1fr_1fr_1fr_auto_1fr_1fr] items-center">
                       <span className="py-3 px-4 font-semibold text-ink">{r.registration ?? '—'}</span>
                       <span className="py-3 px-4 text-ink">{r.customerName ?? '—'}</span>
-                      <span className="py-3 px-4 text-right text-ink tabular-nums">{formatMoney(r.grossPennies, { currency: props.currency, locale: props.locale })}</span>
+                      {/* NULL IS NOT ZERO. An unpriced draft has no value; £0.00 would claim the
+                          job is worth nothing — the same failure as a mileage box that defaulted to
+                          the arrival reading. The em dash is what the expiry column already does. */}
+                      <span className="py-3 px-4 text-right text-ink tabular-nums" data-testid={`quote-value-${r.jobCardId}`}>
+                        {quoteValuePennies(r) == null ? '—' : formatMoney(quoteValuePennies(r) as number, { currency: props.currency, locale: props.locale })}
+                      </span>
                       <span className="py-3 px-2 text-center text-muted tabular-nums">{r.version ? `v${r.version}` : '—'}</span>
                       <span className="py-3 px-4 text-muted">{r.sentAt ? fmtDate(r.sentAt) : '—'}</span>
-                      <span className="py-3 px-4 text-muted">{r.expiresAt ? fmtDate(r.expiresAt) : '—'}</span>
+                      {/* A draft has no expiry — nothing was sent — so this column carries its AGE
+                          instead. Age, never a deadline: there is no honest basis for deciding when
+                          an unpriced card is late, and that varies by garage and by job. */}
+                      <span className="py-3 px-4 text-muted" data-testid={`quote-when-${r.jobCardId}`}>
+                        {r.status === 'not_sent' ? draftAgeLabel(r) : r.expiresAt ? fmtDate(r.expiresAt) : '—'}
+                      </span>
                     </Link>
                   </td>
                   <td className="py-3 px-4 align-middle">
@@ -164,7 +183,9 @@ export default function QuotesPage(props: Props) {
                         superseded latest = the estimate was materially edited and never re-sent,
                         so the customer's link is dead: state the fact AND the remedy, without
                         implying the garage did anything wrong. */}
-                    {r.verbal
+                    {draftPill(r)
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-warn-soft text-warn border border-line" data-testid={`quote-pill-${r.jobCardId}`}>{draftPill(r)}</span>
+                      : r.verbal
                       ? <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-muted border border-line">Quoted verbally — not sent</span>
                       : r.supersededNoLink
                         ? <span className="text-xs text-warn">Superseded — customer can no longer view this quote.</span>
@@ -215,7 +236,10 @@ export default function QuotesPage(props: Props) {
                   {LABELS[props.filter]} — {props.rows.length} {props.rows.length === 1 ? 'quote' : 'quotes'}
                 </td>
                 <td className="py-3 px-4 text-right tabular-nums" data-testid="value-total">
-                  {formatMoney(props.rows.reduce((sum, r) => sum + r.grossPennies, 0), { currency: props.currency, locale: props.locale })}
+                  {/* UNPRICED DRAFTS ARE LEFT OUT, not summed as zeros — a total that counts
+                      absences as zeros is how £0.00 becomes believable. */}
+                  {quotesTotalPennies(props.rows) == null ? '—'
+                    : formatMoney(quotesTotalPennies(props.rows) as number, { currency: props.currency, locale: props.locale })}
                 </td>
                 <td colSpan={4} />
               </tr>

@@ -12,8 +12,20 @@
  * ready to price; without it you land on the card overview, exactly as before.
  *
  * The card is created as DRAFT either way. It only becomes `quoted` when the quote is actually sent
- * or marked quoted verbally — so clicking "New quote" never puts an unpriced £0 row in the Quotes
- * list.
+ * or marked quoted verbally.
+ *
+ * ── WHERE THE DRAFT SHOWS, AND WHY THAT CHANGED (28 Aug 2026) ───────────────────────────────────
+ * This used to end: "so clicking New quote never puts an unpriced £0 row in the Quotes list."
+ * The £0 half of that was right and is still right — a card nobody has priced has NO value, and
+ * rendering it as £0.00 claims the job is worth nothing. What was too strong was the conclusion:
+ * keeping the card off the list entirely is not the only cure for a bad figure, and it cost more
+ * than it saved. FB04JNJ sat priced-and-unsent for sixteen days on the live tenant, on no list, no
+ * board and no tile, because the only state it could reach was one nothing looked at.
+ *
+ * A draft now appears under the Quotes tab's first filter, "Not sent yet", where its value shows as
+ * an em dash until something is priced and is left OUT of the tab total. The row says which of the
+ * two things it needs — "Started — nothing priced yet" or "Priced — never sent" — and carries its
+ * age rather than an expiry, because nothing was sent so nothing lapses.
  */
 import React, { useState } from 'react';
 import Head from 'next/head';

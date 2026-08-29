@@ -20,7 +20,12 @@ import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import { isBookedCard, statusSubset } from '@/lib/jobcard-status';
 import { acceptanceProvenance, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
 
-export const QUOTE_FILTERS = ['awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
+/**
+ * ORDERED BY HOW MUCH DOING A TAB NEEDS. `not_sent` is FIRST — nothing has gone to the customer at
+ * all, which is the earliest and most actionable state there is — and `accepted_booked` stays last
+ * as the only one needing nothing.
+ */
+export const QUOTE_FILTERS = ['not_sent', 'awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
 export type QuoteFilter = typeof QUOTE_FILTERS[number];
 export const isQuoteFilter = (v: string): v is QuoteFilter => (QUOTE_FILTERS as readonly string[]).includes(v);
 
@@ -143,6 +148,12 @@ export type QuoteRow = {
   grossPennies: number;
   sentAt: string | null;
   expiresAt: string | null;
+  /** Has anything been priced on the card? An unpriced draft has no VALUE, which is not the same
+   *  fact as a value of zero — see quoteValuePennies. */
+  priced: boolean;
+  /** When the card was created. A draft has no expiry (nothing was sent), so this is the only
+   *  clock it has, and it is measured rather than invented. */
+  createdAt: string;
   status: DerivedQuoteStatus;
   /** TRUE when this card's LATEST version is `superseded` — the estimate was materially edited after
    *  sending and never re-sent, so there is NO live link: the customer can no longer view it. Distinct
@@ -161,6 +172,50 @@ export type QuoteRow = {
  * Every card's LATEST version, site-scoped, optionally filtered. Ordering puts the most urgent
  * first: for the chase list that is the soonest expiry, otherwise most recently sent.
  */
+
+/**
+ * WHICH OF THE THREE THINGS AN UNSENT CARD NEEDS, or null when the row is not one.
+ *
+ * Three states because they are three different jobs: an unpriced card needs somebody to price it,
+ * a priced one needs somebody to send it, and a verbal quote needs neither — a human already said
+ * the price out loud and recorded that. Collapsing the first two would put "needs a price" and
+ * "needs an envelope" in one bucket and the tab would stop telling anyone what to do.
+ */
+export function draftPill(r: Pick<QuoteRow, 'status' | 'priced'>): string | null {
+  if (r.status !== 'not_sent') return null;
+  return r.priced ? 'Priced — never sent' : 'Started — nothing priced yet';
+}
+
+/**
+ * THE VALUE TO SHOW, or NULL when there is none.
+ *
+ * NULL IS NOT ZERO. An unpriced card has no value; rendering it as £0.00 says the job is worth
+ * nothing, which is a claim nobody made — the same failure as a mileage-out box defaulting to the
+ * arrival reading. The renderer shows an em dash, as it already does for a missing expiry.
+ */
+export function quoteValuePennies(r: Pick<QuoteRow, 'status' | 'priced' | 'grossPennies'>): number | null {
+  return r.status === 'not_sent' && !r.priced ? null : r.grossPennies;
+}
+
+/** The tab total, with unpriced drafts LEFT OUT rather than summed as zeros — a total that counts
+ *  absences as zeros is how £0.00 becomes believable. Null when nothing in view has a value. */
+export function quotesTotalPennies(rows: Array<Pick<QuoteRow, 'status' | 'priced' | 'grossPennies'>>): number | null {
+  const priced = rows.map(quoteValuePennies).filter((v): v is number => v != null);
+  return priced.length ? priced.reduce((a, b) => a + b, 0) : null;
+}
+
+/**
+ * HOW LONG IT HAS SAT — age, never a deadline. A draft has no expiry because nothing was sent, so
+ * there is no honest basis for deciding when it becomes late; that varies by garage and by job.
+ * Showing the age lets a human decide, which is the most the data supports.
+ */
+export function draftAgeLabel(r: Pick<QuoteRow, 'status' | 'priced' | 'createdAt'>, now: Date = new Date()): string {
+  if (r.status !== 'not_sent') return '';
+  const days = Math.max(0, Math.round((now.getTime() - new Date(r.createdAt).getTime()) / 86_400_000));
+  const verb = r.priced ? 'priced' : 'started';
+  return days === 0 ? `${verb} today` : `${verb} ${days} ${days === 1 ? 'day' : 'days'} ago`;
+}
+
 export async function listQuotes(args: {
   groupId: string;
   siteIds: string[];
@@ -178,7 +233,7 @@ export async function listQuotes(args: {
       responded_by_user: true, responded_ip: true, // the provenance pair — see lib/acceptance-provenance
       job_card: {
         select: {
-          status: true, site_id: true,
+          status: true, site_id: true, created_at: true,
           // The booking fact, read from the card itself — see isBookedCard.
           resource_id: true, start_at: true, end_at: true,
           vehicle: { select: { registration: true } },
@@ -221,6 +276,10 @@ export async function listQuotes(args: {
       customerName: v.job_card?.customer?.name ?? null,
       grossPennies: v.gross_pennies,
       sentAt: v.sent_at.toISOString(),
+      // A version froze a total, so a versioned row is priced by definition. createdAt rides along
+      // for one shape across every row rather than an optional the renderer has to test for.
+      priced: true,
+      createdAt: (v.job_card.created_at as Date).toISOString(),
       expiresAt: quoteExpiry(v.sent_at).toISOString(),
       status: deriveQuoteStatus({ status: v.status, sent_at: v.sent_at, booked }, now),
       supersededNoLink: v.status === 'superseded',
@@ -235,7 +294,12 @@ export async function listQuotes(args: {
 
   // ── VERBAL QUOTES: cards sitting at `quoted` with NO version at all. ──
   const verbalCards = (await prisma.jobCard.findMany({
-    where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: 'quoted', id: { notIn: [...seen] } },
+    // ── WIDENED, AND BRANCHED BELOW ───────────────────────────────────────────────────────────
+    // `quoted` with no version is a verbal quote; `draft` is a card somebody started and has not
+    // sent. Both are versionless and both need the same shape, so this is one query with a branch
+    // rather than a second read — the alternative was two queries that would drift on every field
+    // added to either.
+    where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: { in: ['quoted', 'draft'] }, id: { notIn: [...seen] } },
     select: {
       id: true, status: true, site_id: true, created_at: true,
       resource_id: true, start_at: true, end_at: true,
@@ -251,19 +315,32 @@ export async function listQuotes(args: {
       (sum: number, it: any) => sum + Math.round(Number(it.qty) * Number(it.unit_price) * 100) + Math.round(Number(it.vat_amount) * 100),
       0,
     );
+    // THE BRANCH. A draft was never sent and never marked quoted by anyone — it files under
+    // not_sent, and whether it is priced decides which of the two things it still needs.
+    const isDraft = c.status === 'draft';
     rows.push({
       jobCardId: c.id,
       quoteVersionId: null,
       version: null,
-      verbal: true,
+      // A DRAFT IS NOT A VERBAL QUOTE. Verbal means a human said the price out loud and recorded
+      // it; a draft means nobody has said anything to anybody.
+      verbal: !isDraft,
       booked: isBookedCard(c),
       priceUnconfirmed: null, // no versions at all — nothing was ever sent, so nothing is unagreed
       registration: c.vehicle?.registration ?? null,
       customerName: c.customer?.name ?? null,
       grossPennies: gross,
       sentAt: null,
+      // ── A LINE IS NOT A PRICE ─────────────────────────────────────────────────────────────
+      // This was `items.length > 0`, and the live tenant refuted it immediately: FB04JNJ carries
+      // one line reading "Quote for battery" with qty 0, unit 0 and vat 0 — a placeholder somebody
+      // typed while they went to find out what a battery costs. Counting that as priced would have
+      // rendered £0.00 on the row, which is the precise failure this whole filter exists to avoid.
+      // Priced means somebody put a NUMBER on it.
+      priced: gross > 0,
+      createdAt: c.created_at.toISOString(),
       expiresAt: null, // nothing was sent, so nothing lapses — a verbal quote never "expires"
-      status: 'awaiting',
+      status: isDraft ? 'not_sent' : 'awaiting',
       supersededNoLink: false, // never sent → no link to have lost
       cardStatus: c.status,
       siteId: c.site_id,
