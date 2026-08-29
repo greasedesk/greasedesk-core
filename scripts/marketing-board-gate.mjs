@@ -419,7 +419,12 @@ try {
   // four times standalone, and the detail was EMPTY — an error whose message is blank told nobody
   // anything, and the run was unreproducible with no evidence left behind. The constructor name and
   // the first stack frame cost nothing and are the difference between a diagnosis and a shrug.
-  const kind = e?.constructor?.name ?? typeof e;
+  // THE CODE IS THE DIAGNOSIS. Naming the class got us from a blank line to
+  // "PrismaClientKnownRequestError" — which is still not an answer: P2024 (pool timeout) and P1017
+  // (server closed the connection) are different faults with different fixes, and only e.code tells
+  // them apart. Prisma puts the message on `.message` and, for known request errors, nothing useful
+  // there at all, so the code has to be read directly.
+  const kind = (e?.constructor?.name ?? typeof e) + (e?.code ? ` [${e.code}]` : '');
   const where = String(e?.stack ?? '').split('\n')[1]?.trim() ?? 'no frame';
   const msg = String(e?.message ?? e) || '(empty message)';
   check('gate run completed', false, `${kind}: ${msg}`.slice(0, 240) + ` @ ${where}`.slice(0, 120));
