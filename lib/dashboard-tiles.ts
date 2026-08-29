@@ -301,7 +301,21 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // stateable in advance; the residual refinement is DISPLAY arithmetic in the popover from
   // pnl numbers). Per-site: site cost base ÷ that site's LABOUR_HR rate, summed — a site with
   // allocated cost but NO rate is FLAGGED, never guessed.
-  costBase: async ({ groupId, siteIds, months, from, to }) => {
+  costBase: async ({ groupId, siteIds, months, from, to, dataStart }) => {
+    // ── CLIPPED, LIKE CAPACITY AND UTILISATION ───────────────────────────────────────────────
+    // Those two clip and this did not, so a rolling-12 selection on TMBS — first record 1 April
+    // 2026 — put a TWELVE-month cost base of £112,100.16 beside FIVE months of sellable capacity
+    // and rendered "= 135% of sellable hours". A garage told it cannot cover its costs, by an
+    // arithmetic accident between two figures that were each defensible alone.
+    //
+    // THE MONTH COUNT MOVES WITH THE WINDOW. cost is monthly × months; clipping `from` without
+    // recomputing `months` bills twelve months of payroll against a five-month window — the same
+    // error one layer down and harder to see, because the window would look right while the total
+    // stayed 2.4× too big.
+    const clipCB = clipToData(from, to, dataStart ?? null);
+    if (clipCB.empty) return { beforeData: true };
+    from = clipCB.from;
+    months = Math.max(1, Math.round((to.getTime() - from.getTime()) / (86_400_000 * 30.436875)));
     const sites = (await prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } })) as any[];
     const rates = (await prisma.serviceCatalogue.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
@@ -324,6 +338,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return {
       wageBillPennies: wage, overheadsPennies: over, costBasePennies: wage + over,
       breakEvenCentihours, ratesMissing, perSite, months,
+      // THE WINDOW IT ACTUALLY COVERS, so the figure can name its own period and a reader can tell
+      // it apart from the one they selected. utilisation reports the same field for the same reason.
+      clippedFrom: from.toISOString().slice(0, 10), clipped: clipCB.clipped,
     };
   },
   // Utilisation = charged ÷ SELLABLE (factor-adjusted). ALL maths in lib/capacity (getGroupUtilisation:
@@ -355,7 +372,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       const { ratio, ...rest } = u as any;
       return { ...rest, imported: importedU, suppressed: true };
     }
-    if (!inProgress) return { ...u, imported: importedU }; // closed month / multi-month → unchanged (goldens byte-identical)
+    // THE WINDOW IT ACTUALLY MEASURED, named. costBase reports the same field so the two figures on
+    // the break-even line can be shown to cover the same months rather than assumed to.
+    const clippedFrom = from.toISOString().slice(0, 10);
+    if (!inProgress) return { ...u, imported: importedU, clippedFrom, clipped: clip.clipped }; // closed month / multi-month
 
     // Remaining sellable capacity for [end, to) — the rest of the month — valued at the site rate.
     const rem = end.getTime() < to.getTime() ? await getGroupUtilisation(groupId, siteIds, { from: end, to }) : null;
@@ -384,6 +404,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return {
       ...u,
       imported: importedU,
+      // Reported on BOTH branches, or the field means "closed period" rather than "the window I
+      // measured" — and a caller comparing it against costBase's would silently get undefined.
+      clippedFrom, clipped: clip.clipped,
       inProgress: true,
       periodFromISO: from.toISOString(),
       periodToInclusiveISO: now.toISOString(), // the elapsed period is [from, end-of-today]

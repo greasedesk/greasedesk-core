@@ -189,8 +189,22 @@ function monthLabel(w: { from: string; to: string }, locale: string): string {
   return one ? f(from, 'long') : `${f(from, 'short')} – ${f(lastIncl, 'short')}`;
 }
 
-// Elapsed-period label for an in-progress month, e.g. "1–18 July" (calendar days to date).
-function elapsedLabel(w: { from: string }, daysElapsed: number, locale: string): string {
+/**
+ * Elapsed-period label for an in-progress MONTH, e.g. "1–18 July" (calendar days to date).
+ *
+ * ── IT REFUSES A SPAN IT CANNOT DESCRIBE, rather than trusting the caller ──────────────────────
+ * It names the month of `from` and pairs it with a day count over the whole span, so a September→
+ * August window rendered "1–363 September": right shape, false claim. It was safe only because one
+ * caller's guard happened to be `undefined` for multi-month selections — while a DIFFERENT guard on
+ * this same page, monthInProgress, is TRUE for that window. The next person to reach for the
+ * obvious one would have got the wrong label immediately, and it would have looked plausible.
+ *
+ * A label that cannot describe its span says nothing. Returning null makes the line disappear,
+ * which is the honest outcome: there is no "1–N August" to state about a year.
+ */
+function elapsedLabel(w: { from: string; to?: string }, daysElapsed: number, locale: string): string | null {
+  // A calendar month is at most 31 days. Anything longer is not a month, whatever the caller thinks.
+  if (!(daysElapsed >= 1 && daysElapsed <= 31)) return null;
   const month = new Date(w.from).toLocaleDateString(locale, { month: 'long', timeZone: 'UTC' });
   return `1–${daysElapsed} ${month}`;
 }
@@ -980,9 +994,13 @@ export default function AdminDashboard(props: PageProps) {
                           construction, so no separate target line may reappear here. */}
                       <Figure className="text-2xl font-bold tabular-nums text-ink">{pct(u.ratio)}</Figure>
                       <p className="text-xs text-ink mt-0.5">{t('pnl.utilHundred')}</p>
-                      {u.inProgress && monthWindow && (
-                        <p className="text-xs text-accent mt-0.5">{t('pnl.utilToDate', { period: elapsedLabel(monthWindow, monthMeta?.daysElapsed ?? 0, props.locale) })}</p>
-                      )}
+                      {/* The refusal is the point: elapsedLabel returns null for anything that is
+                          not a month, and the line disappears rather than naming one. */}
+                      {(() => {
+                        const el = u.inProgress && monthWindow
+                          ? elapsedLabel(monthWindow, monthMeta?.daysElapsed ?? 0, props.locale) : null;
+                        return el ? <p className="text-xs text-accent mt-0.5">{t('pnl.utilToDate', { period: el })}</p> : null;
+                      })()}
                       <p className="text-xs text-muted mt-1">{t('pnl.utilSub', { charged: h(u.charged), available: h(u.available) })}</p>
                       {(() => {
                         // The money floor: required share of SELLABLE capacity to cover fixed costs.
