@@ -31,6 +31,45 @@
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+// THE RUNNER HAD NO DATABASE_URL. Nothing here loaded .env — each gate loaded it for itself — so
+// the tuning below had nothing to tune and would have handed every child a URL consisting of
+// "?connection_limit=10&pool_timeout=20" and nothing else. dotenv does not override an env var
+// that is already set, so that broken value would have WON in every child and taken out the whole
+// suite. Load it here, where the URL is now actually needed.
+import 'dotenv/config';
+
+/**
+ * ── THE POOL A GATE GETS, STATED RATHER THAN INHERITED ──────────────────────────────────────────
+ * Every gate is its own process with its own Prisma pool, and the URL carried NO connection_limit
+ * and NO pool_timeout — so Prisma used its default of num_cpus * 2 + 1, which is 33 on this
+ * machine. That number describes a laptop, not a Neon pooler, and it is the parameter actually
+ * governing the failures: marketing-board-gate dies at the same check every in-tier run, and that
+ * check is the one immediately before buildBoard, whose two Promise.all bursts ask for six
+ * connections at once from a client that has so far opened one.
+ *
+ *   connection_limit=10 — comfortably above the largest burst any gate makes (six), and far below
+ *                         a number that invites the pooler to hand out sessions nobody needs. A
+ *                         gate is sequential; it has no use for 33.
+ *   pool_timeout=20     — doubled from the 10s default, because a Neon compute waking from
+ *                         autosuspend takes seconds and the old value gave up during the wake. It
+ *                         is a ceiling on waiting, not on working.
+ *
+ * DB_RETRY_TRANSIENT=1 turns on lib/db's existing retry, which its own header says exists "for the
+ * bulk scripts" and is off by default so nothing about a Vercel request changes. A gate run IS a
+ * long local run. NOTE it reaches only the 52 gates that import lib/db — the 43 constructing a
+ * bare PrismaClient bypass it, and marketing-board-gate is one of those, so the URL settings above
+ * are the only thing that touches it. Routing those 43 is its own slice.
+ */
+function gateEnv() {
+  const url = process.env.DATABASE_URL;
+  // NO URL, NO TUNING. Setting a partial one would be worse than leaving it alone: the child would
+  // inherit a broken value it cannot override.
+  if (!url) return { ...process.env, DB_RETRY_TRANSIENT: '1' };
+  const tuned = /connection_limit=/.test(url)
+    ? url
+    : `${url}${url.includes('?') ? '&' : '?'}connection_limit=10&pool_timeout=20`;
+  return { ...process.env, DATABASE_URL: tuned, DB_RETRY_TRANSIENT: '1' };
+}
 import path from 'node:path';
 
 const ROOT = process.cwd();
@@ -142,7 +181,7 @@ function run(gate) {
     const started = Date.now();
     const src = readFileSync(path.join(ROOT, 'scripts', `${gate}.mjs`), 'utf8');
     const limit = Number((src.match(/@gate-timeout:\s*(\d+)/) ?? [])[1] ?? DEFAULT_TIMEOUT_S) * 1000;
-    const child = spawn('node', [path.join('scripts', `${gate}.mjs`)], { cwd: ROOT, env: process.env });
+    const child = spawn('node', [path.join('scripts', `${gate}.mjs`)], { cwd: ROOT, env: gateEnv() });
     const killer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, limit);
     let timedOut = false;
     let out = '';

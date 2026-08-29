@@ -17,6 +17,10 @@
  * WHICH ERRORS, AND WHY THE SPLIT MATTERS. A retry is only safe when the statement did not run.
  *   P1001/P1002/P2024 — raised while OBTAINING a connection, so nothing was sent. Any operation,
  *                       including a create, can be retried: there is nothing to duplicate.
+ *   PrismaClientInitializationError — no code at all: the connection could not be OBTAINED, which
+ *                       is a Neon compute asleep after idle refusing the first caller. Same safety
+ *                       as P1001 — nothing was sent — and added 29 Aug 2026 after it took out four
+ *                       gates at once, standalone, which recovered untouched a minute later.
  *   P1017/P2028       — the server closed a connection, or a transaction vanished, MID-FLIGHT. A
  *                       write may well have committed before the answer was lost, so only naturally
  *                       idempotent operations are retried here. A create is allowed to fail.
@@ -87,10 +91,18 @@ function withTransientRetry(client: PrismaClient) {
             return await query(args);
           } catch (e: any) {
             const code = e?.code;
-            const canRetry = NEVER_SENT.has(code) || (MAYBE_SENT.has(code) && IDEMPOTENT.has(operation));
+            // ── THE WAKE HAS NO CODE ──────────────────────────────────────────────────────────
+            // PrismaClientInitializationError carries no `code`, so every set above missed it and
+            // it was the one fault with no handling at all. It means the connection could not be
+            // OBTAINED — a Neon compute asleep after idle, answering the first caller with a
+            // refusal instead of a wait — so nothing was sent and anything may be repeated,
+            // exactly like P1001. On 29 Aug it took out four gates at once, standalone, and they
+            // recovered untouched a minute later.
+            const neverConnected = code == null && e?.constructor?.name === 'PrismaClientInitializationError';
+            const canRetry = neverConnected || NEVER_SENT.has(code) || (MAYBE_SENT.has(code) && IDEMPOTENT.has(operation));
             if (!canRetry || attempt >= RETRIES) throw e;
             const backoff = Math.min(8_000, 400 * 2 ** (attempt - 1));
-            console.warn(`[db] ${code} on ${operation}, attempt ${attempt}/${RETRIES} — retrying in ${backoff}ms`);
+            console.warn(`[db] ${code ?? e?.constructor?.name} on ${operation}, attempt ${attempt}/${RETRIES} — retrying in ${backoff}ms`);
             await new Promise((res) => setTimeout(res, backoff));
           }
         }
