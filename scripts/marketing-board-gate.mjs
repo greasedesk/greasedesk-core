@@ -309,19 +309,41 @@ try {
   await contactPage.waitForSelector('[data-testid="sort-strip"]');
   const order = () => contactPage.$$eval('li[data-reg]', (ns) => ns.map((n) => n.getAttribute('data-reg')));
   const pos = (list, reg) => list.indexOf(reg);
+  /**
+   * ── WAIT FOR THE REORDER, NOT FOR 300ms ──────────────────────────────────────────────────────
+   * These two clicks were followed by `waitForTimeout(300)`, which is a guess about how long a
+   * client-side sort takes. Under tier load it is not long enough: on 29 Aug this failed 4 of 72
+   * in-tier while passing standalone, reporting the UNSORTED order — the click had landed and the
+   * assertion read the DOM before React had re-rendered.
+   *
+   * IT WAITS FOR THE ORDER TO CHANGE, NOT FOR THE ORDER TO BE RIGHT. Waiting on the asserted
+   * condition would make the check vacuous — it would spin until true and then assert true. A
+   * different order is strictly weaker than the correct order, so a sort that reorders WRONGLY
+   * still satisfies the wait and still fails the assertion, which is the whole point.
+   *
+   * A sort that changes nothing times out and throws, which is also right: clicking a sort control
+   * that does nothing is a defect, and a silent pass would hide it.
+   */
+  const waitForReorder = (previous) => contactPage.waitForFunction(
+    (prev) => Array.from(document.querySelectorAll('li[data-reg]'))
+      .map((n) => n.getAttribute('data-reg')).join(' ') !== prev,
+    previous.join(' '),
+    { timeout: 10_000 },
+  );
+
   const byUrgency = await order();
   check('the default order is urgency, closest first', pos(byUrgency, 'ZZ76ZZY') < pos(byUrgency, 'ZZ76AAA'),
     byUrgency.join(' '));
   check('  …and the strip says so without being clicked',
     (await contactPage.locator('[data-testid="sort-dir-urgency"]').innerText()).trim() === '↑');
   await contactPage.click('[data-testid="sort-registration"]');
-  await contactPage.waitForTimeout(300);
+  await waitForReorder(byUrgency);
   const byReg = await order();
   check('clicking Reg sorts by registration', pos(byReg, 'ZZ76AAA') < pos(byReg, 'ZZ76ZZY'), byReg.join(' '));
   check('  …which is the OPPOSITE of urgency order, so it cannot have passed by coincidence',
     pos(byUrgency, 'ZZ76AAA') > pos(byUrgency, 'ZZ76ZZY') && pos(byReg, 'ZZ76AAA') < pos(byReg, 'ZZ76ZZY'));
   await contactPage.click('[data-testid="sort-registration"]');
-  await contactPage.waitForTimeout(300);
+  await waitForReorder(byReg);
   const reversed = await order();
   check('clicking it again reverses', pos(reversed, 'ZZ76AAA') > pos(reversed, 'ZZ76ZZY'), reversed.join(' '));
   check('  …and the sort rides in the URL beside the tab, not in component state',
