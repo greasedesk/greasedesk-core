@@ -27,7 +27,7 @@
  * vacuous.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { receivedInPeriod } = await import('../lib/payments.ts');
@@ -205,7 +205,7 @@ try {
     (naive._sum.amount_pennies ?? 0) >= (pay?.amount_pennies ?? 0),
     'this query is the one that silently dropped £2,485.43; with a correct site it now finds the row');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (madePaymentIds.length) {

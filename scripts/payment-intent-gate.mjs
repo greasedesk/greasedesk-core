@@ -16,6 +16,7 @@
  * own reaper, not an audit log; deleting rows this run created is not the AuditLog rule.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refusePayment } = await import('../lib/invoice-payment-intent.ts');
@@ -143,7 +144,7 @@ try {
       /wait|try again/i.test(String(sawLimit?.body?.message ?? '')), String(sawLimit?.body?.message ?? '').slice(0, 60));
   }
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (minted.length) {
     const d = await prisma.customerMagicLink.deleteMany({ where: { id: { in: minted } } });

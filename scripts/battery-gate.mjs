@@ -8,7 +8,7 @@
  * says so — the failure mode is a plausible advisory, not an error.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
@@ -369,12 +369,12 @@ try {
     'a finding has no price when it is recorded, and this screen is why');
 
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // AuditLog is append-only. Its rows for these cards stay, correctly.
     const vehIds = [fix.veh, fix.reportVeh, fix.deskVeh].filter(Boolean);
     await step('link', () => prisma.customerMagicLink.deleteMany({ where: { job_card_id: { in: fix.cards } } }));

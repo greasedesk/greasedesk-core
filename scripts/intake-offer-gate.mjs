@@ -13,7 +13,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -139,12 +139,12 @@ try {
   const audited = await prisma.auditLog.count({ where: { group_id: ZZ, action: 'intake.offer_dismissed' } });
   check('both routes to the answer are audited', audited >= 1, `${audited} recorded`);
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     await step('cards', () => prisma.jobCard.deleteMany({ where: { id: { in: [fix.card, fix.card2].filter(Boolean) } } }));
     await step('vehicle', () => (fix.veh ? prisma.vehicle.delete({ where: { id: fix.veh } }) : Promise.resolve()));
     await step('sites', () => prisma.site.deleteMany({ where: { id: { in: [fix.site, fix.site2].filter(Boolean) } } }));

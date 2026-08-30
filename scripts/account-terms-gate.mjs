@@ -7,6 +7,7 @@
  * and asserts up front that it owns nothing else.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { dueDateFor, normaliseTermsDays, isAccountCustomer, overdueWhere, daysOverdue, MAX_TERMS_DAYS } = await import('../lib/account-terms.ts');
@@ -70,7 +71,7 @@ try {
   const overdueNow = await prisma.invoice.count({ where: { group_id: ZZ, ...listWhere('overdue', null).where } });
   check('nothing on ZZ is overdue on deploy day', overdueNow === 0, `${overdueNow}`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 200));
+  check('run completed', false, describeError(e).slice(0, 200));
 } finally {
   if (custId) await prisma.customer.delete({ where: { id: custId } }).catch(() => {});
   const left = await prisma.customer.count({ where: { group_id: ZZ, name: { startsWith: 'ZZ Terms Fixture' } } });

@@ -6,7 +6,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. Throwaway rows, created and removed here.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
@@ -178,7 +178,7 @@ try {
   check('  …and the no-rate variant shows hours only, never £0.00',
     /booked time/.test(i18n.capacity.noShowLostNoRate) && !/rate/.test(i18n.capacity.noShowLostNoRate));
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('fixture run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (fix) {
     // AuditLog rows are deliberately LEFT — append-only is a standing rule, and rows referencing a

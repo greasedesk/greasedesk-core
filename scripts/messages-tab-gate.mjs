@@ -14,7 +14,7 @@
  * job card uses selectTab, which only runs from the tab strip's onSelect. Same convention.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { TAB_KEYS, NON_STAGE_TABS, TAB_STAGE, computeTabs } = await import('../lib/jobcard-tabs.ts');
@@ -130,7 +130,7 @@ try {
   check('and its Save + stage buttons are still there', await page.locator('[data-testid="details-save"]').count() === 1
     && await page.locator('[data-testid="stage-complete-details"]').count() === 1);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (threadId !== null && restoreUnread !== null) {

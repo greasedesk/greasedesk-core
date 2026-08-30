@@ -23,7 +23,7 @@
  * correctly refuses a refunded invoice — which is the real sequence a customer experiences.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { computeTabs, TAB_KEYS, NON_STAGE_TABS } = await import('../lib/jobcard-tabs.ts');
@@ -226,7 +226,7 @@ try {
   check('and both equal lib/invoice-refund-state::refundLines', cH === shared?.headline,
     'one formatter, so a timezone or a rounding cannot diverge the two screens');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (madeRefunds.length) {

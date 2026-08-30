@@ -7,7 +7,7 @@
  * the £50 had gone back. Nothing on the page was wrong except the only thing the reader cared about.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundState, hasRefund } = await import('../lib/invoice-refund-state.ts');
@@ -186,7 +186,7 @@ const R = (amount, at) => ({ amount_pennies: amount, collected_at: D(at) });
       'a refunded invoice must not ask a customer who has been made whole to pay again');
   } finally { await browser.close().catch(() => {}); }
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (madeRefunds.length) {
     const d = await prisma.refund.deleteMany({ where: { refund_id: { in: madeRefunds } } });

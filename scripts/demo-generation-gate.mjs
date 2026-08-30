@@ -68,6 +68,7 @@
  * rule that a destructive e2e asserts its own fixtures are the only candidates in scope.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const t0 = Date.now();
 const { prisma } = await import('../lib/db.ts');
@@ -118,7 +119,7 @@ const teardownAndExit = async (signal) => {
         console.log(`  purged ${g.ref}`);
       } else console.log(`  REFUSED — ${JSON.stringify(g)}`);
     } else console.log('  no group had been created yet — nothing to purge');
-  } catch (e) { console.log(`  teardown failed: ${String(e?.message ?? e).slice(0, 200)}`); }
+  } catch (e) { console.log(`  teardown failed: ${describeError(e).slice(0, 200)}`); }
   await prisma.$disconnect().catch(() => {});
   process.exit(130);
 };
@@ -205,7 +206,7 @@ try {
   check('every customer with a phone has the derived phone_e164', withPhone === withE164 && withPhone > 0,
     `${withE164} of ${withPhone}`);
 } catch (e) {
-  check('generation and assertion completed', false, String(e?.message ?? e).slice(0, 300));
+  check('generation and assertion completed', false, describeError(e).slice(0, 300));
 } finally {
   // ── TEARDOWN — refused unless the target is provably this run's throwaway ──────────────────────
   if (groupId) {

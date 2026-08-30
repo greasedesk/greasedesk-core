@@ -23,7 +23,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -300,12 +300,12 @@ try {
     (src.match(/The check didn’t complete/g) ?? []).length === 2,
     'a silent row after a press reads as "no change"');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // BY THE FIXTURE'S OWN REGISTRATION, never an id the code handed back.
     // BOTH fixture plates, by registration. The real plate is a ZZ row that happens to share a
     // string with a TMBS car — scoped by group_id, so the tenant's own vehicle is untouched.

@@ -26,6 +26,7 @@
  *      runs, and that set changes without the script knowing.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 import { createServer } from 'node:http';
 import bcrypt from 'bcryptjs';
@@ -217,7 +218,7 @@ try {
   });
   check('the endpoint refuses without the cron secret', unauth === 401, String(unauth));
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
   console.error(e);
 } finally {
   for (const m of made) {

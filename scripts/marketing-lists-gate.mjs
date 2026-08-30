@@ -8,7 +8,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -255,12 +255,12 @@ try {
   check('  …and no snooze on a non-snooze state', rec?.snooze_until === null,
     'the CHECK constraint refuses the other direction too');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     await step('contacts', () => prisma.marketingContact.deleteMany({ where: { vehicle_id: { in: fix.vehicles } } }));
     await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: { in: fix.vehicles } } }));
     await step('vehicles', () => prisma.vehicle.deleteMany({ where: { id: { in: fix.vehicles } } }));

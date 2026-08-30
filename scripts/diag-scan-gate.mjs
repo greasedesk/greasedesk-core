@@ -19,7 +19,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
@@ -135,7 +135,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 110)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
     // The site switch is ZZ's own setting and the fixture turned it on — put it back.
     await step('site switch', () => prisma.site.update({ where: { id: fix.site }, data: { intake_prompt_diag_scan: false } }));
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
@@ -143,7 +143,7 @@ try {
     try {
       check('teardown removed every fixture row (ZZ only)',
         (await prisma.vehicle.count({ where: { id: fix.veh } })) === 0, 'AuditLog rows stay, append-only');
-    } catch (e) { check('teardown removed every fixture row (ZZ only)', false, String(e?.message ?? e).slice(0, 70)); }
+    } catch (e) { check('teardown removed every fixture row (ZZ only)', false, describeError(e).slice(0, 70)); }
   }
   const f = out.filter((x) => x === 'F').length;
   console.log(`\n${f} failures of ${out.length}`);

@@ -86,6 +86,36 @@ if (!globalThis.__gatePreflightRan) {
 }
 
 /**
+ * ── AN ERROR THAT NAMES ITSELF, EVEN WITH NOTHING TO SAY ────────────────────────────────────────
+ * Every gate reported a thrown error as `String(e?.message ?? e)`. That is fine until the error has
+ * no message — and the one that actually happens here has none. A Neon compute asleep after idle
+ * refuses the first caller, and Prisma reports it as a PrismaClientInitializationError carrying
+ * neither `code` nor message, so the summary printed:
+ *
+ *     ✗ run completed  —
+ *
+ * A red with an empty reason. It cost three days of "unexplained one-off" failures, and one gate
+ * had already worked around it locally with `|| '(empty message)'` — which says a fault occurred
+ * and still not which.
+ *
+ * The class name is always there, so lead with it. Falling back to `String(e)` is not enough: for
+ * an Error subclass that yields "PrismaClientInitializationError: " with the same empty tail, and
+ * for a plain object it yields "[object Object]".
+ *
+ * Deliberately total — it is called from catch blocks, and a reporter that throws while reporting
+ * replaces the failure with its own.
+ */
+export function describeError(e) {
+  if (e == null || typeof e !== 'object') return String(e);
+  const ctor = e.constructor?.name;
+  const cls = ctor && ctor !== 'Object' ? ctor : (typeof e.name === 'string' ? e.name : '');
+  const code = e.code != null ? ` [${e.code}]` : '';
+  const msg = typeof e.message === 'string' ? e.message.trim() : '';
+  if (!cls && !code) return msg || String(e);
+  return `${cls}${code}${msg ? `: ${msg}` : ''}`;
+}
+
+/**
  * ── A SELECTOR TIMEOUT MIGHT BE THE STALE-CLIENT GUARD ──────────────────────────────────────────
  * lib/client-freshness makes a stale dev-server client say so ON THE PAGE. A gate driving Chrome
  * with waitForSelector never reads that page: it waits for an element the error page does not have

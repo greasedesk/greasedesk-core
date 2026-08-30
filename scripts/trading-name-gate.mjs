@@ -19,6 +19,7 @@
  * same rule that stops a labour rate revaluing a closed month.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { resolveCompanyIdentity } = await import('../lib/invoice.ts');
@@ -115,7 +116,7 @@ try {
   check('no backfill was invented for historical documents', existing === total,
     `${existing} of ${total} pre-date the column — asserting a trading name for them would be a claim nobody recorded`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (restore !== undefined) {
     await prisma.group.update({ where: { id: ZZ }, data: { trading_name: restore } });

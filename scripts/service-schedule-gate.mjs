@@ -9,7 +9,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -861,12 +861,12 @@ try {
     'rows written before that date inherit the bound; rows after it do not');
 
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // THE INVOICE GOES FIRST — an issued invoice blocks a card delete, by design.
     //
     // NOTE, because someone will find it: minting here CONSUMES a number from ZZ's gapless invoice

@@ -3,6 +3,7 @@
  * The twelve-month comparison: right numbers, and four states that cannot be confused.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 import { withRetry } from './_gate-retry.mjs';
@@ -52,7 +53,7 @@ try {
   }, { attempts: 4, onRetry: (a, e) => console.log(`\n… transient database fault on attempt ${a} (${e?.code ?? '—'}) — retrying`) });
   dbAttempts = attempts;
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 240));
+  check('run completed', false, describeError(e).slice(0, 240));
 }
 
 async function runDbChecks() {

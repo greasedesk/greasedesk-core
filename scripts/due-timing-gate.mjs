@@ -13,7 +13,7 @@
  * It also proves freeze-at-issue on the one document that can prove it. Fixtures on ZZ only.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
@@ -155,10 +155,10 @@ try {
   check('all twenty-five say false today', O.OBSERVATIONS.every((o) => o.carriesOwnTiming === false),
     'plain noun phrases — "Wiper blades smearing" — where the basis is what says when');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     await step('battery', () => prisma.batteryReading.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));

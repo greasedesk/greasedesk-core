@@ -24,6 +24,7 @@
  * ZZ only. Every row is removed and the invoice cache is captured and restored, never recomputed.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { receivedInPeriod, reconcileInvoice } = await import('../lib/payments.ts');
@@ -190,12 +191,12 @@ try {
        VALUES (gen_random_uuid(), $1, $2, NULL, 'manual', 'succeeded', 1, 'GBP', $3, now())`,
       ZZ, inv2.id, `${MARK}mustfail`,
     );
-  } catch (e) { refused = String(e?.message ?? e); }
+  } catch (e) { refused = describeError(e); }
   check('a null site_id is REFUSED by the database', refused !== null && /23502|not-null|null value/i.test(refused),
     refused ? refused.split('\n').find((l) => /23502|null value/i.test(l))?.trim() ?? 'refused' : 'THE INSERT SUCCEEDED — the constraint is not there');
   check('and nothing was written', (await prisma.payment.count({ where: { source_ref: `${MARK}mustfail` } })) === 0);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (madeRefunds.length) {
     const d = await prisma.refund.deleteMany({ where: { refund_id: { in: madeRefunds } } });

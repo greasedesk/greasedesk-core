@@ -24,6 +24,7 @@
  * so there is no card state to restore.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_STATUSES } = await import('../lib/wip.ts');
@@ -138,7 +139,7 @@ try {
   check('the work the cache valued at nothing is inside that total', clutchP > 0 && zzTotal >= clutchP,
     `${clutch._count} lines worth ${P(clutchP)}, inside ${P(zzTotal)} — the cache read these cards as £0`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (itemId) {
     await prisma.jobCardItem.delete({ where: { id: itemId } }).catch(() => {});

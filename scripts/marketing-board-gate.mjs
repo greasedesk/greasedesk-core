@@ -10,7 +10,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
@@ -448,13 +448,15 @@ try {
   // there at all, so the code has to be read directly.
   const kind = (e?.constructor?.name ?? typeof e) + (e?.code ? ` [${e.code}]` : '');
   const where = String(e?.stack ?? '').split('\n')[1]?.trim() ?? 'no frame';
-  const msg = String(e?.message ?? e) || '(empty message)';
+  // The `|| '(empty message)'` that used to be here was this problem patched one gate deep: it
+  // said a fault had occurred and still not which one. describeError names the class instead.
+  const msg = describeError(e);
   check('gate run completed', false, `${kind}: ${msg}`.slice(0, 240) + ` @ ${where}`.slice(0, 120));
   await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     const CONTACT_REGS = ['ZZ76DEC', 'ZZ76SNZ', 'ZZ76OLD', 'ZZ76AAA', 'ZZ76ZZY', 'ZZ76TIA', 'ZZ76TIB', 'ZZ76ANS'];
     await step('findings', () => prisma.vehicleDueItem.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } }));
     await step('contacts', () => prisma.marketingContact.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.contactVehicles ?? [] } } }));

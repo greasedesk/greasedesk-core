@@ -12,6 +12,7 @@
  * ZZ, and every row this run writes is removed. It refuses to start if a previous run left anything.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
@@ -102,7 +103,7 @@ try {
   check('one pack is a hundred, not one', one?.granted === 100,
     'the line-item quantity counts PACKS; how many messages a pack holds is a product rule');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (made.length) {
     const d = await prisma.smsTopUp.deleteMany({ where: { id: { in: made } } });

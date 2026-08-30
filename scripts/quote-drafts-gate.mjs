@@ -23,6 +23,7 @@
  * Collapsing the first two would put "needs a price" and "needs an envelope" in one bucket.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const Q = await import('../lib/quotes-list.ts');
@@ -108,7 +109,7 @@ try {
     'the next reader needs where it goes, not just that the old rule is gone');
 } catch (e) {
   const kind = e?.constructor?.name ?? typeof e;
-  console.log(`\n✗ THREW: ${kind}: ${String(e?.message ?? e).slice(0, 300)}`);
+  console.log(`\n✗ THREW: ${kind}: ${describeError(e).slice(0, 300)}`);
   out.push('F');
 }
 const f = out.filter((x) => x === 'F').length;

@@ -24,6 +24,7 @@
  * tree. A detector that has never detected anything is not a detector.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 import { readFileSync, readdirSync, statSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -150,7 +151,7 @@ try {
   check('and a duplicate is recognised rather than reported as a failure',
     /firstBind = false/.test(intent) && /was already bound — a repeat press, not an error/.test(intent));
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   process.exit(out.includes('F') ? 1 : 0);

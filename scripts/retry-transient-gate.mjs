@@ -12,16 +12,19 @@
  *
  * THE RETRY HELPER MUST RECOGNISE THE FAULT THAT ACTUALLY HAPPENS.
  *
- * ── WHAT THIS EXISTS FOR ────────────────────────────────────────────────────────────────────────
- * Neon's compute suspends after idle and refuses the first caller. Prisma reports that as a
- * PrismaClientInitializationError, and — this is the whole problem — the instance carries NO `code`
- * and, in the shape that reaches a gate, NO message either. `lib/db` learned this on 29 Aug 2026,
- * after the fault took out four gates at once. `_gate-retry` did not.
+ * ── WHAT THIS EXISTS FOR, AND THE DIAGNOSIS IT CORRECTS ─────────────────────────────────────────
+ * Neon's compute suspends after idle and refuses the first caller, which Prisma reports as a
+ * PrismaClientInitializationError with no `code`. `lib/db` learned to retry that on 29 Aug 2026;
+ * `_gate-retry` had not, so this gate pins that the two now agree.
  *
- * So the helper written to stop this exact failure returned false for this exact failure: its
- * TRANSIENT_CODES check needs a `code` and its TRANSIENT_TEXT check needs a message, and the error
- * has neither. It was a false reassurance — the two gates using it were no better protected than
- * the thirty-three that use none.
+ * IT DOES NOT PIN WHAT I FIRST SAID IT DID. The claim was that those errors carried no message
+ * either, leaving isTransient blind to them. That was wrong: they carry "Can't reach database
+ * server at <host>:5432", which TRANSIENT_TEXT already matches. The blank reasons in the summary
+ * came from Prisma's messages beginning with a NEWLINE while the runner read a single line — a
+ * reporting defect, not a detection one, now fixed in _gate-summary.mjs and gated in section 7.
+ *
+ * The clause is still right, just narrower than advertised: it covers an initialization error
+ * whose wording the regex does not know. Section 1 tests exactly that and nothing more.
  *
  * ── WHY MATCH ON THE CLASS NAME ─────────────────────────────────────────────────────────────────
  * There is nothing else to match on. Checked rather than assumed: the class name survives the
@@ -38,6 +41,7 @@
 import './_gate-preflight.mjs';
 const { Prisma } = await import('@prisma/client');
 const { isTransient } = await import('./_gate-retry.mjs');
+const { describeError } = await import('./_gate-preflight.mjs');
 const { readFileSync } = await import('node:fs');
 
 const out = [];
@@ -98,6 +102,79 @@ for (const f of ['lib/db.ts', 'scripts/_gate-retry.mjs']) {
   check(`${f} tests the class in CODE, exactly once`, hits === 1,
     hits === 1 ? 'comments stripped, so this is the predicate itself' : `${hits} matches outside comments`);
 }
+
+// ── 5. AND IT NAMES ITSELF WHEN IT IS CAUGHT ────────────────────────────────────────────────────
+// Recognising the fault and reporting it are the two halves of the same problem. Every gate printed
+// `String(e?.message ?? e)`, which for this error prints nothing at all — "✗ run completed —" with
+// the reason blank. describeError leads with the class, which is always present.
+console.log('\n— describeError: a red must say what went wrong —');
+const D = (x) => { try { return describeError(x); } catch (err) { return `THREW: ${err?.message}`; } };
+check('describeError is exported from _gate-preflight', typeof describeError === 'function');
+
+const silent = new Prisma.PrismaClientInitializationError('', '6.19.0');
+check('a message-less error still names its class', D(silent) === 'PrismaClientInitializationError',
+  JSON.stringify(D(silent)));
+check('  …where the old shape said nothing at all', String(silent?.message ?? silent) === '',
+  'this is the "✗ run completed —" that cost three days');
+
+const withMsg = new Prisma.PrismaClientInitializationError("Can't reach database server", '6.19.0');
+check('a message is kept, after the class', D(withMsg) === "PrismaClientInitializationError: Can't reach database server",
+  JSON.stringify(D(withMsg)));
+
+const coded = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+check('a code is reported too — it is the most useful field when present',
+  D(coded) === 'Error [P2002]: Unique constraint failed', JSON.stringify(D(coded)));
+
+// TOTAL. It is called from catch blocks: a reporter that throws replaces the failure with its own.
+for (const [label, v] of [['null', null], ['undefined', undefined], ['a thrown string', 'boom'], ['a number', 7], ['a plain object', {}]]) {
+  const r = D(v);
+  check(`  ${label} is described without throwing`, typeof r === 'string' && !r.startsWith('THREW'), JSON.stringify(r));
+}
+
+// ── 6. NO GATE STILL REPORTS THE OLD WAY ────────────────────────────────────────────────────────
+// Built from an escaped source string, NOT written as a literal: a regex literal for this pattern
+// would appear in this file verbatim and the scan would match itself. This gate is excluded from
+// the sweep anyway — it necessarily discusses the shape it bans — and the counter-check below
+// proves the scanner can still see a real one.
+const OLD_SHAPE = new RegExp('String\\(e\\?\\.message \\?\\? e\\)');
+const { readdirSync } = await import('node:fs');
+const gateFiles = readdirSync('scripts').filter((f) => f.endsWith('-gate.mjs') && f !== 'retry-transient-gate.mjs');
+const stragglers = gateFiles.filter((f) => OLD_SHAPE.test(readFileSync(`scripts/${f}`, 'utf8')));
+check('no gate reports a caught error the old way', stragglers.length === 0,
+  stragglers.length ? `${stragglers.length} of ${gateFiles.length}: ${stragglers.slice(0, 6).join(', ')}${stragglers.length > 6 ? ' …' : ''}` : `${gateFiles.length} gates use describeError`);
+check('  …and the scanner can still find one', OLD_SHAPE.test('check("x", false, String(e?.message ?? e).slice(0, 200))'),
+  'a sweep that matches nothing is indistinguishable from a sweep that is broken');
+
+// ── 7. AND THE SUMMARY SAYS IT ──────────────────────────────────────────────────────────────────
+// The third place this fault hid. Recognising it, naming it, and SURFACING it are one problem: a
+// red whose reason lands on the second line is a red with no reason at all.
+console.log('\n— firstFailureLine: the reason must survive into the summary —');
+const { firstFailureLine } = await import('./_gate-summary.mjs');
+
+const REAL = [
+  '✓ a fixture exists',
+  '✗ run completed  — ',
+  'PrismaClientValidationError: Invalid `prisma.notificationLog.createMany()` invocation:',
+  '',
+  '1 failures of 20',
+].join('\n');
+check('a reason on the NEXT line reaches the summary',
+  /PrismaClientValidationError/.test(firstFailureLine(REAL) ?? ''), JSON.stringify(firstFailureLine(REAL)));
+check('  …which the old one-line read could not', /^✗ run completed\s+—\s*$/.test((REAL.match(/^✗.*$/m) ?? [])[0] ?? ''),
+  'this is the shape that reported four reds with a blank reason');
+
+// AND IT MUST NOT INVENT ONE. A failure with genuinely no detail must stay short rather than
+// borrowing the next check's words into a sentence that reads true and is not.
+const NO_DETAIL = ['✗ every route is guarded  — ', '✓ and the next check passed  — 14 routes', '2 failures of 13'].join('\n');
+check('a blank detail does NOT borrow the following check',
+  !/next check/.test(firstFailureLine(NO_DETAIL) ?? ''), JSON.stringify(firstFailureLine(NO_DETAIL)));
+const NO_SEP = ['✗ the totals disagree', '3 failures of 9'].join('\n');
+check('  …nor the totals line', !/failures of/.test(firstFailureLine(NO_SEP) ?? ''), JSON.stringify(firstFailureLine(NO_SEP)));
+check('a line that already carries its reason is unchanged',
+  firstFailureLine('✗ the board builds quickly (6.2s)  — ZZ is small\n0 failures of 1') === '✗ the board builds quickly (6.2s)  — ZZ is small');
+check('no ✗ at all means no failure line', firstFailureLine('✓ all good\n0 failures of 1') === null);
+check('  …and it is total on rubbish input', firstFailureLine(null) === null && firstFailureLine(undefined) === null);
+check('the cap still applies', (firstFailureLine(`✗ x  — \n${'y'.repeat(400)}`) ?? '').length === 110);
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

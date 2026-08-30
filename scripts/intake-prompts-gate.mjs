@@ -11,7 +11,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { INTAKE_ITEMS, INTAKE_SWITCH, intakeItemDone, intakeItemStates, intakeOutstanding, SKIP_REASON_CHIPS, DIAG_SCAN_SLOT } = await import('../lib/intake-items.ts');
@@ -143,7 +143,7 @@ try {
   const s = await prisma.site.findUnique({ where: { id: site.id }, select: { intake_prompt_findings: true, intake_prompt_diag_scan: true } });
   check('switches default OFF — the feature ships inert', s.intake_prompt_findings === false && s.intake_prompt_diag_scan === false);
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 250));
+  check('fixture run completed', false, describeError(e).slice(0, 250));
 } finally {
   if (fix) {
     await prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.vehId } });

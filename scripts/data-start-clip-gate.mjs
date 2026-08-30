@@ -10,6 +10,7 @@
  * The pure half runs with no database (standing rule 1). The DB half reads only.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { clipToData, precedesData, getTenantDataStart } = await import('../lib/tenant-data-start.ts');
@@ -75,7 +76,7 @@ try {
   check('a normal month is completely untouched by the fix',
     !mc.clipped && mc.from.getTime() === m.from.getTime() && mc.to.getTime() === m.to.getTime());
 } catch (e) {
-  if (String(e.message) !== 'no tenant') check('run completed', false, String(e?.message ?? e).slice(0, 200));
+  if (String(e.message) !== 'no tenant') check('run completed', false, describeError(e).slice(0, 200));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();

@@ -9,6 +9,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const {
@@ -165,7 +166,7 @@ try {
   check('a zero or negative reading is dropped, not stored',
     (await recordOdometerReadings(prisma, { groupId: ZZ, vehicleId: veh, source: 'visit', readings: [{ date: '2025-07-01', miles: 0 }] })) === 0);
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 200));
+  check('fixture run completed', false, describeError(e).slice(0, 200));
 } finally {
   if (veh) {
     await prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: veh } });

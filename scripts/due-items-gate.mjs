@@ -5,7 +5,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. Throwaway rows, removed here.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock, closureOffer, closureOffersForCard } = await import('../lib/due-items.ts');
@@ -475,7 +475,7 @@ try {
     'the subtler half: MOT expiry moves on retest and a live read would print next year\'s on last year\'s invoice');
 
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('fixture run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (fix) {
     if (fix.invoiceId) {

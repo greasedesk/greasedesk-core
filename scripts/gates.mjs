@@ -37,6 +37,7 @@ import { spawn } from 'node:child_process';
 // that is already set, so that broken value would have WON in every child and taken out the whole
 // suite. Load it here, where the URL is now actually needed.
 import 'dotenv/config';
+import { firstFailureLine } from './_gate-summary.mjs';
 
 /**
  * ── THE POOL A GATE GETS, STATED RATHER THAN INHERITED ──────────────────────────────────────────
@@ -199,7 +200,7 @@ function run(gate) {
         // The first failing line, so the summary says WHAT rather than only THAT.
         firstFailure: timedOut
           ? `NEVER RETURNED — killed after ${limit / 1000}s. A hang is not a pass.`
-          : (out.match(/^✗.*$/m) ?? [])[0]?.slice(0, 110) ?? null,
+          : firstFailureLine(out),
         log: out.slice(-4000),
       });
     });

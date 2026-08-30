@@ -13,6 +13,7 @@
  * no invoice number is spent — and deletes only the link rows it wrote, matched on their own ids.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { MAGIC_LINK_DAYS, INVOICE_PAY_GRACE_DAYS, invoicePayExpiry, createMagicLink, resolveMagicLink, magicLinkUrl } = await import('../lib/magic-link.ts');
@@ -178,7 +179,7 @@ try {
   check('a quote link still carries no invoice', qr.ok && qr.link.invoiceId === null, 'additive, not a change of meaning');
   check('and keeps the flat 14-day lifetime', days(new Date(), q.expiresAt) === MAGIC_LINK_DAYS);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   // Scoped to the rows this run minted, by id. Nothing else on ZZ is in scope, and the invoices
   // themselves were only ever read.

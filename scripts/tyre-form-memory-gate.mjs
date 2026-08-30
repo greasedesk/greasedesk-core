@@ -21,7 +21,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -206,12 +206,12 @@ try {
   check('both seed from this card’s rows', /seedFrom\(onThisCard/.test(d) && /seedFrom\(onThisCard/.test(m));
   check('both send only what changed', /!unchanged\(state\[key\], seed\[key\]\)/.test(d) && /!same\(s\[k\], base\[k\]\)/.test(m));
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     const cards = [fix.card, fix.card2].filter(Boolean);
     await step('readings', () => prisma.tyreReading.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));

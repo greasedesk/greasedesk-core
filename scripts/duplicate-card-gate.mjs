@@ -35,7 +35,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. LX13ZPO is not touched.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
@@ -221,7 +221,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 110)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
     await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: fix.cards } } }));
     await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: { in: fix.vehs } } }));
     await step('vehicles', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: { in: REGS } } }));

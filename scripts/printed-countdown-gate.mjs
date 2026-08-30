@@ -23,7 +23,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
@@ -146,7 +146,7 @@ try {
   out.push('F');
 } finally {
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 110)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
     await step('invoice', () => prisma.invoice.deleteMany({ where: { job_card_id: fix.card } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
@@ -155,7 +155,7 @@ try {
     try {
       const left = (await prisma.vehicle.count({ where: { id: fix.veh } })) + (await prisma.jobCard.count({ where: { id: fix.card } }));
       check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
-    } catch (e) { check('teardown removed every fixture row (ZZ only)', false, String(e?.message ?? e).slice(0, 70)); }
+    } catch (e) { check('teardown removed every fixture row (ZZ only)', false, describeError(e).slice(0, 70)); }
   }
   const f = out.filter((x) => x === 'F').length;
   console.log(`\n${f} failures of ${out.length}`);

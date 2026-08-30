@@ -19,6 +19,7 @@
  * blast radius.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { expectedCachePennies } = await import('../lib/payments.ts');
@@ -185,7 +186,7 @@ try {
     !payments.some((p) => invoices.find((i) => i.id === p.invoice_id)?.group.is_demo),
     'demo tenants carry no ledger');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 200));
+  check('run completed', false, describeError(e).slice(0, 200));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();

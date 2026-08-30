@@ -35,7 +35,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
@@ -347,7 +347,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 120)}`); } };
+    const step = async (n, fn) => { try { await fn(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 120)}`); } };
     await step('tyres', () => prisma.tyreReading.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.vehs } } }));
     await step('battery', () => prisma.batteryReading.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.vehs } } }));
     await step('findings', () => prisma.vehicleDueItem.deleteMany({ where: { group_id: ZZ, vehicle_id: { in: fix.vehs } } }));

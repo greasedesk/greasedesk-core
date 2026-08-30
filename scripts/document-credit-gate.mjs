@@ -21,7 +21,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync, readdirSync, writeFileSync, mkdtempSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
@@ -133,7 +133,7 @@ try {
     'the rendered PDF is asserted by declaration order, not by reading one');
 
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
 }
 

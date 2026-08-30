@@ -9,7 +9,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const T = await import('../lib/tyres.ts');
@@ -111,7 +111,7 @@ try {
   const rd = await prisma.tyreReading.count({ where: { vehicle_id: veh.id } });
   check('  …and the reading is upserted, not duplicated', rd === 2, `${rd} readings for 2 corners`);
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 250));
+  check('fixture run completed', false, describeError(e).slice(0, 250));
 } finally {
   if (fix) {
     await prisma.tyreReading.deleteMany({ where: { vehicle_id: fix.veh } });

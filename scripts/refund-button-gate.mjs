@@ -11,6 +11,7 @@
  * for writes rather than claiming a proof this environment cannot give.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { quoteRefund, refundConfirmationLines } = await import('../lib/refund-quote.ts');
@@ -100,7 +101,7 @@ try {
   // ── 7. NOTHING WAS WRITTEN BY THIS GATE ────────────────────────────────────────────────────
   check('this gate wrote no rows at all', true, 'pure arithmetic and a source read — no fixtures, nothing to tear down');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();

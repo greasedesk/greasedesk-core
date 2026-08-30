@@ -24,7 +24,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
@@ -192,7 +192,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 110)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
     // AuditLog is append-only. Its rows for these cards stay, correctly.
     await step('schedule readings', () => prisma.serviceScheduleReading.deleteMany({ where: { vehicle_id: { in: fix.vehs } } }));
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: { in: fix.vehs } } }));
@@ -205,7 +205,7 @@ try {
         + (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } }));
       check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
     } catch (e) {
-      check('teardown removed every fixture row (ZZ only)', false, `COULD NOT VERIFY — ${String(e?.message ?? e).split('\n')[0].slice(0, 70)}`);
+      check('teardown removed every fixture row (ZZ only)', false, `COULD NOT VERIFY — ${describeError(e).split('\n')[0].slice(0, 70)}`);
     }
   }
   const f = out.filter((x) => x === 'F').length;

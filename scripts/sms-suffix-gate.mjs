@@ -17,6 +17,7 @@
  * "To reply, call …" tells them what to do, and is two septets cheaper.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
 const { smsCost, smsText } = await import('../lib/sms-text.ts');
@@ -110,7 +111,7 @@ try {
   const qrShort = cost(sms('quote_revised', { garageName: 'Dave Motors' }));
   check('…but fits in one with a short name', qrShort.segments === 1, `${qrShort.septets} septets`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   process.exit(out.includes('F') ? 1 : 0);

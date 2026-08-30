@@ -27,6 +27,7 @@
  * one ZZ customer is CAPTURED AND RESTORED, and every NotificationLog row written here is removed.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { sendNotification, PLATFORM_SEND, NotifyScopeError } = await import('../lib/notify.ts');
@@ -98,7 +99,7 @@ try {
   // today, in the explanatory text rather than the predicate.
   const refuse = async (label, sql) => {
     let err = null;
-    try { await prisma.$executeRawUnsafe(sql); } catch (e) { err = String(e?.message ?? e); }
+    try { await prisma.$executeRawUnsafe(sql); } catch (e) { err = describeError(e); }
     const byCheck = err !== null && /NotificationLog_scope_group_pairing|violates check constraint/i.test(err);
     check(label, byCheck,
       err === null ? 'THE INSERT SUCCEEDED — the pairing is not enforced'
@@ -185,7 +186,7 @@ try {
     "it means 'meant for a tenant, could not tell which' — an outbound send always knows whose it is");
   check('and lib/inbound is the one place that can', /scope: res\.groupId \? 'tenant' : 'unresolved'/.test(readFileSync('lib/inbound.ts', 'utf8')));
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (custId !== null) {
     await prisma.customer.update({ where: { id: custId }, data: { sms_opt_out: custRestore } });

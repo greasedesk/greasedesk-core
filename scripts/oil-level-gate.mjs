@@ -10,7 +10,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const O = await import('../lib/oil-level.ts');
@@ -148,11 +148,11 @@ try {
     (await page.locator('[data-testid="intake-checklist"] li').count()) === 1,
     'the other four are off for this site, and an unprompted item must never show');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // AuditLog is append-only. Its rows for this card stay, correctly.
     await step('due items', () => prisma.vehicleDueItem.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('cards', () => prisma.jobCard.deleteMany({ where: { id: { in: [fix.card, fix.pCard].filter(Boolean) } } }));

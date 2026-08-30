@@ -18,7 +18,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const M = await import('../lib/mot-mint-refresh.ts');
@@ -127,7 +127,7 @@ try {
   out.push('F');
 } finally {
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 110)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
     for (const id of fix.invoices ?? []) {
       await step('invoice lines', () => prisma.invoiceLine.deleteMany({ where: { invoice_id: id } }));
       await step('invoice', () => prisma.invoice.deleteMany({ where: { id } }));
@@ -143,7 +143,7 @@ try {
         + await prisma.customer.count({ where: { group_id: ZZ, id: fix.cust } });
       check('teardown removed every fixture row (ZZ only)', left === 0, `${left} left`);
     } catch (e) {
-      check('teardown removed every fixture row (ZZ only)', false, `COULD NOT VERIFY — ${String(e?.message ?? e).split('\n')[0].slice(0, 70)}`);
+      check('teardown removed every fixture row (ZZ only)', false, `COULD NOT VERIFY — ${describeError(e).split('\n')[0].slice(0, 70)}`);
     }
   }
   const f = out.filter((x) => x === 'F').length;

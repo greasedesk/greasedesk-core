@@ -14,6 +14,7 @@
  * It refuses to start if a previous run left anything behind.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { applicationFeePennies, resolveFeeRate } = await import('../lib/application-fee.ts');
@@ -140,7 +141,7 @@ try {
   check('but two DIFFERENT tenants may share a boundary date', allowed,
     'the index must constrain the timeline, not forbid coexistence');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (made.length) {
     const del = await prisma.applicationFeeRate.deleteMany({ where: { id: { in: made } } });

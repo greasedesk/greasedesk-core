@@ -18,6 +18,7 @@
  * touched, so there is no invoice state to restore.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { vatPosition, creditNoteRequired, refuseCreditAmount, correctionShape, creditNoteMovesJobCard, mintCreditNote } =
@@ -148,7 +149,7 @@ try {
     check('the fixture uses a different period from the invoice', false, 'pick another month — the check above is vacuous otherwise');
   }
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (madeId) {
     await prisma.creditNote.delete({ where: { id: madeId } }).catch(() => {});

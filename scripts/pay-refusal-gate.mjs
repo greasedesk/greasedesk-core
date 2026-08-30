@@ -24,7 +24,7 @@
  * magic link it mints is a real credential for a ZZ invoice and is revoked on the way out.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { isStripeError, classifyStripeError } = await import('../lib/stripe-errors.ts');
@@ -164,7 +164,7 @@ try {
     check('a paid ZZ invoice exists to prove document-order', false, 'none — UNPROVEN');
   }
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (linkId) {

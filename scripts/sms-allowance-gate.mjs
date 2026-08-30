@@ -8,6 +8,7 @@
  * "simplified" into summing monthly grants, which would let unused months accumulate for ever.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { computeAllowance, smsAllowance, monthKey, monthStart, monthEnd, SMS_INCLUDED_PER_MONTH, SMS_TOPUP_PACK } = await import('../lib/sms-allowance.ts');
@@ -100,7 +101,7 @@ try {
     (await prisma.smsTopUp.findUnique({ where: { id: t.id }, select: { quantity: true } })).quantity === 100,
     'there is no `remaining` column anywhere — the balance is derived from purchases minus usage');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (made.length) {
     const d = await prisma.smsTopUp.deleteMany({ where: { id: { in: made } } });

@@ -22,6 +22,7 @@
  * No R2 calls: R2 is unconfigured here, and the matching rule is what determines survival anyway.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { photoKey, R2KeyError, tenantPrefix, isInsideTenantPartition } = await import('../lib/r2.ts');
@@ -83,7 +84,7 @@ try {
     await prisma.$executeRawUnsafe(
       `INSERT INTO "JobCardPhoto" (id, job_card_id, group_id, stage, slot, r2_key)
        VALUES (gen_random_uuid(), $1, NULL, 'intake', 'vin', 'photo_gate_mustfail')`, card.id);
-  } catch (e) { refused = String(e?.message ?? e); }
+  } catch (e) { refused = describeError(e); }
   const byNotNull = refused !== null && /23502|null value|not-null/i.test(refused);
   check('a null tenant is REFUSED by the database', byNotNull,
     refused === null ? 'THE INSERT SUCCEEDED — the column is still nullable'
@@ -102,7 +103,7 @@ try {
     await prisma.$executeRawUnsafe(
       `INSERT INTO "JobCardPhoto" (id, job_card_id, group_id, stage, slot, r2_key)
        VALUES (gen_random_uuid(), $1, $2, 'intake', 'vin', NULL)`, card.id, ZZ);
-  } catch (e) { keyless = String(e?.message ?? e); }
+  } catch (e) { keyless = describeError(e); }
   const keyByNotNull = keyless !== null && /23502|null value|not-null/i.test(keyless);
   check('a null r2_key is REFUSED by the database', keyByNotNull,
     keyless === null ? 'THE INSERT SUCCEEDED — the column is still nullable'
@@ -132,7 +133,7 @@ try {
   check('and every one names a tenant', all.every((p) => !!p.group_id), `${all.length} rows`);
   check('and every one names an object', all.every((p) => !!p.r2_key), `${all.length} rows`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await prisma.jobCardPhoto.deleteMany({ where: { r2_key: { in: ['photo_gate_mustfail', `${ZZ}/photo_gate_ok`] } } });
   check('no fixture row survives', (await prisma.jobCardPhoto.count({ where: { r2_key: 'photo_gate_mustfail' } })) === 0);

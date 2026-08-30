@@ -18,6 +18,7 @@
  * if anything from a previous run survives. Nothing touches ZZ or TMBS.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { accrueFromInvoicePaid } = await import('../lib/commission-billing.ts');
@@ -117,7 +118,7 @@ try {
   check('and the message is truncated rather than rejected by the column', overlong.length === 5000,
     'message is sliced to 1000 in the writer — a 5k Prisma error must not fail the insert');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (gid) {
     await prisma.commissionRefusal.deleteMany({ where: { group_id: gid } });

@@ -23,6 +23,7 @@
  * argument; this gate is only about the two figures sharing a window.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const { PrismaClient } = await import('@prisma/client');
@@ -100,7 +101,7 @@ try {
     'rendering null is the point — the line disappears rather than lying');
 } catch (e) {
   const kind = (e?.constructor?.name ?? typeof e) + (e?.code ? ` [${e.code}]` : '');
-  console.log(`\n✗ THREW: ${kind}: ${String(e?.message ?? e).slice(0, 300)}`);
+  console.log(`\n✗ THREW: ${kind}: ${describeError(e).slice(0, 300)}`);
   out.push('F');
 } finally {
   await prisma.$disconnect();

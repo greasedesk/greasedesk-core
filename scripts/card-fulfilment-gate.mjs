@@ -13,7 +13,7 @@
  * a true record of something that happened.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 import { Prisma } from '@prisma/client';
@@ -242,7 +242,7 @@ try {
     return r.ok && r.moved === false && before === after;
   }), 'a redelivered payment must not read as the card being paid twice');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   for (const f of fixtures) {
     await prisma.refund.deleteMany({ where: { payment: { invoice_id: f.invoiceId } } });

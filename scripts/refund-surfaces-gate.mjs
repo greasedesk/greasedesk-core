@@ -17,7 +17,7 @@
  * the invoice cache is CAPTURED AND RESTORED, never recomputed.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundLines, refundState } = await import('../lib/invoice-refund-state.ts');
@@ -149,7 +149,7 @@ try {
   check('the list reports the refund kind', listRow ? listRow.refundKind === 'full' : false,
     listRow ? `refundKind=${listRow.refundKind}` : 'row not found in the list payload');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (madeRefunds.length) {

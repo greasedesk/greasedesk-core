@@ -21,6 +21,7 @@
  * uses a ZZ invoice and removes every row it writes. Refuses to start on leftovers.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { reconcileInvoice } = await import('../lib/payments.ts');
@@ -173,7 +174,7 @@ try {
     return oldWay(12, 12) === null && stamp([{ amount: 5000 }], 12)[0] === 12;
   })(), 'old: returns null on a zero delta. new: records 12 regardless.');
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (madeRefunds.length) {
     const d = await prisma.refund.deleteMany({ where: { refund_id: { in: madeRefunds } } });

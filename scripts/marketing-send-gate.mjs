@@ -11,7 +11,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -221,12 +221,12 @@ try {
   check('and what this gate cannot prove is said out loud',
     /No SMS or email provider is configured locally/.test(prose(readFileSync('scripts/marketing-send-gate.mjs', 'utf8'))));
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // BY THE FIXTURE'S OWN REGISTRATIONS, never an id the code handed back.
     const mine = await prisma.vehicle.findMany({ where: { group_id: ZZ, registration: { in: [REG, 'ZZ76NOO'] } }, select: { id: true } });
     const vids = [...new Set([fix.veh, ...mine.map((v) => v.id)])];

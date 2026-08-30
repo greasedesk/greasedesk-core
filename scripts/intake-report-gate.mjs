@@ -8,7 +8,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { buildIntakeReport } = await import('../lib/intake-report.ts');
@@ -139,7 +139,7 @@ try {
   check('a clean car reports no findings', clean.findings.length === 0);
   check('  …and the view has copy for it rather than an empty space', /didn’t find anything/.test(viewCode));
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 250));
+  check('fixture run completed', false, describeError(e).slice(0, 250));
 } finally {
   if (fix) {
     await prisma.dueItemCustomerAnswer.deleteMany({ where: { due_item_id: fix.itemId } }).catch(() => {});

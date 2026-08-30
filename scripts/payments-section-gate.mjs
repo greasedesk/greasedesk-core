@@ -21,6 +21,7 @@
  * connection. If either is occupied it refuses and writes nothing. Enforced here, not remembered.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 import Stripe from 'stripe';
 const { prisma } = await import('../lib/db.ts');
@@ -305,7 +306,7 @@ try {
     return sabotaged.disabled_reason !== FIX.reason && got.disabled_reason === FIX.reason;
   })());
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   // ── TEARDOWN ─────────────────────────────────────────────────────────────────────────────────
   // Scoped to the gate tenant and to the fixture we wrote. It only runs if we got as far as writing

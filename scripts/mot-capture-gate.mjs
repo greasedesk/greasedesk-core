@@ -23,7 +23,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -252,12 +252,12 @@ try {
     /NOTHING HERE CALLS DVSA/.test(prose(readFileSync('scripts/mot-capture-gate.mjs', 'utf8'))),
     'and says WHY — made-up registrations, not missing credentials');
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // TORN DOWN BY REGISTRATION, not by the id the API handed back. A probe that stops the endpoint
     // returning vehicleId leaves fix.vehicles empty — and the first version then deleted nothing and
     // reported success on the row it had failed to find. The fixture's own identifier is the one

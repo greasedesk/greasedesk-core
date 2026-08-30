@@ -14,7 +14,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const T = await import('../lib/tyres.ts');
@@ -152,10 +152,10 @@ try {
   } catch { reopened = false; }
   check('  …and a CLOSED item never blocks the same observation next year', reopened);
 } catch (e) {
-  check('gate run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('gate run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${String(e?.message ?? e).slice(0, 90)}`); } };
+    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 90)}`); } };
     // AuditLog is append-only. Its rows for this card stay, correctly.
     await step('readings', () => prisma.tyreReading.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('battery', () => prisma.batteryReading.deleteMany({ where: { vehicle_id: fix.veh } }));

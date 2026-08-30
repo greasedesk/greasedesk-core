@@ -11,7 +11,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { GARAGE_VIEW_OF, answerDivergence, recordCustomerAnswer, latestCustomerAnswers } = await import('../lib/due-items.ts');
@@ -100,7 +100,7 @@ try {
   check('  …which writes through again, resolving the divergence', g.customer_response === 'agreed_later'
     && answerDivergence(latest.get(item.id), g.customer_response).diverged === false);
 } catch (e) {
-  check('fixture run completed', false, String(e?.message ?? e).slice(0, 250));
+  check('fixture run completed', false, describeError(e).slice(0, 250));
 } finally {
   if (fix) {
     await prisma.dueItemCustomerAnswer.deleteMany({ where: { due_item_id: fix.itemId } });

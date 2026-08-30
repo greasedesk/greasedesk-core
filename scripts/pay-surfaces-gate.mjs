@@ -14,6 +14,7 @@
  * rendered document is read back with pdfjs in the separate served check.
  */
 import './_gate-preflight.mjs';
+const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { paymentMarks, marksSentence } = await import('../lib/payment-marks.ts');
@@ -117,7 +118,7 @@ try {
     pay.marks === null ? 'ZZ has never synced capabilities → no marks, correctly' : pay.marks);
 
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
