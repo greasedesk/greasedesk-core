@@ -26,6 +26,18 @@ const TRANSIENT_TEXT = /Can't reach database server|Connection closed|connection
 export const isTransient = (e) => {
   if (!e) return false;
   if (TRANSIENT_CODES.has(e.code)) return true;
+  // ── THE FAULT WITH NOTHING ON IT ──────────────────────────────────────────────────────────────
+  // A Neon compute asleep after idle refuses the first caller, and Prisma reports that as a
+  // PrismaClientInitializationError carrying NO code and — in the shape that reaches a gate — no
+  // message either. Both checks either side of this line need one or the other, so this helper
+  // returned false for the exact fault it was written to absorb: it took out three gates across
+  // two runs in the week of 24 Aug 2026, each a red that meant nothing. `lib/db` grew the same
+  // clause on 29 Aug; this one was missed, so keep the two identical — retry-transient-gate pins
+  // that they match, because the drift is what made this invisible.
+  //
+  // Narrow ON PURPOSE. "No code and no message" also describes a bare `new Error()`, and a gate
+  // whose assertion throws must fail rather than be retried four times into a green.
+  if (e.code == null && e?.constructor?.name === 'PrismaClientInitializationError') return true;
   return TRANSIENT_TEXT.test(String(e.message ?? ''));
 };
 
