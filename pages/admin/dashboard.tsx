@@ -274,6 +274,34 @@ export default function AdminDashboard(props: PageProps) {
   const [noData, setNoData] = useState<{ dataStart: string | null } | null>(null);
   const [utilThresholds, setUtilThresholds] = useState<UtilisationThresholds>(defaultThresholds());
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
+  // ── ONE PERIOD STRING, FOR EVERY TILE THAT NAMES ITS WINDOW ────────────────────────────────────
+  // Six sub-lines said "this month" whatever was selected, and the DEFAULT selection is rolling_12 —
+  // so the first screen described a twelve-month break-even as "hours to sell this month". The
+  // number was right and the sentence was wrong, which is the harder kind to notice.
+  // Taken from the SERVER-ECHOED window, like pnl.utilToDate, so the words cannot drift from the
+  // figures: if the API answered for a different span than the picker shows, both move together.
+  const periodText = monthWindow ? monthLabel(monthWindow, props.locale) : '';
+  // ── AND THE WINDOW THE FIGURES ACTUALLY COVER, WHICH IS NOT ALWAYS THE ONE PICKED ──────────────
+  // costBase, utilisation and capacity clip to the tenant's data start, so a twelve-month selection
+  // shows five months on a garage whose records begin in April. Naming the SELECTED window on those
+  // tiles states a precise falsehood — worse than the vague "this month" this replaced, because it
+  // is specific enough to be believed. Both clipped tiles echo `clippedFrom`; costbase-clip-gate
+  // pins that they agree, so either answers for both.
+  // Tiles that do NOT clip — manpower, and whether a site traded — keep periodText: their figures
+  // really do cover the whole selection, and moving them would be the same error mirrored.
+  const clipInfo = (tiles?.costBase as any)?.clippedFrom ? (tiles?.costBase as any) : (tiles?.utilisation as any);
+  const coveredFrom: string | null = clipInfo?.clippedFrom ?? null;
+  const isClipped = !!clipInfo?.clipped;
+  const coveredText = monthWindow
+    ? monthLabel({ from: coveredFrom ?? monthWindow.from, to: monthWindow.to }, props.locale) : '';
+  const recordsStart = coveredFrom
+    ? new Date(coveredFrom).toLocaleDateString(props.locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }) : '';
+  // A single month, IN PROGRESS. Not monthMeta.inProgress, which is the API's monthInProgress and
+  // true of ANY window containing today — a twelve-month view included, where "the month so far"
+  // is a claim about a year. Derived here rather than read off the utilisation tile, because that
+  // tile can be withheld by role and the reframe must not depend on who is looking.
+  const singleMonthInProgress = !!monthMeta?.inProgress && !!monthWindow
+    && monthsOfRange(new Date(monthWindow.from), new Date(monthWindow.to)).length === 1;
   const [loading, setLoading] = useState(true);
   // Persist ONLY the period selection (a view preference — no money path) in localStorage, keyed per
   // tenant so a shared browser can't surface another tenant's view. `ready` gates the first fetch
@@ -488,7 +516,7 @@ export default function AdminDashboard(props: PageProps) {
       )}
       {siteId !== 'all' && tiles && (tiles.pnl as any)?.invoiceCount === 0 && (tiles.utilisation as any)?.mechanicCount === 0 && ((tiles.utilisation as any)?.missingHoursMechanics?.length ?? 0) === 0 && (
         <div className="rounded-xl border border-line bg-surface-muted p-3 mb-4 text-sm text-muted">
-          {t('notTrading', { site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
+          {t('notTrading', { period: periodText, site: props.sites.find((s2) => s2.id === siteId)?.name ?? '' })}
         </div>
       )}
 
@@ -719,6 +747,11 @@ export default function AdminDashboard(props: PageProps) {
           </div>
         )}
       </div>
+      {isClipped && coveredFrom && (
+        <p className="text-sm text-muted bg-surface-muted border border-line rounded-lg px-3 py-2 mb-3" data-testid="covered-note">
+          {t('pnl.coveredNote', { start: recordsStart, period: coveredText })}
+        </p>
+      )}
       {degraded && monthWindow && (
         <p className="text-sm text-warn bg-warn-soft border border-warn rounded-lg px-3 py-2 mb-3">
           {t('pnl.degradedNote', { label: monthLabel(monthWindow, props.locale) })}
@@ -849,7 +882,7 @@ export default function AdminDashboard(props: PageProps) {
                       least actionable number in the chain and lives in the drill. 0 renders as
                       a clean 0h, never a dash. */}
                   <Figure className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</Figure>
-                  <p className="text-xs text-muted mt-1">{t('pnl.hoursWentSub')}</p>
+                  <p className="text-xs text-muted mt-1" data-testid="hourswent-sub">{t('pnl.hoursWentSub', { period: coveredText })}</p>
                   {/* Rework sits ALONGSIDE absence: hours spent redoing work for free. */}
                   {rw > 0 && <p className="text-xs text-warn mt-1">{t('pnl.hoursWentRework', { hours: h3(rw) })}</p>}
                   <details className="mt-2" open={false}>
@@ -885,7 +918,7 @@ export default function AdminDashboard(props: PageProps) {
                   {(u3.remainingNoRate?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: u3.remainingNoRate.join(', ') })}</p>}
                   <details className="mt-2">
                     <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
-                    <p className="text-xs text-muted mt-1">{t('pnl.stillToSellHelp')}</p>
+                    <p className="text-xs text-muted mt-1" data-testid="stilltosell-sub">{t('pnl.stillToSellHelp', { period: coveredText })}</p>
                   </details>
                 </div>
               );
@@ -925,7 +958,7 @@ export default function AdminDashboard(props: PageProps) {
                 {cb == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : k === 'costBase' ? (
                   <>
                     <Figure className="text-2xl font-bold tabular-nums text-ink">{fmt.money(cb.costBasePennies)}</Figure>
-                    <p className="text-xs text-muted mt-1">{t('pnl.costBaseSub')}</p>
+                    <p className="text-xs text-muted mt-1" data-testid="costbase-sub">{t('pnl.costBaseSub')}</p>
                     <details className="mt-2">
                       <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
                       <p className="text-xs text-muted mt-1">{t('pnl.costBaseCalc', { wages: fmt.money(cb.wageBillPennies), overheads: fmt.money(cb.overheadsPennies), total: fmt.money(cb.costBasePennies) })}</p>
@@ -944,7 +977,7 @@ export default function AdminDashboard(props: PageProps) {
                     return (
                       <>
                         <Figure className="text-2xl font-bold tabular-nums text-ink">{cb.breakEvenCentihours > 0 ? hrs(cb.breakEvenCentihours) : '—'}</Figure>
-                        <p className="text-xs text-muted mt-1">{t('pnl.breakEvenSub')}</p>
+                        <p className="text-xs text-muted mt-1" data-testid="breakeven-sub">{t('pnl.breakEvenSub', { period: coveredText })}</p>
                         {cb.ratesMissing.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: cb.ratesMissing.join(', ') })}</p>}
                         <details className="mt-2">
                           <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
@@ -952,11 +985,11 @@ export default function AdminDashboard(props: PageProps) {
                             {cb.perSite.filter((s2: any) => s2.costBasePennies > 0).map((s2: any) => (
                               <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `${rateSym}${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
                             ))}
-                            <p>{t('pnl.breakEvenRevenue', { value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
+                            <p>{t('pnl.breakEvenRevenue', { period: coveredText, value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
                             {/* Expressed against SELLABLE capacity (factor-adjusted) — the same
                                 denominator the utilisation tile uses. */}
                             {u2 && u2.available > 0 && cb.breakEvenCentihours > 0 && (
-                              <p>{t('pnl.breakEvenOfSellable', { pct: `${(((cb.breakEvenCentihours / 100) / u2.available) * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>
+                              <p data-testid="breakeven-of-sellable">{t('pnl.breakEvenOfSellable', { period: coveredText, pct: `${(((cb.breakEvenCentihours / 100) / u2.available) * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>
                             )}
                             {residualHours != null && <p>{t('pnl.breakEvenResidual', { hours: residualHours.toLocaleString(props.locale, { maximumFractionDigits: 1 }) })}</p>}
                             <p className="italic">{t('pnl.breakEvenHonesty')}</p>
@@ -986,7 +1019,7 @@ export default function AdminDashboard(props: PageProps) {
                   ) : u.available === 0 ? (
                     <>
                       <Figure className="text-2xl font-bold tabular-nums text-muted">—</Figure>
-                      <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail')}</p>
+                      <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail', { period: coveredText })}</p>
                     </>
                   ) : (
                     <>
@@ -1095,7 +1128,7 @@ export default function AdminDashboard(props: PageProps) {
           // Net profit for an IN-PROGRESS month: revenue-to-date is measured against a FULL month's
           // fixed costs, so a negative figure is NOT a loss — it's "£X short of covering the month".
           // Reframe (neutral tone), never a red danger. Positive = the month's fixed costs are covered.
-          const npInProgress = k === 'netProfit' && !!monthMeta?.inProgress && v != null;
+          const npInProgress = k === 'netProfit' && singleMonthInProgress && v != null;
           const npShort = npInProgress && v < 0;
           const tone = v == null ? 'text-muted'
             : npInProgress ? (v >= 0 ? 'text-ok' : 'text-ink')
@@ -1107,7 +1140,7 @@ export default function AdminDashboard(props: PageProps) {
                 <>
                   <Figure className={`text-2xl font-bold tabular-nums ${tone}`}>{fmt.money(npShort ? -v : v)}</Figure>
                   {npInProgress ? (
-                    <p className="text-xs text-muted mt-1">{npShort ? t('pnl.netProfitShort') : t('pnl.netProfitAhead')}</p>
+                    <p className="text-xs text-muted mt-1" data-testid="netprofit-progress">{npShort ? t('pnl.netProfitShort') : t('pnl.netProfitAhead')}</p>
                   ) : (
                   <p className="text-xs text-muted mt-1">{t(`pnl.${k}Sub`, {
                     parts: d ? fmt.money(d.partsCost) : '', wages: d ? fmt.money(d.wageBill) : '', income: d ? fmt.money(d.grossMargin) : '',
@@ -1160,9 +1193,9 @@ export default function AdminDashboard(props: PageProps) {
           { key: 'nonRostered', value: mp.nonRosteredDays.value == null ? null : t('manpower.days', { n: mp.nonRosteredDays.value }),
             sub: t('manpower.nonRosteredSub'), reconciles: true },
           { key: 'hires', value: mp.newHires.value == null ? null : String(mp.newHires.value),
-            sub: t('manpower.hiresSub'), reconciles: false, names: mp.newHires.names },
+            sub: t('manpower.hiresSub', { period: periodText }), reconciles: false, names: mp.newHires.names },
           { key: 'exits', value: mp.exits.value == null ? null : String(mp.exits.value),
-            sub: t('manpower.exitsSub'), reconciles: false, names: mp.exits.names },
+            sub: t('manpower.exitsSub', { period: periodText }), reconciles: false, names: mp.exits.names },
           { key: 'pilon', value: mp.pilonDays.value == null ? null
               : t('manpower.pilonValue', { days: mp.pilonDays.value, money: fmt.money(mp.pilonPennies.value ?? 0) }),
             sub: t('manpower.pilonSub'), reconciles: true, names: mp.pilonDays.names },

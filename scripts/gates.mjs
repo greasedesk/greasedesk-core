@@ -120,6 +120,7 @@ const TIERS = {
     'tyre-form-memory-gate', 'phone-capture-timing', 'marketing-call-view-gate',
     'duplicate-card-gate', 'quote-line-order-gate', 'schedule-reread-gate', 'mot-mint-gate',
     'mot-booking-stamp-gate', 'completion-carry-gate', 'diag-scan-gate',
+    'dashboard-period-copy-gate',
   ],
 };
 
