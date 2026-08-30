@@ -20,7 +20,7 @@
  * removed in the finally. It refuses to start if a previous run left any behind.
  */
 import './_gate-preflight.mjs';
-const { serverReady } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { smsAllowance } = await import('../lib/sms-allowance.ts');
@@ -197,8 +197,12 @@ try {
   const liveLinksBefore = await prisma.customerMagicLink.count({ where: { job_card_id: card.id, revoked_at: null } });
 
   const need = Math.max(0, server.remaining);
+  // `scope` is REQUIRED and has no default (cbd67eb, "whose message this is, said not inferred"),
+  // and these rows carry a group_id, so they are a garage's own messages: tenant. The fixture was
+  // never updated, so this gate has been genuinely red since — reported as "✗ run completed —"
+  // with a blank reason, which is why it read as one more transient blip for weeks.
   const rows = Array.from({ length: need }, (_, i) => ({
-    group_id: ZZ, channel: 'sms', template: 'free_text', provider: 'twilio', status: 'sent',
+    group_id: ZZ, scope: 'tenant', channel: 'sms', template: 'free_text', provider: 'twilio', status: 'sent',
     recipient: '+447700900000', direction: 'out', provider_message_id: `${MARK}${i}`, counts_to_allowance: true,
   }));
   for (let i = 0; i < rows.length; i += 50) filled += (await prisma.notificationLog.createMany({ data: rows.slice(i, i + 50) })).count;
@@ -271,7 +275,7 @@ try {
   check('texting a pay link is refused too', smsRefused.status === 409 && smsRefused.body.code === 'allowance_spent',
     `${smsRefused.status} ${smsRefused.body.code}`);
 } catch (e) {
-  check('run completed', false, String(e?.message ?? e).slice(0, 300));
+  check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   // TEARDOWN RETRIES. Neon drops connections intermittently (P1001) and a blip here would leave 98
