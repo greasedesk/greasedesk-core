@@ -55,7 +55,11 @@ const read = (f) => readFileSync(`scripts/${f}`, 'utf8');
 // gates.mjs is the RUNNER, not a gate. It spawns each gate as its own process, and every one of
 // those imports the preflight for itself — the runner importing it too would run the freshness
 // check once for the suite and then again per gate, and Rule B would be enforcing a no-op.
-const HELPERS = new Set(['_gate-preflight.mjs', '_ts.mjs', '_ts-hook.mjs', '_gate-retry.mjs', 'gates.mjs']);
+// A GATE IS ANYTHING NAMED LIKE ONE, so every shared helper with `gate` in its filename has to
+// be listed here or it is held to the rules for gates — `_gate-summary.mjs` arrived and was
+// duly told to import _gate-preflight, which would have made a side-effect-free module
+// side-effectful. Adding a helper means adding it here.
+const HELPERS = new Set(['_gate-preflight.mjs', '_ts.mjs', '_ts-hook.mjs', '_gate-retry.mjs', '_gate-summary.mjs', 'gates.mjs']);
 const gates = files.filter((f) => f.includes('gate') && !HELPERS.has(f));
 
 console.log(`\n— scanning ${files.length} scripts (${gates.length} gates) —`);
