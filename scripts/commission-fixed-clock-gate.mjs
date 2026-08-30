@@ -8,11 +8,14 @@
  *   Run:  node --env-file=.env scripts/commission-fixed-clock-gate.mjs
  */
 import './_gate-preflight.mjs';
+// gatePrisma() imports lib/db, which is TypeScript — the `@/` resolver has to be registered
+// before it is CALLED, and this file did not need the hook while it built its own client.
+import './_ts.mjs';
+const { gatePrisma } = await import('./_gate-preflight.mjs');
 import { execSync } from 'child_process';
 import { rmSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 // Absolute temp dir at the invocation cwd (repo root) so the compile target and the dynamic import
@@ -22,7 +25,7 @@ try { rmSync(TMP, { recursive: true, force: true }); } catch {}
 execSync(`npx tsc lib/commission.ts --outDir "${TMP}" --module es2020 --target es2020 --moduleResolution node --skipLibCheck --esModuleInterop`, { stdio: 'inherit' });
 const E = await import(pathToFileURL(path.join(TMP, 'commission.js')).href);
 
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 const PASS = [], FAIL = [];
 const chk = (n, c, x = '') => { (c ? PASS : FAIL).push(n); console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? `  ${x}` : '')); };
 const D = (s) => new Date(s + (s.length === 10 ? 'T00:00:00.000Z' : ''));

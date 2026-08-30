@@ -29,10 +29,10 @@
  * list that has drifted — so `subset` is a mode you have to write down, with a reason.
  */
 import './_gate-preflight.mjs';
+const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
-const { PrismaClient } = await import('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

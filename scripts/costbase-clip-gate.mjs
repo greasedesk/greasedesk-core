@@ -23,13 +23,12 @@
  * argument; this gate is only about the two figures sharing a window.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
-const { PrismaClient } = await import('@prisma/client');
 const T = await import('../lib/dashboard-tiles.ts');
 const P = await import('../lib/dashboard-periods.ts');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const TMBS = '854d38e7-6dd4-4836-af61-a0d169639a78';
 const NOW = new Date('2026-08-29T12:00:00Z');

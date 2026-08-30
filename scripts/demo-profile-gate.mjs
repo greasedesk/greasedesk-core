@@ -25,16 +25,16 @@
  * Run after every extraction. It is READ-ONLY against the tenant and writes nothing.
  */
 import './_gate-preflight.mjs';
+const { gatePrisma } = await import('./_gate-preflight.mjs');
 // The determinism checks below import lib/demo/profile-order.ts, so the TS resolver has to be
 // registered — gate-hygiene rule C. It happened to work without this because the dynamic import
 // resolves late, which is exactly the kind of accident the rule exists to stop relying on.
 import './_ts.mjs';
-import { PrismaClient } from '@prisma/client';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 const TMBS = '854d38e7-6dd4-4836-af61-a0d169639a78';
 const PATH = 'lib/demo/profile.ts';
 

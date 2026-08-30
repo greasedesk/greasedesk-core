@@ -13,13 +13,12 @@
  * It also proves freeze-at-issue on the one document that can prove it. Fixtures on ZZ only.
  */
 import './_gate-preflight.mjs';
-const { zzSite, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
 const O = await import('../lib/observations.ts');
 const D = await import('../lib/due-items.ts');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const out = [];

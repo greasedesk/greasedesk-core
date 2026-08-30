@@ -35,13 +35,12 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. LX13ZPO is not touched.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
 const { JOB_STATUSES } = await import('../lib/jobcard-status.ts');
 const { readFileSync } = await import('node:fs');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 let D = null;
 try { D = await import('../lib/duplicate-cards.ts'); } catch { /* named below */ }

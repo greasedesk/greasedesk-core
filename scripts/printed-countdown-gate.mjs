@@ -23,11 +23,10 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 const D = await import('../lib/due-items.ts');
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';

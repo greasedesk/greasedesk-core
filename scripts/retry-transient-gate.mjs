@@ -39,6 +39,7 @@
  * purpose: this class, and no code. The second half of this gate is what holds it narrow.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';   // section 8 imports lib/db through gatePrisma
 const { Prisma } = await import('@prisma/client');
 const { isTransient } = await import('./_gate-retry.mjs');
 const { describeError } = await import('./_gate-preflight.mjs');
@@ -175,6 +176,21 @@ check('a line that already carries its reason is unchanged',
 check('no ✗ at all means no failure line', firstFailureLine('✓ all good\n0 failures of 1') === null);
 check('  …and it is total on rubbish input', firstFailureLine(null) === null && firstFailureLine(undefined) === null);
 check('the cap still applies', (firstFailureLine(`✗ x  — \n${'y'.repeat(400)}`) ?? '').length === 110);
+
+// ── 8. AND EVERY GATE IS ON THE CLIENT THAT RETRIES ─────────────────────────────────────────────
+// The three sections above are worth nothing to a gate holding a client lib/db never wrapped.
+// gate-hygiene Rule G bans the construction; this asserts the REPLACEMENT is what it claims —
+// the same singleton, not a second client that merely comes from a nicer function.
+console.log('\n— gatePrisma —');
+const { gatePrisma } = await import('./_gate-preflight.mjs');
+const { prisma: dbSingleton } = await import('../lib/db.ts');
+const a1 = await gatePrisma();
+const a2 = await gatePrisma();
+check('gatePrisma returns lib/db’s client, not a new one', a1 === dbSingleton,
+  'a second client would have its own pool and none of the retry');
+check('  …and the same one every call', a1 === a2, 'eighteen gates held TWO clients before this');
+check('the retry is on even when the runner did not set it', process.env.DB_RETRY_TRANSIENT === '1',
+  'set at preflight load: a gate run by hand had no retry exactly when somebody was debugging it');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

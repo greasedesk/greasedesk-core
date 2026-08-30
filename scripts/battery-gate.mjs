@@ -8,13 +8,12 @@
  * says so — the failure mode is a plausible advisory, not an error.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const B = await import('../lib/battery.ts');
 const { readFileSync } = await import('node:fs');
 const D = await import('../lib/due-items.ts');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';

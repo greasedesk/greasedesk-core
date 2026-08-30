@@ -16,16 +16,15 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const S = await import('../lib/invoice-snapshots.ts');
 const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
 const { acceptQuote } = await import('../lib/quote-acceptance.ts');
 const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const REG = 'ZZ76SNP';

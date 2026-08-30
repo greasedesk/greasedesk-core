@@ -86,6 +86,37 @@ if (!globalThis.__gatePreflightRan) {
 }
 
 /**
+ * ── THE CLIENT A GATE SHOULD USE ────────────────────────────────────────────────────────────────
+ * Thirty-three gates built their own `new PrismaClient()`, which sounds harmless and is not:
+ *
+ *   NO RETRY. `lib/db` absorbs the transient faults this database actually produces — a Neon
+ *   compute asleep after idle refusing the first caller. A bare client gets none of it, and the
+ *   result is a red that means nothing: three separate gates in one slow run on 30 Aug, all three
+ *   green standalone minutes later. Each one has to be re-run by hand to be believed, and re-running
+ *   is exactly what makes a real failure look like a blip.
+ *
+ *   TWO CLIENTS. Eighteen of the thirty-three ALSO import an app lib that reaches `lib/db`, so the
+ *   process quietly held two clients and two pools — in precisely the gates doing the heaviest work.
+ *
+ * WHY IT IS A FUNCTION AND NOT AN IMPORT. `lib/db` is TypeScript, and the `@/` resolver is not
+ * registered until a gate imports `./_ts.mjs` — which convention puts AFTER this module. A static
+ * import here would fail at load; importing at CALL time lands after the hook.
+ *
+ * ── AND WHY THE ENV VAR IS SET HERE ─────────────────────────────────────────────────────────────
+ * `lib/db` builds its client at module load and only wraps the retry when DB_RETRY_TRANSIENT=1.
+ * The runner sets it; a gate run by hand does not, so the retry was absent exactly when somebody
+ * was debugging one gate on its own. It is set at THIS module's load — the first import in every
+ * gate — because setting it inside gatePrisma() would be too late for the eighteen gates whose app
+ * imports pull `lib/db` in first. Never read in production: nothing outside scripts/ imports this.
+ */
+if (!process.env.DB_RETRY_TRANSIENT) process.env.DB_RETRY_TRANSIENT = '1';
+
+export async function gatePrisma() {
+  const { prisma } = await import('../lib/db.ts');
+  return prisma;
+}
+
+/**
  * ── AN ERROR THAT NAMES ITSELF, EVEN WITH NOTHING TO SAY ────────────────────────────────────────
  * Every gate reported a thrown error as `String(e?.message ?? e)`. That is fine until the error has
  * no message — and the one that actually happens here has none. A Neon compute asleep after idle

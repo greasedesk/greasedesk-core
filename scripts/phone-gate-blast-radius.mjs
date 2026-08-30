@@ -11,8 +11,11 @@
  * then the verdict the live rule would reach.
  */
 import './_gate-preflight.mjs';
-import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
+// gatePrisma() imports lib/db, which is TypeScript — the `@/` resolver has to be registered
+// before it is CALLED, and this file did not need the hook while it built its own client.
+import './_ts.mjs';
+const { gatePrisma } = await import('./_gate-preflight.mjs');
+const prisma = await gatePrisma();
 
 // Mirrors lib/onboarding — deliberately re-stated rather than imported, so a change to the rule
 // shows up as a DISAGREEMENT here instead of both sides moving together silently.

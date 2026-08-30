@@ -51,6 +51,9 @@ const touchesTsModule = (src) => /(?:^import\s[^'"]*from\s*|await import\(\s*)['
 const SELF = 'gate-hygiene-gate.mjs';
 const files = readdirSync('scripts').filter((f) => f.endsWith('.mjs') && f !== SELF).sort();
 const read = (f) => readFileSync(`scripts/${f}`, 'utf8');
+// Comment lines removed. A file that EXPLAINS why it does not do something must not be caught by
+// the rule forbidding it — the commonest way a scan in this repo has been defeated.
+const prose = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 // The helpers are imported BY gates; they are not gates and must not require their own preflight.
 // gates.mjs is the RUNNER, not a gate. It spawns each gate as its own process, and every one of
 // those imports the preflight for itself — the runner importing it too would run the freshness
@@ -78,6 +81,26 @@ const offendersC = files.filter((f) => !HELPERS.has(f) && touchesTsModule(read(f
 check('C. every script touching a .ts module imports _ts.mjs', offendersC.length === 0,
   offendersC.join(', ') || 'the @/ resolver is registered wherever it is needed');
 
+// ── RULE G ────────────────────────────────────────────────────────────────────────────────────
+// A GATE MUST NOT BUILD ITS OWN PRISMA CLIENT. `lib/db` carries the transient retry this database
+// needs; a bare client carries none of it, and the failure is a red that means nothing — three
+// separate gates in one slow run on 30 Aug, all three green standalone. Eighteen of the thirty-three
+// ALSO imported an app lib reaching lib/db, so they held two clients and two pools apiece.
+//
+// The construction is what is banned, not the name: `PrismaClientValidationError` appears in prose
+// in two gates and must not trip this. Comments are stripped first for the same reason.
+const OWN_CLIENT = /new\s+PrismaClient\s*\(/;
+// marketing-board-gate is the ONE declared exception, stated here rather than left to be noticed:
+// it asserts buildBoard finishes inside four seconds, and lib/db's retry sleeps up to 12s across
+// its backoffs, so a connection blip inside the timed region would be reported as "the board is
+// slow" — a plausible sentence pointing at the wrong subsystem. That assertion has already
+// produced exactly that red once, WITHOUT any retry involved, so the assertion is what needs
+// revisiting; until it does, this gate keeps a client whose faults are loud.
+const OWN_CLIENT_ALLOWED = new Set(['marketing-board-gate.mjs']);
+const offendersG = gates.filter((f) => !OWN_CLIENT_ALLOWED.has(f) && OWN_CLIENT.test(prose(read(f))));
+check('G. no gate builds its own PrismaClient', offendersG.length === 0,
+  offendersG.length ? `${offendersG.length}: ${offendersG.slice(0, 6).join(', ')}${offendersG.length > 6 ? ' …' : ''} — use gatePrisma() from _gate-preflight` : `${gates.length - OWN_CLIENT_ALLOWED.size} gates share lib/db, 1 declared exception`);
+
 // ── AND THE RULES CAN FAIL ────────────────────────────────────────────────────────────────────
 // A scanner that matches nothing is indistinguishable from a scanner that matches nothing REAL.
 console.log('\n— the rules bite, proven on synthetic sources —');
@@ -92,6 +115,11 @@ check('A does not flag a .mjs import', staticTsImports("import './_ts.mjs';\n").
 check('B flags a gate without the preflight', importsPreflight('const x = 1;\n') === false);
 check('C flags a .ts consumer with no harness', touchesTsModule(GOOD_A) && !importsTsHarness("const { p } = await import('../lib/db.ts');\n"));
 check('C does not flag a script that touches no .ts module', !touchesTsModule("import { readFileSync } from 'node:fs';\n"));
+check('G flags a constructed client', OWN_CLIENT.test('const prisma = new PrismaClient();'));
+check('G does not flag the error CLASS by name',
+  !OWN_CLIENT.test('a write of these throws PrismaClientValidationError, no code, 500'),
+  'two gates discuss it in prose — the ban is on the construction, not the word');
+check('G does not flag gatePrisma', !OWN_CLIENT.test('const prisma = await gatePrisma();'));
 
 // ── RULE F: A SCAN'S TERM MUST BE ANCHORED TO WHAT IT MEANS ────────────────────────────────────
 // Nine times in two days a gate asserted on a BARE IDENTIFIER where it meant a render or a write,

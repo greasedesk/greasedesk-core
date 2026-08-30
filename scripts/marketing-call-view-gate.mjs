@@ -35,13 +35,12 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('playwright-core');
 const T = await import('../lib/tyres.ts');
 const BAT = await import('../lib/battery.ts');
-const prisma = new PrismaClient();
+const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const CUST = 'Call View Fixture Holder';

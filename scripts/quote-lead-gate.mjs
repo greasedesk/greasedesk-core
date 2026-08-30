@@ -24,6 +24,7 @@
  * taken here.
  */
 import './_gate-preflight.mjs';
+const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const P = await import('../lib/marketing-pipeline.ts');
@@ -179,8 +180,7 @@ try {
   // AND THE DATABASE ACCEPTS BOTH. marketing-board-gate compares the whole list against the CHECK
   // constraint; this pins the two that arrived together, because a kind the board offers and the
   // database refuses fails at the moment somebody rings the customer.
-  const { PrismaClient } = await import('@prisma/client');
-  const db = new PrismaClient();
+  const db = await gatePrisma();
   try {
     const [{ def }] = await db.$queryRawUnsafe(
       "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'MarketingContact_reason_check'");
