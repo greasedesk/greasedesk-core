@@ -26,14 +26,26 @@ const TRANSIENT_TEXT = /Can't reach database server|Connection closed|connection
 export const isTransient = (e) => {
   if (!e) return false;
   if (TRANSIENT_CODES.has(e.code)) return true;
-  // ── THE FAULT WITH NOTHING ON IT ──────────────────────────────────────────────────────────────
-  // A Neon compute asleep after idle refuses the first caller, and Prisma reports that as a
-  // PrismaClientInitializationError carrying NO code and — in the shape that reaches a gate — no
-  // message either. Both checks either side of this line need one or the other, so this helper
-  // returned false for the exact fault it was written to absorb: it took out three gates across
-  // two runs in the week of 24 Aug 2026, each a red that meant nothing. `lib/db` grew the same
-  // clause on 29 Aug; this one was missed, so keep the two identical — retry-transient-gate pins
-  // that they match, because the drift is what made this invisible.
+  // ── AN INITIALIZATION ERROR IS A CONNECTION NEVER OBTAINED ────────────────────────────────────
+  // CORRECTED 30 Aug 2026. This clause was added the day before on a wrong diagnosis, and the
+  // commit message that introduced it (d6c047c) says something untrue. Recorded here rather than
+  // quietly fixed, because the wrong reason is the part that would have misled the next reader.
+  //
+  // WHAT I CLAIMED: the errors taking out gates carried no code and no message, so both checks
+  // either side of this line missed them and the helper was blind to the only fault that happens.
+  //
+  // WHAT WAS ACTUALLY TRUE: they carried a full message — "Can't reach database server at
+  // <host>:5432" — which TRANSIENT_TEXT already matches. `isTransient` would have returned true
+  // for every one of them. The blank reasons came from somewhere else entirely: Prisma's messages
+  // BEGIN with a newline, and the suite summary read one line, so the reason landed on line two
+  // and was dropped (see _gate-summary.mjs). I mistook a reporting defect for a detection one, and
+  // the fix appearing to work was not evidence the diagnosis was right.
+  //
+  // WHY THE CLAUSE STAYS: it is still correct, just narrower than advertised. A
+  // PrismaClientInitializationError with no code IS a connection that could not be obtained —
+  // nothing was sent, so anything may be repeated — and it covers the case TRANSIENT_TEXT cannot:
+  // a wording the regex does not know. `lib/db` carries the same clause (29 Aug); keep the two
+  // identical, and retry-transient-gate pins that they match.
   //
   // Narrow ON PURPOSE. "No code and no message" also describes a bare `new Error()`, and a gate
   // whose assertion throws must fail rather than be retried four times into a green.
