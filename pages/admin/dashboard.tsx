@@ -893,7 +893,11 @@ export default function AdminDashboard(props: PageProps) {
             // Unsold in money: per-site unsold × that site's rate (from the costBase compute —
             // same rate read as break-even; rate-less sites with unsold hours are FLAGGED).
             let unsoldPennies = 0; const noRate: string[] = [];
-            if (cb3) for (const s3 of u3.perSite) {
+            // GUARDED ON THE FIELD, NOT ON TRUTHINESS. When the cost register is empty the tile
+            // returns { registerEmpty: true } — truthy, with no perSite — so `if (cb3)` passed and
+            // `cb3.perSite.find` threw, taking the whole dashboard down with it. Ask for what this
+            // block actually needs.
+            if (cb3?.perSite) for (const s3 of u3.perSite) {
               const su = Math.max(0, s3.available - s3.charged - (s3.rework ?? 0));
               if (su <= 0) continue;
               const rate = cb3.perSite.find((r3: any) => r3.siteId === s3.siteId)?.ratePounds ?? null;
