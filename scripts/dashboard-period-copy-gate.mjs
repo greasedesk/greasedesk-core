@@ -32,7 +32,7 @@
  * is client state, restored from localStorage, and a fresh context starts on the default.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, serverReady, explainIfClientStale } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, serverReady, explainIfClientStale, ZZ_GROUP } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const { chromium } = await import('playwright-core');
@@ -42,8 +42,23 @@ const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (f) => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-let browser;
+let browser, prisma, seededCostId = null;
 try {
+  // A COST, SO THE BREAK-EVEN TILE RENDERS AT ALL. Since costs became instance-backed, a tenant
+  // with an empty register has its cost base and break-even WITHHELD — correctly — and the sub-line
+  // this gate reads does not exist. The period wording is what is under test here, so the gate
+  // supplies one throwaway cost and tears it down.
+  prisma = await gatePrisma();
+  const CG = await import('../lib/costs.ts');
+  const zzSites = (await prisma.site.findMany({ where: { group_id: ZZ_GROUP }, select: { id: true } })).map((x) => x.id);
+  const seed = await prisma.cost.create({
+    data: { group_id: ZZ_GROUP, name: 'ZZCOPY Rent', cadence: 'monthly', charge: 'spread',
+      active_from: new Date('2025-01-01T00:00:00.000Z'),
+      rates: { create: [{ effective_from: new Date('2025-01-01T00:00:00.000Z'), amount_pennies: 100_000 }] },
+      allocations: { create: [{ group_id: ZZ_GROUP, site_id: zzSites[0], percent: 100 }] } },
+    select: { id: true } });
+  seededCostId = seed.id;
+  await CG.regenerate(seed.id, new Date('2025-01-01T00:00:00.000Z'), new Date('2027-01-01T00:00:00.000Z'));
   check('the dev server serves pages before we drive it', await serverReady('/admin/login'));
 
   // ── 1. THE COPY THAT MUST TAKE THE PERIOD ─────────────────────────────────────────────────────
@@ -164,6 +179,14 @@ try {
   await explainIfClientStale(BASE);
 } finally {
   if (browser) await browser.close().catch(() => {});
+  if (prisma && seededCostId) {
+    await prisma.costAllocation.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.costInstance.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.costRate.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.cost.delete({ where: { id: seededCostId } }).catch(() => {});
+    const left = await prisma.cost.count({ where: { group_id: ZZ_GROUP, name: { startsWith: 'ZZCOPY' } } }).catch(() => -1);
+    check('teardown removed the seeded cost (ZZ only)', left === 0, `${left} left`);
+  }
 }
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);

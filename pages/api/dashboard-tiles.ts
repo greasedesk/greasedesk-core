@@ -14,6 +14,7 @@ import { canAccessSite } from '@/lib/admin-guard';
 import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
 import { clipSpanToAnchor } from '@/lib/reporting-anchor';
+import { forwardCosts } from '@/lib/dashboard-tiles';
 import { thresholdsFromGroup } from '@/lib/utilisation-light';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -99,8 +100,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startOfTomorrow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   const elapsedEnd = monthInProgress ? Math.min(startOfTomorrow, month.to.getTime()) : month.to.getTime();
   const daysElapsed = Math.round((elapsedEnd - month.from.getTime()) / 86_400_000);
+  // The forward strip is NOT part of `tiles`: those all report the selected period, and these three
+  // deliberately ignore it. Keeping them separate is what stops a future reader assuming the picker
+  // applies to them.
+  const forward = await forwardCosts(user.group_id as string, siteIds, now);
   return res.status(200).json({
-    tiles, from: cash.from.toISOString(), to: cash.to.toISOString(),
+    tiles, forward, from: cash.from.toISOString(), to: cash.to.toISOString(),
     // monthFrom is the MEASURED start, so every label derived from it names the window the figures
     // cover. What the reader picked is `selectedMonthFrom`, and the difference is disclosed.
     monthFrom: month.from.toISOString(), monthTo: month.to.toISOString(),

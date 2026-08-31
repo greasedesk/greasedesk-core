@@ -105,6 +105,20 @@ enum CostType {
   hourly // amount_pennies = hourly rate
 }
 
+enum CostCadence {
+  monthly
+  quarterly
+  annual
+}
+
+/// How a cost lands in the figures. SPREAD answers "what does a month of trading cost me" and is
+/// the right default for break-even; FALLS answers "what leaves the bank in June". Over a full
+/// cycle the two MUST total the same — the setting distributes a cost, it never changes it.
+enum CostCharge {
+  spread
+  falls
+}
+
 enum OverheadPeriod {
   weekly
   monthly
@@ -452,6 +466,7 @@ model Group {
   // Cost-capture
   cost_people      CostPerson[]
   overheads        Overhead[]
+  costs            Cost[]
   cost_allocations CostAllocation[]
 
   // Invoicing
@@ -3419,6 +3434,87 @@ model PublicHoliday {
 }
 
 // Open-ended, admin-extendable business costs (rent, rates, insurance, IT, phones…).
+/// ── A COST, AND ITS OCCURRENCES ────────────────────────────────────────────────────────────────
+/// The Overhead register it replaces had NO DATES AT ALL: one amount, normalised to a month and
+/// multiplied by the window's month count, so every month of every period carried today's figure.
+/// A cost that started in June was charged to January; a rent rise restated a closed year.
+///
+/// The occurrence (CostInstance) is what every reader reads. The definition carries identity,
+/// cadence and the charge rule; the amount lives in an append-only CostRate series so a rise is
+/// ONE auditable fact with a date, the shape EmploymentEvent already uses for pay.
+model Cost {
+  id       String @id @default(uuid())
+  group_id String
+  name     String
+
+  cadence CostCadence
+  charge  CostCharge  @default(spread)
+
+  /// First period this cost applies to. Instances before it are never generated.
+  active_from DateTime
+  /// Last period, exclusive. NULL = still running — a meaningful absence, not an unset field.
+  active_to   DateTime?
+
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  group       Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  rates       CostRate[]
+  instances   CostInstance[]
+  allocations CostAllocation[]
+
+  @@index([group_id, is_active])
+}
+
+/// APPEND-ONLY. A rent rise is a new row with an effective date, never an edit to the old one —
+/// the same rule as EmploymentEvent, and for the same reason: what a garage was charged in March
+/// is a fact about March and must not move when the rent changes in June.
+model CostRate {
+  id             String   @id @default(uuid())
+  cost_id        String
+  effective_from DateTime
+  amount_pennies Int
+  created_at     DateTime @default(now())
+
+  cost Cost @relation(fields: [cost_id], references: [id], onDelete: Cascade)
+
+  @@unique([cost_id, effective_from])
+  @@index([cost_id, effective_from])
+}
+
+/// ONE OCCURRENCE. Generated forward, then editable: a variable bill is edited when the real figure
+/// arrives, and `is_estimate` says which of those two a reader is looking at.
+model CostInstance {
+  id      String @id @default(uuid())
+  cost_id String
+
+  /// The period this occurrence covers — [period_start, period_end).
+  period_start DateTime
+  period_end   DateTime
+  /// When it actually falls due inside that period. Equals period_start for a monthly cost.
+  due_on       DateTime
+
+  amount_pennies Int
+  /// Generated from the rate, and not yet confirmed against a real bill.
+  is_estimate    Boolean @default(true)
+
+  /// SET BY A HUMAN EDIT, AND THE ONLY THING REGENERATION LOOKS AT. Once somebody types the actual
+  /// figure, regeneration must never overwrite it — that would silently restate a closed month.
+  /// NULL = nobody has touched this occurrence, so it is still the generated estimate and
+  /// regeneration is free to rewrite it. Temporal: every instance starts here.
+  edited_at DateTime?
+  /// NULL = never edited, in step with edited_at — the two are one fact and are written together.
+  edited_by String?
+
+  created_at DateTime @default(now())
+
+  cost Cost @relation(fields: [cost_id], references: [id], onDelete: Cascade)
+
+  @@unique([cost_id, period_start])
+  @@index([cost_id, period_start])
+  @@index([period_start])
+}
+
 model Overhead {
   id                    String         @id @default(uuid())
   group_id              String
@@ -3443,17 +3539,24 @@ model CostAllocation {
   group_id       String // denormalised tenant guard (indexed by-site pivot)
   site_id        String
   percent        Decimal  @db.Decimal(5, 2) // 0.01–100.00
+  /// Exactly ONE of these three owners is set — enforced by CostAllocation_one_owner_chk, which
+  /// Prisma cannot express. NULL = this allocation belongs to one of the other two kinds, never
+  /// "not filled in": an allocation owned by nothing is a cost apportioned to a subject nobody can
+  /// name, and the constraint refuses it.
   cost_person_id String?
   overhead_id    String?
+  cost_id        String?
   created_at     DateTime @default(now())
 
   group       Group       @relation(fields: [group_id], references: [id], onDelete: Cascade)
   site        Site        @relation(fields: [site_id], references: [id], onDelete: Cascade)
   cost_person CostPerson? @relation(fields: [cost_person_id], references: [id], onDelete: Cascade)
   overhead    Overhead?   @relation(fields: [overhead_id], references: [id], onDelete: Cascade)
+  cost        Cost?       @relation(fields: [cost_id], references: [id], onDelete: Cascade)
 
   @@unique([cost_person_id, site_id])
   @@unique([overhead_id, site_id])
+  @@unique([cost_id, site_id])
   @@index([group_id])
   @@index([site_id])
   @@index([cost_person_id])

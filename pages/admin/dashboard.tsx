@@ -275,6 +275,7 @@ export default function AdminDashboard(props: PageProps) {
   const [utilThresholds, setUtilThresholds] = useState<UtilisationThresholds>(defaultThresholds());
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
   const [anchorInfo, setAnchorInfo] = useState<{ reportingStart: string | null; clipped: boolean } | null>(null);
+  const [forward, setForward] = useState<{ key: string; from: string; pennies: number | null; estimateCount: number; instanceCount: number }[]>([]);
   // ── ONE PERIOD STRING, FOR EVERY TILE THAT NAMES ITS WINDOW ────────────────────────────────────
   // Six sub-lines said "this month" whatever was selected, and the DEFAULT selection is rolling_12 —
   // so the first screen described a twelve-month break-even as "hours to sell this month". The
@@ -341,6 +342,7 @@ export default function AdminDashboard(props: PageProps) {
         setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
         setMonthMeta({ inProgress: !!d.monthInProgress, daysElapsed: d.daysElapsed ?? 0, daysInMonth: d.daysInMonth ?? 0 });
         setAnchorInfo({ reportingStart: d.reportingStart ?? null, clipped: !!d.clipped });
+        setForward(Array.isArray(d.forward) ? d.forward : []);
         if (d.utilThresholds) setUtilThresholds(d.utilThresholds);
       }
     } catch { /* tiles keep last values */ }
@@ -721,6 +723,36 @@ export default function AdminDashboard(props: PageProps) {
         );
       })()}
 
+      {/* ── THE FORWARD STRIP ────────────────────────────────────────────────────────────────────
+          Its own strip, ABOVE the P&L heading and outside it, because these three tiles ignore the
+          period picker. Every tile below reports the selected window; mixing these in would break
+          the rule that a tile names the window it covers. */}
+      {forward.length > 0 && (
+        <div className="mt-8" data-testid="forward-strip">
+          <h2 className="text-lg font-bold text-ink">{t('pnl.forwardTitle')}</h2>
+          <p className="text-xs text-muted mb-3">{t('pnl.forwardNote')}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {forward.map((f) => (
+              <div key={f.key} className="bg-surface p-5 rounded-xl border border-line" data-testid={`forward-${f.key}`}>
+                <h3 className="text-sm font-semibold text-muted mb-2">
+                  {new Date(f.from).toLocaleDateString(props.locale, { month: 'long', year: 'numeric', timeZone: 'UTC' })}
+                </h3>
+                {/* `—`, never £0.00: a forward month with nothing entered is indistinguishable from
+                    a cheap one, and the cheap reading is the one somebody would act on. */}
+                <Figure className={`text-2xl font-bold tabular-nums ${f.pennies == null ? 'text-muted' : 'text-ink'}`}>
+                  {f.pennies == null ? '—' : fmt.money(f.pennies)}
+                </Figure>
+                <p className="text-xs text-muted mt-1" data-testid={`forward-state-${f.key}`}>
+                  {f.pennies == null ? t('pnl.forwardNone')
+                    : f.estimateCount > 0 ? t('pnl.forwardEstimates', { count: f.estimateCount, total: f.instanceCount })
+                    : t('pnl.forwardConfirmed')}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3 mt-8 mb-3">
         <div>
           <h2 className="text-lg font-bold text-ink">{t('pnl.title')}</h2>
@@ -950,7 +982,18 @@ export default function AdminDashboard(props: PageProps) {
             return (
               <div key={k} className={`bg-surface p-5 rounded-xl border border-line ${loading ? 'opacity-60' : ''}`}>
                 <h3 className="text-sm font-semibold text-muted mb-2">{t(`pnl.${k}`)}</h3>
-                {cb == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : k === 'costBase' ? (
+                {/* AN EMPTY REGISTER WITHHOLDS BOTH — the cost base and the break-even derived from
+                    it. Withheld with a REASON and a way to act, not a dash: a smaller cost base and
+                    a lower break-even are exactly what a garage would act on, and both would be
+                    wrong in the flattering direction. */}
+                {cb?.registerEmpty ? (
+                  <div data-testid={`register-empty-${k}`}>
+                    <Figure className="text-2xl font-bold tabular-nums text-muted">—</Figure>
+                    <p className="text-xs text-warn mt-1">{t('pnl.registerEmptyTitle')}</p>
+                    <p className="text-xs text-muted mt-1">{t('pnl.registerEmpty')}</p>
+                    <Link href="/admin/costs" className="text-xs text-accent underline">{t('pnl.registerEmptyLink')}</Link>
+                  </div>
+                ) : cb == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : k === 'costBase' ? (
                   <>
                     <Figure className="text-2xl font-bold tabular-nums text-ink">{fmt.money(cb.costBasePennies)}</Figure>
                     <p className="text-xs text-muted mt-1" data-testid="costbase-sub">{t('pnl.costBaseSub')}</p>

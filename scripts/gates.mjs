@@ -111,7 +111,7 @@ const TIERS = {
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
-    'mot-sweep-stamp-gate', 'enum-drift-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate', 'quote-drafts-gate', 'costbase-clip-gate', 'retry-transient-gate', 'wage-per-month-gate',
+    'mot-sweep-stamp-gate', 'enum-drift-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate', 'quote-drafts-gate', 'costbase-clip-gate', 'retry-transient-gate', 'wage-per-month-gate', 'costs-gate',
   ],
   /**
    * ── MANUAL: RUN ON PURPOSE, NOT ON EVERY PASS ────────────────────────────────────────────────

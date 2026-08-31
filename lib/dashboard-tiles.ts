@@ -9,6 +9,7 @@
  */
 import { EmploymentEventKind } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { costsInWindow } from '@/lib/costs';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
@@ -345,14 +346,46 @@ export async function monthlyWageBill(groupId: string, siteIds: string[], window
 }
 /** The Overheads register normalised monthly (annual ÷ 12, weekly × 52 ÷ 12), allocation-scaled.
  *  NO name-matching — the register IS the list; wages live in Headcount, never here. */
-export async function monthlyOverheads(groupId: string, siteIds: string[]): Promise<number> {
-  const overheads = (await prisma.overhead.findMany({
-    where: { group_id: groupId, is_active: true },
-    select: { ex_vat_amount_pennies: true, period: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
-  })) as any[];
-  const monthlyOf = (o: any) => o.period === 'annual' ? o.ex_vat_amount_pennies / 12 : o.period === 'weekly' ? (o.ex_vat_amount_pennies * 52) / 12 : o.ex_vat_amount_pennies;
-  return Math.round(overheads.reduce((a, o) =>
-    a + monthlyOf(o) * o.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100, 0));
+/**
+ * ── THE COSTS IN A WINDOW, SUMMED OVER OCCURRENCES ─────────────────────────────────────────────
+ * Was `monthlyOverheads(groupId, siteIds)` — no window at all — normalising one register to a month
+ * and letting callers multiply by the month count. Every month of every period carried today's
+ * figure, so a cost that started in June was charged to January. The same defect as the wage bill's,
+ * one table across, and fixed the same way: sum the occurrences that fall in the window.
+ *
+ * EMPTY IS NOT ZERO, and this is why the return is a shape rather than a number. A tenant with no
+ * costs defined has an UNKNOWN cost base, not a low one: on TMBS the overheads this replaces are
+ * 34% of the cost base, so reporting zero would improve net profit by £11,175 over five months and
+ * read as good news.
+ */
+export async function windowCosts(groupId: string, siteIds: string[], from: Date, to: Date) {
+  return costsInWindow(groupId, siteIds, from, to);
+}
+
+/**
+ * ── WHAT THE NEXT THREE MONTHS COST ─────────────────────────────────────────────────────────────
+ * Deliberately NOT a month-tile: every tile in the P&L strip reports the SELECTED period, and three
+ * tiles that ignore the picker would break the rule the reporting anchor just established — a tile
+ * names the window it covers. These live in their own forward strip.
+ *
+ * `—` WHEN THERE ARE NO INSTANCES, never £0.00. A past period showing zero is visibly odd; a
+ * FORWARD month showing a small number is indistinguishable from a cheap month, so a month nobody
+ * has generated yet must refuse to answer rather than answer nought. `estimateCount` is reported
+ * for the same reason: a forward figure built entirely from estimates is a plan, not a bill.
+ */
+export async function forwardCosts(groupId: string, siteIds: string[], now: Date, monthsAhead = 3) {
+  const out: { key: string; from: string; pennies: number | null; estimateCount: number; instanceCount: number }[] = [];
+  for (let i = 1; i <= monthsAhead; i++) {
+    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + i, 1));
+    const to = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1));
+    const c = await costsInWindow(groupId, siteIds, from, to);
+    out.push({
+      key: from.toISOString().slice(0, 7), from: from.toISOString(),
+      pennies: c.instanceCount === 0 ? null : c.pennies,
+      estimateCount: c.estimateCount, instanceCount: c.instanceCount,
+    });
+  }
+  return out;
 }
 
 export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Promise<unknown>> = {
@@ -371,17 +404,22 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       select: { site_id: true, default_labour_rate: true },
     })) as any[];
     const rateOf = new Map<string, number>(rates.filter((r) => r.default_labour_rate != null && Number(r.default_labour_rate) > 0).map((r) => [r.site_id, Number(r.default_labour_rate)]));
+    // ── AN EMPTY REGISTER WITHHOLDS THE COST BASE ────────────────────────────────────────────
+    // Not a smaller figure. A cost base with no costs in it is UNKNOWN, and the difference is the
+    // whole point: a low break-even and a healthy net profit are exactly what a garage would act
+    // on. Same rule as a period before the reporting anchor, and as pnl's import suppression —
+    // withheld server-side so the wrong figure never leaves this process.
+    const registerCheck = await costsInWindow(groupId, siteIds, from, to);
+    if (registerCheck.empty) return { registerEmpty: true, months };
     let wage = 0, over = 0, breakEvenCentihours = 0;
     const perSite: any[] = []; const ratesMissing: string[] = [];
     for (const s2 of sites) {
-      const [wb, o] = await Promise.all([monthlyWageBill(groupId, [s2.id], { from, to }), monthlyOverheads(groupId, [s2.id])]);
-      // The wage bill is ALREADY the total for this window — summed month by month, so a starter is
-      // not charged before they started. Overheads are still a monthly rate and are still
-      // multiplied; the register carries no dates, so every month of the window gets today's
-      // figure. That is a known gap of the same family, not this change.
-      const w = wb.pennies;
-      const cost = w + o * months;
-      wage += w; over += o * months;
+      const [wb, oc] = await Promise.all([monthlyWageBill(groupId, [s2.id], { from, to }), costsInWindow(groupId, [s2.id], from, to)]);
+      // BOTH are already totals for this window — wages summed month by month, costs summed over
+      // the occurrences that fall in it. Neither is multiplied by `months` any more.
+      const w = wb.pennies, o = oc.pennies;
+      const cost = w + o;
+      wage += w; over += o;
       const rate = rateOf.get(s2.id) ?? null;
       const hoursC = rate ? Math.round((cost / (rate * 100)) * 100) : null; // pennies ÷ (rate£×100 pennies/hr) → hours ×100
       if (cost > 0 && !rate) ratesMissing.push(s2.site_name);
@@ -510,10 +548,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // Wage bill + overheads via THE extracted helpers below (also the cost-base tile's reads —
     // one truth, never re-derived).
     const wageRead = await monthlyWageBill(groupId, siteIds, { from, to });
-    // The WINDOW TOTAL, not a monthly rate: multiplying it by `months` again would be twelve times
-    // wrong on a year. Overheads below are still monthly and are still multiplied.
+    // Both WINDOW TOTALS now — wages summed per calendar month, costs summed over the occurrences
+    // falling in the window. Neither is multiplied by `months`.
     const wageBillWindow = wageRead.pennies;
-    const overheadsMonthly = await monthlyOverheads(groupId, siteIds);
+    const costRead = await costsInWindow(groupId, siteIds, from, to);
 
     // IMPORT SUPPRESSION. A partially imported period charges the FULL month's wages and overheads
     // against whatever fraction of revenue has been committed, so netProfit/labourContribution are
@@ -523,7 +561,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const imported = await periodImportState(groupId, siteIds, from, to);
 
     const wageBill = wageBillWindow;
-    const operatingCosts = overheadsMonthly * months;
+    const operatingCosts = costRead.pennies;
     // Labour contribution: on the fixed-price model the margin IS the labour income (parts are
     // the only other cost) — so contribution = grossMargin − wageBill. SAME fields the net line
     // uses; by construction contribution − operatingCosts === netProfit.
@@ -535,7 +573,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
       uncostedPartsLines: uncosted.lines, uncostedPartsRetailPennies: uncosted.retailPennies, uncostedPartsInvoices: uncosted.invoices,
       imported };
     if (imported.suppressDerived) return base; // wageBill/labourContribution/operatingCosts/netProfit WITHHELD
-    return { ...base, wageBill, labourContribution, operatingCosts, netProfit };
+    // AN EMPTY COST REGISTER WITHHOLDS NET PROFIT TOO. It is margin − wages − costs, so an unknown
+    // third term makes it unknown — and unknown in the flattering direction, which is the one a
+    // garage acts on. labourContribution survives: it is margin − wages and needs no cost at all.
+    if (costRead.empty) return { ...base, wageBill, labourContribution, registerEmpty: true };
+    return { ...base, wageBill, labourContribution, operatingCosts, netProfit,
+      costEstimates: costRead.estimateCount, costInstances: costRead.instanceCount };
   },
 
   // Capacity — THE headline metric: a month-long burn-up of TWO CUMULATIVE labour-hour lines, plus

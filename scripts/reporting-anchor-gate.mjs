@@ -32,7 +32,7 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 const prose = (f) => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const m = (p) => p == null ? '—' : `£${(p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-let browser, prisma, original = undefined;
+let browser, prisma, original = undefined, seededCostId = null;
 try {
   prisma = await gatePrisma();
 
@@ -78,6 +78,19 @@ try {
   const P = await import('../lib/dashboard-periods.ts');
   const sites = (await prisma.site.findMany({ where: { group_id: ZZ_GROUP }, select: { id: true } })).map((s) => s.id);
   const NOW = new Date('2026-08-30T12:00:00Z');
+  // A COST, SO THERE IS A COST BASE TO RECONCILE. Since costs became instance-backed, an empty
+  // register WITHHOLDS the cost base — correctly, because a cost base with nothing in it is unknown
+  // rather than low. Reconciliation is only a question when there is something to reconcile, so the
+  // gate supplies one throwaway cost of its own and tears it down.
+  const seed = await prisma.cost.create({
+    data: { group_id: ZZ_GROUP, name: 'ZZANCHOR Rent', cadence: 'monthly', charge: 'spread',
+      active_from: new Date('2025-01-01T00:00:00.000Z'),
+      rates: { create: [{ effective_from: new Date('2025-01-01T00:00:00.000Z'), amount_pennies: 100_000 }] },
+      allocations: { create: [{ group_id: ZZ_GROUP, site_id: sites[0], percent: 100 }] } },
+    select: { id: true } });
+  seededCostId = seed.id;
+  const CG = await import('../lib/costs.ts');
+  await CG.regenerate(seed.id, new Date('2025-01-01T00:00:00.000Z'), new Date('2027-01-01T00:00:00.000Z'));
   const sel = P.resolveMonthSpan({ mpreset: 'rolling_12' }, 4, NOW);
   for (const anchor of ['2025-09-01', '2026-04-01', '2026-06-01']) {
     if (typeof A.clipSpanToAnchor !== 'function') { check(`anchor ${anchor}: reconciles`, false, 'no clipSpanToAnchor'); continue; }
@@ -140,6 +153,14 @@ try {
   if (browser) await browser.close().catch(() => {});
   // The anchor is a LIVE column on the gate tenant, not a throwaway row: whatever this run did, ZZ
   // leaves as it arrived, and the restore is asserted rather than assumed.
+  if (prisma && seededCostId) {
+    await prisma.costAllocation.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.costInstance.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.costRate.deleteMany({ where: { cost_id: seededCostId } }).catch(() => {});
+    await prisma.cost.delete({ where: { id: seededCostId } }).catch(() => {});
+    const leftCost = await prisma.cost.count({ where: { group_id: ZZ_GROUP, name: { startsWith: 'ZZANCHOR' } } }).catch(() => -1);
+    check('teardown removed the seeded cost (ZZ only)', leftCost === 0, `${leftCost} left`);
+  }
   if (prisma && original !== undefined) {
     await prisma.group.update({ where: { id: ZZ_GROUP }, data: { reporting_start_date: original } }).catch(() => {});
     const back = await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { reporting_start_date: true } }).catch(() => null);

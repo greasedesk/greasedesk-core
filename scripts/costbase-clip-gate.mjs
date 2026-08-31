@@ -61,12 +61,24 @@ try {
     `months=${w.months} — twelve months of payroll against five months of records is the defect`);
   check('  …and the cost base counted exactly those months', cb.months === 5, `months=${cb.months}`);
 
-  // THE DISCRIMINATING HALF. Clipping `from` while leaving `months` at twelve produces a window
-  // that LOOKS right and a total that is 2.4× too big — the failure that would survive review.
-  const monthly = 7_175_01; // this_month cost base, measured
-  check('  …and the total moved with it, not just the window',
-    cb.costBasePennies < monthly * 12 * 0.6,
-    `£${(cb.costBasePennies / 100).toFixed(2)} — twelve months would be about £${((monthly * 12) / 100).toFixed(2)}`);
+  // ── THE COST BASE IS NOW WITHHELD ON THIS TENANT ────────────────────────────────────────────
+  // TMBS's Overhead rows were retired when costs moved to Cost/CostInstance, and an EMPTY register
+  // withholds the cost base rather than reporting a smaller one — a cost base with nothing in it is
+  // unknown, not low. So the figure this gate used to pin (£7,175.01 a month) no longer exists, and
+  // asserting it would be asserting a number the product deliberately refuses to show.
+  check('an empty cost register WITHHOLDS the cost base', cb.registerEmpty === true,
+    'a smaller cost base and a lower break-even are exactly what a garage would act on');
+  check('  …and does not smuggle a figure out anyway',
+    cb.costBasePennies === undefined && cb.breakEvenCentihours === undefined, JSON.stringify(Object.keys(cb)));
+
+  // THE DISCRIMINATING HALF, kept — on the wage bill, which is windowed and present. Clipping
+  // `from` while leaving `months` at twelve produces a window that LOOKS right and a total 2.4×
+  // too big, and that is the failure this gate exists to catch.
+  const pnl = await T.MONTH_TILE_COMPUTES.pnl(ctx);
+  const oneMonthWages = 717_501 - 223_501; // measured: the wage half of the old monthly cost base
+  check('  …and the windowed total moved with it, not just the window',
+    pnl.wageBill < oneMonthWages * 12 * 0.8,
+    `£${(pnl.wageBill / 100).toFixed(2)} over ${cb.months} months — twelve would be far more`);
 
   // ── THE POINT OF ALL OF IT: ONE WINDOW, SO THE RATIO MEANS SOMETHING ────────────────────────
   const be = cb.breakEvenCentihours / 100;
@@ -79,16 +91,14 @@ try {
   check('break-even and sellable cover the SAME window',
     cb.months === w.months && ut.available != null,
     `costBase months ${cb.months}, window ${w.months}, sellable ${ut.available}`);
-  check('  …so the percentage is no longer over 100 by construction', pct != null && pct < 100,
-    `${be.toFixed(2)}h of ${sellable}h = ${pct == null ? 'n/a' : pct.toFixed(0)}%  (was 135%)`);
 
   // A SINGLE MONTH INSIDE THE DATA MUST NOT MOVE. The clip only ever removes months before the
   // records begin, so a window entirely after the data start is untouched — and this is what stops
   // the fix quietly rewriting every figure the garage already knows.
   const one = P.resolveMonthSpan({ mpreset: 'this_month' }, 4, NOW);
-  const cb1 = await T.MONTH_TILE_COMPUTES.costBase({ ...ctx, from: one.from, to: one.to, months: 1 });
-  check('a month inside the data is untouched', cb1.months === 1 && cb1.costBasePennies === 717_501,
-    `months=${cb1.months} £${(cb1.costBasePennies / 100).toFixed(2)} — unchanged from before the clip`);
+  const pnl1 = await T.MONTH_TILE_COMPUTES.pnl({ ...ctx, from: one.from, to: one.to, months: 1 });
+  check('a month inside the data is untouched', pnl1.months === 1 && pnl1.wageBill === 494_000,
+    `months=${pnl1.months} £${(pnl1.wageBill / 100).toFixed(2)} — one month of payroll, unchanged by the clip`);
 
   // ── elapsedLabel REFUSES A SPAN IT CANNOT DESCRIBE ───────────────────────────────────────────
   // It names the month of `from` and pairs it with a day count over the WHOLE span, so a

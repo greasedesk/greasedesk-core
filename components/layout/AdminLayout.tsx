@@ -47,6 +47,10 @@ const navItems: NavItemDef[] = [
   // invoice without having any business seeing what landed in the bank. The page re-checks
   // server-side, and so does the Stripe account session it mints.
   { key: 'payments', href: '/admin/payments', icon: '💳', ready: true, adminOnly: true },
+  // Costs sits beside Products — what the garage buys, and what it pays whether it sells or not.
+  // adminOnly for the same reason HR is: these figures are the cost base, and a mechanic seeing the
+  // rent is a different decision from a mechanic seeing a price.
+  { key: 'costs', href: '/admin/costs', icon: '🧮', ready: true, adminOnly: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
   { key: 'hr', href: '/admin/hr', icon: '🗂️', ready: true, adminOnly: true }, // wages live here — page + APIs re-check server-side
