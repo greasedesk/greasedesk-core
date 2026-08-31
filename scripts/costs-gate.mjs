@@ -1,7 +1,7 @@
 /**
  * File: scripts/costs-gate.mjs
  * @gate-timeout: 240
- * @gate-requires: db
+ * @gate-requires: server:3000, db
  *
  * A COST LANDS IN THE MONTHS IT APPLIES TO, AND THE CHARGE RULE ONLY DISTRIBUTES IT.
  *
@@ -17,7 +17,11 @@
  * DISTRIBUTION — which would make a garage's yearly cost depend on a display preference.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, serverReady } = await import('./_gate-preflight.mjs');
+const { chromium } = await import('playwright-core');
+const { readFileSync } = await import('node:fs');
+const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const prose = (f) => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 import './_ts.mjs';
 
 const out = [];
@@ -26,10 +30,73 @@ const m = (p) => p == null ? '—' : `£${(p / 100).toLocaleString('en-GB', { mi
 const d = (s) => new Date(`${s}T00:00:00.000Z`);
 const MARK = 'ZZCOST';
 
-let prisma, madeCosts = [];
+let prisma, browser, madeCosts = [];
 try {
   prisma = await gatePrisma();
   const C = await import('../lib/costs.ts');
+
+  // ── 0. THE DASHBOARD SURVIVES AN EMPTY REGISTER ───────────────────────────────────────────────
+  // THIS SECTION EXISTS BECAUSE ITS ABSENCE TOOK PRODUCTION DOWN. Withholding was implemented as a
+  // TRUTHY object with its fields removed — { registerEmpty: true } — and a consumer guarding with
+  // `if (cb3)` sailed through it and read `cb3.perSite.find`. React unmounted the whole tree, so
+  // the nav rendered its raw i18n keys and the page showed "a client-side exception has occurred".
+  //
+  // And no gate caught it because I removed the coverage myself: when the withheld state turned two
+  // dashboard gates red, I gave each a seeded cost so the tiles would render again — which deleted
+  // the only browser coverage of the branch I had just written. Here the empty register is the
+  // SUBJECT, not an obstacle, so nothing may seed one away.
+  console.log('\n— the dashboard with nothing entered —');
+  const zzSites0 = (await prisma.site.findMany({ where: { group_id: ZZ_GROUP }, select: { id: true } })).map((x) => x.id);
+  const preExisting = await prisma.cost.count({ where: { group_id: ZZ_GROUP } });
+  // NOT VACUOUS. If the tenant already had costs this section would prove nothing while passing,
+  // which is the shape that makes a green check meaningless.
+  check('the gate tenant’s register really is empty', preExisting === 0,
+    preExisting === 0 ? 'nothing to withhold away' : `${preExisting} cost(s) present — this section would test the wrong state`);
+
+  browser = await chromium.launch({ channel: 'chrome' });
+  const page = await (await browser.newContext()).newPage();
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(String(e.message).slice(0, 200)));
+  await page.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await page.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+  await page.goto(`${BASE}/admin/dashboard`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="register-empty-costBase"]', { timeout: 60000 }).catch(() => {});
+  const body = await page.innerText('body');
+
+  check('the dashboard renders at all', pageErrors.length === 0,
+    pageErrors[0] ?? 'no uncaught error — the crash showed up here as "Cannot read properties of undefined (reading \'find\')"');
+  // THE NAV IS THE TELL. A crashed tree renders i18n keys, so this is the cheap, unmistakable
+  // signal that the page is alive rather than merely responding.
+  // ASSERTED POSITIVELY, or it cannot fail where it runs. In production a crashed tree renders raw
+  // keys; in dev the error overlay blanks the body instead — so "no nav.* keys" is TRUE of a blank
+  // page and would have passed on the very crash it describes. Requiring a real label present is
+  // what makes it discriminating in both.
+  check('  …and the nav renders its labels', /\bDashboard\b/.test(body) && !/nav\.(dashboard|costs|signOut)/.test(body),
+    /nav\./.test(body) ? `raw keys: ${body.match(/nav\.\w+/g)?.slice(0, 3).join(', ')}`
+      : body.trim() ? 'Dashboard, Diary, Job Cards…' : 'BLANK BODY — the tree rendered nothing at all');
+  check('the withheld cost base gives a REASON, not a bare dash',
+    (await page.$('[data-testid="register-empty-costBase"]')) !== null && /No costs entered/i.test(body),
+    'a dash with no explanation is a broken tile; the reason and the link are the tile');
+  check('  …and break-even is withheld with it, since it is derived from it',
+    (await page.$('[data-testid="register-empty-breakEven"]')) !== null);
+  await browser.close(); browser = null;
+
+  // ── 0b. EVERY CONSUMER GUARDS ON A FIELD, NOT ON THE OBJECT ───────────────────────────────────
+  // `{ registerEmpty: true }` is truthy. A consumer that tests the OBJECT is testing something that
+  // is always true, and the first field it touches throws. Comment-stripped: the file necessarily
+  // discusses the trap it fell into.
+  const dashSrc = prose('pages/admin/dashboard.tsx');
+  const aliases = [...dashSrc.matchAll(/const (\w+) = tiles\??\.costBase as any;/g)].map((x) => x[1]);
+  check('the costBase consumers are found at all', aliases.length >= 3, aliases.join(', ') || 'none — the scan is anchored on nothing');
+  for (const a of aliases) {
+    // The banned shape, exactly: a bare truthiness test on the object.
+    const bare = new RegExp(`if\\s*\\(\\s*!?${a}\\s*\\)`);
+    const guardsOnField = new RegExp(`${a}\\?\\.|${a}\\.registerEmpty|${a}\\.(breakEvenCentihours|perSite)\\s*[>&]|!\\(${a}\\.`);
+    check(`  ${a} guards on a field, not on the object`, !bare.test(dashSrc) && guardsOnField.test(dashSrc),
+      bare.test(dashSrc) ? `if (${a}) — passes on { registerEmpty: true }, then throws on the first field` : 'guarded on what it reads');
+  }
 
   // ── 1. THE INVARIANT: THE SETTING DISTRIBUTES, IT DOES NOT CHANGE ─────────────────────────────
   console.log('\n— a year costs the same either way —');
@@ -125,6 +192,7 @@ try {
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));
 } finally {
+  if (browser) await browser.close().catch(() => {});
   if (prisma && madeCosts.length) {
     await prisma.costAllocation.deleteMany({ where: { cost_id: { in: madeCosts } } }).catch(() => {});
     await prisma.costInstance.deleteMany({ where: { cost_id: { in: madeCosts } } }).catch(() => {});
