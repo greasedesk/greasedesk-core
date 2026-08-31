@@ -7,13 +7,14 @@
  * SAME financial truth as the Invoices view: invoice rows + the money chokepoints (snapshot lines
  * once paid, live card items while issued). No money logic is re-implemented here.
  */
+import { EmploymentEventKind } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { periodImportState, NO_IMPORT, type ImportPeriod } from '@/lib/import-period';
 import { listWhere } from '@/lib/invoice-list-filters';
 import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDateWhere } from '@/lib/invoice';
 import { receivedInPeriod } from '@/lib/payments';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
-import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
+import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isEmployedDuring, resolveValuesAt, isFiniteNumber } from '@/lib/capacity';
 import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
@@ -266,12 +267,32 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
 export type WageBill = { pennies: number; assumedPayPeople: string[]; hourlyExcludedPeople: string[] };
 
 export async function monthlyWageBill(groupId: string, siteIds: string[], window: { from: Date; to: Date }): Promise<WageBill> {
-  // BASIS 'pay' — the LAST PAID day bounds cost, not the last working day. Payment in lieu means
-  // the P&L carries someone for a month in which they generated no capacity, and that is correct.
+  // ── SUMMED MONTH BY MONTH, AND `pennies` IS THE WINDOW TOTAL ────────────────────────────────
+  // It used to ask the whole window one question — who overlapped it at any point, at their pay as
+  // at the window END — and hand back a monthly rate for the caller to multiply. Every one of those
+  // people was then charged to every month. On TMBS that put a starter (1 June 2026) on the April
+  // payroll and a leaver (28 March 2026) on all twelve months of a September year: £85,280.04 where
+  // the months actually paid come to £61,966.66, 27% too high, straight into net profit, the cost
+  // base and break-even hours.
+  //
+  // THE SIGNATURE IS UNCHANGED ON PURPOSE. pnl, costBase and manpower all read this one function,
+  // and lib/manpower states grossPayPennies ≡ monthlyWageBill().pennies. A separate per-month helper
+  // would let the cost base be corrected while the Gross pay tile stayed wrong — and the identity
+  // would quietly become false with nothing failing to say so.
+  //
+  // WHAT CALLERS MUST NOT DO NOW: multiply by `months`. `pennies` is the total for the window it was
+  // given, so a caller that multiplies again is twelve times wrong on a year — and reads plausibly.
+  // wage-per-month-gate scans for that.
+  //
+  // THREE READS, NOT THREE PER MONTH. The people and the wage events for the whole window are
+  // fetched once and the months are answered in memory (isEmployedDuring / resolveValuesAt in
+  // lib/capacity, which are the same rules the SQL uses). A query per month per site would have put
+  // ~70 extra round trips on a dashboard load.
   const employed = employedDuring(groupId, window, 'pay');
   const people = (await prisma.costPerson.findMany({
     where: { ...employed, cost_type: 'salary' },
-    select: { id: true, name: true, amount_pennies: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
+    select: { id: true, name: true, amount_pennies: true, start_date: true, pay_start_date: true,
+      work_end_date: true, pay_end_date: true, allocations: { where: { site_id: { in: siteIds } }, select: { percent: true } } },
   })) as any[];
   // HOURLY PEOPLE ARE COSTED AT NOTHING, and until now nobody was told. `amount_pennies` is an
   // hourly RATE for them, not an annual salary, so ÷12 would be meaningless and the filter above
@@ -282,16 +303,45 @@ export async function monthlyWageBill(groupId: string, siteIds: string[], window
     where: { ...employed, cost_type: { not: 'salary' }, allocations: { some: { site_id: { in: siteIds } } } },
     select: { name: true },
   })) as any[]).map((p2) => p2.name as string);
-  const paid = await valuesAtWindowEnd<number>(people.map((p2) => p2.id), window.to, 'wage', 'amount_pennies', isFiniteNumber);
-  const paidAt = paid.values;
-  const assumedPayPeople: string[] = [];
-  const pennies = Math.round(people.reduce((a, p2) => {
-    const annual = paidAt.get(p2.id);
-    if (annual == null) assumedPayPeople.push(p2.name);
-    const use = annual ?? Number(p2.amount_pennies);
-    return a + (use / 12) * p2.allocations.reduce((s: number, al: any) => s + Number(al.percent), 0) / 100;
-  }, 0));
-  return { pennies, assumedPayPeople, hourlyExcludedPeople };
+  // NO CAST. The select is exhaustive and resolveValuesAt takes exactly this shape, so the types
+  // line up on their own — and an untyped cast on a Prisma result is how a forgotten `select`
+  // compiles (see lib/db's note on the one word that made every query in the codebase untyped).
+  // The comment is worded around the literal too: prisma-any-gate counts occurrences in the FILE,
+  // comments included, so writing the cast out here would have raised the count it guards.
+  const evs = await prisma.employmentEvent.findMany({
+    where: { cost_person_id: { in: people.map((p2) => p2.id) }, kind: EmploymentEventKind.wage, voided_at: null },
+    orderBy: [{ effective_date: 'asc' }, { created_at: 'asc' }],
+    select: { cost_person_id: true, effective_date: true, value_json: true, previous_json: true },
+  });
+
+  // ASSUMED PAY IS NOW A FACT ABOUT THE WINDOW, NOT ABOUT EACH MONTH. A person with no wage history
+  // is assumed to have been on today's pay for EVERY month they were employed, so naming them once
+  // is still exactly right — the disclosure says "we do not know what this person was paid then",
+  // which does not become twelve separate admissions by being true twelve times. Deduped for that
+  // reason: a Set, not a push per month.
+  const assumed = new Set<string>();
+  let pennies = 0;
+  const cursor = new Date(Date.UTC(window.from.getUTCFullYear(), window.from.getUTCMonth(), 1));
+  while (cursor.getTime() < window.to.getTime()) {
+    const mFrom = new Date(cursor);
+    const mTo = new Date(Date.UTC(mFrom.getUTCFullYear(), mFrom.getUTCMonth() + 1, 1));
+    const paidAt = resolveValuesAt<number>(evs, mTo, 'amount_pennies', isFiniteNumber).values;
+    let monthPennies = 0;
+    for (const p2 of people) {
+      if (!isEmployedDuring(p2, { from: mFrom, to: mTo }, 'pay')) continue;
+      const annual = paidAt.get(p2.id);
+      if (annual == null) assumed.add(p2.name);
+      const use = annual ?? Number(p2.amount_pennies);
+      monthPennies += (use / 12) * p2.allocations.reduce((s2: number, al: any) => s2 + Number(al.percent), 0) / 100;
+    }
+    // ROUNDED PER MONTH, THEN SUMMED — not summed then rounded once. Each month is a figure a
+    // garage can see on its own (the Gross pay tile is exactly one of these), so a year must equal
+    // the twelve months you could add up by hand. Rounding once at the end is a penny more accurate
+    // and produces a total that does not reconcile with the screen, which is the worse trade.
+    pennies += Math.round(monthPennies);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return { pennies, assumedPayPeople: [...assumed], hourlyExcludedPeople };
 }
 /** The Overheads register normalised monthly (annual ÷ 12, weekly × 52 ÷ 12), allocation-scaled.
  *  NO name-matching — the register IS the list; wages live in Headcount, never here. */
@@ -325,9 +375,13 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     const perSite: any[] = []; const ratesMissing: string[] = [];
     for (const s2 of sites) {
       const [wb, o] = await Promise.all([monthlyWageBill(groupId, [s2.id], { from, to }), monthlyOverheads(groupId, [s2.id])]);
+      // The wage bill is ALREADY the total for this window — summed month by month, so a starter is
+      // not charged before they started. Overheads are still a monthly rate and are still
+      // multiplied; the register carries no dates, so every month of the window gets today's
+      // figure. That is a known gap of the same family, not this change.
       const w = wb.pennies;
-      const cost = (w + o) * months;
-      wage += w * months; over += o * months;
+      const cost = w + o * months;
+      wage += w; over += o * months;
       const rate = rateOf.get(s2.id) ?? null;
       const hoursC = rate ? Math.round((cost / (rate * 100)) * 100) : null; // pennies ÷ (rate£×100 pennies/hr) → hours ×100
       if (cost > 0 && !rate) ratesMissing.push(s2.site_name);
@@ -456,7 +510,9 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // Wage bill + overheads via THE extracted helpers below (also the cost-base tile's reads —
     // one truth, never re-derived).
     const wageRead = await monthlyWageBill(groupId, siteIds, { from, to });
-    const wageBillMonthly = wageRead.pennies;
+    // The WINDOW TOTAL, not a monthly rate: multiplying it by `months` again would be twelve times
+    // wrong on a year. Overheads below are still monthly and are still multiplied.
+    const wageBillWindow = wageRead.pennies;
     const overheadsMonthly = await monthlyOverheads(groupId, siteIds);
 
     // IMPORT SUPPRESSION. A partially imported period charges the FULL month's wages and overheads
@@ -466,7 +522,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     // revenueNet, partsCost and grossMargin are true as far as they go and are kept.
     const imported = await periodImportState(groupId, siteIds, from, to);
 
-    const wageBill = wageBillMonthly * months;
+    const wageBill = wageBillWindow;
     const operatingCosts = overheadsMonthly * months;
     // Labour contribution: on the fixed-price model the margin IS the labour income (parts are
     // the only other cost) — so contribution = grossMargin − wageBill. SAME fields the net line

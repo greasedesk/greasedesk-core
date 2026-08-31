@@ -162,6 +162,29 @@ export function employedDuring(groupId: string, window: CapacityWindow, basis: E
   };
 }
 
+/**
+ * THE SAME RULE AS `employedDuring`, IN MEMORY.
+ *
+ * Two forms of one rule is a divergence waiting to happen, so they sit together and
+ * wage-per-month-gate pins that they agree on the boundary cases. The in-memory form exists because
+ * a per-month payroll would otherwise cost one query per month per site: monthlyWageBill fetches
+ * the window's people once and asks this question twelve times.
+ *
+ * Read it against the SQL above line for line — started on or before the window end, not ended
+ * before the window start, with `pay_*` governing when set and the working dates when not.
+ */
+export function isEmployedDuring(
+  p: { start_date: Date | null; pay_start_date?: Date | null; work_end_date: Date | null; pay_end_date?: Date | null },
+  window: CapacityWindow,
+  basis: EmploymentBasis = 'work',
+): boolean {
+  const start = basis === 'pay' ? (p.pay_start_date ?? p.start_date) : p.start_date;
+  const end = basis === 'pay' ? (p.pay_end_date ?? p.work_end_date) : p.work_end_date;
+  const startedBefore = start == null || start.getTime() < window.to.getTime();
+  const notEndedBefore = end == null || end.getTime() >= window.from.getTime();
+  return startedBefore && notEndedBefore;
+}
+
 export async function getAvailableHours(groupId: string, siteId: string, window: CapacityWindow): Promise<AvailableHours> {
   const [site, people] = await Promise.all([
     prisma.site.findFirst({ where: { id: siteId, group_id: groupId }, select: { open_days: true } }) as any,
@@ -448,14 +471,28 @@ export type ResolvedValues<T> = {
 export async function valuesAtWindowEnd<T>(
   ids: string[], to: Date, kind: string, field: string, validate: (v: unknown) => v is T,
 ): Promise<ResolvedValues<T>> {
-  const values = new Map<string, T>();
-  const malformed: string[] = [];
-  if (!ids.length) return { values, malformed };
+  if (!ids.length) return { values: new Map<string, T>(), malformed: [] };
   const evs = (await prisma.employmentEvent.findMany({
     where: { cost_person_id: { in: ids }, kind: kind as any, voided_at: null },
     orderBy: [{ effective_date: 'asc' }, { created_at: 'asc' }],
     select: { cost_person_id: true, effective_date: true, value_json: true, previous_json: true },
   })) as any[];
+  return resolveValuesAt(evs, to, field, validate);
+}
+
+/**
+ * The resolution itself, over events ALREADY FETCHED — so a caller asking the same question for
+ * twelve consecutive months pays for one query, not twelve. `valuesAtWindowEnd` is this function
+ * plus the read; both must stay one rule, which is why the loop lives here and not in either.
+ *
+ * Events must arrive ordered by effective_date then created_at, as the query above orders them.
+ */
+export function resolveValuesAt<T>(
+  evs: { cost_person_id: string; effective_date: Date; value_json: any; previous_json: any }[],
+  to: Date, field: string, validate: (v: unknown) => v is T,
+): ResolvedValues<T> {
+  const values = new Map<string, T>();
+  const malformed: string[] = [];
   const byPerson = new Map<string, any[]>();
   for (const e of evs) byPerson.set(e.cost_person_id, [...(byPerson.get(e.cost_person_id) ?? []), e]);
   for (const [pid, list] of byPerson) {
