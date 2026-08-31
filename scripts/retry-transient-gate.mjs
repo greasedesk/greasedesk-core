@@ -104,6 +104,35 @@ for (const f of ['lib/db.ts', 'scripts/_gate-retry.mjs']) {
     hits === 1 ? 'comments stripped, so this is the predicate itself' : `${hits} matches outside comments`);
 }
 
+// ── 4b. lib/db: P2028 IS NOT RETRYABLE AT THIS LEVEL ────────────────────────────────────────────
+// `withTransientRetry` is a QUERY extension, so it wraps operations INSIDE an interactive
+// transaction. P2028 means the transaction is already closed — retrying the inner query cannot
+// reopen it, so every attempt is doomed before it is made. On 31 Aug a tenant purge whose work
+// exceeded its 5s budget retried five times, spent 12.4s of backoff, and failed with the same
+// error it started with. The only meaningful retry unit for P2028 is the whole $transaction call,
+// which an extension cannot reach.
+//
+// P1017 stays: outside a transaction a closed connection is genuinely transient, and the next
+// attempt gets a fresh one.
+console.log('\n— lib/db classification —');
+const DB = await import('../lib/db.ts');
+check('lib/db exports its retry classification', typeof DB.isRetryable === 'function',
+  'asserted on the FUNCTION, not on a source scan of the set');
+if (typeof DB.isRetryable === 'function') {
+  const err = (code, message = '') => Object.assign(new Error(message), { code });
+  const P2028 = err('P2028', 'Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 5000 ms, however 17599 ms passed since the start of the transaction.');
+  check('a P2028 is NOT retried', DB.isRetryable(P2028, 'deleteMany') === false,
+    'the transaction is gone; no retry of the inner query can bring it back');
+  check('  …not even for a findMany', DB.isRetryable(P2028, 'findMany') === false);
+  check('a P1017 on an idempotent operation IS still retried', DB.isRetryable(err('P1017'), 'deleteMany') === true,
+    'outside a transaction a closed connection is genuinely transient');
+  check('  …but not for a create, which could duplicate', DB.isRetryable(err('P1017'), 'create') === false);
+  check('a P1001 is retried even for a create', DB.isRetryable(err('P1001'), 'create') === true,
+    'raised while OBTAINING a connection — nothing was sent, so there is nothing to duplicate');
+  check('a message-less initialization error is retried', DB.isRetryable(noCodeNoMessage, 'create') === true);
+  check('an unknown code is not retried', DB.isRetryable(err('P2002'), 'findMany') === false);
+}
+
 // ── 5. AND IT NAMES ITSELF WHEN IT IS CAUGHT ────────────────────────────────────────────────────
 // Recognising the fault and reporting it are the two halves of the same problem. Every gate printed
 // `String(e?.message ?? e)`, which for this error prints nothing at all — "✗ run completed —" with

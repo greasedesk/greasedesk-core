@@ -103,7 +103,7 @@ const TIERS = {
   ],
   core: [
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
-    'demo-fuel-gate', 'demo-generation-gate', 'document-credit-gate', 'marketing-board-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
+    'demo-fuel-gate', 'document-credit-gate', 'marketing-board-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
     'demo-subject-gate', 'due-items-gate', 'due-timing-gate', 'gate-hygiene-gate',
     'seeds-from-props-gate',
     'intake-prompts-gate', 'intake-report-gate', 'no-show-gate', 'notify-scope-gate',
@@ -113,6 +113,24 @@ const TIERS = {
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
     'mot-sweep-stamp-gate', 'enum-drift-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate', 'quote-drafts-gate', 'costbase-clip-gate', 'retry-transient-gate', 'wage-per-month-gate',
   ],
+  /**
+   * ── MANUAL: RUN ON PURPOSE, NOT ON EVERY PASS ────────────────────────────────────────────────
+   * Still DECLARED, deliberately. Deleting a gate from every tier makes it vanish — it stops being
+   * reported and nobody notices it is gone, which is worse than a red. Listed here it appears in
+   * `--list` with a tier, and a bare `node scripts/gates.mjs` (no --tier) still runs it.
+   *
+   * demo-generation-gate generates a whole tenant — 810 cards — and exceeded its 2,700s limit three
+   * times on 31 Aug 2026 while the database was slow, once taking 2h54m at 0% CPU. Each failure
+   * stops before its own teardown and ORPHANS the tenant it made, which then makes
+   * demo-lifecycle-gate refuse. So a bad afternoon cost three orphans and put 24 minutes on every
+   * core run for a result nobody could act on.
+   *
+   * Run it deliberately, when the database is quick and somebody is watching:
+   *     node scripts/gates.mjs --tier manual
+   *     node scripts/demo-generation-gate.mjs
+   * and check for a leftover Gateholm tenant afterwards if it does not finish.
+   */
+  manual: ['demo-generation-gate'],
   slow: [
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',

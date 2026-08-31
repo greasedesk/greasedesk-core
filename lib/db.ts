@@ -32,8 +32,27 @@ import { clientIsStale, warnOnce, STALE_CLIENT_MESSAGE } from '@/lib/client-fres
 
 /** Never sent: the connection itself could not be obtained. Safe to repeat anything. */
 const NEVER_SENT = new Set(['P1001', 'P1002', 'P2024']);
-/** Possibly sent: only repeat operations that are the same run twice as once. */
-const MAYBE_SENT = new Set(['P1017', 'P2028']);
+/**
+ * Possibly sent: only repeat operations that are the same run twice as once.
+ *
+ * ── P2028 WAS HERE AND HAD TO COME OUT (31 Aug 2026) ────────────────────────────────────────────
+ * P2028 is TRANSACTION-SCOPED, and this retry is a QUERY extension — it wraps operations running
+ * INSIDE an interactive transaction. By the time P2028 is raised the transaction is already closed,
+ * so retrying the inner query cannot reopen it: every attempt is doomed before it is made.
+ *
+ * It cost a real run. A tenant purge whose 13 deletes exceeded the default 5s transaction budget
+ * ("the timeout for this transaction was 5000 ms, however 17599 ms passed") retried five times,
+ * spent 12.4s of backoff, and failed with the error it started with — while looking, in the log,
+ * like a transient fault being handled. The retry was not merely unhelpful; it delayed the truth.
+ *
+ * The only meaningful retry unit for P2028 is the whole `$transaction` call, which an extension
+ * cannot reach. A caller that wants that must wrap its own transaction.
+ *
+ * P1017 STAYS. Outside a transaction a closed connection is genuinely transient and the next
+ * attempt gets a fresh one — which is why the distinction is by CAUSE, not by how alike the two
+ * codes look.
+ */
+const MAYBE_SENT = new Set(['P1017']);
 /** Same result whether applied once or five times. `create` is conspicuously absent. */
 const IDEMPOTENT = new Set([
   'findUnique', 'findUniqueOrThrow', 'findFirst', 'findFirstOrThrow', 'findMany',
@@ -82,6 +101,29 @@ function withFreshnessGuard(client: PrismaClient) {
   });
 }
 
+/**
+ * IS THIS FAULT WORTH REPEATING, FOR THIS OPERATION?
+ *
+ * Exported so retry-transient-gate can assert the rule itself rather than scan the sets above — a
+ * scan proves the spelling, not the decision. Pure: it reads the error and the operation name and
+ * nothing else.
+ */
+export function isRetryable(e: any, operation: string): boolean {
+  const code = e?.code;
+  // ── THE WAKE HAS NO CODE ──────────────────────────────────────────────────────────────────────
+  // PrismaClientInitializationError carries no `code`, so every set above misses it. It means the
+  // connection could not be OBTAINED — a Neon compute asleep after idle refusing the first caller
+  // — so nothing was sent and anything may be repeated, exactly like P1001.
+  //
+  // CORRECTED 30 Aug 2026: the commit that added this (d6c047c) claimed those errors carried no
+  // message either. They carry "Can't reach database server at <host>", which the gate helper's
+  // text match already caught. The clause is still right, just narrower than advertised — it covers
+  // an initialization error whose wording no regex knows.
+  if (code == null && e?.constructor?.name === 'PrismaClientInitializationError') return true;
+  if (NEVER_SENT.has(code)) return true;
+  return MAYBE_SENT.has(code) && IDEMPOTENT.has(operation);
+}
+
 function withTransientRetry(client: PrismaClient) {
   return client.$extends({
     query: {
@@ -98,8 +140,7 @@ function withTransientRetry(client: PrismaClient) {
             // refusal instead of a wait — so nothing was sent and anything may be repeated,
             // exactly like P1001. On 29 Aug it took out four gates at once, standalone, and they
             // recovered untouched a minute later.
-            const neverConnected = code == null && e?.constructor?.name === 'PrismaClientInitializationError';
-            const canRetry = neverConnected || NEVER_SENT.has(code) || (MAYBE_SENT.has(code) && IDEMPOTENT.has(operation));
+            const canRetry = isRetryable(e, operation);
             if (!canRetry || attempt >= RETRIES) throw e;
             const backoff = Math.min(8_000, 400 * 2 ** (attempt - 1));
             console.warn(`[db] ${code ?? e?.constructor?.name} on ${operation}, attempt ${attempt}/${RETRIES} — retrying in ${backoff}ms`);

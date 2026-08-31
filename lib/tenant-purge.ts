@@ -65,6 +65,9 @@ import { getStripe } from '@/lib/stripe';
 import { deleteByPrefix, tenantPrefix } from '@/lib/r2';
 import { tenantRateLimitKeys } from '@/lib/auth-rate-limit';
 
+/** See the note at the transaction below: the default 5s budget is not enough for a purge. */
+const PURGE_TX = { maxWait: 30_000, timeout: 120_000 };
+
 /**
  * Thrown INSTEAD of purging when the subscription cannot be confirmed stopped. Carries the
  * subscription id because that id is about to become the only way to find the thing, and if the
@@ -248,6 +251,23 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
   const r2 = await deleteByPrefix(tenantPrefix(groupId));
 
   // 3. DB — ordered, past the NoAction FKs, in ONE transaction.
+  //
+  // ── ITS OWN BUDGET, BECAUSE THE DEFAULT IS FIVE SECONDS ────────────────────────────────────────
+  // Thirteen deletes, three of which cascade to child tables, so the work scales with the tenant
+  // even though the statement count does not. On 31 Aug this took 17,599 ms against Prisma's 5,000
+  // ms default and died with P2028 — "consider increasing the interactive transaction timeout or
+  // doing less work in the transaction" — leaving a half-generated demo tenant unpurged. Twice.
+  //
+  // Following lib/demo/generate's DEMO_TX, which exists for the same stall on the same database,
+  // and doubled: a purge is rarer and larger than one generation batch, and the cost of a budget
+  // that is too generous is a slow failure, while the cost of one that is too small is an
+  // undeleted tenant. `maxWait` is its own trap — it bounds ACQUIRING the connection, and the 2s
+  // default fails under exactly the load that makes the timeout matter.
+  //
+  // NOT SPLIT. The identity sweep and the group delete must stay atomic — "a purge that half-erased
+  // somebody would be worse than one that failed, because only the failure is visible" — and
+  // splitting the bulk deletes above them trades a clean failure for a resumable partial one. That
+  // trade should be forced by a measurement near this ceiling, not anticipated.
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.invoice.deleteMany({ where: { group_id: groupId } });      // → InvoiceLine cascades
     await tx.booking.deleteMany({ where: { group_id: groupId } });
@@ -278,7 +298,7 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     // (lib/auth-rate-limit.reapRateLimits).
 
     await tx.group.delete({ where: { id: groupId } });                 // cascades the entire remainder
-  });
+  }, PURGE_TX);
 
   const after = await countTenantRows(groupId, subjects); // SAME identifiers — see the header
 
