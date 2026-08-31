@@ -135,13 +135,16 @@ function ProfitCentreTags({ tags, siteId, testName }: { tags: PcTag[]; siteId: s
   );
 }
 
-export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial, utilRedInitial, utilAmberInitial, countryName, tzOptions, tzFixed, fyDefaultMonth, testName }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number; utilRedInitial?: number; utilAmberInitial?: number }) {
+export default function FinancialSettings({ initial, profitCentres, sites, selectedSiteId, isAdmin, locale, taxLabelInitial, fyStartMonthInitial, utilRedInitial, utilAmberInitial, countryName, tzOptions, tzFixed, fyDefaultMonth, testName, reportingStartInitial }: PageProps & { taxLabelInitial?: string; fyStartMonthInitial?: number; utilRedInitial?: number; utilAmberInitial?: number; reportingStartInitial?: string }) {
   const router = useRouter();
   const [settings, setSettings] = useState<SiteSettings>(initial);
   const rateSym = currencySymbol({ currency: settings.currencyCode, locale }); // labour-rate unit label, from the tenant currency
   const [isSaving, setIsSaving] = useState(false);
   const [taxLabel, setTaxLabel] = useState(taxLabelInitial ?? 'VAT');
   const [fyStartMonth, setFyStartMonth] = useState(String(fyStartMonthInitial ?? 4)); // business-wide (Group), like the tax label
+  // The reporting anchor — business-wide, and the sibling of the FY start: between them they frame
+  // every figure on the dashboard. Held as YYYY-MM because it is always the first of a month.
+  const [reportingStart, setReportingStart] = useState(String(reportingStartInitial ?? '').slice(0, 7));
   const [utilRed, setUtilRed] = useState(String(utilRedInitial ?? 50));
   const [utilAmber, setUtilAmber] = useState(String(utilAmberInitial ?? 75));
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
@@ -182,7 +185,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       // The thresholds share this write. Its refusal is SURFACED, not swallowed — an inverted pair
       // must not save silently and leave a light that looks like it works.
       const cRes = await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth), util_red_below: Number(utilRed), util_amber_below: Number(utilAmber) }) });
+        body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth), util_red_below: Number(utilRed), util_amber_below: Number(utilAmber), reporting_start_date: `${reportingStart}-01` }) });
       if (!cRes.ok) { const cd = await cRes.json().catch(() => ({})); throw new Error(cd?.message || 'Could not save the business-wide settings.'); }
       setMessage({ text: 'Settings saved successfully!', type: 'success' });
     } catch (err: any) {
@@ -264,6 +267,15 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
                 </select>
                 <p className="text-xs text-muted mt-1">What your accounting year runs from — used for financial-year reporting. Business-wide (every location). Most {countryName} businesses start in {new Date(2026, fyDefaultMonth - 1, 1).toLocaleDateString(locale, { month: 'long' })}.</p>
               </div>
+              <div>
+                <label htmlFor="reportingStart" className={labelClass}>Reporting starts</label>
+                <input id="reportingStart" type="month" value={reportingStart} onChange={(e) => setReportingStart(e.target.value)} className={inputClass} />
+                <p className="text-xs text-muted mt-1">
+                  The first month your dashboard reports on. Every figure — revenue, costs, capacity, utilisation —
+                  is measured from here, so a period reaching further back is shortened to it and says so.
+                  Set to your earliest records; move it forward to exclude a period you would rather not report on.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -342,12 +354,13 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const profitCentres: PcTag[] = pcs.map((p: PcDbRow) => ({ id: p.id, name: p.name, category: p.category }));
   const sites: SiteOpt[] = allSites.map((s) => ({ id: s.id, name: s.site_name }));
 
-  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true, util_red_below: true, util_amber_below: true } })) as any;
+  const grpTax = (await prisma.group.findUnique({ where: { id: groupId }, select: { tax_label: true, fy_start_month: true, util_red_below: true, util_amber_below: true, reporting_start_date: true } })) as any;
   return { props: {
     initial, profitCentres, sites, selectedSiteId, isAdmin: true,
     locale: (site as any)?.locale ?? profile.locale,
     taxLabelInitial: grpTax?.tax_label ?? profile.taxLabel,
     fyStartMonthInitial: grpTax?.fy_start_month ?? profile.fyStartMonth,
+    reportingStartInitial: grpTax?.reporting_start_date ? new Date(grpTax.reporting_start_date).toISOString().slice(0, 10) : null,
     utilRedInitial: grpTax?.util_red_below ?? 50,
     utilAmberInitial: grpTax?.util_amber_below ?? 75,
     countryName: profile.name, tzOptions: choices.options, tzFixed: choices.fixed,

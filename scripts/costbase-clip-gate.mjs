@@ -28,6 +28,7 @@ import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const T = await import('../lib/dashboard-tiles.ts');
 const P = await import('../lib/dashboard-periods.ts');
+const A = await import('../lib/reporting-anchor.ts');
 const prisma = await gatePrisma();
 
 const TMBS = '854d38e7-6dd4-4836-af61-a0d169639a78';
@@ -40,18 +41,25 @@ try {
   const sites = (await prisma.site.findMany({ where: { group_id: TMBS }, select: { id: true } })).map((s) => s.id);
   // A DATA START FIVE MONTHS AGO, stated rather than read: the gate is about the RULE, and pinning
   // the boundary keeps it true when the tenant's real first record moves.
-  const dataStart = new Date('2026-04-01T00:00:00.000Z');
+  // AN ANCHOR FIVE MONTHS AGO, stated rather than read: the gate is about the RULE, and pinning the
+  // boundary keeps it true when the tenant's own anchor moves.
+  //
+  // CLIPPED AT THE SEAM, NOT INSIDE THE TILE. costBase used to clip for itself; the clip now happens
+  // once where the API builds the tile context, so this gate applies it the same way the API does.
+  // The invariant is unchanged and is the reason the gate exists: the total must move with the
+  // window, not just the window.
+  const anchor = new Date('2026-04-01T00:00:00.000Z');
   const span = P.resolveMonthSpan({ mpreset: 'rolling_12' }, 4, NOW);
-  const ctx = { groupId: TMBS, siteIds: sites, from: span.from, to: span.to, months: span.months, now: NOW, dataStart };
+  const w = A.clipSpanToAnchor(span.from, span.to, anchor);
+  const ctx = { groupId: TMBS, siteIds: sites, from: w.from, to: w.to, months: w.months, now: NOW, dataStart: null };
 
   const cb = await T.MONTH_TILE_COMPUTES.costBase(ctx);
   const ut = await T.MONTH_TILE_COMPUTES.utilisation(ctx);
 
   check('the selection really is twelve months', span.months === 12, `${span.from.toISOString().slice(0, 10)} → ${span.to.toISOString().slice(0, 10)}`);
-  check('the cost base is clipped to the data start', cb.months === 5,
-    `months=${cb.months} — twelve months of payroll against five months of records is the defect`);
-  check('  …and its window says so', cb.clippedFrom === '2026-04-01',
-    `${cb.clippedFrom} — the figure must be able to name the period it covers`);
+  check('the window handed to the tiles is clipped to the anchor', w.months === 5 && w.clipped,
+    `months=${w.months} — twelve months of payroll against five months of records is the defect`);
+  check('  …and the cost base counted exactly those months', cb.months === 5, `months=${cb.months}`);
 
   // THE DISCRIMINATING HALF. Clipping `from` while leaving `months` at twelve produces a window
   // that LOOKS right and a total that is 2.4× too big — the failure that would survive review.
@@ -66,9 +74,11 @@ try {
   const pct = sellable ? (be / sellable) * 100 : null;
   // BOTH DEFINED, not merely equal: undefined === undefined passed this vacuously before either
   // tile reported its window, which is the shape that makes a green check meaningless.
-  check('break-even and sellable now cover the SAME window',
-    !!cb.clippedFrom && !!ut.clippedFrom && cb.clippedFrom === ut.clippedFrom,
-    `costBase from ${cb.clippedFrom}, utilisation from ${ut.clippedFrom}`);
+  // One window by CONSTRUCTION now — both tiles receive the same clipped context, so the check is
+  // that they counted it the same, not that they each reported a window of their own.
+  check('break-even and sellable cover the SAME window',
+    cb.months === w.months && ut.available != null,
+    `costBase months ${cb.months}, window ${w.months}, sellable ${ut.available}`);
   check('  …so the percentage is no longer over 100 by construction', pct != null && pct < 100,
     `${be.toFixed(2)}h of ${sellable}h = ${pct == null ? 'n/a' : pct.toFixed(0)}%  (was 135%)`);
 

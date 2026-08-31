@@ -13,7 +13,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { canAccessSite } from '@/lib/admin-guard';
 import { resolveRange, resolveMonthSpan } from '@/lib/dashboard-periods';
 import { computeTiles } from '@/lib/dashboard-tiles';
-import { getTenantDataStart, precedesData } from '@/lib/tenant-data-start';
+import { clipSpanToAnchor } from '@/lib/reporting-anchor';
 import { thresholdsFromGroup } from '@/lib/utilisation-light';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const grp = (await prisma.group.findUnique({
     where: { id: user.group_id },
-    select: { fy_start_month: true, util_red_below: true, util_amber_below: true },
+    select: { fy_start_month: true, util_red_below: true, util_amber_below: true, reporting_start_date: true },
   })) as any;
   const range = resolveRange(
     { preset: req.query.preset ? String(req.query.preset) : undefined, from: req.query.from ? String(req.query.from) : undefined, to: req.query.to ? String(req.query.to) : undefined },
@@ -56,37 +56,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     siteIds = [siteId];
   }
   const now = new Date();
-  // ── DOES THIS PERIOD PREDATE THE TENANT ENTIRELY? ────────────────────────────────────────────
-  // Asked BEFORE the tiles are computed, and answered instead of them: computing a window nobody
-  // lived through yields zeros that read as findings. The client renders the tiles' existing
-  // unknown state rather than a second kind of empty.
-  const dataStart = await getTenantDataStart(user.group_id as string);
-  const beforeData = precedesData(range.to, dataStart) && precedesData(monthSpan.to, dataStart);
-  if (beforeData) {
+  // ── ONE ANCHOR, APPLIED ONCE, BEFORE ANYTHING IS COMPUTED ────────────────────────────────────
+  // Clipping used to be opt-in per tile: three computes clipped to the earliest record and four did
+  // not, so net profit measured TWELVE months of payroll against FIVE months of trading and sat
+  // beside a five-month cost base. Both figures were defensible; the pair was not.
+  //
+  // Doing it HERE makes clipping opt-OUT. Every compute receives a window already inside the
+  // tenant's reporting period, a new tile is clipped by default, and a tile that should not be has
+  // to say so in writing. `months` is recomputed with the window — cost is a monthly rate × months,
+  // and moving `from` alone would bill a year of payroll against five months.
+  const anchor = grp.reporting_start_date as Date;
+  const cash = clipSpanToAnchor(range.from, range.to, anchor);
+  const month = clipSpanToAnchor(monthSpan.from, monthSpan.to, anchor);
+
+  // ── A PERIOD ENTIRELY BEFORE THE ANCHOR HAS NO FIGURES, NOT ZERO ONES ────────────────────────
+  // Answered instead of the tiles. "£0.00 revenue" is a claim about a month that traded badly, not
+  // about a month nobody reported on, and zeros read as findings.
+  if (cash.empty && month.empty) {
     return res.status(200).json({
       tiles: {}, from: range.from.toISOString(), to: range.to.toISOString(),
       monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
       monthInProgress: false, daysElapsed: 0, daysInMonth: 0,
-      dataStart: dataStart ? dataStart.toISOString() : null, beforeData: true,
+      reportingStart: anchor.toISOString(), beforeData: true,
     });
   }
-  // dataStart reaches every compute; only the two capacity tiles act on it (see TileContext).
-  const base = { groupId: user.group_id as string, siteIds, now, dataStart }; // now reaches every compute (point-in-time ageing + in-progress-month window)
-  const tiles = await computeTiles({ ...base, from: range.from, to: range.to }, { ...base, from: monthSpan.from, to: monthSpan.to, months: monthSpan.months });
+  const base = { groupId: user.group_id as string, siteIds, now, dataStart: null }; // now reaches every compute (point-in-time ageing + in-progress-month window)
+  // Each strip carries its OWN emptiness: the cash range and the month span are picked separately,
+  // so a prior financial year on the profit tiles must not drag the cash tiles into silence, and a
+  // pre-anchor month span must not be computed just because the cash range is fine.
+  const tiles = await computeTiles(
+    { ...base, from: cash.from, to: cash.to, empty: cash.empty },
+    { ...base, from: month.from, to: month.to, months: month.months, selectedMonths: monthSpan.months, empty: month.empty },
+  );
   // In-progress period (month, quarter OR financial year — any span containing `now`) → "N of M days,
   // fixed costs shown in full", net-profit reframes to "£X short of covering the period", and the
   // to-date treatment (sellable-to-date / effective rate) computes against the ELAPSED portion. Closed
   // period → false. daysInMonth/daysElapsed are the PERIOD's day counts (kept names for client compat).
-  const monthInProgress = monthSpan.from.getTime() <= now.getTime() && now.getTime() < monthSpan.to.getTime();
-  const daysInMonth = Math.round((monthSpan.to.getTime() - monthSpan.from.getTime()) / 86_400_000);
+  // Reported for the window ACTUALLY measured, not the one picked — every figure beside them
+  // covers `month`, and a day count over a different span would quietly disagree with all of them.
+  const monthInProgress = month.from.getTime() <= now.getTime() && now.getTime() < month.to.getTime();
+  const daysInMonth = Math.round((month.to.getTime() - month.from.getTime()) / 86_400_000);
   const startOfTomorrow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
-  const elapsedEnd = monthInProgress ? Math.min(startOfTomorrow, monthSpan.to.getTime()) : monthSpan.to.getTime();
-  const daysElapsed = Math.round((elapsedEnd - monthSpan.from.getTime()) / 86_400_000);
+  const elapsedEnd = monthInProgress ? Math.min(startOfTomorrow, month.to.getTime()) : month.to.getTime();
+  const daysElapsed = Math.round((elapsedEnd - month.from.getTime()) / 86_400_000);
   return res.status(200).json({
-    tiles, from: range.from.toISOString(), to: range.to.toISOString(),
-    monthFrom: monthSpan.from.toISOString(), monthTo: monthSpan.to.toISOString(),
+    tiles, from: cash.from.toISOString(), to: cash.to.toISOString(),
+    // monthFrom is the MEASURED start, so every label derived from it names the window the figures
+    // cover. What the reader picked is `selectedMonthFrom`, and the difference is disclosed.
+    monthFrom: month.from.toISOString(), monthTo: month.to.toISOString(),
+    selectedMonthFrom: monthSpan.from.toISOString(),
+    reportingStart: anchor.toISOString(), clipped: month.clipped || cash.clipped,
     monthInProgress, daysElapsed, daysInMonth,
-    dataStart: dataStart ? dataStart.toISOString() : null, beforeData: false,
+    beforeData: false,
     // The tenant's own thresholds travel with the figures, so the light and the numbers it judges
     // arrive together and cannot be resolved from two different reads.
     utilThresholds: thresholdsFromGroup(grp),

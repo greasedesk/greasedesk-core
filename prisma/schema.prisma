@@ -422,6 +422,15 @@ model Group {
   util_red_below   Int? @default(50)
   util_amber_below Int? @default(75)
 
+  // ── THE REPORTING ANCHOR ─────────────────────────────────────────────────────────────────────
+  // Where this tenant's reporting begins. EVERY dashboard tile clips to it, in one place, before
+  // any compute runs — clipping used to be opt-in per tile, and the four that did not opt in put a
+  // twelve-month net profit beside a five-month cost base. NOT NULL because "nobody set it" is
+  // indistinguishable to a reader from "set to the earliest record", and an invisible window is
+  // the whole failure. Backfilled to the earliest record truncated to the month; new tenants
+  // default to signup, which for them is the same date. Settings → Company Profile → Financial.
+  reporting_start_date DateTime @default(now())
+
   billing            GroupBilling?
   features           GroupFeature[]
   sites              Site[]

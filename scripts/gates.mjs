@@ -121,6 +121,7 @@ const TIERS = {
     'duplicate-card-gate', 'quote-line-order-gate', 'schedule-reread-gate', 'mot-mint-gate',
     'mot-booking-stamp-gate', 'completion-carry-gate', 'diag-scan-gate',
     'dashboard-period-copy-gate',
+    'reporting-anchor-gate',
   ],
 };
 

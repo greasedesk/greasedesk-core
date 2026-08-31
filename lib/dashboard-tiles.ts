@@ -14,7 +14,6 @@ import { invoiceTotals, effectivePaidDate, effectiveIssueDate, effectiveIssueDat
 import { receivedInPeriod } from '@/lib/payments';
 import { fetchLedgerInvoices, chargedLabourCentihours, partsCostPennies, uncostedParts, labourGrossMargin } from '@/lib/charged-labour';
 import { getGroupUtilisation, getDailyCapacity, dayKey, employedDuring, valuesAtWindowEnd, isFiniteNumber } from '@/lib/capacity';
-import { clipToData } from '@/lib/tenant-data-start';
 import { getManpower } from '@/lib/manpower';
 import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS } from '@/lib/wip';
 import { notVoided } from '@/lib/invoice-void';
@@ -34,7 +33,17 @@ export type TileContext = {
    */
   dataStart?: Date | null;
 };
-export type MonthTileContext = TileContext & { months: number };
+export type MonthTileContext = TileContext & {
+  /** Whole months in the window ACTUALLY measured — already clipped to the reporting anchor. */
+  months: number;
+  /**
+   * Whole months the reader SELECTED, before the anchor shortened it. Only the shape of a view
+   * depends on this — a twelve-month selection stays a twelve-month bar chart on a tenant whose
+   * reporting began five months ago, drawn with five bars. Never use it for arithmetic: every
+   * figure must be computed over `months`, or a clipped window is billed for time it did not cover.
+   */
+  selectedMonths?: number;
+};
 
 // Date bases (ONE chokepoint each, lib/invoice): paid tiles bucket by effectivePaidDate
 // (date_paid ?? paid_at — cash basis); issued/warranty/P&L bucket by the effective ISSUE date
@@ -302,20 +311,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // pnl numbers). Per-site: site cost base ÷ that site's LABOUR_HR rate, summed — a site with
   // allocated cost but NO rate is FLAGGED, never guessed.
   costBase: async ({ groupId, siteIds, months, from, to, dataStart }) => {
-    // ── CLIPPED, LIKE CAPACITY AND UTILISATION ───────────────────────────────────────────────
-    // Those two clip and this did not, so a rolling-12 selection on TMBS — first record 1 April
-    // 2026 — put a TWELVE-month cost base of £112,100.16 beside FIVE months of sellable capacity
-    // and rendered "= 135% of sellable hours". A garage told it cannot cover its costs, by an
-    // arithmetic accident between two figures that were each defensible alone.
-    //
-    // THE MONTH COUNT MOVES WITH THE WINDOW. cost is monthly × months; clipping `from` without
-    // recomputing `months` bills twelve months of payroll against a five-month window — the same
-    // error one layer down and harder to see, because the window would look right while the total
-    // stayed 2.4× too big.
-    const clipCB = clipToData(from, to, dataStart ?? null);
-    if (clipCB.empty) return { beforeData: true };
-    from = clipCB.from;
-    months = Math.max(1, Math.round((to.getTime() - from.getTime()) / (86_400_000 * 30.436875)));
+    // The window arrives ALREADY clipped to the tenant's reporting anchor (lib/reporting-anchor,
+    // applied once where the tile context is built). This compute used to clip for itself while
+    // pnl did not, which is exactly how a twelve-month net profit ended up beside a five-month
+    // cost base. Clipping here again would re-open that gap from the other side.
     const sites = (await prisma.site.findMany({ where: { id: { in: siteIds }, group_id: groupId }, orderBy: { created_at: 'asc' }, select: { id: true, site_name: true } })) as any[];
     const rates = (await prisma.serviceCatalogue.findMany({
       where: { group_id: groupId, site_id: { in: siteIds }, service_code: 'LABOUR_HR' },
@@ -338,9 +337,6 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return {
       wageBillPennies: wage, overheadsPennies: over, costBasePennies: wage + over,
       breakEvenCentihours, ratesMissing, perSite, months,
-      // THE WINDOW IT ACTUALLY COVERS, so the figure can name its own period and a reader can tell
-      // it apart from the one they selected. utilisation reports the same field for the same reason.
-      clippedFrom: from.toISOString().slice(0, 10), clipped: clipCB.clipped,
     };
   },
   // Utilisation = charged ÷ SELLABLE (factor-adjusted). ALL maths in lib/capacity (getGroupUtilisation:
@@ -352,12 +348,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // (a DIFFERENT measure — bay occupancy, not sellable labour — surfaced side-by-side, never subtracted).
   // CLOSED month (to ≤ now) or multi-month span → the window is [from, to] unchanged → byte-identical.
   utilisation: async ({ groupId, siteIds, from, to, months, now, dataStart }) => {
-    // CLIP FIRST. A window straddling the tenant's first record counted capacity for months before
-    // the garage existed and reported the average as failure (38.17% where the traded months ran
-    // 62.66%). See lib/tenant-data-start::clipToData.
-    const clip = clipToData(from, to, dataStart ?? null);
-    if (clip.empty) return { beforeData: true };
-    from = clip.from;
+    // The window arrives already clipped to the reporting anchor (lib/reporting-anchor, applied
+    // once where the context is built). It used to clip here: a straddling window counted capacity
+    // for months before the garage existed and reported the average as failure (38.17% where the
+    // traded months ran 62.66%). Same rule, one place, and now every tile shares it.
     // Utilisation divides committed charged hours by the WHOLE period's sellable capacity, so a
     // part-imported month reports a near-zero ratio that means nothing (May: 0.3%). Withheld.
     const importedU = await periodImportState(groupId, siteIds, from, to);
@@ -374,8 +368,7 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     }
     // THE WINDOW IT ACTUALLY MEASURED, named. costBase reports the same field so the two figures on
     // the break-even line can be shown to cover the same months rather than assumed to.
-    const clippedFrom = from.toISOString().slice(0, 10);
-    if (!inProgress) return { ...u, imported: importedU, clippedFrom, clipped: clip.clipped }; // closed month / multi-month
+    if (!inProgress) return { ...u, imported: importedU }; // closed month / multi-month
 
     // Remaining sellable capacity for [end, to) — the rest of the month — valued at the site rate.
     const rem = end.getTime() < to.getTime() ? await getGroupUtilisation(groupId, siteIds, { from: end, to }) : null;
@@ -404,9 +397,6 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
     return {
       ...u,
       imported: importedU,
-      // Reported on BOTH branches, or the field means "closed period" rather than "the window I
-      // measured" — and a caller comparing it against costBase's would silently get undefined.
-      clippedFrom, clipped: clip.clipped,
       inProgress: true,
       periodFromISO: from.toISOString(),
       periodToInclusiveISO: now.toISOString(), // the elapsed period is [from, end-of-today]
@@ -501,14 +491,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   // On-chart end labels: Total Sellable Hours → potential (sellable×rate); Total Hours Sold → actual
   // (charged×rate). Statements below: headline rate (LABOUR_HR) and effective rate (charged×rate ÷
   // sellable). All valued PER SITE so mixed-rate groups stay honest.
-  capacity: async ({ groupId, siteIds, from, to, months, now, dataStart }) => {
-    // Same clip as utilisation, and for the same reason: getDailyCapacity draws its accrual line
-    // from `from`, so an unclipped straddling window renders a dashed line climbing through months
-    // in which the sold line is flat on zero by construction.
-    const clipC = clipToData(from, to, dataStart ?? null);
-    if (clipC.empty) return { beforeData: true };
-    const periodFrom = from;            // what the LABEL says
-    from = clipC.from;                  // what was actually measured
+  capacity: async ({ groupId, siteIds, from, to, months, now, selectedMonths }) => {
+    // The window arrives already clipped to the reporting anchor. It used to clip here for the
+    // same reason utilisation did: getDailyCapacity draws its accrual line from `from`, so a
+    // straddling window renders a dashed line climbing through months in which the sold line is
+    // flat on zero by construction.
+    const periodFrom = from;
     // To-date window for the ACTUALS (charged / effective): elapsed portion for a live period (month,
     // quarter OR financial year — any span containing `now`), else the full period. This is what makes
     // "sellable to date" and the effective rate compute against the elapsed part of a partial quarter/FY.
@@ -625,7 +613,12 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
      *   0%          trading and sold nothing → full sellable bar, no sold bar. A real, bad number.
      *   partial     the live month, drawn to the elapsed day so day 10 of 31 is not a collapse.
      */
-    const monthly = months >= 12 ? (() => {
+    // ── THE BAR CHART BELONGS TO THE SELECTION, NOT TO WHAT SURVIVED THE CLIP ──────────────────
+    // Gated on the SELECTED month count, not the clipped one. When the clip moved out of this file
+    // and `months` began arriving already shortened, a twelve-month selection on a young tenant
+    // recomputed to five and the monthly chart vanished entirely — the one view whose whole job is
+    // to show a young tenant fewer bars rather than zero-height ones. rolling-12-gate caught it.
+    const monthly = (selectedMonths ?? months) >= 12 ? (() => {
       const lastCumul = new Map<string, number>();
       for (const d of daily.days) lastCumul.set(d.dayKey.slice(0, 7), d.cumulativeSellable);
       const keys = [...lastCumul.keys()].sort();
@@ -654,7 +647,10 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
         // was at least partly lived through. A month only partly covered by the clip is marked.
         const mFrom = new Date(`${k}-01T00:00:00.000Z`);
         const mTo = new Date(Date.UTC(mFrom.getUTCFullYear(), mFrom.getUTCMonth() + 1, 1));
-        const partialStart = clipC.clipped && clipC.from > mFrom && clipC.from < mTo;
+        // Derived from the WINDOW rather than from a clip flag: the measured start can fall inside
+        // a month either because the anchor moved it or because the reader picked a custom range,
+        // and the bar is equally partial in both cases. Asking `from` answers for both.
+        const partialStart = from > mFrom && from < mTo;
         const live = k === nowKey;
         const soldPennies = revByMonth.get(k) ?? 0;
         const sellablePennies = (() => {
@@ -674,9 +670,6 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
 
     return {
       series, sellableHours, chargedHours, monthly,
-      // The surface must be able to say the period was shortened; a figure quietly describing a
-      // different window than its label is the same failure one step removed.
-      clippedToDataStart: clipC.clipped,
       periodFromISO: periodFrom.toISOString(), measuredFromISO: from.toISOString(),
       headlineRatePennies, headlineRateMixed: distinct.length > 1,
       potentialPennies: withheld ? null : potentialPennies,
@@ -690,10 +683,30 @@ export const MONTH_TILE_COMPUTES: Record<string, (ctx: MonthTileContext) => Prom
   },
 };
 
-export async function computeTiles(ctx: TileContext, monthCtx?: MonthTileContext): Promise<Record<string, unknown>> {
+/**
+ * ── A STRIP WHOSE WINDOW IS ENTIRELY BEFORE THE ANCHOR IS NOT COMPUTED AT ALL ───────────────────
+ * Per STRIP, not per dashboard. The cash range and the month span are chosen separately, so one can
+ * sit inside the reporting period while the other does not — a prior financial year picked for the
+ * profit tiles while the cash tiles show this quarter. Computing the pre-anchor one yields a
+ * capacity line climbing through months nobody reported on, beside a sold line flat on zero by
+ * construction: twelve bars that look like a catastrophic year rather than an absence.
+ *
+ * `beforeData` is the tiles' existing unknown state, so every renderer already handles it.
+ */
+export async function computeTiles(
+  ctx: TileContext & { empty?: boolean },
+  monthCtx?: MonthTileContext & { empty?: boolean },
+): Promise<Record<string, unknown>> {
+  const blank = (keys: string[]) => keys.map((k) => [k, { beforeData: true }] as const);
   const entries = await Promise.all([
-    ...Object.entries(TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(ctx)] as const),
-    ...(monthCtx ? Object.entries(MONTH_TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(monthCtx)] as const) : []),
+    ...(ctx.empty
+      ? blank(Object.keys(TILE_COMPUTES))
+      : Object.entries(TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(ctx)] as const)),
+    ...(monthCtx
+      ? (monthCtx.empty
+        ? blank(Object.keys(MONTH_TILE_COMPUTES))
+        : Object.entries(MONTH_TILE_COMPUTES).map(async ([key, fn]) => [key, await fn(monthCtx)] as const))
+      : []),
   ]);
   return Object.fromEntries(entries);
 }

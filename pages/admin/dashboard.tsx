@@ -271,9 +271,10 @@ export default function AdminDashboard(props: PageProps) {
   // The month window the SERVER resolved for the P&L (echoed back) — drives the loud label.
   const [monthWindow, setMonthWindow] = useState<{ from: string; to: string } | null>(null);
   // In-progress SINGLE month meta (server-authoritative): drives the to-date labels + net-profit reframe.
-  const [noData, setNoData] = useState<{ dataStart: string | null } | null>(null);
+  const [noData, setNoData] = useState<{ reportingStart: string | null } | null>(null);
   const [utilThresholds, setUtilThresholds] = useState<UtilisationThresholds>(defaultThresholds());
   const [monthMeta, setMonthMeta] = useState<{ inProgress: boolean; daysElapsed: number; daysInMonth: number } | null>(null);
+  const [anchorInfo, setAnchorInfo] = useState<{ reportingStart: string | null; clipped: boolean } | null>(null);
   // ── ONE PERIOD STRING, FOR EVERY TILE THAT NAMES ITS WINDOW ────────────────────────────────────
   // Six sub-lines said "this month" whatever was selected, and the DEFAULT selection is rolling_12 —
   // so the first screen described a twelve-month break-even as "hours to sell this month". The
@@ -281,21 +282,14 @@ export default function AdminDashboard(props: PageProps) {
   // Taken from the SERVER-ECHOED window, like pnl.utilToDate, so the words cannot drift from the
   // figures: if the API answered for a different span than the picker shows, both move together.
   const periodText = monthWindow ? monthLabel(monthWindow, props.locale) : '';
-  // ── AND THE WINDOW THE FIGURES ACTUALLY COVER, WHICH IS NOT ALWAYS THE ONE PICKED ──────────────
-  // costBase, utilisation and capacity clip to the tenant's data start, so a twelve-month selection
-  // shows five months on a garage whose records begin in April. Naming the SELECTED window on those
-  // tiles states a precise falsehood — worse than the vague "this month" this replaced, because it
-  // is specific enough to be believed. Both clipped tiles echo `clippedFrom`; costbase-clip-gate
-  // pins that they agree, so either answers for both.
-  // Tiles that do NOT clip — manpower, and whether a site traded — keep periodText: their figures
-  // really do cover the whole selection, and moving them would be the same error mirrored.
-  const clipInfo = (tiles?.costBase as any)?.clippedFrom ? (tiles?.costBase as any) : (tiles?.utilisation as any);
-  const coveredFrom: string | null = clipInfo?.clippedFrom ?? null;
-  const isClipped = !!clipInfo?.clipped;
-  const coveredText = monthWindow
-    ? monthLabel({ from: coveredFrom ?? monthWindow.from, to: monthWindow.to }, props.locale) : '';
-  const recordsStart = coveredFrom
-    ? new Date(coveredFrom).toLocaleDateString(props.locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }) : '';
+  // ── ONE WINDOW NOW, BECAUSE EVERY TILE SHARES THE ANCHOR ──────────────────────────────────────
+  // monthWindow is the MEASURED window: the API clips to the reporting anchor before any compute
+  // runs and echoes what it measured. So there is no longer a covered-vs-selected split to carry
+  // per tile — the split that existed while three tiles clipped and four did not.
+  const reportingStart: string | null = anchorInfo?.reportingStart ?? null;
+  const isClipped = !!anchorInfo?.clipped;
+  const recordsStart = reportingStart
+    ? new Date(reportingStart).toLocaleDateString(props.locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }) : '';
   // A single month, IN PROGRESS. Not monthMeta.inProgress, which is the API's monthInProgress and
   // true of ANY window containing today — a twelve-month view included, where "the month so far"
   // is a claim about a year. Derived here rather than read off the utilisation tile, because that
@@ -342,10 +336,11 @@ export default function AdminDashboard(props: PageProps) {
         // A window that closes before the tenant's first record has no tiles to show. Clearing
         // them puts every tile into its EXISTING unknown state ("—") rather than inventing a
         // second kind of blank — zero and never-measured must not look alike.
-        setNoData(d.beforeData ? { dataStart: d.dataStart ?? null } : null);
+        setNoData(d.beforeData ? { reportingStart: d.reportingStart ?? null } : null);
         setTiles(d.beforeData ? null : d.tiles);
         setMonthWindow(d.monthFrom && d.monthTo ? { from: d.monthFrom, to: d.monthTo } : null);
         setMonthMeta({ inProgress: !!d.monthInProgress, daysElapsed: d.daysElapsed ?? 0, daysInMonth: d.daysInMonth ?? 0 });
+        setAnchorInfo({ reportingStart: d.reportingStart ?? null, clipped: !!d.clipped });
         if (d.utilThresholds) setUtilThresholds(d.utilThresholds);
       }
     } catch { /* tiles keep last values */ }
@@ -418,8 +413,8 @@ export default function AdminDashboard(props: PageProps) {
         <div className="rounded-xl border border-line bg-surface-muted p-4 mb-6" data-testid="dash-no-data">
           <p className="text-sm font-semibold text-ink">{t('noData.title')}</p>
           <p className="text-sm text-muted mt-1">
-            {noData.dataStart
-              ? t('noData.startsAt', { month: monthNameOf(new Date(noData.dataStart).getUTCFullYear(), new Date(noData.dataStart).getUTCMonth(), props.locale) })
+            {noData.reportingStart
+              ? t('noData.startsAt', { month: monthNameOf(new Date(noData.reportingStart).getUTCFullYear(), new Date(noData.reportingStart).getUTCMonth(), props.locale) })
               : t('noData.nothingYet')}
           </p>
         </div>
@@ -589,13 +584,8 @@ export default function AdminDashboard(props: PageProps) {
             {/* The subtitle used to read "across the month" over a financial year. It names the
                 shape of the chart that is actually drawn. */}
             <p className="text-xs text-muted mb-3">{monthlyMode ? t('capacity.noteMonths') : t('capacity.note')}</p>
-            {/* THE PERIOD WAS SHORTENED — say so. A figure quietly describing a different window
-                than the label above it is the same failure the clip exists to fix, one step on. */}
-            {cap?.clippedToDataStart && (
-              <p className="text-xs text-warn mb-3">
-                {t('capacity.clipped', { from: new Date(cap.measuredFromISO).toLocaleDateString(props.locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) })}
-              </p>
-            )}
+            {/* The shortening is disclosed ONCE at the head of the strip now, because the anchor
+                applies to every tile rather than to this chart alone. */}
             {cap == null ? <p className="text-sm text-muted">{loading ? t('loading') : '—'}</p> : monthlyMode ? (
               <CapacityMonthsChart
                 bars={monthBars}
@@ -747,9 +737,14 @@ export default function AdminDashboard(props: PageProps) {
           </div>
         )}
       </div>
-      {isClipped && coveredFrom && (
-        <p className="text-sm text-muted bg-surface-muted border border-line rounded-lg px-3 py-2 mb-3" data-testid="covered-note">
-          {t('pnl.coveredNote', { start: recordsStart, period: coveredText })}
+      {/* ONE DISCLOSURE, FOR EVERY TILE AT ONCE — the anchor is one value for the whole dashboard,
+          so this belongs at the head of the strip rather than repeated per tile. It names a SETTING
+          and links to the page that changes it: a disclosure the reader cannot act on is
+          decoration, and the previous version explained a decision nobody had made. */}
+      {isClipped && reportingStart && (
+        <p className="text-sm text-muted bg-surface-muted border border-line rounded-lg px-3 py-2 mb-3" data-testid="anchor-note">
+          {t('pnl.anchorNote', { start: recordsStart, period: periodText })}{' '}
+          <Link href="/admin/settings/financial" className="text-accent underline">{t('pnl.anchorNoteLink')}</Link>
         </p>
       )}
       {degraded && monthWindow && (
@@ -882,7 +877,7 @@ export default function AdminDashboard(props: PageProps) {
                       least actionable number in the chain and lives in the drill. 0 renders as
                       a clean 0h, never a dash. */}
                   <Figure className="text-2xl font-bold tabular-nums text-ink">{h3(Math.round((u3.leaveHours + u3.phHours) * 100) / 100)}</Figure>
-                  <p className="text-xs text-muted mt-1" data-testid="hourswent-sub">{t('pnl.hoursWentSub', { period: coveredText })}</p>
+                  <p className="text-xs text-muted mt-1" data-testid="hourswent-sub">{t('pnl.hoursWentSub', { period: periodText })}</p>
                   {/* Rework sits ALONGSIDE absence: hours spent redoing work for free. */}
                   {rw > 0 && <p className="text-xs text-warn mt-1">{t('pnl.hoursWentRework', { hours: h3(rw) })}</p>}
                   <details className="mt-2" open={false}>
@@ -918,7 +913,7 @@ export default function AdminDashboard(props: PageProps) {
                   {(u3.remainingNoRate?.length ?? 0) > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: u3.remainingNoRate.join(', ') })}</p>}
                   <details className="mt-2">
                     <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
-                    <p className="text-xs text-muted mt-1" data-testid="stilltosell-sub">{t('pnl.stillToSellHelp', { period: coveredText })}</p>
+                    <p className="text-xs text-muted mt-1" data-testid="stilltosell-sub">{t('pnl.stillToSellHelp', { period: periodText })}</p>
                   </details>
                 </div>
               );
@@ -977,7 +972,7 @@ export default function AdminDashboard(props: PageProps) {
                     return (
                       <>
                         <Figure className="text-2xl font-bold tabular-nums text-ink">{cb.breakEvenCentihours > 0 ? hrs(cb.breakEvenCentihours) : '—'}</Figure>
-                        <p className="text-xs text-muted mt-1" data-testid="breakeven-sub">{t('pnl.breakEvenSub', { period: coveredText })}</p>
+                        <p className="text-xs text-muted mt-1" data-testid="breakeven-sub">{t('pnl.breakEvenSub', { period: periodText })}</p>
                         {cb.ratesMissing.length > 0 && <p className="text-xs text-warn mt-1">{t('pnl.breakEvenNoRate', { sites: cb.ratesMissing.join(', ') })}</p>}
                         <details className="mt-2">
                           <summary className="text-xs text-accent cursor-pointer">{t('pnl.utilHow')}</summary>
@@ -985,11 +980,11 @@ export default function AdminDashboard(props: PageProps) {
                             {cb.perSite.filter((s2: any) => s2.costBasePennies > 0).map((s2: any) => (
                               <p key={s2.siteId}>{s2.siteName}: {fmt.money(s2.costBasePennies)} ÷ {s2.ratePounds != null ? `${rateSym}${s2.ratePounds}/h` : '—'} = {hrs(s2.breakEvenCentihours)}</p>
                             ))}
-                            <p>{t('pnl.breakEvenRevenue', { period: coveredText, value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
+                            <p>{t('pnl.breakEvenRevenue', { period: periodText, value: beRevenue != null ? fmt.money(beRevenue) : '—' })}</p>
                             {/* Expressed against SELLABLE capacity (factor-adjusted) — the same
                                 denominator the utilisation tile uses. */}
                             {u2 && u2.available > 0 && cb.breakEvenCentihours > 0 && (
-                              <p data-testid="breakeven-of-sellable">{t('pnl.breakEvenOfSellable', { period: coveredText, pct: `${(((cb.breakEvenCentihours / 100) / u2.available) * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>
+                              <p data-testid="breakeven-of-sellable">{t('pnl.breakEvenOfSellable', { period: periodText, pct: `${(((cb.breakEvenCentihours / 100) / u2.available) * 100).toLocaleString(props.locale, { maximumFractionDigits: 1 })}%` })}</p>
                             )}
                             {residualHours != null && <p>{t('pnl.breakEvenResidual', { hours: residualHours.toLocaleString(props.locale, { maximumFractionDigits: 1 }) })}</p>}
                             <p className="italic">{t('pnl.breakEvenHonesty')}</p>
@@ -1019,7 +1014,7 @@ export default function AdminDashboard(props: PageProps) {
                   ) : u.available === 0 ? (
                     <>
                       <Figure className="text-2xl font-bold tabular-nums text-muted">—</Figure>
-                      <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail', { period: coveredText })}</p>
+                      <p className="text-xs text-muted mt-1">{t('pnl.utilZeroAvail', { period: periodText })}</p>
                     </>
                   ) : (
                     <>

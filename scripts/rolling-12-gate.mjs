@@ -10,7 +10,7 @@ import { withRetry } from './_gate-retry.mjs';
 const { computeTiles } = await import('../lib/dashboard-tiles.ts');
 const { presetRange, monthPresetSpan, isMonthlyComparison, rollingTwelveMonths, monthsOfRange, PERIOD_PRESETS, MONTH_PRESETS } = await import('../lib/dashboard-periods.ts');
 const { getGroupUtilisation } = await import('../lib/capacity.ts');
-const { getTenantDataStart } = await import('../lib/tenant-data-start.ts');
+const A = await import('../lib/reporting-anchor.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -60,11 +60,18 @@ async function runDbChecks() {
   const u = await prisma.user.findUnique({ where: { email: 'demo.owner.reference15@example.com' }, select: { group_id: true } });
   const g = u.group_id;
   const site = await prisma.site.findFirst({ where: { group_id: g }, select: { id: true } });
-  const dataStart = await getTenantDataStart(g);
-  const base = { groupId: g, siteIds: [site.id], now: NOW, dataStart };
+  // THE ANCHOR, CLIPPED AT THE SEAM. The tiles no longer clip for themselves — the API applies the
+  // tenant's reporting anchor once, before any compute runs, so this gate builds its contexts the
+  // same way. What is asserted is unchanged: a window is never measured before the anchor, and a
+  // window entirely before it produces nothing rather than empty bars.
+  const anchor = await prisma.group.findUnique({ where: { id: g }, select: { reporting_start_date: true } }).then((x) => x.reporting_start_date);
+  const clipped = (from, to) => A.clipSpanToAnchor(from, to, anchor);
+  const base = { groupId: g, siteIds: [site.id], now: NOW, dataStart: null };
 
+  const rc = clipped(r.from, r.to), sc = clipped(span.from, span.to);
   const t0 = Date.now();
-  const tiles = await computeTiles({ ...base, from: r.from, to: r.to }, { ...base, from: span.from, to: span.to, months: span.months });
+  const tiles = await computeTiles({ ...base, from: rc.from, to: rc.to, empty: rc.empty },
+    { ...base, from: sc.from, to: sc.to, months: sc.months, selectedMonths: span.months, empty: sc.empty });
   const ms = Date.now() - t0;
   const cap = tiles.capacity;
   console.log(`\n   computeTiles(rolling_12): ${ms}ms\n`);
@@ -72,9 +79,9 @@ async function runDbChecks() {
   check('the monthly split is produced', Array.isArray(cap.monthly), `${cap.monthly?.length ?? 0} months`);
   // Clipping is correct ONLY when the tenant's records begin inside the window. This tenant is
   // older than twelve months, so the honest expectation is NO clip.
-  const startsInside = dataStart > r.from;
-  check(`the clip flag matches reality (records ${startsInside ? 'begin inside' : 'predate'} the window)`,
-    cap.clippedToDataStart === startsInside, `clipped=${cap.clippedToDataStart}, dataStart ${dataStart.toISOString().slice(0, 10)}, window opens ${r.from.toISOString().slice(0, 10)}`);
+  const startsInside = anchor > r.from;
+  check(`the clip matches reality (the anchor ${startsInside ? 'falls inside' : 'predates'} the window)`,
+    rc.clipped === startsInside, `clipped=${rc.clipped}, anchor ${anchor.toISOString().slice(0, 10)}, window opens ${r.from.toISOString().slice(0, 10)}`);
 
   // ── THE NUMBERS. Each bucket must equal an independent per-month read. ────────────────────────
   let allAgree = true;
@@ -118,23 +125,24 @@ async function runDbChecks() {
 
   // ── THE ABSENT STATE, EXERCISED RATHER THAN ASSUMED ───────────────────────────────────────────
   // The reference tenant is older than twelve months, so the assertion above passed VACUOUSLY —
-  // there were no absent months to get wrong. dataStart is an INPUT to the tile, so a young tenant
-  // can be simulated exactly: same data, first record five months ago.
+  // there were no absent months to get wrong. The ANCHOR is an input to the clip, so a young tenant
+  // can be simulated exactly: same data, reporting starting five months ago.
   {
     const young = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth() - 4, 1));
-    const t = await computeTiles({ ...base, dataStart: young, from: r.from, to: r.to },
-      { ...base, dataStart: young, from: span.from, to: span.to, months: span.months });
+    const yr = A.clipSpanToAnchor(r.from, r.to, young), ys = A.clipSpanToAnchor(span.from, span.to, young);
+    const t = await computeTiles({ ...base, from: yr.from, to: yr.to, empty: yr.empty },
+      { ...base, from: ys.from, to: ys.to, months: ys.months, selectedMonths: span.months, empty: ys.empty });
     const c = t.capacity;
     const shown = new Set(c.monthly.map((m) => m.key));
     const missing = keys.filter((k) => !shown.has(k));
-    console.log(`\n   simulated first record ${young.toISOString().slice(0, 10)} → ${c.monthly.length} bars, ${missing.length} absent\n`);
+    console.log(`\n   simulated anchor ${young.toISOString().slice(0, 10)} → ${c.monthly.length} bars, ${missing.length} absent\n`);
     check('ABSENT (exercised): a younger tenant gets FEWER bars, not zero-height ones',
       c.monthly.length === 5 && missing.length === 7, `${c.monthly.length} bars, absent ${missing.join(',')}`);
-    check('… every absent month is genuinely before the first record',
+    check('… every absent month is genuinely before the anchor',
       missing.every((k) => k < young.toISOString().slice(0, 7)));
     check('… every shown month is on or after it', c.monthly.every((m) => m.key >= young.toISOString().slice(0, 7)));
     check('… and NONE of them is a zero row masquerading as a month', c.monthly.every((m) => m.sellableHours > 0));
-    check('… the clip is flagged so the surface can say the period was shortened', c.clippedToDataStart === true);
+    check('… the clip is flagged so the surface can say the period was shortened', yr.clipped === true);
     check('… and a real month\'s figures are IDENTICAL to the unclipped run — the clip removes months, it does not alter them',
       (() => { const a = c.monthly.find((m) => m.key === nowKey), b2 = cap.monthly.find((m) => m.key === nowKey);
         return a && b2 && a.sellableHours === b2.sellableHours && a.soldPennies === b2.soldPennies; })());
@@ -161,11 +169,13 @@ async function runDbChecks() {
     check(`${preset}: and monthsOfRange follows it — Jul…Jun, not Jan…Dec`,
       (() => { const ms = monthsOfRange(july.from, july.to); return ms.length === 12 && ms[0].from.getUTCMonth() === 6 && ms[11].from.getUTCMonth() === 5; })());
 
-    const ft = await computeTiles({ ...base, from: fr.from, to: fr.to }, { ...base, from: fs.from, to: fs.to, months: fs.months });
+    const frc = clipped(fr.from, fr.to), fsc = clipped(fs.from, fs.to);
+    const ft = await computeTiles({ ...base, from: frc.from, to: frc.to, empty: frc.empty },
+      { ...base, from: fsc.from, to: fsc.to, months: fsc.months, selectedMonths: fs.months, empty: fsc.empty });
     const fc = ft.capacity;
     // A fiscal year entirely before the tenant existed is SUPPOSED to produce nothing. Asserting a
     // split here would demand the very fabrication clipToData exists to prevent.
-    const entirelyBefore = fr.to <= dataStart;
+    const entirelyBefore = fr.to <= anchor;
     if (entirelyBefore) {
       check(`${preset}: entirely before the tenant → NOTHING, not twelve empty bars`,
         fc.beforeData === true && fc.monthly === undefined, JSON.stringify(fc));
@@ -177,13 +187,15 @@ async function runDbChecks() {
     check(`${preset}: the monthly split is produced`, Array.isArray(fc.monthly), `${fc.monthly?.length ?? 0} months`);
     check(`${preset}: NO month is live — so the chart cannot draw a light`,
       fc.monthly.every((m) => !m.live), fc.monthly.filter((m) => m.live).map((m) => m.key).join(',') || 'none live');
-    check(`${preset}: it reads clipToData like the rolling view`,
-      fc.clippedToDataStart === (dataStart > fr.from), `clipped=${fc.clippedToDataStart}`);
+    check(`${preset}: it is clipped at the same seam as the rolling view`,
+      frc.clipped === (anchor > fr.from), `clipped=${frc.clipped}, anchor ${anchor.toISOString().slice(0, 10)}`);
   }
 
   // ── AND THE SINGLE-MONTH VIEW IS UNTOUCHED ────────────────────────────────────────────────────
   const mr = presetRange('this_month', 4, NOW), msp = monthPresetSpan('this_month', 4, NOW);
-  const single = await computeTiles({ ...base, from: mr.from, to: mr.to }, { ...base, from: msp.from, to: msp.to, months: msp.months });
+  const mrc = clipped(mr.from, mr.to), mspc = clipped(msp.from, msp.to);
+  const single = await computeTiles({ ...base, from: mrc.from, to: mrc.to, empty: mrc.empty },
+    { ...base, from: mspc.from, to: mspc.to, months: mspc.months, selectedMonths: msp.months, empty: mspc.empty });
   check('a single month still gets the burn-up, with NO monthly split',
     single.capacity.monthly === null && Array.isArray(single.capacity.series),
     `${single.capacity.series.length} daily points`);

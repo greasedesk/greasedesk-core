@@ -22,14 +22,11 @@
  * `monthInProgress`, which is true of ANY window containing today — including the twelve-month
  * default. Section 4 drives the real page and asserts the line is absent there.
  *
- * ── WHAT THIS GATE DOES NOT ASSERT ──────────────────────────────────────────────────────────────
- * That the named period matches the period the FIGURES cover. It does not, today, on either tenant:
- * costBase and utilisation clip to the tenant's data start, so a "Sept 2025 – Aug 2026" selection
- * shows five months on TMBS (records begin 2026-04-01) and four on ZZ (2026-05-12) — and these
- * lines now name the SELECTED window. Naming a specific wrong range is arguably worse than the
- * vague "this month" it replaced, and a green here must not be read as saying otherwise.
- * The window is already on the wire — costBase and utilisation both return `clippedFrom` — so the
- * fix is a rendering decision, not a data one. Deliberately not made here.
+ * ── AND THAT THE NAMED PERIOD IS THE MEASURED ONE ───────────────────────────────────────────────
+ * This gate once asserted only that the tiles named the SELECTED window, and was green while they
+ * named twelve months over five months of figures. Every tile now clips to the tenant's reporting
+ * anchor — one value, applied once before any compute runs — so the assertion is that the tiles,
+ * the disclosure and each other all name the same span.
  *
  * Driven through the period control rather than a URL, because there is no URL for it: the preset
  * is client state, restored from localStorage, and a fresh context starts on the default.
@@ -107,16 +104,19 @@ try {
   const be = await textOf('breakeven-sub');
   check('the break-even line does NOT say "this month" on a twelve-month view', !/this month/i.test(be ?? ''), JSON.stringify(be));
 
-  // ── IT NAMES THE COVERED WINDOW, NOT THE PICKED ONE ─────────────────────────────────────────
+  // ── IT NAMES THE WINDOW THE FIGURES COVER, NOT THE ONE PICKED ───────────────────────────────
   // The check this replaces asked only whether a year appeared, and was green while the line named
   // a twelve-month range over five months of figures — passing for a reason that had nothing to do
-  // with what it claimed. costBase and utilisation clip to the tenant's data start; ZZ's records
-  // begin 2026-05-12, so a Sept 2025 – Aug 2026 selection covers May – Aug 2026.
-  const note = await textOf('covered-note');
-  check('the clipped window is DISCLOSED, not silently substituted', note !== null,
-    note === null ? 'no note — the tile would name a window the reader never picked, unexplained' : JSON.stringify(note));
-  const covered = (note ?? '').match(/cover (.+?) —/)?.[1] ?? null;
-  check('  …and the note names the covered window', !!covered, JSON.stringify(covered));
+  // with what it claimed. Every tile now clips to the tenant's reporting anchor, applied once
+  // before any compute runs; ZZ's anchor is mid-2026, so a Sept 2025 – Aug 2026 selection is
+  // shortened, and the shortening is disclosed once at the head of the strip.
+  const note = await textOf('anchor-note');
+  check('the shortened window is DISCLOSED, not silently substituted', note !== null,
+    note === null ? 'no note — the tiles would name a window the reader never picked, unexplained' : JSON.stringify(note));
+  check('  …naming the SETTING rather than an inference', /reporting starts/i.test(note ?? ''),
+    'the previous wording explained a decision nobody had made and nobody could change');
+  const covered = (note ?? '').match(/cover (.+?) rather than/)?.[1] ?? null;
+  check('  …and the window it covers', !!covered, JSON.stringify(covered));
   // Format-independent: whatever monthLabel renders, the tile and the note must name the SAME span.
   check('the break-even line names exactly the window the note discloses',
     !!covered && (be ?? '').includes(covered), `line ${JSON.stringify(be)} vs note window ${JSON.stringify(covered)}`);
@@ -126,11 +126,14 @@ try {
   check('  …which is NOT the selected one', !/2025/.test(be ?? ''),
     `selected "${selected}" starts in 2025; the covered window does not`);
 
-  // The tiles that do NOT clip must keep the SELECTED window — moving them would be the same
-  // error mirrored. Manpower counts employment events across the whole selection.
+  // ── AND EVERY TILE NAMES THE SAME ONE ───────────────────────────────────────────────────────
+  // This is the assertion that changed when the anchor arrived. It used to require manpower to keep
+  // the FULL selection, because manpower did not clip and three other tiles did — a split that was
+  // correct only while the dashboard measured two windows at once. One anchor removes the split,
+  // so the check becomes the stronger one: the money tile and the people tile agree.
   const hires = await textOf('manpower-hires');
-  check('an unclipped tile still names the full selected period', /2025/.test(hires ?? ''),
-    JSON.stringify((hires ?? '').slice(0, 90)));
+  check('a people tile names the SAME window as a money tile', !!covered && (hires ?? '').includes(covered),
+    `manpower ${JSON.stringify((hires ?? '').slice(0, 70))} vs ${JSON.stringify(covered)}`);
 
   const cb = await textOf('costbase-sub');
   check('fixed costs still says every month, on the same screen', /every month/i.test(cb ?? ''), JSON.stringify(cb));
@@ -151,7 +154,7 @@ try {
   check('a single month names that month', /\d{4}/.test(be1 ?? '') && !/–/.test(be1 ?? ''), JSON.stringify(be1));
   // A month wholly inside the data is not clipped, so the disclosure must NOT appear: a note on
   // every view would be wallpaper, and wallpaper is not read.
-  check('  …and no clipping note, because nothing was clipped', (await textOf('covered-note')) === null,
+  check('  …and no shortening note, because nothing was shortened', (await textOf('anchor-note')) === null,
     'the note earns attention by being rare');
   const np1 = await textOf('netprofit-progress');
   check('  …and the to-date line comes BACK for the month in progress', np1 !== null,

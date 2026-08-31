@@ -9,6 +9,7 @@
  * an editable pre-fill to quotes + overheads. Both gate/feed via lib/tenant-vat.ts.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { normaliseAnchor } from '@/lib/reporting-anchor';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { toE164Digits } from '@/lib/contact-routes';
@@ -38,14 +39,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     group_name, trading_name, company_number, address, vat_number, vat_registered, default_vat_rate, invoice_prefix, invoice_pad_width,
     invoice_fy_digits, fy_start_month, invoice_warranty_prefix, invoice_email_footer, invoice_next_number, paid_confirm_window_hours,
     invoice_reply_to, invoice_sender_name, invoice_bcc, invoice_footer_text, logo_r2_key, tax_label, phone, whatsapp, ops_email,
-    util_red_below, util_amber_below,
+    util_red_below, util_amber_below, reporting_start_date,
   } = (req.body || {}) as {
     group_name?: string; trading_name?: string; company_number?: string; address?: string; vat_number?: string; vat_registered?: boolean; default_vat_rate?: number | string;
     invoice_prefix?: string; invoice_pad_width?: number | string;
     invoice_fy_digits?: number | string; fy_start_month?: number | string; invoice_warranty_prefix?: string; invoice_email_footer?: boolean;
     invoice_next_number?: number | string; paid_confirm_window_hours?: number | string;
     invoice_reply_to?: string; invoice_sender_name?: string; invoice_bcc?: string; invoice_footer_text?: string; logo_r2_key?: string; tax_label?: string; ops_email?: string;
-    util_red_below?: number; util_amber_below?: number;
+    util_red_below?: number; util_amber_below?: number; reporting_start_date?: string;
     phone?: string; whatsapp?: string;
   };
 
@@ -95,6 +96,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const m = Math.trunc(Number(fy_start_month));
     if (!Number.isFinite(m) || m < 1 || m > 12) return res.status(400).json({ message: 'Fiscal-year start month must be 1–12.' });
     data.fy_start_month = m;
+  }
+  // ── THE REPORTING ANCHOR ─────────────────────────────────────────────────────────────────────
+  // Normalised to the first of the month, because the dashboard reads it back as "reporting starts
+  // September 2025" and every period count is in whole months: a stored 22nd would make the first
+  // month fractional and the sentence a lie about precision it does not have.
+  // Refused rather than silently corrected when unparseable — a bad date that saves as "now" is a
+  // reporting frame nobody chose.
+  if (reporting_start_date !== undefined) {
+    const d = new Date(String(reporting_start_date));
+    if (Number.isNaN(d.getTime())) return res.status(400).json({ message: 'Reporting start must be a valid date.' });
+    data.reporting_start_date = normaliseAnchor(d);
   }
   if (invoice_warranty_prefix !== undefined) {
     const p = String(invoice_warranty_prefix).trim();

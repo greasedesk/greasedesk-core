@@ -120,7 +120,8 @@
     "costBaseCalc": "wages {{wages}} + overheads {{overheads}} = {{total}}",
     "breakEven": "Break-even hours",
     "breakEvenSub": "hours to sell in {{period}} just to stand still",
-    "coveredNote": "Your records start {{start}}, so the capacity and cost figures below cover {{period}} — not the full period selected.",
+    "anchorNote": "Your reporting starts {{start}}, so these figures cover {{period}} rather than the whole period selected.",
+    "anchorNoteLink": "Change in Financial settings",
     "breakEvenNoRate": "no labour rate set for {{sites}} — that share isn’t counted",
     "breakEvenRevenue": "As revenue (÷ the margin rate for {{period}}): {{value}}",
     "breakEvenResidual": "Refined (parts & outsourced margin already covers some of it): {{hours}}h of labour",
@@ -192,7 +193,7 @@
   },
   "noData": {
     "title": "No records for this period.",
-    "startsAt": "Your records begin in {{month}}. Nothing was measured before then, so there are no figures to show — not zero ones.",
+    "startsAt": "Your reporting starts {{month}}. Nothing before then is reported on, so there are no figures for this period — not zero ones.",
     "nothingYet": "Nothing has been recorded in GreaseDesk yet, so there is nothing to measure for this period."
   }
 }
