@@ -90,6 +90,21 @@ export type InvoiceDoc = {
   paidAt: Date | null;
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
+  /**
+   * ── WHO THE DOCUMENT IS ADDRESSED TO. RESOLVED ONCE, HERE. ────────────────────────────────────
+   * Three renderers draw the bill-to block (the PDF, the admin page, the customer's link) and each
+   * of them getting to decide whether an account outranks the customer is three chances to disagree
+   * about who is being billed. They read this and print it.
+   *
+   * `onBehalfOf` is the car's owner and is present ONLY when they are not the addressee — so a
+   * renderer draws the "for …" line by asking whether it is there, never by comparing two names.
+   */
+  addressee: { name: string; address: string | null; onBehalfOf: string | null };
+  /**
+   * THE PERSON, ALWAYS — not the addressee. Kept beside `addressee` because some readers genuinely
+   * mean the human: invoice-email-send greets `customer.name`, and greeting an employee's employer
+   * by name in a message sent to the employee is the failure that keeps this field separate.
+   */
   customer: { name: string; address: string | null };
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   /**
@@ -125,6 +140,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
+      account_name_snapshot: true, account_address_snapshot: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       due_items_snapshot: true,
       measured_snapshot: true,
@@ -222,6 +238,12 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },
+    // FROM THE SNAPSHOT PAIR, not re-resolved from the customer today — the account is frozen at
+    // issue like every other particular. An account set NULL is the customer, which is what every
+    // document raised before this existed carries and what nearly every one since carries too.
+    addressee: inv.account_name_snapshot
+      ? { name: inv.account_name_snapshot, address: inv.account_address_snapshot, onBehalfOf: inv.customer_name_snapshot }
+      : { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot, onBehalfOf: null },
     // DELIBERATE ASYMMETRY (ruling 2026-07-12 — do NOT "tidy" this to match the line freeze):
     // MONEY freezes at ISSUE; vehicle IDENTITY FACTS (reg/VIN/mileage) stay LIVE-read from the
     // card while issued (a reg correction flows straight through to the unpaid document) and

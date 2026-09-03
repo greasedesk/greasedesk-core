@@ -80,7 +80,7 @@ type PageProps = {
   locale: string;
   vatRate: number;
   vatRegistered: boolean;
-  owner: { name: string; phone: string | null; email: string | null; address: string | null; accountTermsDays?: number | null; accountName?: string | null };
+  owner: { name: string; phone: string | null; email: string | null; address: string | null; accountTermsDays?: number | null; accountName?: string | null; accountAddress?: string | null };
   vehicle: {
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
     make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;

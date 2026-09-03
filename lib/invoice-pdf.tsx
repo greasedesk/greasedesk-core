@@ -148,8 +148,11 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
         <View style={S.partiesRow}>
           <View style={{ maxWidth: 260 }}>
             <Text style={S.label}>{t('billTo')}</Text>
-            <Text>{doc.customer.name}</Text>
-            {doc.customer.address ? <Text style={S.muted}>{doc.customer.address}</Text> : null}
+            <Text>{doc.addressee.name}</Text>
+            {doc.addressee.address ? <Text style={S.muted}>{doc.addressee.address}</Text> : null}
+            {/* WHOSE CAR IT WAS. Only when the bill is not theirs — an accounts department paying
+                for a fleet cannot attribute a bill it cannot tie to an employee. */}
+            {doc.addressee.onBehalfOf ? <Text style={S.muted}>{t('billForCustomer', { name: doc.addressee.onBehalfOf })}</Text> : null}
           </View>
           {(doc.vehicle.reg || doc.vehicle.desc || doc.vehicle.vin || doc.vehicle.mileage != null) ? (
             // Stacked Registration / VIN / Mileage (TMBS layout) — absent fields omit their line.

@@ -16,7 +16,7 @@ import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/veh
 // rendered as "opted in".
 type Owner = {
   name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null;
-  accountTermsDays?: number | null; accountName?: string | null;
+  accountTermsDays?: number | null; accountName?: string | null; accountAddress?: string | null;
   smsOptOut?: boolean | null; emailOptOut?: boolean | null;
 };
 type Vehicle = {
@@ -60,6 +60,10 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
   // case, not missing data, so this field starts empty and stays empty for almost every customer.
   const [termsDays, setTermsDays] = useState(owner.accountTermsDays != null ? String(owner.accountTermsDays) : '');
   const [accountName, setAccountName] = useState(owner.accountName ?? '');
+  // The ACCOUNT's address, never a substitute for the customer's. An invoice addressed to a company
+  // at an employee's house is worse than one with no address, so this is its own field and its own
+  // column — see lib/invoice::resolveBilledParty.
+  const [accountAddress, setAccountAddress] = useState(owner.accountAddress ?? '');
   // Contact preferences. `?? null` preserves the unknown state — a customer nobody has asked must
   // not be turned into an explicit "opted in" just by opening the form and saving.
   const [smsOptOut, setSmsOptOut] = useState<boolean | null>(owner.smsOptOut ?? null);
@@ -136,7 +140,7 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
         name, phone, email, address, sms_opt_out: smsOptOut, email_opt_out: emailOptOut,
         // Sent as typed; the server normalises through the one rule. '' becomes NULL — clearing the
         // box takes a customer OFF account, which is the only way back to paying on collection.
-        account_terms_days: termsDays, account_name: accountName,
+        account_terms_days: termsDays, account_name: accountName, account_address: accountAddress,
       },
       vehicle: {
         registration, vin, mileageIn, make, model, colour, year: vyear, fuel, engineCc,
@@ -238,7 +242,29 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
           )}
         </div>
         <div><label className={labelCls}>{t('field.email')}</label><input className={inputCls} type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
-        <div className="sm:col-span-2"><label className={labelCls}>{t('field.address')}</label><textarea className={`${inputCls} resize-y`} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} /></div>
+        <div className="sm:col-span-2"><label className={labelCls}>{t('field.address')}</label><textarea className={`${inputCls} resize-y`} rows={2} value={address} onChange={(e) => setAddress(e.target.value)} data-testid="cust-address" /></div>
+        {/* ── BILL SOMEONE ELSE ──────────────────────────────────────────────────────────────────
+            ITS OWN SECTION, AND DELIBERATELY NOT IN THE ON-ACCOUNT BLOCK BELOW. It used to sit
+            beside "Payment terms (days)" as "Account name (if different)", which asserted something
+            untrue — that billing an employer is a credit-terms decision. An employer-billed job can
+            be paid on collection like any other. It was also the only field on this form with no
+            hint, which is part of why nothing but the demo generator ever wrote to it.
+            Placed directly under the customer's own address so the two addresses are adjacent and
+            it is obvious which is which. */}
+        <div className="sm:col-span-2">
+          <div className={labelCls}>{t('field.billElsewhere')}</div>
+          <p className="text-[11px] text-muted mb-2">{t('field.accountNameHint')}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>{t('field.accountName')}</label>
+              <input className={inputCls} value={accountName} onChange={(e) => setAccountName(e.target.value)} data-testid="cust-account-name" />
+            </div>
+            <div>
+              <label className={labelCls}>{t('field.accountAddress')}</label>
+              <textarea className={`${inputCls} resize-y`} rows={2} value={accountAddress} onChange={(e) => setAccountAddress(e.target.value)} data-testid="cust-account-address" />
+            </div>
+          </div>
+        </div>
         {/* ── ON ACCOUNT ─────────────────────────────────────────────────────────────────────────
             Blank is the answer for almost everyone: a garage does not release a car until the bill
             is paid, so retail work has no terms and cannot be overdue. Filling this in is the whole
@@ -248,10 +274,6 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
           <input className={inputCls} type="number" inputMode="numeric" min="1" max="180" placeholder={t('field.accountTermsPh')}
             value={termsDays} onChange={(e) => setTermsDays(e.target.value)} data-testid="cust-terms" />
           <p className="text-[11px] text-muted mt-1">{t('field.accountTermsHint')}</p>
-        </div>
-        <div>
-          <label className={labelCls}>{t('field.accountName')}</label>
-          <input className={inputCls} value={accountName} onChange={(e) => setAccountName(e.target.value)} data-testid="cust-account-name" />
         </div>
         {/* CONTACT PREFERENCES — the garage is controller of this consent, so it is edited here on
             the customer's own record. Ticking a box records a REFUSAL (true); leaving it clear

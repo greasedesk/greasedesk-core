@@ -148,6 +148,7 @@ export async function mintCreditNote(tx: Prisma.TransactionClient, args: {
       company_name_snapshot: true, company_trading_name_snapshot: true,
       company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
+      account_name_snapshot: true, account_address_snapshot: true,
       group: { select: { invoice_credit_note_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true } },
     },
   });
@@ -188,6 +189,12 @@ export async function mintCreditNote(tx: Prisma.TransactionClient, args: {
       company_address_snapshot: inv.company_address_snapshot,
       customer_name_snapshot: inv.customer_name_snapshot,
       customer_address_snapshot: inv.customer_address_snapshot,
+      // THE ADDRESSEE TRAVELS WITH THE PAIR. A credit note that reverted to the employee's name
+      // while the invoice it corrects is addressed to their employer would not read as a pair —
+      // and a company chasing a credit it cannot find under its own name is the same failure the
+      // company particulars above are copied to prevent.
+      account_name_snapshot: inv.account_name_snapshot,
+      account_address_snapshot: inv.account_address_snapshot,
       created_by: args.createdBy,
       lines: { create: args.lines.map((l) => ({ ...l, item_type: l.item_type as never })) },
     },

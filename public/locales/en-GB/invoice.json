@@ -22,6 +22,7 @@
   "companyNumber": "Company no.",
   "notRegistered": "Not {{label}} registered.",
   "billTo": "Bill to",
+  "billForCustomer": "for {{name}}",
   "vehicle": "Vehicle",
   "vehicleBlock": {
     "registration": "Registration",

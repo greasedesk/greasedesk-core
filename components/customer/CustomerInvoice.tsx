@@ -157,8 +157,10 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide text-muted mb-1">Billed to</p>
-                <p className="text-ink">{d.customer.name || '—'}</p>
-                {d.customer.address && <p className="text-muted whitespace-pre-line">{d.customer.address}</p>}
+                <p className="text-ink">{d.addressee.name || '—'}</p>
+                {d.addressee.address && <p className="text-muted whitespace-pre-line">{d.addressee.address}</p>}
+                {/* Whose car it was, when the bill is not theirs. Resolved in lib/invoice-doc. */}
+                {d.addressee.onBehalfOf && <p className="text-muted">for {d.addressee.onBehalfOf}</p>}
               </div>
             </div>
 

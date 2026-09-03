@@ -47,6 +47,21 @@ export const INVOICE_SNAPSHOTS: readonly SnapshotPolicy[] = [
     reason: 'who was billed; a customer who has since married or moved was still billed under that name' },
   { column: 'customer_address_snapshot', policy: 'frozen',
     reason: 'where the document was addressed' },
+  // ── THE ACCOUNT, WHEN THE BILL IS NOT THE CAR OWNER'S ────────────────────────────────────────
+  // The same party, said the other way round: these carry the employer/lease company an invoice was
+  // addressed to, and the customer pair above carries whose car it was. Declared `frozen` on the
+  // same grounds — a re-issue must not re-read the account from the customer record, because a
+  // fleet put on account next year did not receive last year's invoices.
+  //
+  // FROZEN IS TRUE TODAY AND IS NOT THE FINAL ANSWER. Nothing can correct a document addressed to
+  // the wrong party, which is the gap that produced this pair in the first place; slice two moves
+  // this and the customer pair together to a third policy (`correctable`) — an explicit, audited,
+  // admin-only correction while the invoice is under correction. Recorded here so the next reader
+  // finds the pending decision beside the entry rather than in a report.
+  { column: 'account_name_snapshot', policy: 'frozen',
+    reason: 'the account the document was addressed to at issue; re-reading it from the customer would re-address a historical document to a party that was not billed then' },
+  { column: 'account_address_snapshot', policy: 'frozen',
+    reason: 'where that account was billed at issue' },
   { column: 'vat_registered_at_issue', policy: 'frozen',
     reason: 'whether VAT was chargeable then; a later registration cannot make past VAT due' },
 

@@ -223,7 +223,10 @@
     "accountTerms": "Payment terms (days)",
     "accountTermsPh": "Blank = on collection",
     "accountTermsHint": "Leave blank for a normal customer who pays when they collect the car.",
-    "accountName": "Account name (if different)"
+    "billElsewhere": "Bill someone else",
+    "accountName": "Company or employer to invoice",
+    "accountAddress": "Billing address",
+    "accountNameHint": "Leave blank to invoice the customer. Fill this in and the invoice is addressed to the company — the customer stays the owner of the car, and their own details above are unchanged. Applies to invoices raised from now on."
   },
   "detailsEdit": {
     "dvsaButton": "Look up vehicle details (DVSA)",

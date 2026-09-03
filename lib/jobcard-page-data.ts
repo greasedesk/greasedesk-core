@@ -149,7 +149,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     (async () => {
       const ownerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
       const or = ownerId
-        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true } })
+        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })
         : (row.customer ?? null);
       // The customer's missed-booking history rides with the owner — derived (lib/no-show), so a
       // reopened card corrects it by construction. THIS card counts too when it is itself a
@@ -325,6 +325,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     // NULL all the way to the screen: no terms is "pays on collection", not "we don't know".
     accountTermsDays: (ownerRow as any)?.account_terms_days ?? null,
     accountName: (ownerRow as any)?.account_name ?? null,
+    accountAddress: (ownerRow as any)?.account_address ?? null,
     // Missed bookings, most recent first — shown beside the customer so whoever books the next
     // slot sees the form. Empty array = clean history (derived, so it is a real zero).
     noShowDates: ownerNoShows.dates,

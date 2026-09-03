@@ -1495,8 +1495,16 @@ model Customer {
   // disagree — a trade customer with no terms, terms sitting on a retail customer — and then
   // something has to decide which of them is lying. One nullable column cannot contradict itself.
   account_terms_days Int?
-  // The trading name to bill, when the account is not simply the customer's own name.
+  // ── WHO THE INVOICE IS ADDRESSED TO, WHEN THAT IS NOT THIS PERSON ─────────────────────────────
+  // An employer paying for an employee's company car, a lease company, an insurer. NULL on both =
+  // bill the customer, which is nearly every invoice a garage raises.
+  //
+  // THE ADDRESS IS ITS OWN COLUMN AND IS NEVER SUBSTITUTED. When account_name is set and this is
+  // NULL the document prints no address at all, because the alternative a `??` would reach for is
+  // the customer's HOME address under the company's name — a haulage firm addressed at an
+  // employee's house, which is a worse document than one with no address on it.
   account_name       String?
+  account_address    String?
   // ── CONTACT PREFERENCES (per channel — a customer may refuse SMS and still accept email) ────────
   // The GARAGE is controller of this consent, so it is tenant-scoped customer data, not a platform
   // record. THREE STATES, deliberately nullable: NULL = no record (unknown), true = opted OUT,
@@ -2590,6 +2598,18 @@ model Invoice {
   company_trading_name_snapshot String?
   customer_name_snapshot      String
   customer_address_snapshot   String?
+  /// ── THE PARTY THE DOCUMENT IS ADDRESSED TO, WHEN IT IS NOT THE CUSTOMER ──────────────────────
+  /// NULL = billed to the customer, and that is the honest answer for the whole back catalogue as
+  /// well as for nearly every invoice raised since. NOT backfilled: an empty string here would say
+  /// "billed to an account with no name", which is a different and untrue claim.
+  ///
+  /// Deliberately a SECOND PAIR rather than an overload of the two columns above. Those mean the
+  /// person whose car it is on 3,395 existing documents; writing a company into them would restate
+  /// every one of those retrospectively, and the invoice list's Customer column would show people
+  /// for some rows and companies for others with nothing to tell them apart.
+  account_name_snapshot       String?
+  /// NULL when the account had no address recorded. Never the customer's own — see Customer.
+  account_address_snapshot    String?
   vehicle_reg_snapshot        String?
   vehicle_desc_snapshot       String?
   vehicle_vin_snapshot        String?
@@ -4008,6 +4028,11 @@ model CreditNote {
   /// counter jobs never collect one, and inventing one on the correction would differ from the
   /// document being corrected.
   customer_address_snapshot  String?
+  /// COPIED FROM THE INVOICE, like every other particular here. A credit note that reverted to the
+  /// employee's name while the invoice it corrects is addressed to their employer would not read as
+  /// a pair — which is the one thing this whole block of columns exists to guarantee.
+  account_name_snapshot      String?
+  account_address_snapshot   String?
 
   /// NULL when the system issued it rather than a person — the same convention Payment uses.
   /// The `refund.requested` audit row carries WHO for the person-initiated case.

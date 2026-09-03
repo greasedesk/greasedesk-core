@@ -46,7 +46,10 @@ try {
   const model = schema.slice(schema.indexOf('model Invoice {'));
   const body = model.slice(0, model.indexOf('\n}'));
   const columns = [...body.matchAll(/^\s{2}([a-z_]*(?:snapshot|_at_issue))\s+\w/gm)].map((m) => m[1]);
-  check('the schema still has the fifteen this was written against', columns.length === 15,
+  // 15 → 17 on 2026-09-03: the billed-party pair (account_name_snapshot, account_address_snapshot).
+  // PINNED, not loosened — the number is the whole point of the check. A new snapshot column must
+  // move this line and the register in the same commit, which is what makes adding one a decision.
+  check('the schema still has the seventeen this was written against', columns.length === 17,
     `${columns.length}: ${columns.join(' ')}`);
   const undeclared = columns.filter((c) => !S.snapshotPolicy(c));
   check('every one is declared rebuild or frozen', undeclared.length === 0,

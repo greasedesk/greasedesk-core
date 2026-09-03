@@ -32,7 +32,7 @@ type OwnerIn = {
   sms_opt_out?: boolean | null; email_opt_out?: boolean | null;
   // Arrives as typed (the form sends a string, '' included) — normaliseTermsDays is the only thing
   // that decides what it means, so the wire type stays deliberately loose.
-  account_terms_days?: number | string | null; account_name?: string;
+  account_terms_days?: number | string | null; account_name?: string; account_address?: string;
 };
 type VehicleIn = {
   registration?: string; vin?: string; mileageIn?: number | string; make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
@@ -114,7 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (owner && ownerId) {
-        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true } })) as any;
+        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })) as any;
         const next: any = {};
         const diff: any = {};
         const set = (k: string, v: any, curV: any) => { if (v !== undefined && v !== curV) { next[k] = v; diff[k] = { from: curV, to: v }; } };
@@ -146,7 +146,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (owner.account_terms_days !== undefined) {
           set('account_terms_days', normaliseTermsDays(owner.account_terms_days), cur.account_terms_days);
         }
+        // WHO TO BILL, AND WHERE. Two columns because the address is never a substitute: a company
+        // with no billing address recorded prints no address at all, not the customer's own.
         if (owner.account_name !== undefined) set('account_name', clean(owner.account_name), cur.account_name);
+        if (owner.account_address !== undefined) set('account_address', clean(owner.account_address), cur.account_address);
         if (Object.keys(next).length) {
           await tx.customer.update({ where: { id: ownerId }, data: next });
           await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff: { ...diff, via } });

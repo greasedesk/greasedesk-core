@@ -78,6 +78,8 @@ type PageProps = {
   vatRegistered: boolean;
   company: { name: string; vatNumber: string | null; address: string | null };
   customer: { name: string; address: string | null };
+  /** WHO IT IS ADDRESSED TO — resolved once in lib/invoice-doc, never decided here. */
+  addressee: { name: string; address: string | null; onBehalfOf: string | null };
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   /** The frozen due-items block, as printed at mint — `printedNeedsBlock`, via
    *  invoice-issue's computeNarrativeBlocks, stored as Invoice.due_items_snapshot. This said
@@ -630,8 +632,12 @@ export default function InvoicePage(props: PageProps) {
           <div className="flex flex-wrap justify-between gap-4 py-5 border-b border-line">
             <div>
               <div className="text-xs uppercase tracking-wide text-muted mb-1">{t('billTo')}</div>
-              <div className="text-sm text-ink font-medium">{props.customer.name}</div>
-              {props.customer.address && <div className="text-sm text-muted whitespace-pre-line">{props.customer.address}</div>}
+              <div className="text-sm text-ink font-medium" data-testid="invoice-addressee">{props.addressee.name}</div>
+              {props.addressee.address && <div className="text-sm text-muted whitespace-pre-line">{props.addressee.address}</div>}
+              {/* Only when the bill is not the owner's — see lib/invoice-doc. */}
+              {props.addressee.onBehalfOf && (
+                <div className="text-sm text-muted" data-testid="invoice-on-behalf-of">{t('billForCustomer', { name: props.addressee.onBehalfOf })}</div>
+              )}
             </div>
             {(props.vehicle.reg || props.vehicle.desc || props.vehicle.vin || props.vehicle.mileage != null) && (
               <div className="text-right">
@@ -892,6 +898,7 @@ const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
       vatRegistered: doc.vatRegistered,
       company: doc.company,
       customer: doc.customer,
+      addressee: doc.addressee,
       vehicle: doc.vehicle,
       // ALL FOUR, and the type above now enforces it. The PDF reads `doc.*` directly; this page
       // has to copy each field across the SSR boundary by hand, which is the one hop the shared

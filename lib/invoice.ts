@@ -89,6 +89,49 @@ export function resolveCompanyIdentity(
   };
 }
 
+// ---- WHO THE DOCUMENT IS ADDRESSED TO (the mirror of resolveCompanyIdentity above) ----
+/**
+ * ── THE OTHER PARTY ─────────────────────────────────────────────────────────────────────────────
+ * A document names two parties, and until now only one of them had a resolver. The garage side has
+ * had `resolveCompanyIdentity` since the beginning; the billed side was `card.customer?.name` typed
+ * inline at the mint, which is why "bill this to the customer's employer" had no path through the
+ * product at all. Both parties are now resolved the same way, in the same file, so neither can
+ * quietly grow a rule the other does not have.
+ *
+ * ── THE ACCOUNT NAME IS THE ADDRESSEE; THE CUSTOMER IS STILL NAMED ──────────────────────────────
+ * An employer paying for an employee's company car needs to see BOTH: the bill is theirs, and the
+ * car is not. So this returns the addressee AND `onBehalfOf` — the owner, present only when they
+ * are not the addressee. NULL there is the ordinary case and means there is nothing to add.
+ *
+ * ── THE ADDRESS IS NEVER SUBSTITUTED, AND THIS IS THE WHOLE POINT ───────────────────────────────
+ * When an account name is set, the address is the ACCOUNT's or it is absent. The `??` that suggests
+ * itself here — fall back to the customer's — produces a document addressed to a haulage firm at an
+ * employee's house, which is worse than one carrying no address at all, and it would be a decision
+ * nobody made. Absent is honest; wrong is not.
+ */
+export type BilledParty = {
+  /** The party the document is ADDRESSED to: the account when one is set, else the customer. */
+  name: string;
+  /** The addressee's own address. NULL is a meaningful absence, never the other party's. */
+  address: string | null;
+  /** The car's owner, ONLY when they are not the addressee. NULL on nearly every invoice. */
+  onBehalfOf: string | null;
+};
+
+export function resolveBilledParty(
+  customer: { name?: string | null; address?: string | null; account_name?: string | null; account_address?: string | null } | null | undefined,
+): BilledParty {
+  const clean = (v: string | null | undefined) => (typeof v === 'string' && v.trim() ? v : null);
+  const customerName = clean(customer?.name) ?? '';
+  const account = clean(customer?.account_name);
+  // THE NAME DECIDES, NOT THE ADDRESS. An account address with no account name bills nobody — an
+  // address is not a party — so it is ignored rather than promoted into one.
+  if (!account) {
+    return { name: customerName, address: clean(customer?.address), onBehalfOf: null };
+  }
+  return { name: account, address: clean(customer?.account_address), onBehalfOf: customerName || null };
+}
+
 // ---- Per-line money (pennies). Rate applied via the lib/tax chokepoint; VAT zeroed when not registered. ----
 export function computeInvoiceLinePennies(qty: number, unitPricePennies: number, vatRate: number, vatApplies: boolean) {
   const q = Number.isFinite(qty) ? qty : 0;

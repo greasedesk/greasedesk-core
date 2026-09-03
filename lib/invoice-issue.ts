@@ -25,7 +25,7 @@ import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
-import { resolveCompanyIdentity } from '@/lib/invoice';
+import { resolveCompanyIdentity, resolveBilledParty } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { dueDateFor } from '@/lib/account-terms';
 import { visitEndMileage } from '@/lib/odometer';
@@ -38,7 +38,7 @@ const CARD_SELECT = {
   odometer_out: true,
   group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
-  customer: { select: { name: true, address: true, account_terms_days: true } },
+  customer: { select: { name: true, address: true, account_terms_days: true, account_name: true, account_address: true } },
   // mot_expiry rides along because it PRINTS on the due-items block and must freeze with it.
   vehicle: { select: { id: true, registration: true, make: true, model: true, vin: true, mileage_at_create: true, mot_expiry: true } },
 } as const;
@@ -53,6 +53,9 @@ async function createInvoiceRow(
   if (!card) throw new Error('CARD_NOT_FOUND');
 
   const identity = resolveCompanyIdentity(card.group, card.site);
+  // BOTH PARTIES, RESOLVED THE SAME WAY. See lib/invoice::resolveBilledParty for why the account
+  // rides in its own pair instead of overwriting the customer columns.
+  const billed = resolveBilledParty(card.customer);
   const issuedAt = new Date();
   const seq = series === 'warranty' ? await assignWarrantyNumber(tx, groupId)
     : series === 'historical' ? await assignHistoricalNumber(tx, groupId)
@@ -105,6 +108,12 @@ async function createInvoiceRow(
       company_address_snapshot: identity.address,
       customer_name_snapshot: card.customer?.name ?? '',
       customer_address_snapshot: card.customer?.address ?? null,
+      // ── WHO THIS IS ADDRESSED TO, WHEN IT IS NOT THE PERSON WHOSE CAR IT IS ──────────────────
+      // NULL on both when the customer is the addressee, which is nearly every invoice. Written
+      // from the account as it stands NOW, and frozen here with every other particular: putting a
+      // fleet on account next year must not re-address last year's documents to them.
+      account_name_snapshot: billed.onBehalfOf ? billed.name : null,
+      account_address_snapshot: billed.onBehalfOf ? billed.address : null,
       vehicle_reg_snapshot: card.vehicle?.registration ?? null,
       vehicle_desc_snapshot: vehicleDesc,
       vehicle_vin_snapshot: card.vehicle?.vin ?? null,
