@@ -161,6 +161,10 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
                 {d.addressee.address && <p className="text-muted whitespace-pre-line">{d.addressee.address}</p>}
                 {/* Whose car it was, when the bill is not theirs. Resolved in lib/invoice-doc. */}
                 {d.addressee.onBehalfOf && <p className="text-muted">for {d.addressee.onBehalfOf}</p>}
+                {/* If they are holding an earlier copy addressed to somebody else, say so here. */}
+                {d.addresseeOriginal && (
+                  <p className="mt-1 text-xs text-muted">Originally addressed to: {d.addresseeOriginal.replace(/\n/g, ', ')}</p>
+                )}
               </div>
             </div>
 

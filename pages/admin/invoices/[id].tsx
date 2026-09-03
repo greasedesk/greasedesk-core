@@ -80,6 +80,9 @@ type PageProps = {
   customer: { name: string; address: string | null };
   /** WHO IT IS ADDRESSED TO — resolved once in lib/invoice-doc, never decided here. */
   addressee: { name: string; address: string | null; onBehalfOf: string | null };
+  /** Both texts, always — a re-addressed document must not look like it only ever said one thing. */
+  addresseeOriginal: string | null;
+  addresseeCorrectedAt: string | null;
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   /** The frozen due-items block, as printed at mint — `printedNeedsBlock`, via
    *  invoice-issue's computeNarrativeBlocks, stored as Invoice.due_items_snapshot. This said
@@ -638,6 +641,17 @@ export default function InvoicePage(props: PageProps) {
               {props.addressee.onBehalfOf && (
                 <div className="text-sm text-muted" data-testid="invoice-on-behalf-of">{t('billForCustomer', { name: props.addressee.onBehalfOf })}</div>
               )}
+              {/* THE CORRECTION HISTORY, beside the party it corrected — the same treatment an
+                  amended void reason gets, and for the same reason. */}
+              {props.addresseeOriginal && (
+                <div className="mt-2 pt-2 border-t border-line text-xs text-muted" data-testid="addressee-history">
+                  <p className="font-semibold">{t('addresseeHistoryTitle')}</p>
+                  <p data-testid="addressee-history-original">
+                    <span className="opacity-70">{t('addresseeHistoryOriginal')}: </span>
+                    <span className="line-through whitespace-pre-line">{props.addresseeOriginal}</span>
+                  </p>
+                </div>
+              )}
             </div>
             {(props.vehicle.reg || props.vehicle.desc || props.vehicle.vin || props.vehicle.mileage != null) && (
               <div className="text-right">
@@ -899,6 +913,8 @@ const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
       company: doc.company,
       customer: doc.customer,
       addressee: doc.addressee,
+      addresseeOriginal: doc.addresseeOriginal,
+      addresseeCorrectedAt: doc.addresseeCorrectedAt,
       vehicle: doc.vehicle,
       // ALL FOUR, and the type above now enforces it. The PDF reads `doc.*` directly; this page
       // has to copy each field across the SSR boundary by hand, which is the one hop the shared

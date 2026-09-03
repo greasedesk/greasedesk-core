@@ -2610,10 +2610,29 @@ model Invoice {
   account_name_snapshot       String?
   /// NULL when the account had no address recorded. Never the customer's own — see Customer.
   account_address_snapshot    String?
-  vehicle_reg_snapshot        String?
-  vehicle_desc_snapshot       String?
-  vehicle_vin_snapshot        String?
-  vehicle_mileage_snapshot    Int? // odometer_in at issue (falls back to mileage_at_create)
+  /// ── APPEND-ONLY LOG OF ADDRESSEE CORRECTIONS ─────────────────────────────────────────────────
+  /// [{ at, by, reason, from: {…four fields}, to: {…four fields} }] — the fourth use of the shape
+  /// void_reason_corrections, amendments and EmploymentEvent.correction_json already share.
+  ///
+  /// NULL = never corrected, which is every invoice. Deliberately NOT folded into `amendments`:
+  /// that log is money-shaped and fires only when the total moves, so an addressee correction —
+  /// which never changes a figure — would either write {fromPennies: 5000, toPennies: 5000} or
+  /// vanish. The customer can end up holding two copies addressed to different parties, and this
+  /// is the record that says why.
+  ///
+  /// NULL = never re-addressed, which is every invoice until one is. Never backfilled to `[]`:
+  /// an empty array claims "corrected zero times, and we were counting", which is a different
+  /// statement from a column that did not exist when the document was raised.
+  addressee_corrections       Json?
+  /// ── THE CAR, AS THE DOCUMENT NAMED IT ────────────────────────────────────────────────────────
+  /// Each says its own meaning ON ITS OWN LINE, deliberately. These three carried no explanation at
+  /// all until 2026-09-03: they satisfied nullable-annotation-gate only while a NEIGHBOURING
+  /// column's comment happened to fall inside its four-line window, and inserting a column above
+  /// them revealed it. A shared block above the group would recreate exactly that fragility.
+  vehicle_reg_snapshot        String? // NULL = no registration on the card at issue (a counter parts sale has none)
+  vehicle_desc_snapshot       String? // NULL = make and model both unknown; "we did not know", never "it has none"
+  vehicle_vin_snapshot        String? // NULL = no VIN recorded — usual on a hand-typed vehicle with no lookup
+  vehicle_mileage_snapshot    Int? // odometer_in at issue (falls back to mileage_at_create); NULL = no reading taken
   vat_registered_at_issue     Boolean
   created_at                  DateTime @default(now())
 

@@ -19,7 +19,14 @@ import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
-const { readFileSync } = await import('node:fs');
+const { readFileSync, existsSync, readdirSync, statSync } = await import('node:fs');
+/** Comment lines stripped, so a column named in prose is never mistaken for a write. */
+const prose = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+/** Every .ts/.tsx under a directory, recursively — the haystack for "who else writes this". */
+const appFiles = (dir) => readdirSync(dir).flatMap((n) => {
+  const p = `${dir}/${n}`;
+  return statSync(p).isDirectory() ? appFiles(p) : (/\.tsx?$/.test(p) ? [p] : []);
+});
 const S = await import('../lib/invoice-snapshots.ts');
 const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
 const { acceptQuote } = await import('../lib/quote-acceptance.ts');
@@ -78,13 +85,72 @@ try {
   // `select` — a frozen column is READ on that path all the time, and reading is not rewriting.
   // Only the payloads of `data: { … }` are searched, which is where a write actually is.
   const dataPayloads = [...reissue.matchAll(/data:\s*\{([\s\S]*?)\}/g)].map((m) => m[1]).join('\n');
-  const rewritten = S.INVOICE_SNAPSHOTS.filter((s) => s.policy === 'frozen')
-    .filter((s) => new RegExp(`\\b${s.column}\\s*:`).test(dataPayloads));
-  check('  …and no frozen column is rewritten there', rewritten.length === 0,
-    rewritten.map((r) => r.column).join(', ') || 'rebuilding the parties would restate a past transaction in the present’s terms');
+  // ── SELECTED ON `!== 'rebuild'`, NOT ON `=== 'frozen'` (amended 2026-09-03) ───────────────────
+  // The rule this check enforces has never changed: a re-issue writes the rebuild set and nothing
+  // else. But it used to be SPELLED as "no frozen column", and adding the `correctable` policy
+  // would have made it pass by SHRINKING — the four addressee columns would have dropped out of
+  // `filter(policy === 'frozen')` and stopped being examined at all, and the gate would have
+  // reported success while covering strictly less than the day before.
+  //
+  // Stated the way the rule is actually meant, the check is WIDER after the new policy than before
+  // it (nine columns became eleven), which is the difference between an amendment and a bypass. A
+  // correctable column must not be written here either: an addressee correction is an explicit,
+  // audited act, never a side effect of pressing re-issue.
+  const notOnReissue = S.INVOICE_SNAPSHOTS.filter((s) => s.policy !== 'rebuild');
+  const rewritten = notOnReissue.filter((s) => new RegExp(`\\b${s.column}\\s*:`).test(dataPayloads));
+  check('  …and NOTHING outside the rebuild set is rewritten there', rewritten.length === 0,
+    rewritten.map((r) => r.column).join(', ') || `${notOnReissue.length} columns checked — rebuilding the parties would restate a past transaction in the present’s terms`);
+  // THE GUARD ON THE GUARD. Reverting the filter above to `=== 'frozen'` turns this red, which is
+  // the only thing standing between "we widened the register" and "we narrowed the assertion".
+  const correctable = S.INVOICE_SNAPSHOTS.filter((s) => s.policy === 'correctable');
+  // THE DETAIL IS COMPUTED FROM WHAT IS ACTUALLY COVERED, not from what was intended. The first
+  // version printed "4 correctable, all covered" while FAILING, because the message was built from
+  // the register rather than from the set the check had just examined — a failing assertion
+  // reassuring its reader is worse than one with no detail at all.
+  const uncovered = correctable.filter((c) => !notOnReissue.includes(c));
+  check('  …with the correctable columns INSIDE that check, not exempted by it',
+    correctable.length > 0 && uncovered.length === 0,
+    correctable.length === 0
+      ? 'NO correctable column exists — every check below it passes vacuously'
+      : uncovered.length
+        ? `EXEMPTED: ${uncovered.map((c) => c.column).join(', ')} — the check above passed by covering ${notOnReissue.length} columns instead of ${notOnReissue.length + uncovered.length}`
+        : `${correctable.length} correctable, all inside a check covering ${notOnReissue.length}`);
   check('  …and that check looks at writes, not at the select',
     /\bvat_registered_at_issue: true\b/.test(reissue) && !/\bvat_registered_at_issue\s*:/.test(dataPayloads),
     'the endpoint reads a frozen column on every call; the assertion above must not trip on that');
+  // The discriminator above only discriminates while that column is READ and never WRITTEN here.
+  // If it ever became correctable it would acquire a writer and the counter-check would rot silently.
+  check('  …and its discriminator is still a frozen column',
+    S.snapshotPolicy('vat_registered_at_issue')?.policy === 'frozen');
+
+  // ── 2b. `correctable` NAMES THE ONE PATH ALLOWED TO WRITE IT ─────────────────────────────────
+  // A third policy is a door in a freeze, and a door nobody can point at is an unlock. Every
+  // correctable column names its endpoint, that file exists, and NOTHING else writes the column.
+  console.log('\n— a correctable column names the one path that may write it —');
+  check('there is a correctable column at all', correctable.length > 0,
+    'without one, every assertion in this section is true of the empty set');
+  const viaMissing = correctable.filter((c) => !c.via || !existsSync(c.via));
+  check('every correctable column names a via, and the file is there', viaMissing.length === 0,
+    viaMissing.map((c) => `${c.column} → ${c.via ?? '(none)'}`).join(', ') || correctable.map((c) => c.via).filter((v, i, a) => a.indexOf(v) === i).join(', '));
+  // WHO ELSE WRITES IT. Two files are allowed for reasons that are about a different ROW, not a
+  // softer rule, so each says which: the mint creates the Invoice, and the credit note copies the
+  // particulars onto a CreditNote row and never touches the Invoice's own.
+  const WRITERS_ALLOWED = new Map([
+    ['lib/invoice-issue.ts', 'the mint — this is where these columns are first written'],
+    ['lib/credit-note.ts', 'writes the CreditNote row’s own copies; it never updates an Invoice'],
+    ...correctable.map((c) => [c.via, 'the declared correction path']),
+  ]);
+  const sources = [...appFiles('pages/api'), ...appFiles('lib')];
+  const writers = sources.filter((f) => {
+    const payloads = [...prose(readFileSync(f, 'utf8')).matchAll(/data:\s*\{([\s\S]*?)\}/g)].map((m) => m[1]).join('\n');
+    return correctable.some((c) => new RegExp(`\\b${c.column}\\s*:`).test(payloads));
+  });
+  const unexpected = writers.filter((f) => !WRITERS_ALLOWED.has(f));
+  check('  …and nothing outside the declared writers writes one', unexpected.length === 0,
+    unexpected.join(', ') || `${writers.length} writers, all declared: ${writers.join(', ')}`);
+  // A SCAN THAT FINDS NOTHING IS INDISTINGUISHABLE FROM ONE THAT CANNOT SEE. Prove it can.
+  check('  …and that scan can actually see a writer', writers.includes('lib/invoice-issue.ts'),
+    'the mint writes all four; a scan that misses it is broken, not reassuring');
 
   // ── 3. THE SCREEN SAYS SO BEFORE IT IS PRESSED ───────────────────────────────────────────────
   const ui = readFileSync('pages/admin/invoices/[id].tsx', 'utf8');

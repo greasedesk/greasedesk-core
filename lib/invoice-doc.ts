@@ -22,6 +22,7 @@ import { refundState, type RefundState } from '@/lib/invoice-refund-state';
 import { COUNTED_STATUSES } from '@/lib/payments';
 import { presignGet } from '@/lib/r2';
 import { readVoidCorrections } from '@/lib/invoice-void';
+import { readAddresseeCorrections, printedAddressee } from '@/lib/invoice-addressee';
 
 export type InvoiceDocLine = {
   description: string;
@@ -101,6 +102,15 @@ export type InvoiceDoc = {
    */
   addressee: { name: string; address: string | null; onBehalfOf: string | null };
   /**
+   * WHO THIS USED TO BE ADDRESSED TO, when it has been re-addressed. Printed by the same rule as
+   * the block above (lib/invoice-addressee::printedAddressee), so the history cannot describe a
+   * case — an account with no address, say — differently from the live block it sits under.
+   * NULL on every invoice that has never been corrected, which is all of them until one is.
+   */
+  addresseeOriginal: string | null;
+  addresseeCorrectedAt: string | null;
+  addresseeCorrectionCount: number;
+  /**
    * THE PERSON, ALWAYS — not the addressee. Kept beside `addressee` because some readers genuinely
    * mean the human: invoice-email-send greets `customer.name`, and greeting an employee's employer
    * by name in a message sent to the employee is the failure that keeps this field separate.
@@ -141,6 +151,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
       customer_name_snapshot: true, customer_address_snapshot: true,
       account_name_snapshot: true, account_address_snapshot: true,
+      addressee_corrections: true,
       vehicle_reg_snapshot: true, vehicle_desc_snapshot: true, vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, vat_registered_at_issue: true,
       due_items_snapshot: true,
       measured_snapshot: true,
@@ -238,6 +249,17 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     vatRegistered: registered,
     company: { name: inv.company_name_snapshot, vatNumber: inv.company_vat_number_snapshot, address: inv.company_address_snapshot },
     customer: { name: inv.customer_name_snapshot, address: inv.customer_address_snapshot },
+    // BOTH TEXTS, ALWAYS — the same rule the void reason follows. A re-addressed document must not
+    // present its corrected addressee as the only party ever named on it: the customer may be
+    // holding the earlier copy, and this is the line that lets them tell the two apart.
+    ...(() => {
+      const log = readAddresseeCorrections(inv.addressee_corrections);
+      return {
+        addresseeOriginal: log.length ? printedAddressee(log[0].from) : null,
+        addresseeCorrectedAt: log.length ? log[log.length - 1].at : null,
+        addresseeCorrectionCount: log.length,
+      };
+    })(),
     // FROM THE SNAPSHOT PAIR, not re-resolved from the customer today — the account is frozen at
     // issue like every other particular. An account set NULL is the customer, which is what every
     // document raised before this existed carries and what nearly every one since carries too.

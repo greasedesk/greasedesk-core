@@ -23,6 +23,10 @@
   "notRegistered": "Not {{label}} registered.",
   "billTo": "Bill to",
   "billForCustomer": "for {{name}}",
+  "addresseeCorrected": "Re-addressed on {{when}}. Originally addressed to: {{original}}",
+  "addresseeHistoryTitle": "This invoice was re-addressed",
+  "addresseeHistoryOriginal": "Originally addressed to",
+
   "vehicle": "Vehicle",
   "vehicleBlock": {
     "registration": "Registration",

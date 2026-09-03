@@ -153,6 +153,16 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
             {/* WHOSE CAR IT WAS. Only when the bill is not theirs — an accounts department paying
                 for a fleet cannot attribute a bill it cannot tie to an employee. */}
             {doc.addressee.onBehalfOf ? <Text style={S.muted}>{t('billForCustomer', { name: doc.addressee.onBehalfOf })}</Text> : null}
+            {/* RE-ADDRESSED DOCUMENTS SHOW BOTH, exactly as an amended void reason does. The
+                customer may be holding the earlier copy; this is what tells them apart. */}
+            {doc.addresseeOriginal ? (
+              <Text style={{ marginTop: 4, fontSize: 8 }}>
+                {t('addresseeCorrected', {
+                  when: doc.addresseeCorrectedAt ? new Date(doc.addresseeCorrectedAt).toLocaleDateString(doc.locale) : '—',
+                  original: doc.addresseeOriginal.replace(/\n/g, ', '),
+                })}
+              </Text>
+            ) : null}
           </View>
           {(doc.vehicle.reg || doc.vehicle.desc || doc.vehicle.vin || doc.vehicle.mileage != null) ? (
             // Stacked Registration / VIN / Mileage (TMBS layout) — absent fields omit their line.
