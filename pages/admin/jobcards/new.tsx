@@ -36,7 +36,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
@@ -103,6 +103,9 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
   // FILL-BLANKS-ONLY so a manual correction is never clobbered by pressing Look up again; any miss or
   // failure just shows "enter manually" and never blocks the form.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
+  // WHAT THE LAST LOOKUP FILLED, AND FOR WHICH PLATE. Editing the registration hands it back —
+  // see lib/vehicle-lookup-client::clearStale for why "hands back" and not "clears everything".
+  const [fill, setFill] = useState<LookupFill | null>(null);
   const [looking, setLooking] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
   // VIN decode (US / vPIC) — fill-blanks-only, same as the reg path.
@@ -137,14 +140,17 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
       });
       return;
     }
-    const keep = (cur: string, inc: string) => (cur.trim() ? cur : inc); // fill blanks only
-    setForm((p) => ({
-      ...p, registration: r.reg,
-      customerName: keep(p.customerName, r.owner?.name ?? ''), phone: keep(p.phone, r.owner?.phone ?? ''), email: keep(p.email, r.owner?.email ?? ''),
-      vin: keep(p.vin, r.vehicle.vin), mileage: keep(p.mileage, r.vehicle.mileage),
-      make: keep(p.make, r.vehicle.make), model: keep(p.model, r.vehicle.model), colour: keep(p.colour, r.vehicle.colour),
-      year: keep(p.year, r.vehicle.year), fuel: keep(p.fuel, r.vehicle.fuel), engineCc: keep(p.engineCc, r.vehicle.engineCc),
-    }));
+    // THE SHARED MERGE — fill blanks only, and remember what was filled and from which plate.
+    setForm((p) => {
+      const { values, fill: f } = applyLookup(p, {
+        customerName: r.owner?.name, phone: r.owner?.phone, email: r.owner?.email,
+        vin: r.vehicle.vin, mileage: r.vehicle.mileage,
+        make: r.vehicle.make, model: r.vehicle.model, colour: r.vehicle.colour,
+        year: r.vehicle.year, fuel: r.vehicle.fuel, engineCc: r.vehicle.engineCc,
+      }, r.reg, { mot: !!r.mot });
+      setFill(f);
+      return { ...values, registration: r.reg };
+    });
     if (r.mot) setMot(r.mot);
     setLookMsg({ ok: true, text: r.source === 'records' ? 'Filled from your records.' : 'Filled from DVSA.' });
   }
@@ -167,6 +173,9 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
           motExpiry: mot.motExpiry ?? undefined,
           lastMotMileage: mot.lastMotMileage ?? undefined,
           lastMotDate: mot.lastMotDate ?? undefined,
+          // WHOSE MOT THIS IS. The server records none of it without this, and refuses it outright
+          // when it names a different car (lib/dvsa::motClientWrite).
+          motSourceReg: fill?.mot ? fill.reg : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -213,7 +222,18 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
                   name="registration"
                   value={form.registration}
                   maxLength={12}
-                  onChange={(e) => setForm((p) => ({ ...p, registration: normalizeReg(e.target.value) || '' }))}
+                  data-testid="new-reg"
+                  onChange={(e) => {
+                    const next = normalizeReg(e.target.value) || '';
+                    // A DIFFERENT PLATE IS A DIFFERENT CAR. Anything the last lookup filled and the
+                    // operator has not since changed goes back, along with its MOT.
+                    setForm((p) => {
+                      if (!staleAgainst(fill, next)) return { ...p, registration: next };
+                      const { values } = clearStale(p, fill);
+                      return { ...values, registration: next };
+                    });
+                    if (staleAgainst(fill, next)) { setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null }); setFill(null); }
+                  }}
                   onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); runLookup(); } }}
                   required
                   placeholder={lookupKeyFor(vehicleLookupProvider) === 'registration' ? 'e.g. AB12CDE' : 'e.g. 7ABC123'}
@@ -237,15 +257,15 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
             </div>
             <div>
               <label className={labelClass}>Customer name *</label>
-              <input name="customerName" value={form.customerName} onChange={handleField} required className={inputClass} />
+              <input name="customerName" data-testid="new-customer" value={form.customerName} onChange={handleField} required className={inputClass} />
             </div>
             <div>
               <label className={labelClass}>Make</label>
-              <input name="make" value={form.make} onChange={handleField} className={inputClass} />
+              <input name="make" data-testid="new-make" value={form.make} onChange={handleField} className={inputClass} />
             </div>
             <div>
               <label className={labelClass}>Model</label>
-              <input name="model" value={form.model} onChange={handleField} className={inputClass} />
+              <input name="model" data-testid="new-model" value={form.model} onChange={handleField} className={inputClass} />
             </div>
             <div>
               <label className={labelClass}>Colour</label>
@@ -265,7 +285,7 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
             </div>
             <div>
               <label className={labelClass}>Phone</label>
-              <input name="phone" type="tel" inputMode="tel" value={form.phone} onChange={handleField} className={inputClass} />
+              <input name="phone" data-testid="new-phone" type="tel" inputMode="tel" value={form.phone} onChange={handleField} className={inputClass} />
               {phoneWarn(form.phone) && <p className="text-[11px] text-warn mt-1">That doesn’t look like a phone number.</p>}
             </div>
             <div>

@@ -27,6 +27,23 @@ export function normalizeReg(reg?: string | null): string | null {
 }
 
 /**
+ * ARE THESE THE SAME CAR? One predicate, three consumers that must not disagree:
+ *   - the lookup forms, deciding whether a filled field still belongs to the plate in the box;
+ *   - /api/dvsa-lookup, deciding whether it may attach an MOT mileage history to a vehicle;
+ *   - lib/dvsa::motClientWrite, deciding whether an MOT date may be stamped as verified.
+ *
+ * FAIL CLOSED. An absent plate on either side is NOT a match. Every caller is asking permission to
+ * write one car's facts onto another, and "we don't know which car this came from" has exactly one
+ * safe answer. `normalizeReg` returns null for empty, so this is a null check, not an empty-string
+ * comparison that would quietly report two blanks as the same vehicle.
+ */
+export function sameRegistration(a?: string | null, b?: string | null): boolean {
+  const x = normalizeReg(a);
+  const y = normalizeReg(b);
+  return x !== null && y !== null && x === y;
+}
+
+/**
  * Stage B owner resolution: the CURRENT owner of a vehicle, read from the ownership edge — never
  * from Vehicle.customer_id. Returns the customer_id of the single is_current edge, or null if the
  * vehicle has no current owner (a genuinely new vehicle, or a pre-backfill anomaly the caller heals).

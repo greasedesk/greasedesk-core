@@ -10,12 +10,14 @@
  * DVSA MOT History (/api/dvsa-lookup) for a new car. Best-effort and NON-THROWING: any network/API
  * failure resolves to { ok:false, reason } so the form stays fully usable for manual entry.
  *
- * It deliberately does NOT touch form state. Each caller applies the returned fields FILL-BLANKS-ONLY
- * against its own inputs — the merge policy lives with the form, which alone knows what the user has
- * already typed, and a manual correction must never be clobbered by pressing Look up again.
+ * It deliberately does NOT touch form state — but it DOES own the rules, as pure functions the
+ * callers apply to their own inputs (applyLookup / staleAgainst / clearStale, below). That
+ * distinction is the fix for a real bug: "the merge policy lives with the form" used to mean each
+ * form hand-rolled it, three implementations drifted, and none of them handled the case where the
+ * REGISTRATION ITSELF CHANGED. State stays with the form; the policy lives here, once.
  */
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
-import { normalizeReg } from '@/lib/vehicle-identity';
+import { normalizeReg, sameRegistration } from '@/lib/vehicle-identity';
 
 export type LookupVehicleFields = {
   make: string; model: string; colour: string; year: string; fuel: string; engineCc: string;
@@ -98,6 +100,82 @@ export async function lookupVehicleByReg(
   } catch {
     return { ok: false, reg, reason: 'error' }; // network/parse failure — caller shows "enter manually"
   }
+}
+
+// ── THE MERGE POLICY, AND WHEN AN ANSWER STOPS BEING THIS CAR'S ─────────────────────────────────
+/**
+ * WHAT A LOOKUP FILLED, AND WHICH PLATE IT CAME FROM.
+ *
+ * Fill-blanks-only was written for pressing Look up TWICE ON THE SAME CAR, where clobbering a
+ * manual correction would be wrong. It is right for that and was never extended to the case where
+ * the registration changed — which is not a re-fetch of the same car, it is a different car. So a
+ * fill remembers its plate, and the form asks whether that plate is still the one in the box.
+ */
+export type LookupFill = {
+  /** NORMALISED. Compared through sameRegistration, so tidying the spacing is not a change. */
+  reg: string;
+  /** ONLY the fields this lookup actually wrote, and the exact value it wrote. */
+  fields: Record<string, string>;
+  /** Whether the answer carried MOT metadata, which has no manual input and is wholly lookup-owned. */
+  mot: boolean;
+};
+
+/**
+ * FILL BLANKS ONLY, and record what was filled. The three forms had three copies of this — two
+ * spelled `!x.trim() &&`, one spelled `keep(p.x, …)` — and a rule with three implementations is
+ * three rules. Values are compared and written as strings because that is what an input holds.
+ */
+export function applyLookup<T extends Record<string, string>>(
+  current: T,
+  incoming: Partial<Record<keyof T & string, string | null | undefined>>,
+  reg: string,
+  opts: { mot?: boolean } = {},
+): { values: T; fill: LookupFill } {
+  const values = { ...current };
+  const fields: Record<string, string> = {};
+  for (const [k, raw] of Object.entries(incoming)) {
+    const next = typeof raw === 'string' ? raw : '';
+    if (!next.trim()) continue;                       // nothing offered
+    if (String(values[k] ?? '').trim()) continue;     // already something there — never clobbered
+    (values as Record<string, string>)[k] = next;
+    fields[k] = next;                                 // remembered so it can be taken back
+  }
+  return { values, fill: { reg: normalizeReg(reg) ?? '', fields, mot: !!opts.mot } };
+}
+
+/** Has the plate moved away from the one this fill came from? No fill = nothing to be stale. */
+export function staleAgainst(fill: LookupFill | null | undefined, reg: string): boolean {
+  if (!fill) return false;
+  return !sameRegistration(fill.reg, reg);
+}
+
+/**
+ * TAKE BACK WHAT THE LOOKUP GAVE, AND ONLY THAT.
+ *
+ * A field is cleared if it STILL HOLDS what the lookup wrote. A value the operator has since
+ * changed is provably theirs and survives, and a field the lookup never wrote is never touched —
+ * which is what stops this blanking a real car on the details pane, where make/model/colour are
+ * seeded from the SAVED vehicle and no lookup put them there.
+ *
+ * The one residual error is a value the operator typed that happens to equal what the lookup wrote:
+ * indistinguishable, and cleared. That costs a retype. The opposite error — keeping another car's
+ * data — is silent and reaches the database. The asymmetry is the whole argument for clearing.
+ *
+ * MOT is unconditional: no form offers a manual MOT input, so every byte of it is lookup-owned.
+ */
+export function clearStale<T extends Record<string, string>>(
+  current: T,
+  fill: LookupFill | null | undefined,
+): { values: T; cleared: string[]; clearMot: boolean } {
+  if (!fill) return { values: current, cleared: [], clearMot: false };
+  const values = { ...current };
+  const cleared: string[] = [];
+  for (const [k, written] of Object.entries(fill.fields)) {
+    if (String(values[k] ?? '') !== written) continue; // theirs now
+    (values as Record<string, string>)[k] = '';
+    cleared.push(k);
+  }
+  return { values, cleared, clearMot: fill.mot };
 }
 
 /**

@@ -42,7 +42,7 @@ import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -1154,6 +1154,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // job fields — Registration + Customer anchor the card; the rest are OPTIONAL (capture-if-available so
   // a card can be born with Customer Details complete). All wire through the existing create path.
   const [reg, setReg] = useState(''); const [cust, setCust] = useState(''); const [mileage, setMileage] = useState('');
+  // What the last lookup filled, and for which plate — see clearStale for why it is not "everything".
+  const [fill, setFill] = useState<LookupFill | null>(null);
   // Cleared with each lookup, like noShows and dueItems, so a warning never outlives the car it was about.
   const [openCards, setOpenCards] = useState<OpenCardSummary[] | null>(null);
   /** YYYY-MM-DD → the tenant's own short date. UTC throughout, like every other date on this page:
@@ -1236,20 +1238,18 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     setOpenCards(r.ok ? (r.openCards ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
     if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
-    // Fill BLANKS ONLY — a manual correction is never clobbered.
-    if (r.owner) {
-      if (!cust.trim() && r.owner.name) setCust(r.owner.name);
-      if (!phone.trim() && r.owner.phone) setPhone(r.owner.phone);
-      if (!email.trim() && r.owner.email) setEmail(r.owner.email);
-    }
-    if (!vin.trim() && r.vehicle.vin) setVin(r.vehicle.vin);
-    if (!mileage.trim() && r.vehicle.mileage) setMileage(r.vehicle.mileage);
-    if (!make.trim() && r.vehicle.make) setMake(r.vehicle.make);
-    if (!model.trim() && r.vehicle.model) setModel(r.vehicle.model);
-    if (!vColour.trim() && r.vehicle.colour) setVColour(r.vehicle.colour);
-    if (!fuel.trim() && r.vehicle.fuel) setFuel(r.vehicle.fuel);
-    if (!year.trim() && r.vehicle.year) setYear(r.vehicle.year);
-    if (!engineCc.trim() && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
+    // and for which plate, so editing the registration can hand it back.
+    const { values, fill: f } = applyLookup(
+      { cust, phone, email, vin, mileage, make, model, colour: vColour, fuel, year, engineCc },
+      { cust: r.owner?.name, phone: r.owner?.phone, email: r.owner?.email,
+        vin: r.vehicle.vin, mileage: r.vehicle.mileage, make: r.vehicle.make, model: r.vehicle.model,
+        colour: r.vehicle.colour, fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc },
+      r.reg, { mot: !!r.mot });
+    setCust(values.cust); setPhone(values.phone); setEmail(values.email);
+    setVin(values.vin); setMileage(values.mileage); setMake(values.make); setModel(values.model);
+    setVColour(values.colour); setFuel(values.fuel); setYear(values.year); setEngineCc(values.engineCc);
+    setFill(f);
     // DVSA's own facts, held for the create below. Not editable on this form — it is a booking, not
     // the MOT record — but no longer thrown away.
     if (r.mot) setMot(r.mot);
@@ -1282,6 +1282,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
           make: make.trim() || undefined, model: model.trim() || undefined, colour: vColour.trim() || undefined,
           fuel: fuel.trim() || undefined, year: year.trim() || undefined, engineCc: engineCc.trim() || undefined,
           // From the lookup that already ran — see the note on the reversal above.
+          // WHOSE MOT THIS IS — the server writes none of it without this (lib/dvsa::motClientWrite).
+          motSourceReg: fill?.mot ? fill.reg : undefined,
           motExpiry: mot.motExpiry ?? undefined,
           lastMotMileage: mot.lastMotMileage ?? undefined,
           lastMotDate: mot.lastMotDate ?? undefined,
@@ -1350,7 +1352,21 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
               <div className="flex items-center gap-2">
                 <input className={`${inputCls} max-w-[9rem] tracking-wider`} value={reg} maxLength={12} autoCapitalize="characters" autoCorrect="off" spellCheck={false}
                   data-testid="create-reg"
-                  onChange={(e) => setReg(normalizeReg(e.target.value) || '')}
+                  onChange={(e) => {
+                    const next = normalizeReg(e.target.value) || '';
+                    setReg(next);
+                    // A DIFFERENT PLATE IS A DIFFERENT CAR — including the owner, whose phone number
+                    // is where the booking confirmation goes.
+                    if (!staleAgainst(fill, next)) return;
+                    const { values } = clearStale(
+                      { cust, phone, email, vin, mileage, make, model, colour: vColour, fuel, year, engineCc }, fill);
+                    setCust(values.cust); setPhone(values.phone); setEmail(values.email);
+                    setVin(values.vin); setMileage(values.mileage); setMake(values.make); setModel(values.model);
+                    setVColour(values.colour); setFuel(values.fuel); setYear(values.year); setEngineCc(values.engineCc);
+                    setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
+                    setNoShows(null); setDueItems(null); setOpenCards(null);
+                    setFill(null);
+                  }}
                   onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); lookupVehicle(); } }} />
                 {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
                   <button type="button" onClick={lookupVehicle} disabled={lookBusy || !reg.trim()} data-testid="veh-lookup"
@@ -1405,7 +1421,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>{t('create.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
+              <div><label className={labelCls}>{t('create.make')}</label><input className={inputCls} data-testid="create-make" value={make} onChange={(e) => setMake(e.target.value)} /></div>
               <div><label className={labelCls}>{t('create.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -1448,7 +1464,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelCls}>{t('create.phone')}</label>
-                <input className={inputCls} type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                <input className={inputCls} data-testid="create-phone" type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
                 {phoneWarn(phone) && <p className={warnCls}>{t('create.warn.phone')}</p>}
               </div>
               <div>

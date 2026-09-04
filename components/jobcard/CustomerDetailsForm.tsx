@@ -7,7 +7,7 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { lookupVehicleByReg, lookupVehicleByVin } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
@@ -87,6 +87,10 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
   // it's saved with the form and displayed immediately below.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null } | null>(null);
   const [lookBusy, setLookBusy] = useState(false);
+  // WHAT THE LAST LOOKUP FILLED, AND FOR WHICH PLATE. Only what it wrote is ever taken back: these
+  // fields are seeded from the SAVED vehicle, so clearing indiscriminately would blank a real car
+  // because somebody corrected a typo. See lib/vehicle-lookup-client::clearStale.
+  const [fill, setFill] = useState<LookupFill | null>(null);
   async function vinLookup() {
     if (!vin.trim()) return;
     setLookBusy(true);
@@ -110,14 +114,16 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
       setMsg({ text: t(r.reason === 'error' ? 'detailsEdit.dvsaError' : 'detailsEdit.dvsaNone'), ok: false });
       return;
     }
-    // FILL-BLANKS-ONLY on the editable fields — a manual correction is never clobbered. The MOT trio
-    // has no manual input, so a lookup always refreshes it (a returning car's MOT data HAS changed).
-    if (!make.trim() && r.vehicle.make) setMake(r.vehicle.make);
-    if (!model.trim() && r.vehicle.model) setModel(r.vehicle.model);
-    if (!colour.trim() && r.vehicle.colour) setColour(r.vehicle.colour);
-    if (!fuel.trim() && r.vehicle.fuel) setFuel(r.vehicle.fuel);
-    if (!vyear.trim() && r.vehicle.year) setVYear(r.vehicle.year);
-    if (!engineCc.trim() && r.vehicle.engineCc) setEngineCc(r.vehicle.engineCc);
+    // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
+    // and for which plate. The MOT trio has no manual input, so a lookup always refreshes it.
+    const { values, fill: f } = applyLookup(
+      { make, model, colour, fuel, year: vyear, engineCc },
+      { make: r.vehicle.make, model: r.vehicle.model, colour: r.vehicle.colour,
+        fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc },
+      r.reg, { mot: !!r.mot });
+    setMake(values.make); setModel(values.model); setColour(values.colour);
+    setFuel(values.fuel); setVYear(values.year); setEngineCc(values.engineCc);
+    setFill(f);
     if (r.mot) setMot(r.mot);
     setMsg({ text: t('detailsEdit.dvsaDone'), ok: true });
   }
@@ -198,7 +204,19 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls} data-testid="veh-id-label">{vehicleIdLabel}</label>
-          <input className={inputCls} value={registration} onChange={(e) => setRegistration(e.target.value)} autoCapitalize="characters" />
+          <input className={inputCls} value={registration} data-testid="veh-reg" autoCapitalize="characters"
+            onChange={(e) => {
+              const next = e.target.value;
+              setRegistration(next);
+              // A DIFFERENT PLATE IS A DIFFERENT CAR. Only what the lookup filled goes back; a value
+              // the operator typed, and the car's own saved details, both survive.
+              if (!staleAgainst(fill, next)) return;
+              const { values } = clearStale({ make, model, colour, fuel, year: vyear, engineCc }, fill);
+              setMake(values.make); setModel(values.model); setColour(values.colour);
+              setFuel(values.fuel); setVYear(values.year); setEngineCc(values.engineCc);
+              setMot(null); // falls back to the vehicle's own stored MOT, which is still this car's
+              setFill(null);
+            }} />
           {/* Deliberate button press — returning cars never auto-fire DVSA (skip-on-existing stays).
               Hidden where the country has no lookup provider: DVLA/DVSA are keyed on UK plates. */}
           {lookupKeyFor(vehicleLookupProvider) === 'registration' && (
@@ -208,8 +226,8 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
             </button>
           )}
         </div>
-        <div><label className={labelCls}>{t('field.make')}</label><input className={inputCls} value={make} onChange={(e) => setMake(e.target.value)} /></div>
-        <div><label className={labelCls}>{t('field.model')}</label><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.make')}</label><input className={inputCls} data-testid="veh-make" value={make} onChange={(e) => setMake(e.target.value)} /></div>
+        <div><label className={labelCls}>{t('field.model')}</label><input className={inputCls} data-testid="veh-model" value={model} onChange={(e) => setModel(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.colour')}</label><input className={inputCls} value={colour} onChange={(e) => setColour(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.year')}</label><input className={inputCls} type="number" inputMode="numeric" min="0" value={vyear} onChange={(e) => setVYear(e.target.value)} /></div>
         <div><label className={labelCls}>{t('field.fuel')}</label><input className={inputCls} value={fuel} onChange={(e) => setFuel(e.target.value)} /></div>

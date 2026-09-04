@@ -21,6 +21,7 @@ import { getVisibility } from '@/lib/site-visibility';
 import { getTenantPermissions, canCreateDiaryEntry } from '@/lib/permissions';
 import { placeJobCard } from '@/lib/diary-booking';
 import { ensureIdentityAndCurrentOwner, getCurrentOwnerId, normalizeVin, normalizeReg } from '@/lib/vehicle-identity';
+import { motClientWrite } from '@/lib/dvsa';
 import { detailsMinDataMet } from '@/lib/jobcard-tabs';
 import { writeAudit } from '@/lib/audit';
 import { customerPhoneFields } from '@/lib/contact-routes';
@@ -40,6 +41,8 @@ type CreateJobCardBody = {
   make?: string; model?: string; colour?: string; year?: number | string; fuel?: string; engineCc?: number | string;
   // DVSA MOT metadata (for the banked reminder feature): ISO dates + miles.
   motExpiry?: string; lastMotMileage?: number | string; lastMotDate?: string;
+  /** The plate the MOT trio above came from. Absent = unattributable, so none of it is written. */
+  motSourceReg?: string;
   flag_urgent?: boolean;
   flag_sales_car?: boolean;
   flag_customer_car?: boolean;
@@ -186,21 +189,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           customerId = ownerId ?? (await newCustomer()).id;
         } else {
           customerId = (await newCustomer()).id;
-          // ── WHERE THESE MOT FACTS CAME FROM, RECORDED ────────────────────────────────────────
+          // ── WHERE THESE MOT FACTS CAME FROM, ASSERTED RATHER THAN INFERRED ───────────────────
           // They arrive as REQUEST-BODY PARAMS, already fetched by the browser's registration
-          // lookup. The server cannot tell a real DVSA hit from a hand-typed vehicle except by
-          // whether they arrived — so mot_checked_at is stamped only when they did. A false
-          // verification is harder to find than a missing one: a missing stamp is a null anybody
-          // can count, and a false one looks exactly like a real check.
+          // lookup. This used to infer "a lookup happened" from the fields merely ARRIVING, which
+          // cannot tell this car's MOT from the last car the operator mistyped: correct a wrong
+          // plate and the form still held the first car's dates, so they were written here and
+          // STAMPED AS VERIFIED. A false verification is harder to find than a missing one.
           //
-          // KNOWN LIMIT (not fixable server-side): "DVSA answered and the car has no MOT yet"
-          // arrives identically to "no lookup ran" — both are an absent motExpiry. A brand-new car
-          // therefore gets no stamp though it was genuinely checked. Closing that needs the client
-          // to send an explicit asked-flag; until it does, this stays deliberately cautious.
-          const motExpiry = dateOrNull(body.motExpiry);
-          const lastMotMileage = intOrNull(body.lastMotMileage);
-          const lastMotDate = dateOrNull(body.lastMotDate);
-          const motLookupAnswered = motExpiry !== null || lastMotMileage !== null || lastMotDate !== null;
+          // `motSourceReg` is the plate those fields came from. It must be this car's or nothing is
+          // recorded at all — not an unstamped write; nothing. See lib/dvsa::motClientWrite, which
+          // also closes the limit this comment used to record: "DVSA answered and the car has no
+          // MOT yet" is now expressible, because the plates matching is the evidence, not the data.
+          const motWrite = motClientWrite(
+            { mot_expiry: null, last_mot_mileage: null, last_mot_date: null },
+            { motExpiry: body.motExpiry ?? null, lastMotMileage: intOrNull(body.lastMotMileage), lastMotDate: body.lastMotDate ?? null },
+            typeof body.motSourceReg === 'string' ? body.motSourceReg : null,
+            registration,
+            new Date(),
+          );
           const createdVehicle = await tx.vehicle.create({
             data: {
               group_id: groupId,
@@ -216,11 +222,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               fuel_type: body.fuel?.trim() || null,
               year: intOrNull(body.year),
               engine_cc: intOrNull(body.engineCc),
-              mot_expiry: motExpiry,
-              last_mot_mileage: lastMotMileage,
-              last_mot_date: lastMotDate,
-              // Honest-null: no fields, no claim of a check.
-              mot_checked_at: motLookupAnswered ? new Date() : null,
+              // Spread, so an unattributable answer contributes NOTHING — no dates and no stamp.
+              ...(motWrite ?? {}),
               mileage_at_create: mileage,
             },
             select: { id: true },

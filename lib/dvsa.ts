@@ -8,6 +8,7 @@
  * Env: DVSA_MOT_CLIENT_ID, DVSA_MOT_CLIENT_SECRET, DVSA_MOT_API_KEY, DVSA_MOT_SCOPE_URL,
  *      DVSA_MOT_TOKEN_URL, optional DVSA_MOT_API_URL (defaults to the live trade endpoint).
  */
+import { sameRegistration } from '@/lib/vehicle-identity';
 import { normaliseOdometer } from '@/lib/odometer';
 export type DvsaVehicle = {
   make?: string; model?: string; colour?: string; fuel?: string; engineCc?: number; year?: number;
@@ -163,6 +164,45 @@ export function motVerifiedWrite(
 ): (MotFieldWrite & { mot_checked_at: Date }) | null {
   if (!incoming) return null; // no answer — the one case that records nothing
   return { ...motFieldsToWrite(current, incoming), mot_checked_at: at };
+}
+
+/**
+ * ── THE SAME DECISION WHEN THE ANSWER CAME THROUGH A CLIENT ─────────────────────────────────────
+ * motVerifiedWrite above serves the paths where the SERVER made the DVSA call and therefore knows
+ * which plate it asked about. The create path does not: it is handed MOT fields by a browser, and
+ * it used to infer "a lookup happened" from those fields merely ARRIVING. That inference cannot
+ * tell this car's MOT from the last car the operator mistyped, and jobcard.ts said so in its own
+ * comment — "not fixable server-side … needs the client to send an explicit asked-flag".
+ *
+ * This is that flag, and it is a plate rather than a boolean, because a boolean would only say
+ * SOMETHING was looked up. `sourceReg` is the registration the fields came from; `targetReg` is the
+ * one being written. They must be the same car or nothing is recorded — not an unstamped write,
+ * NOTHING: another car's MOT expiry is not this car's data at any confidence level.
+ *
+ * AND IT CLOSES THE LIMIT IN THE SAME STROKE. "DVSA answered, and this car has no MOT yet" used to
+ * be indistinguishable from "nobody asked" — both are absent fields — so a genuinely-checked new
+ * car got no stamp. With the plates matching, empty fields are now a verification like any other.
+ *
+ * FAIL CLOSED: an absent sourceReg is a refusal, because sameRegistration refuses an absent plate.
+ * PURE, with `at` a parameter, for the same reason motVerifiedWrite is.
+ */
+export function motClientWrite(
+  current: MotFieldsNow,
+  incoming: { motExpiry?: string | null; lastMotMileage?: number | null; lastMotDate?: string | null } | null,
+  sourceReg: string | null | undefined,
+  targetReg: string | null | undefined,
+  at: Date,
+): (MotFieldWrite & { mot_checked_at: Date }) | null {
+  if (!incoming) return null;
+  if (!sameRegistration(sourceReg, targetReg)) return null;
+  return {
+    ...motFieldsToWrite(current, {
+      motExpiry: incoming.motExpiry ?? null,
+      lastMotMileage: incoming.lastMotMileage ?? null,
+      lastMotDate: incoming.lastMotDate ?? null,
+    } as DvsaVehicle),
+    mot_checked_at: at,
+  };
 }
 
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {

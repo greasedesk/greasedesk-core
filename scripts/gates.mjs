@@ -142,6 +142,7 @@ const TIERS = {
     'reporting-anchor-gate',
     'billed-party-gate',
     'addressee-correction-gate',
+    'lookup-reset-gate',
   ],
 };
 

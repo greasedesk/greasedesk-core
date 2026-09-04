@@ -200,6 +200,11 @@ try {
   }, {
     registration: 'ZZ76MOT', customerName: 'MOT Capture Fixture', siteId: site.id,
     make: 'Mot', model: 'Fixture', motExpiry: '2027-03-14', lastMotMileage: 61234, lastMotDate: '2026-03-14',
+    // WHOSE MOT THIS IS (added 2026-09-04). This body stands in for the diary client, and the
+    // client now attributes the trio to the plate it came from — the server records none of it
+    // otherwise, so omitting it here would test a client that no longer exists.
+    // See lib/dvsa::motClientWrite and scripts/mot-booking-stamp-gate for the boundary itself.
+    motSourceReg: 'ZZ76MOT',
   });
   check('the card is created', created.status === 201, `HTTP ${created.status}: ${created.body?.message ?? ''}`);
   if (created.body?.id) fix.cards.push(created.body.id);
