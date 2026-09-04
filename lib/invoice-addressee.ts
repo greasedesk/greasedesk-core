@@ -74,6 +74,21 @@ export function printedAddressee(a: AddresseeSnapshot): string {
   return lines.filter((l) => typeof l === 'string' && l.trim()).join('\n');
 }
 
+/**
+ * THE FOUR COLUMNS, NAMED ONCE. A Prisma `select` fragment rather than four literals repeated at
+ * every call site — and specifically so that a RENDERER never types them: billed-party-gate bans
+ * the column names in the three document renderers, on the rule that who to bill is decided in
+ * lib/invoice-doc and nowhere else. The correction panel legitimately needs the columns SEPARATELY
+ * (a printed addressee cannot be edited back into four fields), and that is a different need from
+ * deciding the fallback — so it gets the columns through here instead of naming them in the page.
+ */
+export const ADDRESSEE_SELECT = {
+  customer_name_snapshot: true,
+  customer_address_snapshot: true,
+  account_name_snapshot: true,
+  account_address_snapshot: true,
+} as const;
+
 /** The four columns as they stand on a row, in the one order everything reads them. */
 export function addresseeOf(inv: {
   customer_name_snapshot: string;

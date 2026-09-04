@@ -27,6 +27,7 @@ import { offersPayLink } from '@/lib/invoice-pay-link';
 // exactly the invoices the server would accept — never a button that 409s, never a hidden one that
 // would have worked.
 import { canVoid, VOID_CATEGORIES, MIN_REASON_LENGTH, validateVoidReason } from '@/lib/invoice-void';
+import { ADDRESSEE_SELECT, addresseeOf } from '@/lib/invoice-addressee';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
@@ -83,6 +84,10 @@ type PageProps = {
   /** Both texts, always — a re-addressed document must not look like it only ever said one thing. */
   addresseeOriginal: string | null;
   addresseeCorrectedAt: string | null;
+  /** THE FOUR COLUMNS, RAW — the correction panel edits these, not the resolved block above. */
+  addresseeFields: { customerName: string; customerAddress: string; accountName: string; accountAddress: string };
+  /** The first credit note's number, when one exists. Its EXISTENCE closes the correction path. */
+  creditNoteNumber: string | null;
   vehicle: { reg: string | null; desc: string | null; vin: string | null; mileage: number | null };
   /** The frozen due-items block, as printed at mint — `printedNeedsBlock`, via
    *  invoice-issue's computeNarrativeBlocks, stored as Invoice.due_items_snapshot. This said
@@ -223,6 +228,27 @@ export default function InvoicePage(props: PageProps) {
     } catch { setMsg({ text: t('reissueError'), ok: false }); }
     finally { setBusy(null); }
   }
+  // ── CORRECTING THE ADDRESSEE ────────────────────────────────────────────────────────────────
+  // Its own control, not a step of re-issue: re-issue refuses on estimate divergence, its dialog is
+  // about money, and its amendment log fires only when the TOTAL moves — so a correction folded
+  // into it would be blocked by unrelated problems and leave no record. See lib/invoice-addressee.
+  const [addrOpen, setAddrOpen] = useState(false);
+  const [addr, setAddr] = useState(props.addresseeFields);
+  const [addrReason, setAddrReason] = useState('');
+  async function doAddressee() {
+    setBusy('addressee'); setMsg(null);
+    try {
+      const res = await fetch('/api/invoice-addressee', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: props.invoiceId, ...addr, reason: addrReason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg({ text: data?.message || t('addressee.error'), ok: false }); setBusy(null); return; }
+      setAddrOpen(false); setAddrReason('');
+      router.replace(router.asPath);
+    } catch { setMsg({ text: t('addressee.error'), ok: false }); setBusy(null); }
+  }
+
   async function doAmend() {
     setBusy('amend'); setMsg(null);
     try {
@@ -506,7 +532,76 @@ export default function InvoicePage(props: PageProps) {
         {/* Freeze-at-issue: frozen lines are the document; an unlocked invoice is under correction. */}
         {props.status === 'issued' && props.hasFrozenLines && <p className="text-xs text-muted mb-3">{t('frozenNote')}</p>}
         {props.status === 'issued' && !props.hasFrozenLines && (
-          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">{t('unlockedNote')}</div>
+          <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">
+            {t('unlockedNote')}
+            {/* ── THE ADDRESSEE, CORRECTABLE ONLY HERE ────────────────────────────────────────
+                Beside unlockedNote because "under correction" is the state the endpoint requires,
+                and a control offered anywhere else would be an invitation to a 409. Admin-only, to
+                match it — a control that 403s is worse than no control. */}
+            {props.isAdmin && props.creditNoteNumber && (
+              <p className="mt-2 pt-2 border-t border-warn/30 text-xs" data-testid="addressee-blocked">
+                {t('addressee.blockedByCreditNote', { number: props.creditNoteNumber })}
+              </p>
+            )}
+            {props.isAdmin && !props.creditNoteNumber && !addrOpen && (
+              <button data-testid="addressee-open" onClick={() => { setAddr(props.addresseeFields); setAddrReason(''); setAddrOpen(true); setMsg(null); }}
+                className="mt-2 text-xs underline hover:no-underline">{t('addressee.open')}</button>
+            )}
+            {props.isAdmin && !props.creditNoteNumber && addrOpen && (
+              <div className="mt-3 pt-3 border-t border-warn/30 text-ink" data-testid="addressee-panel">
+                <p className="text-xs font-semibold text-warn">{t('addressee.title')}</p>
+                {/* WHAT IT SAYS NOW, before anything is typed — the thing being changed, shown. */}
+                <p className="text-xs text-muted mt-1">{t('addressee.currentLabel')}:</p>
+                <p className="text-sm whitespace-pre-line" data-testid="addressee-current">
+                  {[props.addressee.name, props.addressee.address, props.addressee.onBehalfOf ? `for ${props.addressee.onBehalfOf}` : null].filter(Boolean).join('\n')}
+                </p>
+                {/* THE ASYMMETRY, SAID RATHER THAN LEFT TO BE DISCOVERED. Everything else on this
+                    path waits for the re-issue; this lands on the document as soon as it is saved. */}
+                <p className="text-xs text-muted mt-2" data-testid="addressee-live-note">{t('addressee.intro')}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="block text-xs uppercase text-muted mb-1">{t('addressee.customerName')}</label>
+                    <input data-testid="addressee-customer-name" value={addr.customerName}
+                      onChange={(e) => setAddr((p) => ({ ...p, customerName: e.target.value }))}
+                      className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase text-muted mb-1">{t('addressee.customerAddress')}</label>
+                    <textarea data-testid="addressee-customer-address" rows={2} value={addr.customerAddress}
+                      onChange={(e) => setAddr((p) => ({ ...p, customerAddress: e.target.value }))}
+                      className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm resize-y" />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase text-muted mb-1">{t('addressee.accountName')}</label>
+                    <input data-testid="addressee-account-name" value={addr.accountName}
+                      onChange={(e) => setAddr((p) => ({ ...p, accountName: e.target.value }))}
+                      className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs uppercase text-muted mb-1">{t('addressee.accountAddress')}</label>
+                    <textarea data-testid="addressee-account-address" rows={2} value={addr.accountAddress}
+                      onChange={(e) => setAddr((p) => ({ ...p, accountAddress: e.target.value }))}
+                      className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm resize-y" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted mt-1">{t('addressee.accountHint')}</p>
+                <label className="block text-xs uppercase text-muted mb-1 mt-3">{t('addressee.reason')}</label>
+                <textarea data-testid="addressee-reason" rows={2} maxLength={500} value={addrReason}
+                  onChange={(e) => setAddrReason(e.target.value)}
+                  className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm resize-y" />
+                <p className="text-[11px] text-muted mt-1">{t('addressee.reasonHint')}</p>
+                <div className="flex gap-2 mt-2">
+                  {/* The server re-checks both of these; disabling here is courtesy, not authority. */}
+                  <button data-testid="addressee-save" onClick={doAddressee}
+                    disabled={!addrReason.trim() || !addr.customerName.trim() || busy !== null}
+                    className="text-sm font-semibold rounded-lg px-3 py-1.5 bg-accent text-white disabled:opacity-40">
+                    {busy === 'addressee' ? t('addressee.working') : t('addressee.save')}
+                  </button>
+                  <button onClick={() => setAddrOpen(false)} className="text-sm opacity-70 px-2">{t('addressee.cancel')}</button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
         {props.status === 'paid_pending' && (
           <div className="bg-warn-soft text-warn rounded-lg p-3 text-sm mb-3">
@@ -840,6 +935,14 @@ const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
   const vis = await getVisibility(user.id as string);
   if (!canManageSite(vis, doc.siteId)) return { redirect: { destination: '/admin/dashboard', permanent: false } };
 
+  // THE FOUR ADDRESSEE COLUMNS RAW, AND WHETHER A CREDIT NOTE EXISTS. Not on InvoiceDoc: that
+  // object is the RENDERABLE document, and both of these are inputs to a correction rather than
+  // anything a document says. Same shape as the receiptFailed count further down.
+  const invRow = await prisma.invoice.findFirst({
+    where: { id: doc.invoiceId, group_id: user.group_id },
+    select: { ...ADDRESSEE_SELECT, credit_notes: { select: { credit_note_number: true }, orderBy: { sequence_value: 'asc' }, take: 1 } },
+  });
+
   return {
     props: {
       invoiceId: doc.invoiceId,
@@ -915,6 +1018,15 @@ const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
       addressee: doc.addressee,
       addresseeOriginal: doc.addresseeOriginal,
       addresseeCorrectedAt: doc.addresseeCorrectedAt,
+      // RAW, for the correction panel: the resolved block above cannot be edited back into columns.
+      addresseeFields: (() => {
+        const a = invRow ? addresseeOf(invRow) : null;
+        return { customerName: a?.customerName ?? '', customerAddress: a?.customerAddress ?? '',
+          accountName: a?.accountName ?? '', accountAddress: a?.accountAddress ?? '' };
+      })(),
+      // Its EXISTENCE is the refusal (lib/invoice-addressee::refuseCorrection). Read here so the
+      // page can say why while the invoice is still open, rather than after a button is pressed.
+      creditNoteNumber: invRow?.credit_notes[0]?.credit_note_number ?? null,
       vehicle: doc.vehicle,
       // ALL FOUR, and the type above now enforces it. The PDF reads `doc.*` directly; this page
       // has to copy each field across the SSR boundary by hand, which is the one hop the shared

@@ -211,6 +211,84 @@ try {
     /addressed to/i.test(body) && new RegExp(PERSON).test(body),
     'a customer holding two copies must be able to tell why they differ');
 
+  // ── 6b. THE CONTROL, DRIVEN THE WAY A PERSON DRIVES IT ───────────────────────────────────────
+  // THE GAP THAT LET THE ENDPOINT SHIP UNREACHABLE. Sections 3-5 drive /api/invoice-addressee with
+  // fetch, which proves the door works and cannot notice there is no handle: the endpoint shipped
+  // with no caller anywhere in pages/ or components/, and this gate was green the whole time.
+  // Everything below goes through the rendered control.
+  console.log('\n— and the control somebody presses —');
+  const noCaller = !/api\/invoice-addressee/.test(readFileSync('pages/admin/invoices/[id].tsx', 'utf8'));
+  check('the invoice page calls the endpoint at all', !noCaller,
+    'a capability with no control is a capability nobody has');
+
+  // FROZEN FIRST: the control must not be offered in a state the endpoint refuses.
+  await admin.goto(`${BASE}/admin/invoices/${M.invoice}`, { waitUntil: 'domcontentloaded' });
+  await admin.waitForSelector('[data-testid="invoice-addressee"]', { timeout: 30000 }).catch(() => {});
+  const frozenBody = await admin.evaluate(() => document.body.innerText);
+  check('the page renders while frozen', /Bill to/i.test(frozenBody), `${frozenBody.length} chars`);
+  check('  …and offers no correction there', (await admin.locator('[data-testid="addressee-open"]').count()) === 0,
+    'the endpoint refuses a frozen invoice; offering the control would be an invitation to a 409');
+
+  const unlockedAgain = await post(admin, '/api/invoice-unlock', { invoiceId: M.invoice, action: 'unlock' });
+  check('unlocked again for the UI pass', unlockedAgain.status === 200, JSON.stringify(unlockedAgain.body).slice(0, 90));
+  await admin.goto(`${BASE}/admin/invoices/${M.invoice}`, { waitUntil: 'domcontentloaded' });
+  await admin.waitForSelector('[data-testid="addressee-open"]', { timeout: 30000 }).catch(() => {});
+  check('the control appears once it is under correction',
+    (await admin.locator('[data-testid="addressee-open"]').count()) === 1);
+  // ADMIN ONLY, on the screen as well as at the endpoint — a control that 403s is worse than none.
+  await manager.goto(`${BASE}/admin/invoices/${M.invoice}`, { waitUntil: 'domcontentloaded' });
+  await manager.waitForSelector('[data-testid="invoice-addressee"]', { timeout: 30000 }).catch(() => {});
+  const mgrBody = await manager.evaluate(() => document.body.innerText);
+  check('a site manager sees the invoice', /Bill to/i.test(mgrBody), `${mgrBody.length} chars`);
+  check('  …but is not offered the control', (await manager.locator('[data-testid="addressee-open"]').count()) === 0);
+
+  // GUARDED, so an absent control fails the checks BELOW on their own terms instead of killing the
+  // run at a click timeout — the red-proof has to be able to say what each assertion would report.
+  const hasOpener = (await admin.locator('[data-testid="addressee-open"]').count()) === 1;
+  if (hasOpener) {
+    await admin.locator('[data-testid="addressee-open"]').click();
+    await admin.waitForSelector('[data-testid="addressee-panel"]', { timeout: 15000 }).catch(() => {});
+  }
+  const panel = await admin.locator('[data-testid="addressee-panel"]').innerText().catch(() => '');
+  check('the panel shows who it is addressed to NOW', new RegExp('Otley Groundworks \\(Yorkshire\\) Limited').test(panel),
+    panel.slice(0, 120) || '(no panel)');
+  // THE ASYMMETRY, SAID OUT LOUD. Everything else on this path waits for the re-issue; this does not.
+  check('  …and says the change lands before the re-issue',
+    /before you re-?issue|straight away|immediately/i.test(panel),
+    'the addressee is not in the frozen lines, so it moves on save — silence about that is the defect');
+  const fields = ['addressee-customer-name', 'addressee-customer-address', 'addressee-account-name', 'addressee-account-address', 'addressee-reason'];
+  const missing = [];
+  for (const f of fields) if ((await admin.locator(`[data-testid="${f}"]`).count()) !== 1) missing.push(f);
+  check('  …with all four columns and a reason', missing.length === 0, missing.join(', ') || '5 of 5');
+
+  const hasForm = (await admin.locator('[data-testid="addressee-save"]').count()) === 1;
+  if (hasForm) await admin.locator('[data-testid="addressee-account-name"]').fill('Wharfedale Contracts Limited');
+  check('save is refused until a reason is given',
+    hasForm && (await admin.locator('[data-testid="addressee-save"]').isDisabled()),
+    hasForm ? 'a correction nobody can explain is a correction nobody can audit' : 'NO SAVE CONTROL — nothing to disable');
+  if (hasForm) {
+    await admin.locator('[data-testid="addressee-reason"]').fill('Employer changed its trading name');
+    await admin.locator('[data-testid="addressee-save"]').click();
+    await admin.waitForTimeout(2500);
+  }
+  const viaUi = await prisma.invoice.findUnique({ where: { id: M.invoice },
+    select: { account_name_snapshot: true, addressee_corrections: true, lines: { select: { id: true } } } });
+  check('the control corrects the invoice', viaUi?.account_name_snapshot === 'Wharfedale Contracts Limited',
+    String(viaUi?.account_name_snapshot));
+  check('  …carrying the reason typed into it',
+    /trading name/i.test(readLog(viaUi?.addressee_corrections)?.slice(-1)[0]?.reason ?? ''),
+    JSON.stringify(readLog(viaUi?.addressee_corrections)?.slice(-1)[0]?.reason));
+  // THE ASYMMETRY, PROVEN AND NOT MERELY DESCRIBED: no re-issue has happened, the lines are still
+  // gone, and the document already reads the new party.
+  // PAIRED WITH THE CORRECTION ITSELF: "no lines" is true of an unlocked invoice nothing happened
+  // to, so on its own this passes hardest when the control does nothing at all.
+  check('  …and the document moved WITHOUT a re-issue',
+    viaUi?.account_name_snapshot === 'Wharfedale Contracts Limited' && viaUi?.lines.length === 0,
+    'still unlocked — if this needed a re-issue the sentence in the panel would be a lie');
+  const afterUi = await admin.evaluate(() => document.body.innerText);
+  check('  …visibly, on the page', /Wharfedale Contracts Limited/.test(afterUi),
+    afterUi.slice(afterUi.search(/BILL TO/i), afterUi.search(/BILL TO/i) + 120));
+
   // ── 7. A CREDIT NOTE CLOSES THE DOOR ─────────────────────────────────────────────────────────
   console.log('\n— once a credit note exists, the pair must not be split —');
   const { mintCreditNote } = await import('../lib/credit-note.ts');
@@ -222,6 +300,16 @@ try {
   fix.creditNote = cn?.id ?? null;
   const cnUnlock = await post(admin, '/api/invoice-unlock', { invoiceId: C.invoice, action: 'unlock' });
   check('an invoice with a credit note can still be unlocked', cnUnlock.status === 200, JSON.stringify(cnUnlock.body).slice(0, 100));
+  // AND THE SCREEN SAYS SO BEFORE ANYBODY PRESSES ANYTHING. A control that offers a form and then
+  // refuses it is a worse answer than one that explains itself while the invoice is still open.
+  await admin.goto(`${BASE}/admin/invoices/${C.invoice}`, { waitUntil: 'domcontentloaded' });
+  await admin.waitForSelector('[data-testid="invoice-addressee"]', { timeout: 30000 }).catch(() => {});
+  const cnBody = await admin.evaluate(() => document.body.innerText);
+  check('the unlocked page renders', /Bill to/i.test(cnBody), `${cnBody.length} chars`);
+  check('  …explains that a credit note closes it', /credit note/i.test(cnBody),
+    'named on the page, not discovered by pressing a button');
+  check('  …and does not offer the form', (await admin.locator('[data-testid="addressee-open"]').count()) === 0);
+
   const refusedCn = await post(admin, '/api/invoice-addressee', { invoiceId: C.invoice, ...correction, customerName: PERSON_CN });
   check('  …but its addressee cannot be corrected', refusedCn.status === 409, `HTTP ${refusedCn.status}`);
   check('  …and the refusal names the credit note', /credit note/i.test(refusedCn.body?.message ?? ''),

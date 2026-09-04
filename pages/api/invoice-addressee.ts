@@ -35,7 +35,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { writeAudit } from '@/lib/audit';
 import {
-  addresseeOf, normaliseAddressee, sameAddressee, printedAddressee,
+  ADDRESSEE_SELECT, addresseeOf, normaliseAddressee, sameAddressee, printedAddressee,
   validateAddresseeReason, refuseCorrection, appendCorrection,
 } from '@/lib/invoice-addressee';
 
@@ -59,8 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     where: { id: invoiceId, group_id: user.group_id as string },
     select: {
       id: true, status: true, invoice_number: true, job_card_id: true,
-      customer_name_snapshot: true, customer_address_snapshot: true,
-      account_name_snapshot: true, account_address_snapshot: true,
+      ...ADDRESSEE_SELECT,
       addressee_corrections: true,
       lines: { select: { id: true } },
       // WHAT ELSE IS ALREADY IN THE CUSTOMER'S HANDS. A credit note carries a copy of this same

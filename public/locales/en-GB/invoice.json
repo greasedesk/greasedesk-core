@@ -26,6 +26,24 @@
   "addresseeCorrected": "Re-addressed on {{when}}. Originally addressed to: {{original}}",
   "addresseeHistoryTitle": "This invoice was re-addressed",
   "addresseeHistoryOriginal": "Originally addressed to",
+  "addressee": {
+    "open": "Correct who this is addressed to",
+    "title": "Who this invoice is addressed to",
+    "currentLabel": "Addressed to now",
+    "intro": "Correcting this takes effect on the document straight away, before you re-issue — the addressee is not part of the frozen lines. Re-issuing afterwards freezes the charges again and keeps the correction.",
+    "customerName": "Customer name",
+    "customerAddress": "Customer address",
+    "accountName": "Company or employer to invoice",
+    "accountAddress": "Billing address",
+    "accountHint": "Leave the company blank to address the invoice to the customer. A company with no billing address prints no address — never the customer\u2019s own.",
+    "reason": "Why is it being re-addressed?",
+    "reasonHint": "Recorded on the document, so a customer holding both copies can see why they differ.",
+    "save": "Correct the addressee",
+    "working": "Correcting\u2026",
+    "cancel": "Cancel",
+    "error": "Could not change who this invoice is addressed to.",
+    "blockedByCreditNote": "This invoice has a credit note ({{number}}), which cannot be changed. Correcting the addressee now would leave the two documents addressed to different parties, so it is not offered here — void this invoice and raise it again to the right party instead."
+  },
 
   "vehicle": "Vehicle",
   "vehicleBlock": {
