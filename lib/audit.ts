@@ -142,6 +142,11 @@ export type AuditAction =
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
+  // THE FIRST ENTRY WRITTEN BY SOMEBODY OUTSIDE THE BUSINESS. An operator extended this tenant's
+  // trial from the Engine Room, which changes when their card is charged — so it belongs on THEIR
+  // ledger as well as ours, with user_id null because nobody inside did it. Ten other operator
+  // writes still owe the same row; see pages/api/superadmin/tenant-phone-exempt.
+  | 'billing.trial_extended'
   | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
                                 // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.

@@ -136,6 +136,36 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
     } finally { setBusyExempt(false); } // never strand the busy flag
   }
 
+  // ── EXTEND THE TRIAL ────────────────────────────────────────────────────────────────────────
+  // support-role; the schema has declared "extend trial" a support capability since the roles were
+  // written. Extend ONLY — pulling a date back moves the commission boundary and is refused server
+  // side by name (lib/trial-extension).
+  const [busyTrial, setBusyTrial] = React.useState(false);
+  async function extendTrial() {
+    const next = window.prompt(
+      'Extend the trial to which date? (YYYY-MM-DD)\n\n'
+      + 'Stripe will not accept a date less than 48 hours away.\n'
+      + 'This only extends — bringing the date earlier is a different change.',
+      a.trialEnds ? a.trialEnds.slice(0, 10) : '',
+    );
+    if (!next?.trim()) return;
+    const category = window.prompt(
+      'Why? One of: beta_programme, technical_support, sales, goodwill', 'sales') ?? '';
+    if (!category.trim()) return;
+    const note = window.prompt('What was agreed, and with whom? (recorded on your ledger and theirs)') ?? '';
+    if (!note.trim()) return;
+    setBusyTrial(true);
+    try {
+      const r = await fetch('/api/superadmin/trial-extend', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: d.id, next: `${next.trim()}T12:00:00.000Z`, category: category.trim(), note }),
+      });
+      const j = await r.json().catch(() => ({}));
+      alert(j?.message || (r.ok ? 'Done.' : 'Could not extend the trial.'));
+      if (r.ok) router.replace(router.asPath);
+    } finally { setBusyTrial(false); } // never strand the busy flag
+  }
+
   const companyNumber =
     d.business.companyNumber.kind === 'value' ? <V v={d.business.companyNumber.value} />
     : d.business.companyNumber.kind === 'na' ? <span style={{ color: '#7C8AA3' }}>not applicable</span>
@@ -255,7 +285,21 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             <Field label="Created">{new Date(a.created).toLocaleDateString('en-GB')}</Field>
             <Field label="Tenant status">{a.tenantStatus}</Field>
             <Field label="Subscription status"><V v={a.subscriptionStatus} /></Field>
-            <Field label="Trial ends">{a.trialEnds ? new Date(a.trialEnds).toLocaleDateString('en-GB') : <Muted>{NS}</Muted>}</Field>
+            <Field label="Trial ends">
+              {a.trialEnds ? new Date(a.trialEnds).toLocaleDateString('en-GB') : <Muted>{NS}</Muted>}
+              {/* Which of the two acts pressing this performs, said BEFORE it is pressed: with a
+                  subscription Stripe owns the clock and confirms the new date; without one this is
+                  the only clock they have and the change is local. */}
+              <button type="button" disabled={busyTrial} onClick={extendTrial} data-testid="er-trial-extend"
+                className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#8AB4F8' }}>
+                {busyTrial ? 'Working…' : 'Extend'}
+              </button>
+              <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>
+                {a.subscriptionStatus
+                  ? '· Stripe owns this clock — the new date is read back from them'
+                  : '· No subscription yet: this changes their trial date here only'}
+              </span>
+            </Field>
             <Field label="Modules entitled">{a.modules.length ? a.modules.join(', ') : <Muted>{NS}</Muted>}</Field>
             <Field label="Signup source">{a.signupSource}</Field>
             <Field label="Phone step">

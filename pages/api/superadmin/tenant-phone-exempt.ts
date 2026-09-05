@@ -70,8 +70,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 }
 
-/** BOTH LEDGERS. Ours for accountability, theirs because somebody outside the business changed what
- *  their account is required to do — and the tenant-side actor is null, since nobody inside did. */
+/**
+ * THIS STILL WRITES ONLY THE OPERATOR LEDGER, and the sentence below described an intention nothing
+ * implemented — corrected 2026-09-05 rather than left to mislead.
+ *
+ * WHAT IT SHOULD BE: both ledgers. Ours for accountability, theirs because somebody outside the
+ * business changed what their account is required to do, with a null tenant-side actor since nobody
+ * inside did. pages/api/superadmin/trial-extend is the first operator write that does it — one of
+ * eleven. This file OWES THE TENANT a row, and so do the other nine; trial-extend-gate pins the
+ * count so the debt is visible and shrinking it is deliberate.
+ */
 async function audit(operatorId: string, groupId: string, group: { group_name: string; ref: number | string | null }, action: string, reason: string) {
   await prisma.superAdminAudit.create({
     data: {

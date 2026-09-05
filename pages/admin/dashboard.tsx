@@ -33,6 +33,8 @@ import { utilisationLight, thresholdsFromGroup, defaultThresholds, type Utilisat
 
 type PageProps = {
   groupName: string; accountRef: string; status: string; trialEndsAt: string | null;
+  /** An operator extended this trial. From the tenant's OWN audit row, so the banner can say why. */
+  trialExtended: boolean;
   perMonthLabel: string; perSiteLabel: string;
   subscriptionStatus: string | null; siteCount: number;
   /** A demo has no subscription and nobody's card behind it — see the banner's own note. */
@@ -213,7 +215,7 @@ function elapsedLabel(w: { from: string; to?: string }, daysElapsed: number, loc
 // SAY THE CONVERSION OUT LOUD, every day (ruling 2026-07-13): a trialing tenant sees the exact
 // charge, date and per-site pricing — never a surprise. A LAPSED tenant sees the read-only
 // guarantee (records safe, reads open). "If a customer is ever surprised by a charge, we failed."
-function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel, isDemo }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string; isDemo: boolean }) {
+function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMonthLabel, perSiteLabel, isDemo, trialExtended }: { status: string; trialEndsAt: string | null; subscriptionStatus: string | null; siteCount: number; perMonthLabel: string; perSiteLabel: string; isDemo: boolean; trialExtended: boolean }) {
   // ── A DEMO SAYS NOTHING ABOUT MONEY ───────────────────────────────────────────────────────────
   // Every sentence below is a statement about a subscription, and a demo has none: no GroupBilling
   // row, no card, no trial that ends, nobody who will ever be charged £75. Shown across a desk to a
@@ -233,8 +235,13 @@ function TrialBanner({ status, trialEndsAt, subscriptionStatus, siteCount, perMo
   }
   if (subscriptionStatus === 'trialing' || (status === 'trial' && (daysLeft(trialEndsAt) ?? 1) > 0)) {
     const perSite = siteCount > 1 ? ` (${siteCount} locations × ${perSiteLabel})` : '';
+    // ── WHY THE DATE MOVED ──────────────────────────────────────────────────────────────────
+    // This sentence says when money leaves their account. An operator can now extend the trial from
+    // the Engine Room, so the date can change without the garage doing anything — and finding a new
+    // date with no explanation is a support call created by a support action. Driven by the AUDIT
+    // ROW, not by the date being far away: a fresh signup has a distant date too.
     const text = endLabel
-      ? `Trial ends ${endLabel} — your card will then be charged ${perMonth} per month${perSite} unless you cancel.`
+      ? `${trialExtended ? `Trial extended to ${endLabel}` : `Trial ends ${endLabel}`} — your card will then be charged ${perMonth} per month${perSite} unless you cancel.`
       : `Trial active — ${perSiteLabel} per location per month after the trial unless you cancel.`;
     return <div className="rounded-xl border p-4 mb-6 bg-accent-soft border-accent text-accent">{text}</div>;
   }
@@ -406,7 +413,7 @@ export default function AdminDashboard(props: PageProps) {
       </div>
       <p className="text-muted mb-5">{props.groupName} · <span className="font-mono">{props.accountRef}</span></p>
 
-      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} isDemo={props.isDemo} />
+      <TrialBanner status={props.status} trialEndsAt={props.trialEndsAt} subscriptionStatus={props.subscriptionStatus} siteCount={props.siteCount} perMonthLabel={props.perMonthLabel} perSiteLabel={props.perSiteLabel} isDemo={props.isDemo} trialExtended={props.trialExtended} />
 
       {/* NOTHING WAS MEASURED IN THIS PERIOD — said plainly, and said INSTEAD of figures. The
           twelve-month picker reaches back further than most tenants have existed, and a computed
@@ -1338,6 +1345,11 @@ export const getServerSideProps = withI18n(['dashboard', 'period'])(async (ctx) 
       accountRef: group?.ref ?? '—',
       status: group?.status ?? 'trial',
       trialEndsAt: group?.trial_ends_at ? group.trial_ends_at.toISOString() : null,
+      // THE SIGNAL IS THE AUDIT ROW, not the date. A later date proves nothing — every fresh signup
+      // has one. This is the record an operator's extension writes on the tenant's own ledger.
+      trialExtended: (await prisma.auditLog.count({
+        where: { group_id: vis.groupId as string, action: 'billing.trial_extended' },
+      })) > 0,
       subscriptionStatus: billing?.subscription_status ?? null,
       isDemo: !!group?.is_demo,
       siteCount,
