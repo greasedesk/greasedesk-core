@@ -31,19 +31,25 @@ const S = await import('../lib/invoice-snapshots.ts');
 const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
 const { acceptQuote } = await import('../lib/quote-acceptance.ts');
 const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
+const { writeAudit } = await import('../lib/audit.ts');
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const REG = 'ZZ76SNP';
 const CUST = 'Snapshot Policy Fixture';
+// The names the SUBJECT is rebuilt into. Distinct from CUST so a check cannot pass on the old one.
+const CUST_AFTER = 'Snapshot Policy Fixture Rebuilt';
+const FIRM_AFTER = 'Rebuilt Haulage Limited';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
 const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+/** The protected count, read the same way the check below reads it — one definition, two uses. */
+const notOnReissuePinned = () => S.INVOICE_SNAPSHOTS.filter((x) => x.policy !== 'rebuild').length;
 let fix = null, browser = null;
 
 try {
-  const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
+  const stale = await prisma.customer.count({ where: { group_id: ZZ, name: { in: [CUST, CUST_AFTER] } } });
   if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. THE REGISTER IS TOTAL ─────────────────────────────────────────────────────────────────
@@ -74,10 +80,24 @@ try {
   console.log('\n— and the re-issue actually writes them —');
   const reissue = readFileSync('pages/api/invoice-unlock.ts', 'utf8');
   const snap = readFileSync('lib/invoice-issue.ts', 'utf8');
+  // ── BOTH COUNTS PINNED (2026-09-05) ──────────────────────────────────────────────────────────
+  // The protected set SHRANK when the document's subject became provisional — eleven columns that a
+  // re-issue must not touch became six. That is the rule changing, not the assertion narrowing, and
+  // the difference has to cost an edit rather than happen quietly. So both sides are numbers now:
+  // eleven rebuilt, six protected, seventeen declared. Moving a column between them fails here
+  // until somebody writes the new figure down.
+  check('eleven columns rebuild, six are protected', S.REBUILT_ON_REISSUE.length === 11 && notOnReissuePinned() === 6,
+    `${S.REBUILT_ON_REISSUE.length} rebuild / ${notOnReissuePinned()} protected`);
+  // AND THE POSITIVE HALF NOW CARRIES THE LOAD. With six protected columns the ban proves less than
+  // it did; with eleven rebuilt columns THIS proves more. It is the check that catches a column
+  // declared `rebuild` and quietly not rebuilt — the original defect (100003203, £75, four cycles).
   const written = S.REBUILT_ON_REISSUE.filter((c) => new RegExp(`${c}\\s*:`).test(reissue) || new RegExp(`${c}\\s*:`).test(snap));
   check('every rebuild column is written somewhere on the re-issue path',
     written.length === S.REBUILT_ON_REISSUE.length,
-    S.REBUILT_ON_REISSUE.filter((c) => !written.includes(c)).join(', ') || S.REBUILT_ON_REISSUE.join(', '));
+    S.REBUILT_ON_REISSUE.filter((c) => !written.includes(c)).join(', ') || `all ${written.length}`);
+  check('  …the document’s SUBJECT through the SHARED shaper, not a second copy',
+    /documentSubject\(/.test(reissue) || /rebuildDocumentSubject\(/.test(reissue),
+    'the mint and the re-issue must describe who and what the document is about the same way');
   check('  …the narrative blocks through the SHARED computation, not a second copy',
     /computeNarrativeBlocks\(/.test(reissue) && /export async function computeNarrativeBlocks/.test(snap),
     'the mint and the re-issue must describe the car the same way');
@@ -85,36 +105,22 @@ try {
   // `select` — a frozen column is READ on that path all the time, and reading is not rewriting.
   // Only the payloads of `data: { … }` are searched, which is where a write actually is.
   const dataPayloads = [...reissue.matchAll(/data:\s*\{([\s\S]*?)\}/g)].map((m) => m[1]).join('\n');
-  // ── SELECTED ON `!== 'rebuild'`, NOT ON `=== 'frozen'` (amended 2026-09-03) ───────────────────
-  // The rule this check enforces has never changed: a re-issue writes the rebuild set and nothing
-  // else. But it used to be SPELLED as "no frozen column", and adding the `correctable` policy
-  // would have made it pass by SHRINKING — the four addressee columns would have dropped out of
-  // `filter(policy === 'frozen')` and stopped being examined at all, and the gate would have
-  // reported success while covering strictly less than the day before.
-  //
-  // Stated the way the rule is actually meant, the check is WIDER after the new policy than before
-  // it (nine columns became eleven), which is the difference between an amendment and a bypass. A
-  // correctable column must not be written here either: an addressee correction is an explicit,
-  // audited act, never a side effect of pressing re-issue.
+  // ── SELECTED ON `!== 'rebuild'`, NOT ON `=== 'frozen'` ───────────────────────────────────────
+  // Written this way in September when a third policy arrived, because spelling it "no frozen
+  // column" would have let that policy's columns drop silently out of scope. The spelling has since
+  // earned itself twice over: the third policy is gone again and the protected set has shrunk to
+  // six, and neither move could quietly narrow this check, because the claim is stated as the rule
+  // and not as a list — a re-issue writes the rebuild set and NOTHING else, whatever else exists.
   const notOnReissue = S.INVOICE_SNAPSHOTS.filter((s) => s.policy !== 'rebuild');
   const rewritten = notOnReissue.filter((s) => new RegExp(`\\b${s.column}\\s*:`).test(dataPayloads));
   check('  …and NOTHING outside the rebuild set is rewritten there', rewritten.length === 0,
     rewritten.map((r) => r.column).join(', ') || `${notOnReissue.length} columns checked — rebuilding the parties would restate a past transaction in the present’s terms`);
-  // THE GUARD ON THE GUARD. Reverting the filter above to `=== 'frozen'` turns this red, which is
-  // the only thing standing between "we widened the register" and "we narrowed the assertion".
-  const correctable = S.INVOICE_SNAPSHOTS.filter((s) => s.policy === 'correctable');
-  // THE DETAIL IS COMPUTED FROM WHAT IS ACTUALLY COVERED, not from what was intended. The first
-  // version printed "4 correctable, all covered" while FAILING, because the message was built from
-  // the register rather than from the set the check had just examined — a failing assertion
-  // reassuring its reader is worse than one with no detail at all.
-  const uncovered = correctable.filter((c) => !notOnReissue.includes(c));
-  check('  …with the correctable columns INSIDE that check, not exempted by it',
-    correctable.length > 0 && uncovered.length === 0,
-    correctable.length === 0
-      ? 'NO correctable column exists — every check below it passes vacuously'
-      : uncovered.length
-        ? `EXEMPTED: ${uncovered.map((c) => c.column).join(', ')} — the check above passed by covering ${notOnReissue.length} columns instead of ${notOnReissue.length + uncovered.length}`
-        : `${correctable.length} correctable, all inside a check covering ${notOnReissue.length}`);
+  // THE `correctable` POLICY AND ITS GUARD WERE DELETED WITH IT (2026-09-05), rather than left as
+  // an empty array quietly satisfying an `every()`. A policy with no columns is a rule nobody
+  // follows wearing the shape of one that is enforced, and every assertion about it passes.
+  check('  …and no third policy has crept back undeclared',
+    S.INVOICE_SNAPSHOTS.every((x) => x.policy === 'rebuild' || x.policy === 'frozen'),
+    'two answers: rebuilt from what is true now, or a matter of record');
   check('  …and that check looks at writes, not at the select',
     /\bvat_registered_at_issue: true\b/.test(reissue) && !/\bvat_registered_at_issue\s*:/.test(dataPayloads),
     'the endpoint reads a frozen column on every call; the assertion above must not trip on that');
@@ -122,35 +128,6 @@ try {
   // If it ever became correctable it would acquire a writer and the counter-check would rot silently.
   check('  …and its discriminator is still a frozen column',
     S.snapshotPolicy('vat_registered_at_issue')?.policy === 'frozen');
-
-  // ── 2b. `correctable` NAMES THE ONE PATH ALLOWED TO WRITE IT ─────────────────────────────────
-  // A third policy is a door in a freeze, and a door nobody can point at is an unlock. Every
-  // correctable column names its endpoint, that file exists, and NOTHING else writes the column.
-  console.log('\n— a correctable column names the one path that may write it —');
-  check('there is a correctable column at all', correctable.length > 0,
-    'without one, every assertion in this section is true of the empty set');
-  const viaMissing = correctable.filter((c) => !c.via || !existsSync(c.via));
-  check('every correctable column names a via, and the file is there', viaMissing.length === 0,
-    viaMissing.map((c) => `${c.column} → ${c.via ?? '(none)'}`).join(', ') || correctable.map((c) => c.via).filter((v, i, a) => a.indexOf(v) === i).join(', '));
-  // WHO ELSE WRITES IT. Two files are allowed for reasons that are about a different ROW, not a
-  // softer rule, so each says which: the mint creates the Invoice, and the credit note copies the
-  // particulars onto a CreditNote row and never touches the Invoice's own.
-  const WRITERS_ALLOWED = new Map([
-    ['lib/invoice-issue.ts', 'the mint — this is where these columns are first written'],
-    ['lib/credit-note.ts', 'writes the CreditNote row’s own copies; it never updates an Invoice'],
-    ...correctable.map((c) => [c.via, 'the declared correction path']),
-  ]);
-  const sources = [...appFiles('pages/api'), ...appFiles('lib')];
-  const writers = sources.filter((f) => {
-    const payloads = [...prose(readFileSync(f, 'utf8')).matchAll(/data:\s*\{([\s\S]*?)\}/g)].map((m) => m[1]).join('\n');
-    return correctable.some((c) => new RegExp(`\\b${c.column}\\s*:`).test(payloads));
-  });
-  const unexpected = writers.filter((f) => !WRITERS_ALLOWED.has(f));
-  check('  …and nothing outside the declared writers writes one', unexpected.length === 0,
-    unexpected.join(', ') || `${writers.length} writers, all declared: ${writers.join(', ')}`);
-  // A SCAN THAT FINDS NOTHING IS INDISTINGUISHABLE FROM ONE THAT CANNOT SEE. Prove it can.
-  check('  …and that scan can actually see a writer', writers.includes('lib/invoice-issue.ts'),
-    'the mint writes all four; a scan that misses it is broken, not reassuring');
 
   // ── 3. THE SCREEN SAYS SO BEFORE IT IS PRESSED ───────────────────────────────────────────────
   const ui = readFileSync('pages/admin/invoices/[id].tsx', 'utf8');
@@ -203,18 +180,14 @@ try {
   const C = await import('../lib/due-item-closure.ts');
   await prisma.vehicleDueItem.update({ where: { id: wrong.id },
     data: C.closureFields({ kind: 'fixed', note: 'Topped up', jobCardId: card.id }) });
-  // THE UNLOCK, as the admin path performs it: the frozen lines go.
-  await prisma.invoiceLine.deleteMany({ where: { invoice_id: invId } });
-  const stillStale = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true } });
-  check('unlocking ALONE leaves the block stale, which is why the screen has to say so',
-    /Coolant/.test(stillStale.due_items_snapshot ?? ''),
-    'the unlock drops the lines and touches nothing else — correct, and invisible without the sentence');
-
-  // ── THE RE-ISSUE, THROUGH THE REAL ENDPOINT ──────────────────────────────────────────────────
-  // Not by calling computeNarrativeBlocks here. The first version did, and a probe that stopped
-  // the ENDPOINT calling it still passed this section — the gate was proving the function works,
-  // which was never in doubt, and not that the button uses it. The whole defect was a path that
-  // did not call something.
+  // ── THE UNLOCK, THROUGH THE REAL ENDPOINT ────────────────────────────────────────────────────
+  // It used to be `invoiceLine.deleteMany` here, which drops the lines the way the endpoint does
+  // and skips the thing that turned out to matter: the unlock RECORDS the total on the copy the
+  // customer holds, in its audit row, because that is the last moment it exists. Open-coding it
+  // left `totalBefore` unwritten, so the re-issue read the previous figure as 0 and EVERY amendment
+  // looked like a change of money. The check about non-money amendments was failing for a reason
+  // that lived entirely in the fixture.
+  //
   // The dev server disposes inactive pages and serves 404s while it rebuilds one; a gate that
   // drives a page that was never served dies as a bare selector timeout 25s later. Warm it and
   // say so — see serverReady in _gate-preflight.
@@ -227,11 +200,42 @@ try {
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
   await page.goto(`${BASE}/admin/invoices/${invId}`, { waitUntil: 'domcontentloaded' });
-  const reissued = await page.evaluate(async (id) => {
-    const r = await fetch('/api/invoice-unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin', body: JSON.stringify({ invoiceId: id, action: 'reissue' }) });
+  const post = (url, body) => page.evaluate(async ([u, b]) => {
+    const r = await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
     return { status: r.status, body: await r.json().catch(() => ({})) };
-  }, invId);
+  }, [url, body]);
+  const unlocked = await post('/api/invoice-unlock', { invoiceId: invId, action: 'unlock' });
+  check('the unlock endpoint accepts it', unlocked.status === 200, JSON.stringify(unlocked.body).slice(0, 110));
+  const stillStale = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true } });
+  check('unlocking ALONE leaves the block stale, which is why the screen has to say so',
+    /Coolant/.test(stillStale.due_items_snapshot ?? ''),
+    'the unlock drops the lines and touches nothing else — correct, and invisible without the sentence');
+
+  // ── THE DOCUMENT'S SUBJECT MOVES WHILE IT IS PROVISIONAL ─────────────────────────────────────
+  // Everything below stands on the ruling that unlocking makes a document provisional again: the
+  // lines and the advisory already rebuilt from current state, and the party and the car now do
+  // too. So the customer and the vehicle are edited BETWEEN the unlock and the re-issue, exactly as
+  // a garage would edit them, and the re-issued document has to show the edits.
+  await prisma.customer.update({ where: { id: cust.id },
+    data: { name: CUST_AFTER, address: '9 Rebuilt Row, Leeds LS1 4AA', account_name: FIRM_AFTER, account_address: 'Unit 2, Rebuilt Park' } });
+  await prisma.vehicle.update({ where: { id: veh.id }, data: { make: 'Rebuilt', model: 'Subject', vin: 'ZZVINREBUILT00001' } });
+  await prisma.jobCard.update({ where: { id: card.id }, data: { odometer_in: 81000 } });
+  // AND IT HAS BEEN PRESENTED. The customer is holding a copy, which is what makes a silent rebuild
+  // a problem worth a notice — the whole risk this ruling introduces.
+  await prisma.$transaction(async (tx) => {
+    await writeAudit(tx, { groupId: ZZ, userId: owner.id, jobCardId: card.id, action: 'invoice.sent',
+      diff: { number: 'snapshot-fixture', to: 'gate@zzgategarage.test' } });
+  });
+
+  // ── THE RE-ISSUE, THROUGH THE REAL ENDPOINT ──────────────────────────────────────────────────
+  // Not by calling computeNarrativeBlocks here. The first version did, and a probe that stopped
+  // the ENDPOINT calling it still passed this section — the gate was proving the function works,
+  // which was never in doubt, and not that the button uses it. The whole defect was a path that
+  // did not call something.
+  // CONFIRMED, because the fixture has been PRESENTED and the endpoint asks before amending a
+  // document the customer holds. Passing it is the gate standing in for the person who read it.
+  const reissued = await post('/api/invoice-unlock', { invoiceId: invId, action: 'reissue', confirm: true });
   check('the re-issue endpoint accepts it', reissued.status === 200, JSON.stringify(reissued.body).slice(0, 120));
 
   const after = await prisma.invoice.findUnique({ where: { id: invId }, select: { due_items_snapshot: true, measured_snapshot: true, work_done_snapshot: true, _count: { select: { lines: true } } } });
@@ -256,6 +260,51 @@ try {
   check('  …it is recorded as sorted on the visit', /Coolant/.test(after.work_done_snapshot ?? ''),
     JSON.stringify(after.work_done_snapshot));
   check('  …and the money re-froze in the same pass', after._count.lines > 0, `${after._count.lines} lines`);
+
+  // ── THE SUBJECT, REBUILT ─────────────────────────────────────────────────────────────────────
+  console.log('\n— the party and the car, rebuilt with everything else —');
+  const subj = await prisma.invoice.findUnique({ where: { id: invId },
+    select: { customer_name_snapshot: true, customer_address_snapshot: true, account_name_snapshot: true,
+      account_address_snapshot: true, vehicle_desc_snapshot: true, vehicle_reg_snapshot: true,
+      vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true, amendments: true,
+      company_name_snapshot: true, vat_registered_at_issue: true, date_issued: true } });
+  check('the addressee is rebuilt from the customer as it stands now',
+    subj.account_name_snapshot === FIRM_AFTER && subj.customer_name_snapshot === CUST_AFTER,
+    `${subj.account_name_snapshot} / ${subj.customer_name_snapshot}`);
+  check('  …with both addresses', /Rebuilt Row/.test(subj.customer_address_snapshot ?? '')
+    && /Rebuilt Park/.test(subj.account_address_snapshot ?? ''),
+    `${subj.customer_address_snapshot} | ${subj.account_address_snapshot}`);
+  check('the vehicle description is rebuilt', subj.vehicle_desc_snapshot === 'Rebuilt Subject',
+    String(subj.vehicle_desc_snapshot));
+  // DECLARED `rebuild` SINCE THE REGISTER EXISTED, and re-snapshotted only on mark-paid until now:
+  // the declaration and the code finally agree.
+  check('  …and so are the reg, the VIN and the mileage the declaration always promised',
+    subj.vehicle_vin_snapshot === 'ZZVINREBUILT00001' && subj.vehicle_mileage_snapshot === 81000
+    && subj.vehicle_reg_snapshot === REG,
+    `${subj.vehicle_reg_snapshot} / ${subj.vehicle_vin_snapshot} / ${subj.vehicle_mileage_snapshot}`);
+  // THE OTHER SIDE, and it is the half that keeps this a correction rather than a re-mint.
+  check('the ISSUING ENTITY did not move with it', subj.company_name_snapshot === 'ZZ Gate Garage',
+    String(subj.company_name_snapshot));
+  check('  …nor did whether VAT was chargeable', subj.vat_registered_at_issue === true,
+    'it decides the tax when the lines re-freeze; rebuilding it would move the money');
+  check('  …nor the document date', subj.date_issued?.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10),
+    'the tax point is when the work was supplied, not when a corrected document was re-issued');
+
+  // ── AND A PRESENTED DOCUMENT SAYS IT CHANGED, EVEN WHEN THE TOTAL DID NOT ─────────────────────
+  // The risk this ruling introduces: a document in a customer's hands can now be rebuilt underneath
+  // them. The amendment log used to fire only when the FIGURE moved, so re-addressing an invoice
+  // for the same money left no notice at all.
+  const log = Array.isArray(subj.amendments) ? subj.amendments : [];
+  // TRACEABLE TO ITS NAME: an entry proves nothing about non-money changes unless the money is
+  // demonstrably unchanged in the same entry. Without this the check passes on a re-issue that
+  // happened to move the figure, which is the case the log ALREADY covered.
+  check('the amendment log fired on a change that was not money',
+    log.length === 1 && log[0]?.fromPennies === log[0]?.toPennies,
+    `${log.length} entries, ${log[0]?.fromPennies} → ${log[0]?.toPennies}`);
+  check('  …naming what actually changed', Array.isArray(log[0]?.changes)
+    && log[0].changes.includes('addressee') && log[0].changes.includes('vehicle')
+    && !log[0].changes.includes('total'),
+    JSON.stringify(log[0]?.changes));
 
   // ── A DOCUMENT ISSUED BEFORE THE SPLIT KEEPS BOTH ITS TEXT AND ITS HEADING ───────────────────
   // Freeze-at-issue governs CONTENT. Relabelling an old combined block "What your car needs" would
@@ -297,10 +346,10 @@ try {
     await step('card', () => prisma.jobCard.deleteMany({ where: { id: fix.card } }));
     await step('edges', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
-    await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: CUST } }));
+    await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, name: { in: [CUST, CUST_AFTER] } } }));
     check('teardown removed every fixture row (ZZ only)',
       (await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } })) === 0
-      && (await prisma.customer.count({ where: { group_id: ZZ, name: CUST } })) === 0);
+      && (await prisma.customer.count({ where: { group_id: ZZ, name: { in: [CUST, CUST_AFTER] } } })) === 0);
   }
 }
 

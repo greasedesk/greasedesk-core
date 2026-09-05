@@ -32,7 +32,7 @@ import { writeAudit } from '@/lib/audit';
 import { tServer } from '@/lib/server-i18n';
 import { refuseIfVoid, amendmentRequirement } from '@/lib/invoice-void';
 import { isUnderCorrection } from '@/lib/invoice';
-import { snapshotInvoiceLines, reissueDivergence, billingDivergence, computeNarrativeBlocks } from '@/lib/invoice-issue';
+import { snapshotInvoiceLines, reissueDivergence, billingDivergence, computeNarrativeBlocks, documentSubject, rebuildDocumentSubject } from '@/lib/invoice-issue';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -135,6 +135,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       where: { entity_id: invoice.job_card_id, action: 'invoice.unlocked' },
       orderBy: { created_at: 'desc' }, select: { diff_json: true },
     });
+    // WHAT THE CUSTOMER'S COPY SAYS ABOUT WHO AND WHAT — captured before the rebuild, for the same
+    // reason the figure is: an amendment invisible to the person holding the document is the risk
+    // this ruling introduces, and the only way to see it is to compare.
+    const subjectBefore = await prisma.invoice.findUnique({
+      where: { id: invoice.id },
+      select: {
+        customer_name_snapshot: true, customer_address_snapshot: true,
+        account_name_snapshot: true, account_address_snapshot: true,
+        vehicle_reg_snapshot: true, vehicle_desc_snapshot: true,
+        vehicle_vin_snapshot: true, vehicle_mileage_snapshot: true,
+      },
+    });
     const beforePennies: number = (() => {
       const fromUnlock = (unlockRow?.diff_json as any)?.totalBefore;
       if (typeof fromUnlock === 'number') return fromUnlock;
@@ -156,6 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: `The estimate now totals ${gbp(diverged.livePennies)} but the agreed quote (version ${diverged.version}) is ${gbp(diverged.agreedPennies)}. An invoice can only bill what the customer agreed to, so re-issuing would reproduce ${gbp(diverged.agreedPennies)} unchanged. Re-quote the difference and record the customer's agreement, then re-issue.`,
       });
     }
+    let subjectAfter: ReturnType<typeof documentSubject> | null = null;
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         await snapshotInvoiceLines(tx, invoice, {
@@ -178,6 +191,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           where: { id: invoice.id },
           data: { due_items_snapshot: blocks.dueItemsBlock, measured_snapshot: blocks.measuredBlock, work_done_snapshot: blocks.workDone },
         });
+        // ── AND THE DOCUMENT'S SUBJECT (ruling 2026-09-05) ───────────────────────────────────
+        // An invoice is issued when PRESENTED and becomes a record when PAID, so an unlocked one is
+        // provisional and its subject is rebuilt from what is true now — the party being billed and
+        // the car — exactly as the lines and the advisory above already are. Editing the customer
+        // and pressing this button is how a garage re-addresses an unpaid invoice; there is no
+        // second path, and there was one for two days.
+        //
+        // The ISSUING ENTITY and the PAYMENT are untouched here and stay frozen: who raised the
+        // document, and how money arrived, are not the document's subject.
+        subjectAfter = await rebuildDocumentSubject(tx, invoice.id, invoice.job_card_id);
         if (invoice.series === 'warranty') {
           await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'settled' as any } }); // back to terminal
         }
@@ -188,21 +211,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const after = await tx.invoice.findUnique({ where: { id: invoice.id }, select: { lines: { select: { line_total: true, line_vat: true } } } });
         const toPennies = (after?.lines ?? []).reduce((a: number, l: any) => a + Math.round((Number(l.line_total) + Number(l.line_vat)) * 100), 0);
         const priorLog = Array.isArray(invoice.amendments) ? invoice.amendments : [];
+        // ── WHAT ACTUALLY MOVED ─────────────────────────────────────────────────────────────
+        // Not just the figure. Until the subject became provisional, only a change of TOTAL could
+        // amend a document, and that was right when nothing else could change. Now a re-issue can
+        // re-address an invoice or correct its car for exactly the same money, and 136 TMBS
+        // invoices have been sent — so a rebuild that no notice mentions is a document changing
+        // underneath the person holding it. The comparison is over the eight subject columns the
+        // shaper wrote, so a column added to the subject is covered without anyone remembering to.
+        const changes: string[] = [];
+        if (toPennies !== beforePennies) changes.push('total');
+        const moved = (keys: string[]) => subjectAfter != null && subjectBefore != null
+          && keys.some((k) => (subjectBefore as any)[k] !== (subjectAfter as any)[k]);
+        if (moved(['customer_name_snapshot', 'customer_address_snapshot', 'account_name_snapshot', 'account_address_snapshot'])) changes.push('addressee');
+        if (moved(['vehicle_reg_snapshot', 'vehicle_desc_snapshot', 'vehicle_vin_snapshot', 'vehicle_mileage_snapshot'])) changes.push('vehicle');
         const entry = {
           at: new Date().toISOString(),
           by: user.id as string,
           fromPennies: beforePennies,
           toPennies,
+          // NAMED, not merely counted. "Amended" over an unchanged figure is a puzzle without this.
+          changes,
           wasSent: !!sentAudit || !!invoice.receipt_sent_at,
           wasPaid: invoice.status === 'paid' || invoice.amount_paid_pennies != null,
         };
-        // Only a change of FIGURE is an amendment worth telling the customer about. A re-issue that
-        // lands on the same total (a description tidied, a line reordered) leaves the log alone —
-        // otherwise the document collects "amended" notices that mean nothing.
-        // AND ONLY IF THEY HAVE A COPY. An invoice nobody has seen has no second version to be
-        // distinguished from; stamping "amended" on it would be a notice about nothing, and the
-        // first gate run produced exactly that on a quiet invoice.
-        if (toPennies !== beforePennies && (entry.wasSent || entry.wasPaid)) {
+        // ONLY IF SOMETHING MOVED, AND ONLY IF THEY HAVE A COPY. A re-issue that changes nothing (a
+        // line reordered, a no-op press) leaves the log alone, and an invoice nobody has seen has no
+        // second version to be distinguished from — stamping "amended" on it would be a notice about
+        // nothing, which the first gate run produced on a quiet invoice.
+        if (changes.length > 0 && (entry.wasSent || entry.wasPaid)) {
           await tx.invoice.update({ where: { id: invoice.id }, data: { amendments: [...priorLog, entry] as any } });
         }
         await writeAudit(tx, {
@@ -214,7 +250,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             wasSent: entry.wasSent, wasPaid: entry.wasPaid,
             amountPaidPennies: invoice.amount_paid_pennies ?? null,
             balancePennies: invoice.amount_paid_pennies == null ? null : toPennies - invoice.amount_paid_pennies,
-            amended: toPennies !== beforePennies,
+            amended: changes.length > 0,
+            changes,
           },
         });
       });

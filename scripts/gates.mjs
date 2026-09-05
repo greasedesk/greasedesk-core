@@ -141,7 +141,6 @@ const TIERS = {
     'dashboard-period-copy-gate',
     'reporting-anchor-gate',
     'billed-party-gate',
-    'addressee-correction-gate',
     'lookup-reset-gate',
   ],
 };

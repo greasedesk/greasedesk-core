@@ -53,9 +53,6 @@ async function createInvoiceRow(
   if (!card) throw new Error('CARD_NOT_FOUND');
 
   const identity = resolveCompanyIdentity(card.group, card.site);
-  // BOTH PARTIES, RESOLVED THE SAME WAY. See lib/invoice::resolveBilledParty for why the account
-  // rides in its own pair instead of overwriting the customer columns.
-  const billed = resolveBilledParty(card.customer);
   const issuedAt = new Date();
   const seq = series === 'warranty' ? await assignWarrantyNumber(tx, groupId)
     : series === 'historical' ? await assignHistoricalNumber(tx, groupId)
@@ -72,7 +69,7 @@ async function createInvoiceRow(
     },
     seq,
   );
-  const vehicleDesc = [card.vehicle?.make, card.vehicle?.model].filter(Boolean).join(' ') || null;
+
   // Built BEFORE the row is created, from what is true at this instant — the open findings on this
   // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
   // moment from the rest of the document.
@@ -106,18 +103,9 @@ async function createInvoiceRow(
       work_done_snapshot: workDone,
       company_vat_number_snapshot: identity.vatNumber,
       company_address_snapshot: identity.address,
-      customer_name_snapshot: card.customer?.name ?? '',
-      customer_address_snapshot: card.customer?.address ?? null,
-      // ── WHO THIS IS ADDRESSED TO, WHEN IT IS NOT THE PERSON WHOSE CAR IT IS ──────────────────
-      // NULL on both when the customer is the addressee, which is nearly every invoice. Written
-      // from the account as it stands NOW, and frozen here with every other particular: putting a
-      // fleet on account next year must not re-address last year's documents to them.
-      account_name_snapshot: billed.onBehalfOf ? billed.name : null,
-      account_address_snapshot: billed.onBehalfOf ? billed.address : null,
-      vehicle_reg_snapshot: card.vehicle?.registration ?? null,
-      vehicle_desc_snapshot: vehicleDesc,
-      vehicle_vin_snapshot: card.vehicle?.vin ?? null,
-      vehicle_mileage_snapshot: card.odometer_in ?? card.vehicle?.mileage_at_create ?? null, // same resolution as the card's "Mileage in"
+      // WHO AND WHAT THIS DOCUMENT IS ABOUT — through the one shaper, so the mint and the re-issue
+      // can never describe the same subject differently. See documentSubject below.
+      ...documentSubject(card),
       vat_registered_at_issue: !!card.group.vat_registered,
     },
     select: { id: true },
@@ -134,6 +122,60 @@ async function createInvoiceRow(
   await revokeMagicLinksForCard(jobCardId, 'invoiced', tx);
 
   return invoice.id;
+}
+
+/**
+ * ── WHO AND WHAT THE DOCUMENT IS ABOUT ──────────────────────────────────────────────────────────
+ * The eight columns that carry the document's SUBJECT: the party being billed and the car. Shaped
+ * in ONE place because two callers write them — the mint, and the re-issue once a document has been
+ * unlocked and is provisional again. Two copies of this would be two descriptions of the same car.
+ *
+ * Not here: the issuing entity or the payment. Those are frozen at issue and stay frozen; see
+ * lib/invoice-snapshots for which is which and why the line falls there.
+ */
+export function documentSubject(card: {
+  odometer_in: number | null;
+  customer: { name: string; address: string | null; account_name?: string | null; account_address?: string | null } | null;
+  vehicle: { registration: string | null; make: string | null; model: string | null; vin: string | null; mileage_at_create: number | null } | null;
+}) {
+  const billed = resolveBilledParty(card.customer);
+  return {
+    customer_name_snapshot: card.customer?.name ?? '',
+    customer_address_snapshot: card.customer?.address ?? null,
+    // NULL on both when the customer IS the addressee, which is nearly every invoice.
+    account_name_snapshot: billed.onBehalfOf ? billed.name : null,
+    account_address_snapshot: billed.onBehalfOf ? billed.address : null,
+    vehicle_reg_snapshot: card.vehicle?.registration ?? null,
+    vehicle_desc_snapshot: [card.vehicle?.make, card.vehicle?.model].filter(Boolean).join(' ') || null,
+    vehicle_vin_snapshot: card.vehicle?.vin ?? null,
+    // Same resolution as the card's "Mileage in".
+    vehicle_mileage_snapshot: card.odometer_in ?? card.vehicle?.mileage_at_create ?? null,
+  };
+}
+
+/** The columns documentSubject needs, as a select — so a caller cannot fetch half of them. */
+export const SUBJECT_SELECT = {
+  odometer_in: true,
+  customer: { select: { name: true, address: true, account_name: true, account_address: true } },
+  vehicle: { select: { registration: true, make: true, model: true, vin: true, mileage_at_create: true } },
+} as const;
+
+/**
+ * REBUILD THE SUBJECT ON A RE-ISSUE. Unlocking makes a document provisional, so the party and the
+ * car are re-read from the card exactly as the lines and the advisory block already are. Returns
+ * what it wrote, so the caller can tell whether a presented document actually changed.
+ */
+export async function rebuildDocumentSubject(
+  tx: Prisma.TransactionClient, invoiceId: string, jobCardId: string,
+): Promise<ReturnType<typeof documentSubject> | null> {
+  // TYPED, not cast. A cast here would hide a forgotten column in the very query that supplies the
+  // document's subject — which is the failure the prisma-any ratchet exists to catch, and it caught
+  // this one on its first run against new code.
+  const card = await tx.jobCard.findUnique({ where: { id: jobCardId }, select: SUBJECT_SELECT });
+  if (!card) return null;
+  const subject = documentSubject(card);
+  await tx.invoice.update({ where: { id: invoiceId }, data: subject });
+  return subject;
 }
 
 /** Mint a chargeable invoice AND freeze its lines in the same tx (freeze-at-issue). */
