@@ -13,7 +13,9 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { signOut } from 'next-auth/react';
-import { erNavFor, type OperatorRoleName } from '@/lib/operator-auth';
+// FROM THE LEAF MODULE, NOT operator-auth. This is a client component: importing a value from
+// operator-auth pulls prisma into the browser bundle and every Engine Room page throws.
+import { erNavFor, type OperatorRoleName } from '@/lib/operator-roles';
 
 export default function EngineRoomLayout({ role, children }: { role: OperatorRoleName; children: React.ReactNode }) {
   const router = useRouter();
