@@ -101,5 +101,25 @@ export function validateExtension(input: {
   };
 }
 
+/**
+ * A PLAIN DATE MEANS THE WHOLE OF THAT DAY. The control sends `YYYY-MM-DD` and the resolution
+ * happens here, once, rather than the browser inventing a time.
+ *
+ * IT RESOLVES TO THE END OF THE DAY, and that is the fix for a real defect. The first version of
+ * the control appended `T12:00:00.000Z`, so "extend to 3 November" against a trial ending
+ * 3 November at 15:32 was a three-and-a-half-hour REDUCTION and was refused as a shortening — with
+ * a message about the commission boundary that made no sense to somebody who had picked the day
+ * they were shown. End of day makes a same-day extension expressible, which is what "extend it to
+ * the third" means to a person.
+ *
+ * Anything already carrying a time is passed through untouched, so a caller with a precise instant
+ * (a test, or a future control) is not rounded.
+ */
+export function resolveTrialDate(input: string | Date): Date {
+  if (input instanceof Date) return input;
+  const s = String(input).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T23:59:59.999Z`) : new Date(s);
+}
+
 /** Unix seconds, which is what Stripe's `trial_end` takes. */
 export const toStripeTrialEnd = (d: Date): number => Math.floor(d.getTime() / 1000);

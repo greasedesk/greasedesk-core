@@ -140,6 +140,7 @@ const TIERS = {
     'mot-booking-stamp-gate', 'completion-carry-gate', 'diag-scan-gate',
     'dashboard-period-copy-gate',
     'reporting-anchor-gate',
+    'trial-control-gate',
     'billed-party-gate',
     'lookup-reset-gate',
   ],

@@ -24,6 +24,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { GetServerSideProps } from 'next';
 import { taxDisplay } from '@/lib/tax';
+import { TRIAL_EXTENSION_CATEGORIES, validateExtension, resolveTrialDate } from '@/lib/trial-extension';
 import { prisma } from '@/lib/db';
 import React from 'react';
 import { useRouter } from 'next/router';
@@ -102,6 +103,10 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
       const j = await r.json().catch(() => ({}));
       alert(j?.message || (r.ok ? 'Done.' : 'Could not reset two-factor authentication.'));
       if (r.ok) router.replace(router.asPath);
+    } catch (e: any) {
+      // A REJECTED FETCH MUST SAY SO. `finally` alone resets the button, which made a failure look
+      // exactly like a completion — the defect reported on the trial control, shared by this one.
+      alert(`The request did not reach the server (${e?.message ?? 'network error'}). Nothing has changed.`);
     } finally { setBusy2fa(null); } // never strand the busy flag
   }
 
@@ -133,6 +138,8 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
       const j = await r.json().catch(() => ({}));
       alert(j?.message || (r.ok ? 'Done.' : 'Could not change the exemption.'));
       if (r.ok) router.replace(router.asPath);
+    } catch (e: any) {
+      alert(`The request did not reach the server (${e?.message ?? 'network error'}). Nothing has changed.`);
     } finally { setBusyExempt(false); } // never strand the busy flag
   }
 
@@ -140,29 +147,54 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
   // support-role; the schema has declared "extend trial" a support capability since the roles were
   // written. Extend ONLY — pulling a date back moves the commission boundary and is refused server
   // side by name (lib/trial-extension).
+  //
+  // AN INLINE PANEL, NOT DIALOGS. The first version asked in three prompt() calls, which is exactly
+  // the pattern that makes Chrome offer to suppress dialogs — after which every prompt returns null
+  // and the handler exits in silence. It also pre-filled the date with the CURRENT end, so pressing
+  // OK sent a reduction and was refused. Modelled on the void reason block: a select for the thing
+  // that must not be mistyped, a textarea validated as you type, a preview of what will happen, and
+  // the result on the page.
+  const [trialOpen, setTrialOpen] = React.useState(false);
+  const [trialDate, setTrialDate] = React.useState('');
+  const [trialCat, setTrialCat] = React.useState<string>(TRIAL_EXTENSION_CATEGORIES[0]);
+  const [trialNote, setTrialNote] = React.useState('');
   const [busyTrial, setBusyTrial] = React.useState(false);
+  const [trialResult, setTrialResult] = React.useState<{ text: string; ok: boolean } | null>(null);
+
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  // STRIPE'S FLOOR, MADE UNREACHABLE rather than explained after a refusal.
+  const trialMin = ymd(new Date(Date.now() + 48 * 3600_000));
+  // NOT the current end — that default made the obvious gesture a reduction. A month further on.
+  const trialDefault = ymd(new Date((a.trialEnds ? new Date(a.trialEnds).getTime() : Date.now()) + 30 * 86_400_000));
+  function openTrial() {
+    setTrialDate(trialDefault); setTrialCat(TRIAL_EXTENSION_CATEGORIES[0]);
+    setTrialNote(''); setTrialResult(null); setTrialOpen(true);
+  }
+  // The SAME rules the server applies, so the button is disabled for the same reasons it would be
+  // refused. The server re-checks regardless; this is courtesy, not authority.
+  const trialCheck = validateExtension({
+    current: a.trialEnds, next: trialDate ? resolveTrialDate(trialDate) : null,
+    category: trialCat, note: trialNote,
+  });
+  const trialPreview = trialCheck.ok
+    ? `Extends by ${trialCheck.deltaDays} day${trialCheck.deltaDays === 1 ? '' : 's'}, to `
+      + trialCheck.next.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+    : trialCheck.message;
+
   async function extendTrial() {
-    const next = window.prompt(
-      'Extend the trial to which date? (YYYY-MM-DD)\n\n'
-      + 'Stripe will not accept a date less than 48 hours away.\n'
-      + 'This only extends — bringing the date earlier is a different change.',
-      a.trialEnds ? a.trialEnds.slice(0, 10) : '',
-    );
-    if (!next?.trim()) return;
-    const category = window.prompt(
-      'Why? One of: beta_programme, technical_support, sales, goodwill', 'sales') ?? '';
-    if (!category.trim()) return;
-    const note = window.prompt('What was agreed, and with whom? (recorded on your ledger and theirs)') ?? '';
-    if (!note.trim()) return;
-    setBusyTrial(true);
+    setBusyTrial(true); setTrialResult(null);
     try {
       const r = await fetch('/api/superadmin/trial-extend', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: d.id, next: `${next.trim()}T12:00:00.000Z`, category: category.trim(), note }),
+        body: JSON.stringify({ groupId: d.id, next: trialDate, category: trialCat, note: trialNote }),
       });
       const j = await r.json().catch(() => ({}));
-      alert(j?.message || (r.ok ? 'Done.' : 'Could not extend the trial.'));
-      if (r.ok) router.replace(router.asPath);
+      setTrialResult({ text: j?.message || (r.ok ? 'Done.' : 'Could not extend the trial.'), ok: r.ok });
+      if (r.ok) { setTrialOpen(false); router.replace(router.asPath); }
+    } catch (e: any) {
+      // A REJECTED FETCH MUST SAY SO. Without this the `finally` reset the button and the operator
+      // saw a completed-looking control that had done nothing — the reported symptom.
+      setTrialResult({ text: `The request did not reach the server (${e?.message ?? 'network error'}). Nothing has changed.`, ok: false });
     } finally { setBusyTrial(false); } // never strand the busy flag
   }
 
@@ -290,15 +322,61 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
               {/* Which of the two acts pressing this performs, said BEFORE it is pressed: with a
                   subscription Stripe owns the clock and confirms the new date; without one this is
                   the only clock they have and the change is local. */}
-              <button type="button" disabled={busyTrial} onClick={extendTrial} data-testid="er-trial-extend"
-                className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#8AB4F8' }}>
-                {busyTrial ? 'Working…' : 'Extend'}
-              </button>
+              {!trialOpen && (
+                <button type="button" onClick={openTrial} data-testid="er-trial-extend"
+                  className="text-xs ml-3 hover:underline" style={{ color: '#8AB4F8' }}>Extend</button>
+              )}
               <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>
                 {a.subscriptionStatus
                   ? '· Stripe owns this clock — the new date is read back from them'
                   : '· No subscription yet: this changes their trial date here only'}
               </span>
+              {trialOpen && (
+                <div className="mt-3 pt-3" style={{ borderTop: '1px solid #2A3446' }} data-testid="er-trial-panel">
+                  <div className="flex flex-wrap gap-3 items-start">
+                    <label className="text-xs" style={{ color: '#7C8AA3' }}>
+                      New end date<br />
+                      {/* `min` puts Stripe's 48-hour floor out of reach instead of explaining it after. */}
+                      <input type="date" data-testid="er-trial-date" min={trialMin} value={trialDate}
+                        onChange={(e) => setTrialDate(e.target.value)}
+                        className="mt-1 p-1.5 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }} />
+                    </label>
+                    <label className="text-xs" style={{ color: '#7C8AA3' }}>
+                      Why<br />
+                      {/* CHOSEN, never typed: "Sales" with a capital was a 400 from the server. */}
+                      <select data-testid="er-trial-category" value={trialCat} onChange={(e) => setTrialCat(e.target.value)}
+                        className="mt-1 p-1.5 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }}>
+                        {TRIAL_EXTENSION_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="text-xs block mt-3" style={{ color: '#7C8AA3' }}>
+                    What was agreed, and with whom (recorded on your ledger and theirs)<br />
+                    <textarea data-testid="er-trial-note" rows={2} maxLength={500} value={trialNote}
+                      onChange={(e) => setTrialNote(e.target.value)}
+                      className="mt-1 w-full p-2 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }} />
+                  </label>
+                  {/* THE DELTA, BEFORE PRESSING. A wrong year is invisible in a date field and
+                      obvious in "Extends by 395 days". Doubles as the live validation message. */}
+                  <p className="text-xs mt-1" data-testid="er-trial-preview"
+                    style={{ color: trialCheck.ok ? '#7C8AA3' : '#FCD34D' }}>{trialPreview}</p>
+                  <div className="flex gap-3 mt-2 items-center">
+                    <button type="button" data-testid="er-trial-save" onClick={extendTrial}
+                      disabled={!trialCheck.ok || busyTrial}
+                      className="text-xs px-3 py-1.5 rounded disabled:opacity-40"
+                      style={{ background: '#1D4ED8', color: '#fff' }}>
+                      {busyTrial ? 'Working…' : 'Extend the trial'}
+                    </button>
+                    <button type="button" onClick={() => setTrialOpen(false)}
+                      className="text-xs hover:underline" style={{ color: '#7C8AA3' }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+              {/* INLINE, not alert() — the same modal Chrome offers to suppress. */}
+              {trialResult && (
+                <p className="text-xs mt-2" data-testid="er-trial-result"
+                  style={{ color: trialResult.ok ? '#6EE7B7' : '#FCA5A5' }}>{trialResult.text}</p>
+              )}
             </Field>
             <Field label="Modules entitled">{a.modules.length ? a.modules.join(', ') : <Muted>{NS}</Muted>}</Field>
             <Field label="Signup source">{a.signupSource}</Field>

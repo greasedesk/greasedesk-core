@@ -32,7 +32,7 @@ import { prisma } from '@/lib/db';
 import { requireOperatorApi, tenantInScope } from '@/lib/operator-auth';
 import { getStripe } from '@/lib/stripe';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
-import { validateExtension, toStripeTrialEnd } from '@/lib/trial-extension';
+import { validateExtension, toStripeTrialEnd, resolveTrialDate } from '@/lib/trial-extension';
 import { writeAudit } from '@/lib/audit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -56,7 +56,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!group) return res.status(404).json({ message: 'Not found.' });
 
   // EVERY REFUSAL BEFORE ANY CALL — including the two Stripe would make itself.
-  const checked = validateExtension({ current: group.trial_ends_at, next, category, note });
+  // A PLAIN DATE FROM THE CONTROL, RESOLVED HERE. The browser sends YYYY-MM-DD and nothing else —
+  // it used to append a fixed noon UTC, which made a same-day extension a reduction.
+  const checked = validateExtension({
+    current: group.trial_ends_at,
+    next: next ? resolveTrialDate(next) : null,
+    category, note,
+  });
   if (!checked.ok) return res.status(400).json({ message: checked.message });
 
   const from = group.trial_ends_at;
