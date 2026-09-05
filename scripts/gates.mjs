@@ -141,6 +141,7 @@ const TIERS = {
     'dashboard-period-copy-gate',
     'reporting-anchor-gate',
     'trial-control-gate',
+    'free-tenant-gate',
     'billed-party-gate',
     'lookup-reset-gate',
   ],

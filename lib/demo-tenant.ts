@@ -55,10 +55,35 @@ export const isReservedEmail = (v: string | null | undefined): boolean =>
  * done because there is nothing to do, not because a row says so. Writing a fake GroupBilling
  * status was the alternative and lib/onboarding refused it for the reason that still holds — that
  * table mirrors Stripe's truth and the webhook reads it.
+ *
+ * A THIRD ANSWER, ADDED 2026-09-05: a garage we have simply decided not to charge. See isFree
+ * below for why that is a dated decision rather than a fourth boolean — and note that the banner
+ * was a THIRD reader asking this question through `is_demo`, which does not answer it. ZZ Gate
+ * Garage read "Subscribed — £75 per month" until this landed, for the same reason the two readers
+ * above were wrong, and it was found the same way: by looking at the tenant.
  */
 export const neverSubscribes = (
-  group: { is_demo?: boolean | null; is_internal?: boolean | null } | null | undefined,
-): boolean => !!(group?.is_demo || group?.is_internal);
+  group: { is_demo?: boolean | null; is_internal?: boolean | null; free_since?: Date | string | null } | null | undefined,
+): boolean => !!(group?.is_demo || group?.is_internal || isFree(group));
+
+/**
+ * HAVE WE DECIDED NOT TO CHARGE THIS GARAGE? A third answer to "will this tenant ever buy a
+ * subscription", and deliberately not a third BOOLEAN.
+ *
+ * `is_internal` means OURS. A garage we choose not to charge — a beta partner, a friend's shop, a
+ * reseller's own workshop — is not ours, and flagging it internal would quietly remove a real
+ * business from the tenant count, the forecast and every revenue figure. Those are different claims
+ * and they were conflated once already: is_demo and is_internal were one flag doing two jobs until
+ * the sales demo needed to send texts, and two readers silently changed their mind about what they
+ * were asking.
+ *
+ * THE DATE IS THE DECISION. A reason with no date is not one, so this reads free_since alone —
+ * free_reason explains it and is required at the point of setting, not here. That also makes the
+ * question answerable in time: "free since when" is a thing somebody will ask.
+ */
+export const isFree = (
+  group: { free_since?: Date | string | null } | null | undefined,
+): boolean => !!group?.free_since;
 
 /** Is this tenant a demo? One indexed lookup, and the only place the question is asked. */
 export async function isDemoGroup(groupId: string | null | undefined): Promise<boolean> {
