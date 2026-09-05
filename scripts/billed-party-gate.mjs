@@ -149,10 +149,34 @@ try {
     'honest-null: NULL is "billed to the customer", which is nearly every invoice');
   check('  …and its customer is unchanged', invB.customer_name_snapshot === RETAIL);
 
-  const backfilled = await prisma.invoice.count({
-    where: { account_name_snapshot: { not: null }, id: { notIn: [A.invoice, B.invoice] } } });
-  check('no existing document was backfilled', backfilled === 0,
-    `${backfilled} invoice(s) outside this fixture carry an account — nothing should have been written to the back catalogue`);
+  // ── AN ACCOUNT ON A DOCUMENT IS EXPLICABLE BY A CUSTOMER (amended 2026-09-05) ────────────────
+  // This counted invoices carrying an account outside the fixture and required ZERO. That was the
+  // right claim for one day: the column had just been added, nothing should have had one, and a
+  // backfill would have shown up immediately. It stopped being the right claim the moment the
+  // feature WORKED — TMBS 100003252 was re-addressed to an employer, so the count is 1 and will
+  // grow with every garage that uses it. A residue check that fails on correct use is a check that
+  // gets muted.
+  //
+  // Anchoring on issued_at does not save it either: 100003252 was ISSUED before the migration and
+  // acquired its account afterwards through a legitimate re-issue, which is exactly what the
+  // provisional-document ruling makes possible.
+  //
+  // So the claim is restated as what it always meant. A BACKFILL invents accounts with nothing
+  // behind them; a real one is a snapshot of a customer who has an account name. Every account on
+  // every document must be explicable by the customer it was billed to.
+  const accounts = await prisma.invoice.findMany({
+    where: { account_name_snapshot: { not: null }, id: { notIn: [A.invoice, B.invoice] } },
+    select: { invoice_number: true, account_name_snapshot: true, job_card: { select: { customer: { select: { account_name: true } } } } },
+  });
+  const inexplicable = accounts.filter((i) => i.job_card?.customer?.account_name == null);
+  check('every account on a document is explicable by its customer', inexplicable.length === 0,
+    inexplicable.length
+      ? `${inexplicable.map((i) => `${i.invoice_number}=${i.account_name_snapshot}`).join(', ')} — an account nobody is on is what a backfill looks like`
+      : `${accounts.length} real account document(s), each matching a customer that has one`);
+  // AND THE FIXTURE'S OWN TENANT STAYS CLEAN, which is the residue half of the old check.
+  const zzResidue = await prisma.invoice.count({
+    where: { group_id: ZZ, account_name_snapshot: { not: null }, id: { notIn: [A.invoice, B.invoice] } } });
+  check('  …and no fixture account is left behind on ZZ', zzResidue === 0, `${zzResidue} residual`);
 
   // ── 4. ONE ADDRESSEE BLOCK, READ BY ALL THREE RENDERERS ──────────────────────────────────────
   console.log('\n— one block on the doc, three renderers reading it —');

@@ -23,6 +23,7 @@
 import Head from 'next/head';
 import Link from 'next/link';
 import { GetServerSideProps } from 'next';
+import { taxDisplay } from '@/lib/tax';
 import { prisma } from '@/lib/db';
 import React from 'react';
 import { useRouter } from 'next/router';
@@ -42,7 +43,9 @@ type Detail = {
   business: {
     tradingName: string | null; legalName: string; companyNumber: CompanyNumber;
     vatNumber: string | null; vatRegistered: boolean; country: string | null;
-    currency: string | null; taxModel: string; taxRatePct: number | null;
+    currency: string | null; taxRatePct: number | null;
+    /** Both tax rows, shaped once in lib/tax so the page cannot spell the regime its own way. */
+    tax: { label: string; regimeLabel: string; regimeValue: string; registrationLabel: string; registrationValue: string };
   };
   contact: { address: string | null; phone: string | null; email: string };
   sites: SiteRow[];
@@ -161,11 +164,14 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             <Field label="Tenant ref">{d.ref}</Field>
             <Field label="Group ID"><span className="text-xs" style={{ color: '#9FB0C9' }}>{d.id}</span></Field>
             <Field label="Company number">{companyNumber}</Field>
-            <Field label="VAT number"><V v={b.vatNumber} /></Field>
-            <Field label="VAT registration">{b.vatRegistered ? 'Registered' : 'Not registered'}</Field>
+            <Field label={`${b.tax.label} number`}><V v={b.vatNumber} /></Field>
+            {/* BOTH ROWS FROM ONE SHAPER (lib/tax::taxDisplay). They used to be a hardcoded "VAT
+                registration" and the raw enum, which printed "Not registered" under "vat" as though
+                one denied the other — and asked a US garage about a tax its country does not have. */}
+            <Field label={b.tax.registrationLabel}>{b.tax.registrationValue}</Field>
             <Field label="Country"><V v={b.country} /></Field>
             <Field label="Currency"><V v={b.currency} /></Field>
-            <Field label="Tax model">{b.taxModel}</Field>
+            <Field label={b.tax.regimeLabel}>{b.tax.regimeValue}</Field>
             <Field label="Tax rate">{b.taxRatePct === null ? <Muted>{NS}</Muted> : `${b.taxRatePct}%`}</Field>
           </Section>
 
@@ -307,7 +313,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     select: {
       id: true, ref: true, group_name: true, trading_name: true, company_number: true,
       company_number_not_applicable: true, vat_number: true, vat_registered: true, country_code: true,
-      tax_model: true, tax_default_rate_bp: true, default_vat_rate: true, address: true, phone: true,
+      tax_model: true, tax_label: true, tax_default_rate_bp: true, default_vat_rate: true, address: true, phone: true,
       billing_email: true, created_at: true, status: true, trial_ends_at: true, signup_ref: true,
       phone_step_exempt_at: true, phone_step_exempt_reason: true,
       is_internal: true,
@@ -401,7 +407,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
         business: {
           tradingName: g.trading_name ?? null, legalName: g.group_name, companyNumber,
           vatNumber: g.vat_number ?? null, vatRegistered: !!g.vat_registered, country: g.country_code ?? null,
-          currency: currencies.length ? currencies.join(', ') : null, taxModel: g.tax_model, taxRatePct,
+          currency: currencies.length ? currencies.join(', ') : null, taxRatePct,
+          tax: { label: (g.tax_label ?? '').trim() || 'Tax',
+            ...taxDisplay({ taxLabel: g.tax_label, countryCode: g.country_code, isRegistered: !!g.vat_registered }) },
         },
         contact: { address: g.address ?? null, phone: g.phone ?? null, email: g.billing_email },
         sites: g.sites.map((s: any) => ({

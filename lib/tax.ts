@@ -18,12 +18,34 @@
  *     same rule as labour_hours. The APPLY path (computeTax) uses the rate handed to it; the
  *     RENDER path (aggregateFrozenTax) SUMS the frozen per-line tax and re-derives NOTHING, so a
  *     tenant that later de-registers cannot retroactively move a customer's issued invoice.
- *  2. tax_model === 'vat' is the ONLY implemented branch. sales_tax / gst_split are real values
- *     that THROW — US sales tax is thousands of destination jurisdictions, not a rate, and the
- *     flag exists so we fail loud at onboarding rather than tear apart a live ledger later.
+ *  2. FLAT-RATE MODELS ONLY. `vat` and `sales_tax` are both a single rate applied to a base, so
+ *     they share one implementation; `gst_split` THROWS, because a split rate is a different
+ *     arithmetic and failing loud beats inventing one. The flag exists so an unimplemented regime
+ *     fails at onboarding rather than tearing apart a live ledger later.
+ *
+ *     CORRECTED 2026-09-05: this said sales_tax threw, and it had not for some time — the code
+ *     read `FLAT_RATE_MODELS = ['vat', 'sales_tax']` while the header told the next reader to plan
+ *     around an exception that never fires. A file documenting a rule it does not enforce is worse
+ *     than one documenting nothing.
+ *
+ *     WHAT IS STILL TRUE, and is the reason the old sentence was written: US sales tax is thousands
+ *     of destination jurisdictions, not a rate. A flat rate is the garage's own combined figure,
+ *     entered like the one on their till — it is a usable answer for a single-location shop and NOT
+ *     a jurisdiction engine. Nothing here derives a rate from an address, and it must not start.
  */
 
+import { PICKER_COUNTRIES } from '@/lib/locale-profiles';
+
 export type TaxModel = 'vat' | 'sales_tax' | 'gst_split';
+
+/**
+ * Country CODE → the name a person reads. Built from PICKER_COUNTRIES, which already lists every
+ * country the product offers (supported or not), so this cannot drift from the picker or acquire a
+ * fourth spelling of "United Kingdom". An unknown code falls back to the code itself rather than to
+ * a guess.
+ */
+const COUNTRY_NAMES: Record<string, string> =
+  Object.fromEntries(PICKER_COUNTRIES.map((c) => [c.code, c.name]));
 
 export type TaxProfile = {
   countryCode: string;      // ISO 3166-1 alpha-2
@@ -34,6 +56,52 @@ export type TaxProfile = {
   taxNumber: string | null;
   pricesIncludeTax: boolean; // false for UK B2B (line prices are ex-tax)
 };
+
+/**
+ * ── TWO TAX FACTS, SAID AS TWO FACTS ────────────────────────────────────────────────────────────
+ * `tax_model` is the REGIME a tenant's country runs; registration is that tenant's STATUS within
+ * it. They are orthogonal, and rendering them as bare values put "VAT registration: Not registered"
+ * directly beneath "Tax model: vat" — which reads as a contradiction and is not one. A sub-threshold
+ * UK garage is exactly that, and it is the commonest state a small garage is in.
+ *
+ * Worse outside the UK: the registration row was the literal words "VAT registration" for every
+ * tenant, so the one US garage in the database was shown as registered for a tax its country has no
+ * concept of, with no number to show for it.
+ *
+ * SO BOTH ROWS COME FROM HERE, from the tenant's OWN tax word and its own country. Two rules:
+ *   - never print the enum. `sales_tax` is a storage detail, not a sentence.
+ *   - the unregistered case states its CONSEQUENCE, not its status. "Not registered" makes a reader
+ *     ask what follows from that, and answering it is the only reason the row is on a screen.
+ *
+ * PURE, and deliberately taking a country CODE rather than a profile: the caller has a Group row,
+ * and a shaper that demanded a resolved profile would push the same lookup into every call site.
+ */
+export type TaxDisplay = {
+  regimeLabel: string; regimeValue: string;
+  registrationLabel: string; registrationValue: string;
+};
+
+export function taxDisplay(t: {
+  taxLabel?: string | null;
+  countryCode?: string | null;
+  isRegistered?: boolean | null;
+}): TaxDisplay {
+  // The tenant's own word for its tax, or the neutral fallback — never the enum.
+  const label = (t.taxLabel ?? '').trim() || 'Tax';
+  // HONEST-NULL ON THE COUNTRY. getProfile falls back to GB, which is right for BEHAVIOUR and wrong
+  // for a LABEL: a tenant that has not reached the country step has not chosen one, and naming
+  // "United Kingdom" beside their tax would assert something nobody decided.
+  const code = (t.countryCode ?? '').trim();
+  const country = code ? (COUNTRY_NAMES[code] ?? code) : null;
+  return {
+    regimeLabel: 'Tax regime',
+    regimeValue: country ? `${label} (${country})` : label,
+    registrationLabel: `Registered for ${label}`,
+    // Asymmetric on purpose. "Registered" surprises nobody and needs no explanation; the other
+    // answer is the one that changes what every document says, so it says so.
+    registrationValue: t.isRegistered ? 'Yes' : `No — no ${label} is charged on any document`,
+  };
+}
 
 export class NotImplementedTaxModel extends Error {
   constructor(model: string) { super(`Tax model '${model}' is not implemented (only 'vat').`); this.name = 'NotImplementedTaxModel'; }
