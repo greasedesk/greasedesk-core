@@ -100,14 +100,16 @@ try {
   // ── 3. THE COMEBACK RULE SURVIVED THE CHANGE ───────────────────────────────────────────────
   console.log('\n— the rules that were already there —');
   const lv = await wipLineValuesPennies(prisma, ids);
-  const comeback = cards.find((c) => c.is_comeback);
+  const comeback = cards.find((c) => c.is_comeback && (lv.get(c.id) ?? 0) > 0);
   if (comeback) {
     check('a comeback still values at £0 however many lines it has',
       wipCardValuePennies(comeback, lv) === 0 && (lv.get(comeback.id) ?? 0) > 0,
       `card has ${P(lv.get(comeback.id) ?? 0)} of lines and contributes ${P(0)} — zero-revenue policy`);
   } else {
+    // A comeback with NO lines contributes £0 whether the rule holds or not, so it cannot prove
+    // this. The pure function can, and says so rather than dressing an empty card as evidence.
     check('a synthetic comeback values at £0', wipCardValuePennies({ id: 'x', is_comeback: true }, new Map([['x', 5000]])) === 0,
-      'no real ZZ comeback in WIP right now, so proven against the pure function');
+      `no ZZ comeback with lines in WIP right now (${cards.filter((c) => c.is_comeback).length} comeback card(s), none carrying lines), so proven against the pure function`);
   }
   check('a card with no lines is £0, not unknown', wipCardValuePennies({ id: 'none', is_comeback: false }, new Map()) === 0,
     'absent from the map means it has no lines — genuinely zero');

@@ -8,7 +8,7 @@
     "node": "22.x"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
     "build": "prisma generate && sh -c 'if [ \"$VERCEL_ENV\" = production ]; then DIRECT_URL=\"${DIRECT_URL:-$DATABASE_URL}\" prisma migrate status; fi' && next build",
     "start": "next start",
     "lint": "next lint",
@@ -18,7 +18,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "prebuild": "node scripts/copy-pdf-worker.mjs",
-    "test:pdf-parity": "node scripts/pdf-layout-parity.mjs"
+    "test:pdf-parity": "node scripts/pdf-layout-parity.mjs",
+    "dev:raw": "next dev"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.1",

@@ -196,6 +196,29 @@ const probe = async (port) => {
 };
 
 /**
+ * ── IS THE SERVER ON THIS PORT RUNNING A CLIENT IT HAS OUTLIVED? ────────────────────────────────
+ * `prisma generate` writes a new client into node_modules; a dev server started before that keeps
+ * the OLD one in memory. lib/db then REFUSES every query, and because NextAuth reports any throw
+ * inside authorize() as InvalidCredentials, it surfaces as a wrong password — plus 500s on pages
+ * that read anything. See lib/client-freshness, whose own header records this costing seven or
+ * eight interruptions and twice sending the investigation into the wrong subsystem.
+ *
+ * ASKED ONCE, HERE, BECAUSE THE SYMPTOM IS NOT AN EXCEPTION. Gates already call
+ * explainIfClientStale — but only from their `catch`, and a stale client makes assertions FAIL
+ * rather than throw, so the catch never runs and the explainer never fires. On 2026-09-06 that
+ * turned one cause into eleven unrelated-looking reds across the core tier, three times in a day.
+ *
+ * The route is any page that touches the database; /c/<16 chars> is a customer magic-link path that
+ * always does and needs no session. What is being read is the guard's own banner, not a 500.
+ */
+const staleClient = async (port) => {
+  try {
+    const r = await fetch(`http://localhost:${port}/c/aaaaaaaaaaaaaaaa`, { signal: AbortSignal.timeout(6000) });
+    return /OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(await r.text());
+  } catch { return false; } // unreachable is a different problem, and `probe` already reports it
+};
+
+/**
  * ── A GATE THAT NEVER RETURNS IS WORSE THAN A GATE THAT FAILS ───────────────────────────────────
  * The first version of this runner had no per-gate timeout, and the first full run proved why:
  * demo-generation-gate sat for thirteen minutes with the suite behind it, indistinguishable from
@@ -264,6 +287,20 @@ const reqs = {};
 for (const g of plan) { reqs[g] = requirements(path.join(ROOT, 'scripts', `${g}.mjs`)); reqs[g].ports.forEach((p) => needed.add(p)); }
 const up = {};
 for (const p of needed) up[p] = await probe(p);
+
+// ── REFUSE THE WHOLE RUN RATHER THAN MISREPORT IT ───────────────────────────────────────────────
+// A stale client does not fail one gate honestly, it fails every gate dishonestly. Aborting here
+// costs one restart; not aborting costs an afternoon reading the wrong files.
+const stalePorts = [];
+for (const p of needed) if (up[p] && await staleClient(p)) stalePorts.push(p);
+if (stalePorts.length) {
+  console.error(`\n  THE DEV SERVER ON ${stalePorts.join(', ')} IS RUNNING AN OLD PRISMA CLIENT.\n`);
+  console.error('  `prisma generate` has run since it started, so lib/db refuses every query — which');
+  console.error('  looks like InvalidCredentials on login and 500s everywhere else, not like this.');
+  console.error('  NOTHING HAS BEEN RUN: every gate would have failed for a reason that is not theirs.\n');
+  console.error('  Restart the dev server and run again. `npm run dev` now does this for you.\n');
+  process.exit(3);
+}
 
 if (has('--list')) {
   for (const g of plan) {

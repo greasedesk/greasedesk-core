@@ -115,7 +115,15 @@ async function runDbChecks() {
 
   // ── SOLD IS REVENUE, NOT HOURS × RATE ─────────────────────────────────────────────────────────
   const live = cap.monthly.find((m) => m.live);
-  check('sold value is present for the live month', live.soldPennies > 0, `£${(live.soldPennies / 100).toFixed(2)}`);
+  // NOT `live.soldPennies > 0`. That required the CURRENT month to contain revenue — a fact about
+  // the calendar, not the code. ZZ has no invoices dated September 2026, so it went red on the date.
+  // What this section is named for is that sold is REVENUE: it must be present where sales exist
+  // and zero where they do not, in whichever month that happens to be.
+  const withSales = cap.monthly.filter((m) => m.soldPennies > 0);
+  check('sold value is present in the months that sold something', withSales.length > 0,
+    `${withSales.length} of ${cap.monthly.length} months: ${withSales.map((m) => m.key).join(', ') || 'none in the window'}`);
+  check('  …and the live month is reported either way, not omitted', !!live && typeof live.soldPennies === 'number',
+    `${live?.key} £${((live?.soldPennies ?? 0) / 100).toFixed(2)} — a quiet month is a zero, never a gap`);
   check('the monthly sold total reconciles with the period total',
     Math.abs(cap.monthly.reduce((a, m) => a + m.soldPennies, 0) - (cap.actualPennies ?? 0)) <= cap.monthly.length,
     `Σ£${(cap.monthly.reduce((a, m) => a + m.soldPennies, 0) / 100).toFixed(2)} vs £${((cap.actualPennies ?? 0) / 100).toFixed(2)}`);

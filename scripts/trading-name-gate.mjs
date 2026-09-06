@@ -111,10 +111,30 @@ try {
   check('the column explains that its NULL is TEMPORAL, not forgotten',
     /NULL is TEMPORAL and honest/.test(schema),
     'rows issued before it existed carried no trading name; the renderer falls back rather than pretending');
-  const existing = await prisma.invoice.count({ where: { company_trading_name_snapshot: null } });
-  const total = await prisma.invoice.count();
-  check('no backfill was invented for historical documents', existing === total,
-    `${existing} of ${total} pre-date the column — asserting a trading name for them would be a claim nobody recorded`);
+  // THE RULE, NOT A COUNT. This asserted that EVERY invoice had a null snapshot — true on the day
+  // the column landed, false the moment the first invoice was minted after it, and it now reads
+  // 839 of 1940. The rule it meant to state is that nothing was BACKFILLED onto documents issued
+  // before the column existed; that rule still holds exactly.
+  const COLUMN_ARRIVED = new Date('2026-08-18T12:00:00.000Z'); // migration 20260818120000
+  // created_at, NOT date_issued. date_issued is the DOCUMENT's date and is routinely backdated —
+  // a demo tenant generated last week mints a year of invoices dated across that year, and an
+  // import carries the original dates. Asked with date_issued this reads 802 rows "backfilled"
+  // when every one of them was minted after the column existed and correctly carries a snapshot.
+  // The question is when the ROW was written, which is the only thing a backfill could have
+  // touched.
+  const preColumn = await prisma.invoice.count({ where: { created_at: { lt: COLUMN_ARRIVED } } });
+  const beforeWithName = await prisma.invoice.count({
+    where: { created_at: { lt: COLUMN_ARRIVED }, company_trading_name_snapshot: { not: null } },
+  });
+  check('no backfill was invented for historical documents', beforeWithName === 0,
+    `${beforeWithName} of ${preColumn} written before ${COLUMN_ARRIVED.toISOString().slice(0, 10)} carry one — a trading name nobody recorded`);
+  // THE DISCRIMINATING HALF: without it, "none of the old ones has a snapshot" would pass just as
+  // happily on a column nothing ever writes.
+  const afterWithName = await prisma.invoice.count({
+    where: { created_at: { gte: COLUMN_ARRIVED }, company_trading_name_snapshot: { not: null } },
+  });
+  check('  …while documents minted since DO carry one', afterWithName > 0,
+    `${afterWithName} since the column landed — otherwise the check above passes on a dead column`);
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
