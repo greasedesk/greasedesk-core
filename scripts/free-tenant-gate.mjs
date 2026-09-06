@@ -140,19 +140,24 @@ try {
   check('  …and the banner talks about money', MONEY.test(asPaying),
     'if this passes silently the two checks above prove nothing');
 
-  // ── 7. THE TENANTS THIS SLICE SET FREE ───────────────────────────────────────────────────────
-  console.log('\n— and the two tenants it was built for —');
-  for (const [ref, id] of [['GB-GD1967 TMBS', TMBS], ['US-GD2175 ZZUS', null]]) {
-    const g = id
-      ? await prisma.group.findUnique({ where: { id }, select: { free_since: true, free_reason: true, is_internal: true } })
-      : await prisma.group.findFirst({ where: { ref: 'US-GD2175' }, select: { free_since: true, free_reason: true, is_internal: true } });
-    check(`${ref} is free`, !!g?.free_since, String(g?.free_since));
-    check(`  …with a reason somebody wrote`, (g?.free_reason ?? '').trim().length >= 12, g?.free_reason ?? '(none)');
-  }
+  // ── 7. THE STANDING FREE TENANT ──────────────────────────────────────────────────────────────
+  // This pinned TWO tenants when the slice landed on 5 September. TMBS was cleared on the 6th: it
+  // took a real subscription that morning, and free is a DECISION, so one overtaken by a live
+  // subscription is no longer true. Pinning it here as free was pinning a fact about one day.
+  //
+  // ZZUS stays pinned because it is structural, not circumstantial — the standing non-GB test
+  // tenant, referenced by ref in two other gates, which will never buy anything.
+  console.log('\n— the standing free tenant —');
+  const zzus = await prisma.group.findFirst({ where: { ref: 'US-GD2175' },
+    select: { free_since: true, free_reason: true, is_internal: true } });
+  check('US-GD2175 ZZUS is free', !!zzus?.free_since, String(zzus?.free_since));
+  check('  …with a reason somebody wrote', (zzus?.free_reason ?? '').trim().length >= 12, zzus?.free_reason ?? '(none)');
+
   // EXPLICITLY NOT INTERNAL. TMBS carries 303 job cards and every golden figure; taking it out of
-  // counts, forecast and revenue is a separate decision nobody has made.
+  // counts, forecast and revenue is a separate decision nobody has made. It is no longer free, so
+  // this is now the only claim the gate makes about it — and it is the one that still matters.
   const tmbs = await prisma.group.findUnique({ where: { id: TMBS }, select: { is_internal: true } });
-  check('TMBS is free but NOT internal', tmbs?.is_internal !== true,
+  check('TMBS is NOT internal', tmbs?.is_internal !== true,
     `is_internal=${tmbs?.is_internal} — free says "pays nothing", internal says "ours", and they are different claims`);
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));

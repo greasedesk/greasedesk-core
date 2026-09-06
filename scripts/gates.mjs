@@ -142,6 +142,7 @@ const TIERS = {
     'reporting-anchor-gate',
     'trial-control-gate',
     'free-tenant-gate',
+    'free-not-checkout-gate',
     'billed-party-gate',
     'lookup-reset-gate',
   ],

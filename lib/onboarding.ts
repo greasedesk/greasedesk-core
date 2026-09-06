@@ -14,6 +14,8 @@
  *   (D) rates         — that Site has default_labour_rate (nullable, no default → genuine signal)
  *   (E) tax           — Group.tax_default_rate_bp is set (Int?, NULL until the tax step writes it)
  *   (F) subscription  — GroupBilling.subscription_status ∈ {trialing, active, past_due}
+ *       …unless neverSubscribes(group): a demo, an internal tenant, or one we have decided not
+ *       to charge has no subscription step to complete.
  *                       (webhook/confirm-written mirror of Stripe's truth; a real trial/sub exists)
  *                       past_due COUNTS AS DONE (2026-08-06): the step asks "has this tenant ever
  *                       set billing up", not "is the money currently arriving". A tenant whose card
@@ -28,6 +30,7 @@
  */
 import { prisma } from '@/lib/db';
 import { isSupportedCountry } from '@/lib/locale-profiles';
+import { neverSubscribes } from '@/lib/demo-tenant';
 
 // The wizard's SHAPE lives in lib/onboarding-order — no Prisma, so the browser can read it too and
 // the step counter cannot drift from the gate. Re-exported here: every existing caller imports these
@@ -127,14 +130,23 @@ export async function getOnboardingState(
   // and therefore cannot be is_demo. With the bypass keyed on is_demo it landed on
   // /onboarding/phone at "Step 2 of 6" and the product was unreachable.
   //
-  // `is_internal` is the honest key: it means GreaseDesk owns this tenant, which is exactly the
-  // population that has no subscription to buy and no setup to complete. Every tenant that
-  // bypassed before still bypasses — the reference demo is both flags — and no customer tenant is
-  // is_internal.
+  // `is_internal` is the honest key for tenants we OWN: it means GreaseDesk owns this tenant, which
+  // has no subscription to buy and no setup to complete.
+  //
+  // ── AND `is_internal` ALONE IS STILL TOO NARROW ─────────────────────────────────────────────
+  // A garage we have simply decided not to charge is not ours, so it is not is_internal — and it
+  // arrived here with no exemption at all. TMBS was set free on 5 September; on 6 September the
+  // stale subscription_status that had been satisfying step (F) was cleared as the fossil it was,
+  // and this gate immediately began redirecting every admin page to Checkout. A card was added 27
+  // minutes later, because the product was otherwise unreachable.
+  //
+  // The question is the one lib/demo-tenant already names — WILL THIS TENANT EVER BUY A
+  // SUBSCRIPTION — and it now has three answers, not two. Asking it through any single flag is how
+  // this has gone wrong four times; asking it through the predicate is how it stops.
   const ownGroup = (await prisma.group.findUnique({
-    where: { id: groupId }, select: { is_internal: true },
-  })) as { is_internal: boolean | null } | null;
-  if (ownGroup?.is_internal === true) return { onboarded: true, firstIncompleteStep: null };
+    where: { id: groupId }, select: { is_demo: true, is_internal: true, free_since: true },
+  })) as { is_demo: boolean | null; is_internal: boolean | null; free_since: Date | null } | null;
+  if (neverSubscribes(ownGroup)) return { onboarded: true, firstIncompleteStep: null };
 
   // (A) COUNTRY FIRST — a SUPPORTED country must be chosen. An unsupported one leaves country_code
   // set but not supported: the tenant stays on the country step, which renders the coming-soon gate.

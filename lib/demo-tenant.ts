@@ -94,12 +94,23 @@ export async function isDemoGroup(groupId: string | null | undefined): Promise<b
   return !!g?.is_demo;
 }
 
-/** neverSubscribes, resolved from the database. One indexed lookup, both flags. */
+/**
+ * neverSubscribes, resolved from the database. One indexed lookup, ALL THREE ANSWERS.
+ *
+ * ── THE SELECT IS PART OF THE PREDICATE ─────────────────────────────────────────────────────────
+ * This selected is_demo and is_internal only. When free_since was added on 5 September the call
+ * below kept reading correctly and started answering wrongly: isFree got `undefined` and returned
+ * false for every free tenant, so refuseDemoBilling — the backstop that exists precisely for "this
+ * tenant has nothing to buy" — was blind to the newest reason a tenant has nothing to buy.
+ *
+ * Nothing at the call site looks wrong, which is what makes it worth stating: a predicate handed a
+ * row that cannot answer it is not a weaker check, it is a check that silently says no.
+ */
 export async function groupNeverSubscribes(groupId: string | null | undefined): Promise<boolean> {
   if (!groupId) return false;
   const g = (await prisma.group.findUnique({
-    where: { id: groupId }, select: { is_demo: true, is_internal: true },
-  })) as { is_demo: boolean; is_internal: boolean | null } | null;
+    where: { id: groupId }, select: { is_demo: true, is_internal: true, free_since: true },
+  })) as { is_demo: boolean; is_internal: boolean | null; free_since: Date | null } | null;
   return neverSubscribes(g);
 }
 
