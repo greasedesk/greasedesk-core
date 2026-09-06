@@ -13,6 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import { regenerate } from '@/lib/costs';
+import { writeAudit } from '@/lib/audit';
 
 const monthStart = (iso: string) => {
   const d = new Date(`${String(iso).slice(0, 7)}-01T00:00:00.000Z`);
@@ -88,25 +89,96 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { costId, instanceId, amountPennies, effectiveFrom, generateTo } = req.body ?? {};
+    const { costId, instanceId, amountPennies, effectiveFrom, generateTo, confirmAll } = req.body ?? {};
 
     // ── AN ACTUAL FIGURE ARRIVED ────────────────────────────────────────────────────────────────
     if (instanceId) {
-      const owned = await prisma.costInstance.findFirst({ where: { id: String(instanceId), cost: { group_id: groupId } }, select: { id: true } });
+      const owned = await prisma.costInstance.findFirst({
+        where: { id: String(instanceId), cost: { group_id: groupId } },
+        select: { id: true, period_start: true, amount_pennies: true, is_estimate: true,
+          cost: { select: { id: true, name: true } } },
+      });
       if (!owned) return res.status(404).json({ message: 'Not found.' });
       const amount = Math.trunc(Number(amountPennies));
-      if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ message: 'Enter the amount.' });
-      await prisma.costInstance.update({
-        where: { id: owned.id },
-        // is_estimate FALSE and edited_at SET together: they are one fact — a human typed this —
-        // and regeneration reads edited_at to know never to overwrite it.
-        data: { amount_pennies: amount, is_estimate: false, edited_at: new Date(), edited_by: (vis as any).userId ?? null },
+      // ZERO IS REFUSED, by name, as it is two branches below. This guarded `< 0`, so an EMPTY box
+      // — the obvious gesture for "this month was what we said" — sent Number('') → 0 and wrote
+      // £0.00 marked CONFIRMED with edited_at set, which regeneration then refuses to correct for
+      // ever. A cost of nothing is a row that reads as a real cost and contributes nothing.
+      // Confirming at the estimate is what `confirmAll` below is for.
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ message: 'An amount above zero is required. To confirm this month at the figure already shown, use “Confirm at the estimate”.' });
+      }
+      const previousPennies = owned.amount_pennies;
+      await prisma.$transaction(async (tx) => {
+        await tx.costInstance.update({
+          where: { id: owned.id },
+          // is_estimate FALSE and edited_at SET together: they are one fact — a human typed this —
+          // and regeneration reads edited_at to know never to overwrite it.
+          data: { amount_pennies: amount, is_estimate: false, edited_at: new Date(), edited_by: (vis as any).userId ?? null },
+        });
+        // RECORDED. This was the cheap, unaudited way to change a closed month's cost.
+        await writeAudit(tx, {
+          groupId, userId: (vis as any).userId ?? null, entity: 'cost', entityId: owned.cost.id,
+          action: 'cost.instance_recorded',
+          diff: { costName: owned.cost.name, period: owned.period_start.toISOString().slice(0, 10),
+            fromPennies: previousPennies, toPennies: amount, wasEstimate: owned.is_estimate },
+        });
       });
       return res.status(200).json({ ok: true });
     }
 
-    const cost = await prisma.cost.findFirst({ where: { id: String(costId), group_id: groupId }, select: { id: true, active_from: true } });
+    const cost = await prisma.cost.findFirst({ where: { id: String(costId), group_id: groupId }, select: { id: true, name: true, active_from: true } });
     if (!cost) return res.status(404).json({ message: 'Not found.' });
+
+    // ── CONFIRM EVERY FALLEN-DUE MONTH AT ITS ESTIMATE ─────────────────────────────────────────
+    // A rent that does not vary is the case this exists for. It changes NO figure — costsInWindow
+    // sums amount_pennies whatever is_estimate says — so its whole value is the audit row and the
+    // edited_at lock. It is a record of checking, not a restatement.
+    //
+    // Placed above the rate and regenerate branches deliberately: a body carrying costId and no
+    // amountPennies used to fall through to a regeneration, so this flag would have silently
+    // regenerated the cost instead of confirming it.
+    if (confirmAll === true) {
+      const now = new Date();
+      const instances = await prisma.costInstance.findMany({
+        where: { cost_id: cost.id },
+        select: { id: true, period_start: true, amount_pennies: true, is_estimate: true, due_on: true },
+        orderBy: { period_start: 'asc' },
+      });
+      // DUE_ON, not period_end. Rent falls due on the 1st; on the 6th it has genuinely arrived, and
+      // waiting for the month to close would refuse a bill already paid. Confirming a bill that has
+      // not fallen due is a forecast wearing the wrong label.
+      const inScope = instances.filter((i) => i.due_on <= now);
+      const skipped = inScope.filter((i) => !i.is_estimate).length;
+      const toConfirm = inScope.filter((i) => i.is_estimate);
+      // ONE ZERO REFUSES THE WHOLE ACT. Stamping "confirmed" across a figure that is obviously not
+      // one is the thing this control must never do, and a partial pass would be worse than none.
+      const zeros = inScope.filter((i) => i.amount_pennies <= 0);
+      if (zeros.length) {
+        return res.status(400).json({
+          message: `${zeros.length === 1 ? 'One month is' : `${zeros.length} months are`} showing nothing at all (${zeros.map((z) => z.period_start.toISOString().slice(0, 7)).join(', ')}). Put the real figures in first — confirming a cost of nothing would hide it.`,
+        });
+      }
+      if (!toConfirm.length) return res.status(200).json({ confirmed: 0, skipped });
+
+      const totalPennies = toConfirm.reduce((t, i) => t + i.amount_pennies, 0);
+      const firstPeriod = toConfirm[0].period_start.toISOString().slice(0, 10);
+      const lastPeriod = toConfirm[toConfirm.length - 1].period_start.toISOString().slice(0, 10);
+      await prisma.$transaction(async (tx) => {
+        await tx.costInstance.updateMany({
+          where: { id: { in: toConfirm.map((i) => i.id) } },
+          // The same three fields the per-row save writes, for the same reason.
+          data: { is_estimate: false, edited_at: new Date(), edited_by: (vis as any).userId ?? null },
+        });
+        // ONE ROW FOR THE ACT. Twelve rows would bury the one fact worth reading.
+        await writeAudit(tx, {
+          groupId, userId: (vis as any).userId ?? null, entity: 'cost', entityId: cost.id,
+          action: 'cost.instances_confirmed',
+          diff: { costName: cost.name, confirmed: toConfirm.length, skipped, firstPeriod, lastPeriod, totalPennies },
+        });
+      });
+      return res.status(200).json({ confirmed: toConfirm.length, skipped, firstPeriod, lastPeriod, totalPennies });
+    }
 
     // ── A RISE: A NEW DATED RATE, THEN A REGENERATION ───────────────────────────────────────────
     if (amountPennies !== undefined) {

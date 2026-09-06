@@ -157,6 +157,14 @@ export type AuditAction =
   // and the rate at that date is today's figure, inferred rather than known. Nothing else records
   // that, and six months from now the Cost row looks like a fact somebody entered.
   | 'cost.migrated_from_overhead'
+  // A figure was recorded against ONE month of a standing cost — the actual bill, or the estimate
+  // confirmed as correct. It was the unrecorded path to changing a closed month: edited_by sat on
+  // the row and nothing else said it had happened.
+  | 'cost.instance_recorded'
+  // A whole cost's fallen-due months confirmed at their estimates in one act. ONE row, not one per
+  // month: the act is "I checked these against the bills", and the per-month state is already on
+  // the instances. Carries the count, the range and the total.
+  | 'cost.instances_confirmed'
   | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
                                 // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.

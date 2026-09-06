@@ -19,6 +19,18 @@ type Cost = { id: string; name: string; cadence: string; charge: string; active_
   rates: { id: string; effective_from: string; amount_pennies: number }[]; instances: Instance[]; allocations: { site_id: string; percent: number }[] };
 
 const money = (p: number) => `£${(p / 100).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/**
+ * How many months this cost could confirm right now: fallen due, and still an estimate.
+ *
+ * MIRRORS THE SERVER'S RULE (pages/api/costs PATCH confirmAll) and is not the authority — the
+ * route recounts before it writes. It exists so the button can say the number, which is the
+ * difference between a control you can check and one you press to find out.
+ */
+function confirmableCount(c: { instances: Instance[] }): number {
+  const now = Date.now();
+  return c.instances.filter((i) => i.is_estimate && new Date(i.due_on).getTime() <= now).length;
+}
+
 const monthLabel = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
@@ -130,6 +142,20 @@ export default function CostsPage({ sites }: { sites: { id: string; name: string
               }} className="px-3 py-2 rounded-lg border border-line text-ink text-sm disabled:opacity-50">Apply from</button>
               <button data-testid={`generate-${c.id}`} disabled={busy} onClick={() => send('PATCH', { costId: c.id })}
                 className="px-3 py-2 rounded-lg border border-line text-ink text-sm disabled:opacity-50">Generate forward</button>
+              {/* ── CONFIRM THE MONTHS THAT HAVE ACTUALLY FALLEN DUE ─────────────────────────
+                  A rent that does not vary is the case this exists for. THE NUMBER IS IN THE
+                  LABEL: "Confirm all" is a button you press to find out what it did, and this one
+                  is checkable before pressing. Counted the same way the server counts — due_on on
+                  or before today, still an estimate — and hidden when there is nothing to do
+                  rather than shown disabled, because a nothing-to-do control invites a click that
+                  teaches nothing. The server recounts regardless; this is the label, not the rule. */}
+              {confirmableCount(c) > 0 && (
+                <button data-testid={`confirm-all-${c.id}`} disabled={busy}
+                  onClick={() => send('PATCH', { costId: c.id, confirmAll: true })}
+                  className="px-3 py-2 rounded-lg border border-line text-ink text-sm disabled:opacity-50">
+                  Confirm {confirmableCount(c)} month{confirmableCount(c) === 1 ? '' : 's'} at the estimate
+                </button>
+              )}
             </div>
 
             {c.instances.length > 0 && (
