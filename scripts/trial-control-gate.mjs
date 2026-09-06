@@ -185,9 +185,19 @@ try {
   }
   const preview = opened ? await page.locator('[data-testid="er-trial-preview"]').innerText().catch(() => '') : '';
   const monthName = target.toLocaleDateString('en-GB', { month: 'long', timeZone: 'UTC' });
+  // ── THE DELTA IS DERIVED, NOT HARDCODED (fixed 2026-09-06) ──────────────────────────────────
+  // This asserted "Extends by 30 days" because the fixture moves the date on by 30. It is not 30:
+  // the panel resolves a plain date to the END of that day, so the span from a trial ending at
+  // 07:25 to 23:59 thirty days later rounds to 31 — and to 30 when the gate runs later in the
+  // afternoon. A TIME-OF-DAY DEPENDENT ASSERTION, green on the day it was written and red the next
+  // morning, about a product that was behaving correctly both times.
+  //
+  // Derived through the SAME rule the panel uses, so the check tracks the arithmetic instead of
+  // guessing its result. The DATE is the part that matters anyway — a wrong year shows up there.
+  const expectDelta = Math.round((X.resolveTrialDate(ymd(target)).getTime() - start.getTime()) / 86_400_000);
   check('the preview names the delta AND the date',
-    /Extends by 30 days/.test(preview) && new RegExp(monthName).test(preview),
-    preview || '(no preview)');
+    new RegExp(`Extends by ${expectDelta} days`).test(preview) && new RegExp(monthName).test(preview),
+    `${preview || '(no preview)'} — expected ${expectDelta} days by the panel's own rule`);
   check('  …so a wrong year would be visible before pressing',
     new RegExp(String(target.getUTCFullYear())).test(preview), preview || '(no preview)');
 
@@ -204,8 +214,11 @@ try {
   const sa = await prisma.superAdminAudit.findFirst({ where: { target_group_id: ZZ, action: 'tenant.trial_extended' },
     orderBy: { created_at: 'desc' }, select: { reason: true, detail: true } });
   check('  …the operator ledger recorded it', !!sa, JSON.stringify(sa?.detail ?? null).slice(0, 150));
-  check('  …with the delta and no subscription', (sa?.detail)?.deltaDays === 30 && (sa?.detail)?.hadSubscription === false,
-    JSON.stringify(sa?.detail ?? null).slice(0, 150));
+  // SAME DERIVATION, same reason: 30 was the number the fixture moved the date by, not the number
+  // the end-of-day rule produces from it. The audit must record what the panel computed.
+  check('  …with the delta the panel showed, and no subscription',
+    (sa?.detail)?.deltaDays === expectDelta && (sa?.detail)?.hadSubscription === false,
+    `${JSON.stringify(sa?.detail ?? null).slice(0, 150)} — expected deltaDays ${expectDelta}`);
   const tenantRow = await prisma.auditLog.findFirst({ where: { group_id: ZZ, action: 'billing.trial_extended' },
     orderBy: { created_at: 'desc' }, select: { user_id: true, entity: true } });
   check('  …and so did the tenant’s own', !!tenantRow && tenantRow.user_id === null && tenantRow.entity === 'group',
