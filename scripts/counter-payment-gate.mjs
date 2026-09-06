@@ -44,14 +44,33 @@ let invId = null, cardId = null, before = null, cardBefore = null, browser = nul
 let madePaymentIds = [], groupless = null;
 
 try {
-  // ── A CARD WITH AN ISSUED, UNPAID INVOICE ──────────────────────────────────────────────────
+  // ── THE DATE THE MONEY MOVED, CLAMPED SO IT IS ALWAYS IN THE PAST ──────────────────────────
+  // This was a FIXED DAY-OF-MONTH — the 12th of the current month — chosen so the assertion would
+  // be about the DOCUMENT date the garage picked rather than about "now". Sound intent, wrong
+  // constant: the 12th is in the FUTURE from the 1st to the 11th, and the handler refuses a future
+  // paid date by name (lib/invoice::validatePaymentDate → 'future'). So this gate passed from the
+  // 12th onward and failed for the first eleven days of every month, on the calendar rather than
+  // on anything it tests.
+  //
+  // Clamped to YESTERDAY: still not today, still mid-month when the month is old enough, and never
+  // ahead of the clock. The month buckets below are derived from whatever it lands on.
+  const now = new Date();
+  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const twelfth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 12));
+  const payMonth = twelfth < yesterday ? twelfth : yesterday;
+  const iso = payMonth.toISOString().slice(0, 10);
+
+  // ── A CARD WITH AN ISSUED, UNPAID INVOICE, ISSUED BY THEN ──────────────────────────────────
+  // date_issued <= the paid date, because the OTHER half of the same rule refuses a payment dated
+  // before the invoice existed ('beforeIssue'). Carried in the fixture query rather than hoped for:
+  // an invoice issued this morning cannot be paid yesterday, and that would fail as mysteriously.
   const inv = await prisma.invoice.findFirst({
-    where: { group_id: ZZ, series: 'chargeable', status: 'issued', lines: { some: {} } },
+    where: { group_id: ZZ, series: 'chargeable', status: 'issued', lines: { some: {} }, date_issued: { lte: payMonth } },
     select: { id: true, job_card_id: true, site_id: true, invoice_number: true, amount_paid_pennies: true,
       status: true, paid_at: true, date_paid: true, confirm_due_at: true, payment_method_id: true, payment_method_snapshot: true },
     orderBy: { created_at: 'desc' },
   });
-  if (!inv) throw new Error('no issued unpaid ZZ invoice with lines');
+  if (!inv) throw new Error(`no issued unpaid ZZ invoice with lines issued on or before ${payMonth.toISOString().slice(0, 10)}`);
   invId = inv.id; cardId = inv.job_card_id; before = inv;
   cardBefore = (await prisma.jobCard.findUnique({ where: { id: cardId }, select: { status: true } })).status;
   if (cardBefore !== 'invoiced') throw new Error(`fixture card is '${cardBefore}', need 'invoiced'`);
@@ -63,11 +82,11 @@ try {
   });
   if (!method) throw new Error('no INSTANT payment method on ZZ — check 4 would be vacuous');
 
-  // The month the money moves. Deliberately NOT today: the date is chosen so the assertion is about
-  // the DOCUMENT date the garage picked, not about "now" happening to fall in the right month.
-  const now = new Date();
-  const payMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 12));
-  const iso = payMonth.toISOString().slice(0, 10);
+  // BOTH BOUNDS, PROVEN BEFORE THE CLICK. The handler refuses a paid date that is in the future or
+  // before the invoice was issued; a fixture that trips either fails as a mystery rather than as a
+  // finding. Asserting it here means a red below is about the ledger, not about the calendar.
+  check('the paid date is genuinely in the past', payMonth < new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
+    `${iso} against today ${now.toISOString().slice(0, 10)}`);
   const monthFrom = new Date(Date.UTC(payMonth.getUTCFullYear(), payMonth.getUTCMonth(), 1));
   const monthTo = new Date(Date.UTC(payMonth.getUTCFullYear(), payMonth.getUTCMonth() + 1, 1));
   const prevFrom = new Date(Date.UTC(payMonth.getUTCFullYear(), payMonth.getUTCMonth() - 1, 1));
