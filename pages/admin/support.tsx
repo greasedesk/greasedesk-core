@@ -22,6 +22,12 @@
  * ── A REP IS NOT A SUPPORT DESK ─────────────────────────────────────────────────────────────────
  * The rep card is a section beneath, never the whole page. A rep is a salesperson; routing a garage
  * with a broken diary to the person who signed them up costs them a day.
+ *
+ * ── NAME AND PHONE, NO EMAIL ────────────────────────────────────────────────────────────────────
+ * This briefly published Rep.email — the address a rep SIGNS IN WITH. It is gone from the resolver,
+ * so there is nothing here to render. A rep with no phone is therefore uncontactable through this
+ * card, which is acceptable precisely because of the order of this page: the GreaseDesk number is
+ * above it and always answers.
  */
 import React, { useState } from 'react';
 import Head from 'next/head';
@@ -109,7 +115,6 @@ export default function Support({ rep }: PageProps) {
                     : <span className="text-ink">{rep.phone}</span>}
                 </p>
               )}
-              <p className="text-sm mt-0.5"><a className="text-accent" href={`mailto:${rep.email}`}>{rep.email}</a></p>
               <p className="text-sm text-muted mt-3">
                 {rep.name.split(' ')[0]} introduced you to GreaseDesk and is your first point of contact
                 for questions about your account or subscription. For anything not working, call the

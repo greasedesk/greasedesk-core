@@ -825,12 +825,23 @@ model Rep {
   /// Written ONLY through lib/tenant-rep::repPhoneFields, which derives the dialable form the same
   /// way customerPhoneFields does — a number that is published is a number that gets dialled, so it
   /// is stored dialable rather than reformatted at every render.
-  phone          String?
+  phone          String? // NULL = no published number; the support page omits the line
   /// The dialable form of `phone`. NULL when there is no number, or when what was typed could not
   /// be resolved to E.164 — honest-null, in step with Customer.phone_e164: an unresolvable number
   /// is still shown to a human, it just cannot be made into a link.
   phone_e164     String?
   payout_details Json?
+  /// Set-password invite, mirroring Operator and the tenant User: the raw token is emailed and only
+  /// its HASH is stored, single-use, with an expiry. THREE columns, not four — a rep awaiting one is
+  /// marked by the INVITE_PENDING sentinel in passwordHash, which this model already has.
+  ///
+  /// NULL on all three = no invite is outstanding: either the rep set their password, or none was
+  /// ever issued. Added while zero reps exist, because the alternative once one does is somebody
+  /// typing a colleague's password into a form. THE FLOW IS NOT BUILT — these are the columns it
+  /// will need, and nothing writes them yet.
+  invite_token_hash    String? // NULL = no invite outstanding: set, or never issued
+  invite_token_expires DateTime? // NULL whenever the hash is — written and cleared as one fact
+  invite_token_used_at DateTime? // NULL until accepted; set once, which is what makes it single-use
   status         String   @default("active") // 'active' | 'suspended'
   created_at     DateTime @default(now())
   updated_at     DateTime @updatedAt

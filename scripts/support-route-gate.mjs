@@ -21,6 +21,18 @@
  * the half that matters to a garage: the page renders, a signed-in user reaches it, and it does not
  * send them to the marketing site.
  *
+ * ── AND THE LOGIN ADDRESS IS NOT PUBLISHED ──────────────────────────────────────────────────────
+ * The rep card shipped with a `mailto:` to Rep.email — which is the LOGIN address, the credential
+ * the rep signs in with. GreaseDesk publishes no email for itself on exactly this reasoning
+ * (lib/company-info: "Contact is form-only… phone is the only published non-form contact route"),
+ * so publishing a named individual's credential was a stricter standard for the company than for
+ * its own staff.
+ *
+ * THE GUARD IS AT THE READ. `email` is simply not in the resolver's select, which is the rule that
+ * file already applies to share_bp, payout_details and ref_code: "the safest way to keep them out
+ * of a page is to keep them out of the object the page receives." Asserted twice — the object has
+ * no such key, and the SERVED page does not contain the address anywhere.
+ *
  * Fixtures on ZZ Gate Garage only. Never TMBS. A Rep and its attribution are created and deleted by
  * their own ids.
  */
@@ -40,6 +52,8 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 const code = (f) => (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join('\n') : '');
 /** Ofcom's drama range — unroutable, so a fixture rep can never be phoned by accident. */
 const RAW_PHONE = '07700 900123';
+/** Distinctive on purpose: the served page is searched for this exact string. */
+const REP_EMAIL = 'zz-support-gate@greasedesk.test';
 let fix = null, browser = null;
 
 try {
@@ -88,6 +102,13 @@ try {
   const rep = /^model Rep \{([\s\S]*?)^\}/m.exec(schema)?.[1] ?? '';
   check('Rep carries both columns, nullable', /phone\s+String\?/.test(rep) && /phone_e164\s+String\?/.test(rep),
     'a rep who has not published a number is an ordinary state, not a missing field');
+  // THE INVITE COLUMNS Operator has and Rep lacked. THREE, not four — INVITE_PENDING is a sentinel
+  // in passwordHash, which Rep already has. Free to add while zero reps exist; the alternative once
+  // one does is somebody typing a colleague's password into a form.
+  const inviteCols = ['invite_token_hash', 'invite_token_expires', 'invite_token_used_at']
+    .filter((c) => new RegExp(`${c}\\s+\\w+\\?`).test(rep));
+  check('Rep can be invited rather than issued a password', inviteCols.length === 3,
+    `${inviteCols.join(', ') || 'none'} — columns only; the flow is not built`);
 
   // ── 5. THE THREE STATES ──────────────────────────────────────────────────────────────────────
   console.log('\n— who a garage is told to call —');
@@ -95,7 +116,7 @@ try {
   check('no attribution reads as no rep', before === null, JSON.stringify(before));
 
   const repRow = await prisma.rep.create({
-    data: { email: 'zz-support-gate@greasedesk.test', passwordHash: 'x', name: 'Gate Rep',
+    data: { email: REP_EMAIL, passwordHash: 'x', name: 'Gate Rep',
       ref_code: 'ZZSUPPORTGATE', country_code: 'GB', phone: RAW_PHONE, phone_e164: '447700900123' },
     select: { id: true },
   });
@@ -111,9 +132,18 @@ try {
   check('  …with the number a garage can dial', assigned?.phone === RAW_PHONE
     && assigned?.phoneE164 === '447700900123', JSON.stringify(assigned));
   // WITHHELD, as the resolver already promises: none of these is shaped for a tenant's eyes.
-  check('  …and nothing commercial rides along',
-    assigned && !('ref_code' in assigned) && !('payout_details' in assigned) && !('share_bp' in assigned),
+  check('  …and nothing private rides along',
+    assigned && !('ref_code' in assigned) && !('payout_details' in assigned) && !('share_bp' in assigned)
+    && !('email' in assigned),
     Object.keys(assigned ?? {}).join(', '));
+  // THE KEY IS ABSENT, not null. A null would still be a field the page could learn to render.
+  check('  …the login address is not in the object at all',
+    assigned && Object.values(assigned).every((v) => String(v ?? '') !== REP_EMAIL),
+    `keys: ${Object.keys(assigned ?? {}).join(', ')}`);
+  const src = code('lib/tenant-rep.ts');
+  check('  …and the resolver never selects it',
+    !/email:\s*true/.test(src) && !/rep\.email/.test(src),
+    'kept out of the object the page receives, like share_bp and payout_details');
 
   await prisma.rep.update({ where: { id: repRow.id }, data: { phone: null, phone_e164: null } });
   const noPhone = await R.tenantRep?.(ZZ);
@@ -148,7 +178,13 @@ try {
   check('  …and the number is the first thing on it', telHref === `tel:${C.COMPANY?.phoneE164}`, String(telHref));
   check('  …with a message box on the page', (await p.$('[data-testid="support-message"]')) !== null);
   check('  …and the rep named beneath', /Gate Rep/.test(body) && /447700900123|07700 900123/.test(body),
-    body.slice(0, 0) || 'the rep card is a section, not the page');
+    'the rep card is a section, not the page');
+  // THE SERVED PAGE, not the object. A second reader could reintroduce the address without the
+  // resolver changing at all.
+  const html = await p.content();
+  check('  …with the login address nowhere on it', !body.includes(REP_EMAIL) && !html.includes(REP_EMAIL),
+    'the credential a rep signs in with is not a published contact route');
+  check('  …and no mailto for the rep', !/mailto:zz-support-gate/.test(html));
 
   // ── 7. THE OLD ROUTE STILL WORKS ─────────────────────────────────────────────────────────────
   await p.goto(`${BASE}/admin/settings/rep`, { waitUntil: 'domcontentloaded' });

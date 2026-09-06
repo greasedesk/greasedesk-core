@@ -23,10 +23,10 @@
  *   status 'active'    — a suspended rep's contact details are not handed out.
  *
  * ── WHAT IS DELIBERATELY NOT RETURNED ───────────────────────────────────────────────────────────
- * share_bp (what we pay them), payout_details (their bank details) and ref_code (their attribution
- * token — a garage that saw it could pass it around and misattribute other signups). None of the
- * three is shaped for a tenant's eyes, and the safest way to keep them out of a page is to keep
- * them out of the object the page receives.
+ * share_bp (what we pay them), payout_details (their bank details), ref_code (their attribution
+ * token — a garage that saw it could pass it around and misattribute other signups) and email (the
+ * address they sign in with). None of the four is shaped for a tenant's eyes, and the safest way to
+ * keep them out of a page is to keep them out of the object the page receives.
  */
 import { prisma } from '@/lib/db';
 import { customerPhoneFields } from '@/lib/contact-routes';
@@ -34,7 +34,6 @@ import { customerPhoneFields } from '@/lib/contact-routes';
 /** Everything a garage may see about their rep. */
 export type TenantRep = {
   name: string;
-  email: string;
   /** What was typed — what a person reads. NULL = no published number; the page omits the line. */
   phone: string | null;
   /** The dialable form. NULL when there is no number OR it could not be resolved — a number that
@@ -58,10 +57,16 @@ export function repPhoneFields(raw: string | null | undefined, dialCode = '44'):
  * NULL means "no rep", which is the ordinary case rather than a fault: most garages sign up
  * directly. The page says so plainly instead of rendering an empty card.
  *
- * NOTE on `email`: it is still the rep's LOGIN email, which is the only address Rep carries. The
- * phone is now a PUBLISHED field (Rep.phone), separate from anything used to sign in — the email
- * has not had the same treatment yet, and should before a real person's credentials double as
- * their published contact address.
+ * ── AND THE LOGIN ADDRESS IS NOT ONE OF THEM ────────────────────────────────────────────────────
+ * Rep.email is the CREDENTIAL a rep signs in with, and it was briefly published as a mailto on the
+ * support page. GreaseDesk publishes no email for itself on precisely this reasoning — company-info
+ * records that contact is form-only and "phone is the only published non-form contact route" — so
+ * publishing a named individual's login was a stricter standard for the company than for its staff.
+ *
+ * It is excluded the same way the other three are: not selected. There is no `email` on TenantRep,
+ * so a page cannot render one by mistake and a second reader cannot reintroduce it without changing
+ * this file. If reps are ever to be reachable by email that is a `contact_email` — a published
+ * field, deliberately not the login — and it lands when somebody wants it, not as a patch.
  */
 export async function tenantRep(groupId: string | null | undefined): Promise<TenantRep | null> {
   if (!groupId) return null;
@@ -74,8 +79,8 @@ export async function tenantRep(groupId: string | null | undefined): Promise<Ten
 
   const rep = await prisma.rep.findUnique({
     where: { id: attribution.party_id },
-    select: { name: true, email: true, status: true, phone: true, phone_e164: true },
+    select: { name: true, status: true, phone: true, phone_e164: true },
   });
   if (!rep || rep.status !== 'active') return null;
-  return { name: rep.name, email: rep.email, phone: rep.phone ?? null, phoneE164: rep.phone_e164 ?? null };
+  return { name: rep.name, phone: rep.phone ?? null, phoneE164: rep.phone_e164 ?? null };
 }
