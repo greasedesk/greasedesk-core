@@ -273,7 +273,8 @@ function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr
     setBusy(true); setErr(null);
     try {
       // APPLIES FROM THIS MONTH. A cost entered during setup is one the garage is paying now; the
-      // API resolves the month itself and refuses anything that is not one.
+      // API resolves the month itself and refuses anything that is not one, and generates the
+      // instances in the same request — so there is no second call to forget here.
       const activeFrom = new Date().toISOString().slice(0, 10);
       const r = await fetch('/api/costs', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -282,19 +283,6 @@ function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(d?.message || 'Could not add cost.'); return; }
-      // ── AND GENERATE ITS INSTANCES ──────────────────────────────────────────────────────────
-      // POST creates the cost, its first rate and its allocation — no instances. A Cost row with
-      // none is worse than no cost at all: costsInWindow withholds the cost base only when there
-      // are no cost ROWS, so an ungenerated cost turns "unknown" into a confident £0.00, which
-      // lib/costs's own header measures at £11,175 of imaginary profit on TMBS. A failure here is
-      // reported rather than swallowed — the row exists and the figure it feeds would be wrong.
-      if (d?.id) {
-        const gen = await fetch('/api/costs', {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ costId: d.id }),
-        });
-        if (!gen.ok) { setErr('The cost was saved but its months could not be worked out. Open Costs and press Generate.'); }
-      }
       setName(''); setAmount('');
       await reload();
     } finally { setBusy(false); }

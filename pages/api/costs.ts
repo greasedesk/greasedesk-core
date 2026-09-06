@@ -5,6 +5,9 @@
  * A rise is a NEW RATE with a date, never an edit to the amount: one auditable fact, the shape
  * EmploymentEvent uses for pay. An actual figure is an EDIT TO ONE INSTANCE, which regeneration
  * then leaves alone for ever (lib/costs::regenerate).
+ *
+ * CREATING A COST GENERATES ITS INSTANCES. A cost with none reports £0.00 rather than withholding,
+ * which is worse than never entering it — see the note on the POST branch.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminApi } from '@/lib/admin-guard';
@@ -15,6 +18,15 @@ const monthStart = (iso: string) => {
   const d = new Date(`${String(iso).slice(0, 7)}-01T00:00:00.000Z`);
   return Number.isNaN(d.getTime()) ? null : d;
 };
+
+/**
+ * How far ahead instances are generated when the caller does not say.
+ *
+ * ONE DEFINITION, because POST and PATCH both need it and a create that generated a different span
+ * from the next regenerate would leave a cost whose horizon depended on which route last touched it.
+ */
+const defaultHorizon = () =>
+  new Date(Date.UTC(new Date().getUTCFullYear() + 1, new Date().getUTCMonth(), 1));
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const vis = await requireAdminApi(req, res);
@@ -58,7 +70,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       select: { id: true },
     });
-    return res.status(200).json({ id: cost.id });
+    // ── AND ITS INSTANCES, IN THE SAME REQUEST ────────────────────────────────────────────────
+    // This used to return here, leaving a cost with a rate, an allocation and NO occurrences. That
+    // is not a half-finished cost, it is a wrong figure: costsInWindow withholds the cost base only
+    // while there are no cost ROWS, so the first ungenerated cost flips a tenant from "unknown" to
+    // a confident £0.00 — worth £11,175 of imaginary profit on TMBS by lib/costs's own reckoning.
+    //
+    // Generation was a second step behind a Generate button, so the wrong state was one forgotten
+    // click away and looked exactly like a correct one. A caller that gets a 200 now has a cost
+    // that reports what it costs.
+    //
+    // Safe to run here: regenerate skips instances a person has edited, and there are none on a
+    // cost created a line ago. It stays available on PATCH for extending the horizon and for
+    // re-running after a rate change.
+    const generated = await regenerate(cost.id, from, defaultHorizon());
+    return res.status(200).json({ id: cost.id, ...generated });
   }
 
   if (req.method === 'PATCH') {
@@ -95,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const to = monthStart(generateTo) ?? new Date(Date.UTC(new Date().getUTCFullYear() + 1, new Date().getUTCMonth(), 1));
+    const to = monthStart(generateTo) ?? defaultHorizon();
     const result = await regenerate(cost.id, cost.active_from, to);
     return res.status(200).json(result);
   }

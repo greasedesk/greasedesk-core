@@ -17,8 +17,11 @@
  * costsInWindow returns `empty: true` — the cost base WITHHELD — only when there are no Cost ROWS.
  * A Cost row with no INSTANCES returns `empty: false, pennies: 0`: a confident £0.00 cost base,
  * which lib/costs's own header says would improve TMBS's net profit by £11,175 and read as good
- * news. So a wizard that creates a cost and does not generate its instances is worse than the
- * panel it replaces. POST /api/costs does not generate; the wizard must PATCH after it.
+ * news. So a cost that is created and never generated is worse than one nobody entered.
+ *
+ * POST /api/costs now generates, so no caller can produce that state by forgetting a second step.
+ * It is asserted by CREATING A COST THROUGH THE ROUTE and reading its instances back — a scan for a
+ * follow-up call would only prove one caller remembered, which is the thing that should not matter.
  *
  * That is asserted through costsInWindow itself, not by counting rows — the defect is a reported
  * figure, and only the function that reports it can show the difference between nought and unknown.
@@ -86,7 +89,7 @@ try {
     data: { group_id: ZZ, name: 'GATE FIXTURE overhead', ex_vat_amount_pennies: 100_00, vat_rate: 0, period: 'monthly' },
     select: { id: true },
   });
-  fix = { overheadId: oh.id, costId: null };
+  fix = { overheadId: oh.id, costId: null, postedCostId: null };
   const sigA = await S.getSetupSignals?.(ZZ, null);
   check('an Overhead row no longer satisfies it',
     sigA?.signals?.find((s) => s.key === 'overheads')?.state === 'todo',
@@ -122,9 +125,7 @@ try {
   const after = await C.costsInWindow?.(ZZ, [site.id], win[0], win[1]);
   check('generating instances makes the figure real', (after?.instanceCount ?? 0) > 0 && (after?.pennies ?? 0) > 0,
     JSON.stringify(after));
-  check('the wizard generates after it creates',
-    /PATCH/.test(src('pages/admin/setup-wizard.tsx')) && /costId/.test(src('pages/admin/setup-wizard.tsx')),
-    'POST /api/costs creates the rate and the allocation but no instances');
+
 
   // ── 5. DRIVEN: THE PANEL REDIRECTS AND THE API IS GONE ───────────────────────────────────────
   console.log('\n— and the way a person still reaches it —');
@@ -149,6 +150,31 @@ try {
   check('POST /api/overheads is gone', posted === 404, `HTTP ${posted}`);
 
   // The wizard payload a person actually receives, over HTTP, as the tenant.
+  // ── CREATING A COST THROUGH THE ROUTE LEAVES A REAL FIGURE ──────────────────────────────────
+  // The route itself, over HTTP, as the tenant — not the helper underneath it. A caller that gets a
+  // 200 and walks away must not have left a cost base of nought behind.
+  const made = await page.evaluate(async (siteId) => {
+    const r = await fetch('/api/costs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'GATE FIXTURE posted cost', cadence: 'monthly', charge: 'spread',
+        activeFrom: '2026-01-01', amountPennies: 250_00, siteId }),
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, site.id);
+  check('POST /api/costs creates the cost', made.status === 200 && !!made.body?.id,
+    `${made.status} ${JSON.stringify(made.body).slice(0, 120)}`);
+  fix.postedCostId = made.body?.id ?? null;
+  const postedInstances = fix.postedCostId
+    ? await prisma.costInstance.count({ where: { cost_id: fix.postedCostId } }) : 0;
+  check('  …and its instances, in the same request', postedInstances > 0,
+    `${postedInstances} instances — without them the cost base stops being withheld and reports nought`);
+  const postedSum = fix.postedCostId
+    ? await prisma.costInstance.aggregate({ where: { cost_id: fix.postedCostId }, _sum: { amount_pennies: true } })
+    : null;
+  check('  …carrying the amount that was posted', (postedSum?._sum?.amount_pennies ?? 0) > 0,
+    `${postedSum?._sum?.amount_pennies ?? 0}p across its own instances — scoped to THIS cost, because a`
+    + ' tenant-wide window also contains the fixture cost above and would pass either way');
+
   const wiz = await page.evaluate(async () => {
     const r = await fetch('/api/setup-wizard', { cache: 'no-store' });
     return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -167,11 +193,12 @@ try {
     // Deleted BY THE ID THIS GATE CREATED, never by name or by "the newest row".
     try {
       if (fix.costId) await prisma.cost.delete({ where: { id: fix.costId } });          // rates/instances/allocations cascade
+      if (fix.postedCostId) await prisma.cost.delete({ where: { id: fix.postedCostId } });
       if (fix.overheadId) await prisma.overhead.delete({ where: { id: fix.overheadId } });
     } catch (e) { console.log(`  teardown: ${describeError(e).slice(0, 120)}`); }
-    const leftCost = fix.costId ? await prisma.cost.count({ where: { id: fix.costId } }) : 0;
+    const leftCost = await prisma.cost.count({ where: { id: { in: [fix.costId, fix.postedCostId].filter(Boolean) } } });
     const leftOh = fix.overheadId ? await prisma.overhead.count({ where: { id: fix.overheadId } }) : 0;
-    const leftInst = fix.costId ? await prisma.costInstance.count({ where: { cost_id: fix.costId } }) : 0;
+    const leftInst = await prisma.costInstance.count({ where: { cost_id: { in: [fix.costId, fix.postedCostId].filter(Boolean) } } });
     check('teardown removed every fixture row', leftCost === 0 && leftOh === 0 && leftInst === 0,
       `cost=${leftCost} overhead=${leftOh} instances=${leftInst}`);
   }
