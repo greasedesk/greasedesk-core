@@ -19,15 +19,24 @@
  * this script writes free_since and free_reason and nothing else, so what it did is legible from
  * what it touched.
  *
- * ── REFUSALS ────────────────────────────────────────────────────────────────────────────────────
- * Resolved by ref, never by name (groups legitimately share names). Refuses a tenant that is
- * already free rather than overwriting the date somebody else set, because "free since" is the
- * decision and re-dating it would erase when it was taken.
+ * ── IT NO LONGER WRITES THE COLUMN ──────────────────────────────────────────────────────────────
+ * This script typed `data: { free_since: new Date() }` onto the row, and that was the whole problem:
+ * free_since had a read chokepoint and no write chokepoint, so nothing could refuse. GB-GD1967 was
+ * set free here on 5 September and took a real subscription on the 6th.
+ *
+ * It now calls lib/free-tenant::setFree, which refuses a live subscription, refuses re-dating an
+ * existing decision, and writes both ledgers in one transaction. The refusals below are gone from
+ * this file because they live there — a script that re-implements them is a second opinion waiting
+ * to disagree. Resolved by ref, never by name (groups legitimately share names).
  */
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const prisma = await gatePrisma();
+const { setFree } = await import('../lib/free-tenant.ts');
+
+/** The acting operator. Every operator-initiated write names one. */
+const OPERATOR_ID = 'acab39ee-aea8-4ae8-b855-312007bebdb2'; // hugh@greasedesk.com, owner
 
 const SUBJECTS = [
   { ref: 'GB-GD1967', reason: 'Owner-operated garage — the product is built here; never billed.' },
@@ -45,16 +54,11 @@ for (const s of SUBJECTS) {
   if (!g) { console.log(`${s.ref}  NOT FOUND — nothing done`); continue; }
   console.log(`${g.ref}  ${g.group_name}`);
   console.log(`   before: free_since=${g.free_since?.toISOString() ?? 'null'}  is_internal=${g.is_internal}  is_demo=${g.is_demo}`);
-  if (g.free_since) {
-    console.log('   REFUSED: already free. Re-dating would erase when the decision was taken.\n');
-    continue;
-  }
-  if (dry) { console.log(`   would set free_since=now, free_reason="${s.reason}"\n`); continue; }
-  const after = await prisma.group.update({
-    where: { id: g.id },
-    data: { free_since: new Date(), free_reason: s.reason },
-    select: { free_since: true, free_reason: true, is_internal: true },
-  });
+  if (dry) { console.log(`   would call setFree with reason="${s.reason}"\n`); continue; }
+  const r = await setFree({ groupId: g.id, reason: s.reason, operatorUserId: OPERATOR_ID });
+  if (!r.ok) { console.log(`   REFUSED (${r.code}): ${r.message}\n`); continue; }
+  const after = await prisma.group.findUnique({
+    where: { id: g.id }, select: { free_since: true, free_reason: true, is_internal: true } });
   console.log(`   after:  free_since=${after.free_since?.toISOString()}  is_internal=${after.is_internal} (untouched)`);
   console.log(`   reason: ${after.free_reason}\n`);
 }

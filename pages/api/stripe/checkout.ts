@@ -38,14 +38,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
   const vis = await requireAdminApi(req, res); if (!vis) return;
 
-  const stripe = getStripe();
-  if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
-
   const groupId = vis.groupId as string;
   if (!groupId) return res.status(400).json({ message: 'No group in scope.' });
-  // BEFORE the Price lookup and before the session — a demo that reaches Stripe has already had a
-  // real card typed into it, for a tenant the demo cron deletes. See lib/demo-tenant.
+  // BEFORE the Price lookup and before the session — a tenant that reaches Stripe has already had a
+  // real card typed into it, for a group the demo cron deletes. See lib/demo-tenant.
+  //
+  // AND BEFORE getStripe(), which is where it used to sit. In an environment with no key, a tenant
+  // that has nothing to buy was told "billing isn't configured" — a sentence about our deployment,
+  // for a refusal about them. It also made the refusal untestable without a key: a gate driving
+  // this route got 503 whether the guard was right or wrong. portal.ts and confirm-checkout.ts both
+  // already ordered it this way; checkout was the odd one out.
   if (await refuseDemoBilling(res, groupId)) return;
+
+  const stripe = getStripe();
+  if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
   const [group, siteCount, billing] = await Promise.all([
     prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, billing_email: true, country_code: true, ref: true } }),
     prisma.site.count({ where: { group_id: groupId } }),

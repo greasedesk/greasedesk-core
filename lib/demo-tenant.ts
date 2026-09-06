@@ -115,7 +115,7 @@ export async function groupNeverSubscribes(groupId: string | null | undefined): 
 }
 
 /**
- * ── A DEMO MUST NOT REACH STRIPE ────────────────────────────────────────────────────────────────
+ * ── A TENANT WITH NOTHING TO BUY MUST NOT REACH STRIPE ──────────────────────────────────────────
  * Checkout on a demo would SUCCEED, and that is worse than failing. The endpoint has no idea the
  * tenant is disposable: it would create a real Checkout session with payment_method_collection
  * 'always', take a real card through real 3DS, and the webhook would write a real subscription —
@@ -123,9 +123,45 @@ export async function groupNeverSubscribes(groupId: string | null | undefined): 
  * showroom model, and then watched it be deleted with everything in it.
  *
  * The refusal is 403 with a code the client can branch on, not a 503 "billing isn't configured":
- * billing is configured perfectly well, this tenant simply has nothing to buy. Callers get the same
- * sentence from all three endpoints because they are the same refusal.
+ * billing is configured perfectly well, this tenant simply has nothing to buy.
+ *
+ * ── THREE POPULATIONS, THREE SENTENCES ──────────────────────────────────────────────────────────
+ * One message served all three and described one. "This is a demo garage… nothing in it is real"
+ * is true of a demo, false of ZZ Gate Garage (an internal tenant with real data), and for a garage
+ * we have simply decided not to charge every word after the comma is wrong — it is somebody's real
+ * business, and telling them it is not real is the worst sentence available.
+ *
+ * The CODE is per-population too, because a caller that wants to treat one differently should not
+ * have to parse English to do it — which is exactly what the portal now needs.
  */
+export type BillingRefusalCode = 'demo_tenant' | 'internal_tenant' | 'free_tenant';
+export type BillingRefusal = { status: 403; code: BillingRefusalCode; message: string };
+
+/**
+ * Why this tenant may not buy a subscription, or null if it may.
+ *
+ * ORDER IS THE STRONGEST CLAIM FIRST. A demo that is also free is a demo: its data is invented and
+ * it is about to be deleted, which is a bigger thing to say than "we don't charge you".
+ */
+export function billingRefusalFor(
+  group: { is_demo?: boolean | null; is_internal?: boolean | null; free_since?: Date | string | null } | null | undefined,
+): BillingRefusal | null {
+  if (group?.is_demo) {
+    return { status: 403, code: 'demo_tenant',
+      message: 'This is a demo garage, so there is nothing to subscribe — nothing in it is real. Start a trial when you want to set up your own.' };
+  }
+  if (group?.is_internal) {
+    return { status: 403, code: 'internal_tenant',
+      message: 'This is a GreaseDesk-owned account, so it has no subscription to buy.' };
+  }
+  if (isFree(group)) {
+    return { status: 403, code: 'free_tenant',
+      message: 'This garage is not billed, so there is nothing to subscribe and nothing will be charged. If that is not right, get in touch and we will sort it out.' };
+  }
+  return null;
+}
+
+/** The demo sentence, kept exported: three call sites outside billing still use it verbatim. */
 export const DEMO_BILLING_REFUSAL = {
   status: 403,
   code: 'demo_tenant' as const,
@@ -136,21 +172,33 @@ export const DEMO_BILLING_REFUSAL = {
  * Guard for a billing endpoint. Returns true when it has ALREADY answered the request, so a caller
  * is one line: `if (await refuseDemoBilling(res, groupId)) return;`
  *
- * Placed before any Stripe call and before any write, on purpose — a demo that gets as far as a
+ * Placed before any Stripe call and before any write, on purpose — a tenant that gets as far as a
  * session id has already had a card typed into it.
+ *
+ * ── allowFree: THE PORTAL IS NOT CHECKOUT ───────────────────────────────────────────────────────
+ * Refusing a free tenant the Billing Portal is what broke GB-GD1967: it held a real customer id and
+ * "Manage billing" answered "This is a demo garage". A free garage can legitimately have billing
+ * history — a subscription it used to hold, invoices it is entitled to read — and the portal shows
+ * exactly that without selling anything. Where there is genuinely nothing to manage, portal.ts
+ * already answers 409, which is the honest sentence.
+ *
+ * The option is named for what it permits, not for a route, so a second caller has to say what it
+ * wants rather than inherit a decision made for someone else. It exempts free ONLY: a demo must not
+ * reach the portal either, because a demo must not reach Stripe at all.
  */
 export async function refuseDemoBilling(
   res: { status: (c: number) => { json: (b: any) => any } },
   groupId: string | null | undefined,
+  opts?: { allowFree?: boolean },
 ): Promise<boolean> {
-  // neverSubscribes, NOT isDemoGroup. THE THIRD READER of the same question found in two days.
-  // The sales demo is is_demo = false so it can send real texts, which left this refusal open: a
-  // rep clicking Licences mid-demo could reach a genuine Stripe checkout. Production runs on test
-  // keys, so that limits the damage rather than preventing the embarrassment.
-  if (!(await groupNeverSubscribes(groupId))) return false;
-  res.status(DEMO_BILLING_REFUSAL.status).json({
-    message: DEMO_BILLING_REFUSAL.message, code: DEMO_BILLING_REFUSAL.code,
-  });
+  if (!groupId) return false;
+  const g = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { is_demo: true, is_internal: true, free_since: true },
+  })) as { is_demo: boolean; is_internal: boolean | null; free_since: Date | null } | null;
+  const refusal = billingRefusalFor(g);
+  if (!refusal) return false;
+  if (refusal.code === 'free_tenant' && opts?.allowFree) return false;
+  res.status(refusal.status).json({ message: refusal.message, code: refusal.code });
   return true;
 }
 

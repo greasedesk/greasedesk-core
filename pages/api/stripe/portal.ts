@@ -18,7 +18,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A demo has no customer, so the 409 below would already stop it — but the refusal is stated
   // here anyway. Relying on "there happens to be no row" makes the guarantee an accident of data;
   // the moment anything writes a GroupBilling row for a demo, the accident stops holding.
-  if (await refuseDemoBilling(res, vis.groupId)) return;
+  //
+  // A FREE TENANT IS LET THROUGH, and that is not a weakening. The portal SELLS nothing: it shows a
+  // customer their own billing history and card. GB-GD1967 held a real customer id while marked
+  // free, and this refusal answered "This is a demo garage" when the owner clicked Manage billing —
+  // for their own garage, about a card they had entered that morning. A free garage can hold real
+  // history (a subscription it used to have, invoices it is entitled to read), and where it truly
+  // has nothing to manage the 409 below says so honestly. Demos and internal tenants are still
+  // refused: they must not reach Stripe at all.
+  if (await refuseDemoBilling(res, vis.groupId, { allowFree: true })) return;
 
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });

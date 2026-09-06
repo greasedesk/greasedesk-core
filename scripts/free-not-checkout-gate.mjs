@@ -91,7 +91,7 @@ try {
   const refusedFree = await D.refuseDemoBilling?.(freeRes, ZZ).catch(() => null);
   check('refuseDemoBilling refuses a free tenant', refusedFree === true, String(refusedFree));
   check('  …with 403 and a code the client can branch on',
-    freeRes.code === 403 && freeRes.body?.code === 'demo_tenant',
+    freeRes.code === 403 && freeRes.body?.code === 'free_tenant',
     `${freeRes.code} ${JSON.stringify(freeRes.body)}`);
 
   // ── 2. THE DISCRIMINATING CASE ───────────────────────────────────────────────────────────────

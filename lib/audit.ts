@@ -147,6 +147,11 @@ export type AuditAction =
   // ledger as well as ours, with user_id null because nobody inside did it. Ten other operator
   // writes still owe the same row; see pages/api/superadmin/tenant-phone-exempt.
   | 'billing.trial_extended'
+  // Whether this tenant is billed at all changed, and they are entitled to know from their own
+  // ledger. SET is always an operator; CLEARED may be the platform reconciling a decision that a
+  // live subscription overtook — user_id is null either way, because nobody INSIDE did it.
+  | 'billing.free_flag_set'
+  | 'billing.free_flag_cleared'
   | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
                                 // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.

@@ -407,6 +407,11 @@ model Group {
   //
   // NULL = a normal paying tenant, which is every row that exists today and nearly every one after.
   // Nobody has decided anything about them, and that absence is the honest state — never backfilled.
+  // WRITTEN ONLY THROUGH lib/free-tenant::setFree / clearFree, which refuse a live subscription and
+  // write both ledgers in one transaction. Before that existed the only writer was a script typing
+  // this column directly, and nothing could refuse: GB-GD1967 was set free on 5 September and took
+  // a real subscription on the 6th. Gate fixtures write it raw on purpose.
+  //
   // NULL = a normal paying tenant, which is every row that exists today and nearly every one after.
   // Nobody has decided anything about them, and that absence is the honest state — never backfilled.
   free_since              DateTime?

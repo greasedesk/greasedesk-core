@@ -18,6 +18,7 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { billingStatusFromStripe } from '@/lib/billing';
 import { modulesFromPriceIds, applyStripeModules } from '@/lib/modules';
+import { clearFree, isLiveSubscription } from '@/lib/free-tenant';
 
 /** Map a Stripe subscription onto GroupBilling (+ the trial clock on Group). Resolves the tenant by
  *  customer id, falling back to an explicit groupId (first confirm, before the customer is cached). */
@@ -45,6 +46,12 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   const existing = await prisma.groupBilling.findUnique({
     where: { group_id: groupId }, select: { grace_started_at: true, subscription_status: true },
   });
+  // ── IS THIS TENANT MARKED FREE? ─────────────────────────────────────────────────────────────
+  // Read here, beside the grace anchor, because the answer is needed inside the transaction below
+  // and this read already exists. See the reconciliation at the end of that transaction.
+  const freeNow = (await prisma.group.findUnique({
+    where: { id: groupId }, select: { free_since: true },
+  })) as { free_since: Date | null } | null;
 
   await prisma.$transaction(async (tx: any) => {
     await tx.groupBilling.update({
@@ -69,6 +76,31 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
       },
     });
     await applyStripeModules(tx as any, groupId, entitled);
+
+    // ── A LIVE SUBSCRIPTION OVERTAKES A FREE DECISION ─────────────────────────────────────────
+    // GB-GD1967 was set free on 5 September and took a real subscription on the 6th. Nothing
+    // noticed, and the contradiction broke two things quietly: the tenant was refused its own
+    // Stripe portal, and the dashboard banner went silent about a charge that was coming.
+    //
+    // Stripe's truth wins because it is the money — a live subscription is a card actually being
+    // charged, while free_since is a note we wrote about a tenant. So this reconciles rather than
+    // refuses: a webhook has nowhere to refuse TO. It either 500s and Stripe retries forever, or it
+    // logs and carries on, which is a refusal nobody receives.
+    //
+    // IN THIS TRANSACTION, deliberately. If the subscription write commits and the clear does not,
+    // the contradiction is back and nothing will look again.
+    //
+    // Only LIVE statuses: a canceled or incomplete subscription overtakes nothing. And only
+    // free_since — is_demo and is_internal answer different questions, and a demo that acquires a
+    // subscription is a bug to shout about, not a flag to quietly reconcile.
+    if (freeNow?.free_since && isLiveSubscription(sub.status)) {
+      await clearFree({
+        groupId,
+        operatorUserId: null, // nobody acted; the platform reconciled it. See the schema comment.
+        reason: `Free decision overtaken by a live Stripe subscription (${sub.status}). Cleared automatically when the subscription was cached.`,
+        detail: { stripeSubscriptionId: sub.id, stripeStatus: sub.status, via: 'stripe-billing-cache' },
+      }, tx as any);
+    }
   });
 
   // Stripe owns the trial clock once a subscription exists (item-13): mirror trial_end onto Group.

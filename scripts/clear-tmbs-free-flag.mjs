@@ -24,10 +24,14 @@
  *     standing ruling that a customer is never surprised by a charge.
  * Free and subscribed are mutually exclusive, and nothing in the codebase notices. See the report.
  *
- * ── THE AUDIT ROW IS WRITTEN FIRST, AND READ BACK, BEFORE ANYTHING IS CLEARED ───────────────────
- * Afterwards that row is the only record that this tenant was ever free, and of the reason somebody
- * wrote. A failed audit write aborts the clear rather than proceeding without the record — the same
- * ordering as clear-stranded-subscriptions, for the same reason.
+ * ── IT NO LONGER WRITES THE COLUMN, OR THE AUDIT ROW ───────────────────────────────────────────
+ * When this ran it wrote the SuperAdminAudit row first and read it back before clearing, because a
+ * script cannot roll a failed write back and that row was the only surviving copy of the decision.
+ *
+ * It now calls lib/free-tenant::clearFree, which does the update and BOTH ledger rows in one
+ * transaction — strictly stronger than write-then-verify, so the read-back is gone rather than
+ * duplicated. The record kept below is what actually ran on 6 September; the behaviour is the same
+ * and the guarantee is better.
  *
  * ── REFUSALS ────────────────────────────────────────────────────────────────────────────────────
  * Resolved by ref, never by name. Refuses if the tenant is not free (nothing to clear). Refuses if
@@ -38,10 +42,10 @@ import './_gate-preflight.mjs';
 const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const prisma = await gatePrisma();
+const { clearFree, isLiveSubscription } = await import('../lib/free-tenant.ts');
 
 const OPERATOR_ID = 'acab39ee-aea8-4ae8-b855-312007bebdb2'; // hugh@greasedesk.com, owner
 const SUBJECT = 'GB-GD1967';
-const LIVE = new Set(['trialing', 'active', 'past_due']);
 const REASON = 'Free decision of 5 September 2026 overtaken by a real subscription taken on 6 September 2026 '
   + '(sub on the current platform account, trialing, first charge 5 November). Free and subscribed are mutually '
   + 'exclusive: leaving the flag set refused this tenant its own Stripe portal and silenced the charge notice. '
@@ -65,45 +69,30 @@ console.log(`   billing: status=${b?.subscription_status ?? 'null'}  sub=${b?.st
 
 if (!g.free_since) {
   console.log('\n   REFUSED: not free. Nothing to clear.');
-} else if (!LIVE.has(b?.subscription_status ?? '')) {
+} else if (!isLiveSubscription(b?.subscription_status)) {
   console.log(`\n   REFUSED: no live subscription (status=${b?.subscription_status ?? 'null'}). The reason this script`);
   console.log('   records is that a subscription overtook the decision, and that is not true here.');
 } else if (dry) {
-  console.log('\n   would write a SuperAdminAudit row carrying free_since + free_reason, then null both');
+  console.log('\n   would call clearFree, writing both ledger rows and nulling the decision');
 } else {
-  // ── THE RECORD FIRST. Not caught: if this fails, nothing is cleared. ────────────────────────
-  const audit = await prisma.superAdminAudit.create({
-    data: {
-      operator_user_id: OPERATOR_ID,
-      action: 'tenant.free_flag_cleared',
-      target_group_id: g.id, target_operator_id: null,
-      target_name_snapshot: g.group_name,
-      target_ref_snapshot: g.ref == null ? null : String(g.ref),
-      reason: REASON,
-      detail: {
-        freeSince: g.free_since.toISOString(),
-        freeReason: g.free_reason,
-        subscriptionStatus: b?.subscription_status ?? null,
-        stripeSubscriptionId: b?.stripe_subscription_id ?? null,
-        stripeCustomerId: b?.stripe_customer_id ?? null,
-      },
+  const r = await clearFree({
+    groupId: g.id,
+    reason: REASON,
+    operatorUserId: OPERATOR_ID,
+    detail: {
+      subscriptionStatus: b?.subscription_status ?? null,
+      stripeSubscriptionId: b?.stripe_subscription_id ?? null,
+      stripeCustomerId: b?.stripe_customer_id ?? null,
     },
-    select: { id: true },
   });
-  // READ IT BACK. This row is the only surviving record that the tenant was ever free.
-  const back = await prisma.superAdminAudit.findUnique({ where: { id: audit.id }, select: { detail: true } });
-  const kept = (back?.detail ?? {}).freeSince;
-  if (kept !== g.free_since.toISOString()) {
-    throw new Error(`REFUSING to clear ${g.ref}: the audit row does not carry free_since back (${kept})`);
+  if (!r.cleared) {
+    console.log('\n   nothing to clear');
+  } else {
+    const after = await prisma.group.findUnique({ where: { id: g.id },
+      select: { free_since: true, free_reason: true, is_internal: true, is_demo: true } });
+    console.log(`\n   cleared; it had been free since ${r.freeSince?.toISOString()}`);
+    console.log(`   after:  free_since=${after.free_since ?? 'null'}  free_reason=${after.free_reason ?? 'null'}  is_internal=${after.is_internal} (untouched)  is_demo=${after.is_demo} (untouched)`);
   }
-  console.log(`\n   audit ${audit.id} written and read back, carrying ${kept}`);
-
-  const after = await prisma.group.update({
-    where: { id: g.id },
-    data: { free_since: null, free_reason: null },
-    select: { free_since: true, free_reason: true, is_internal: true, is_demo: true },
-  });
-  console.log(`   after:  free_since=${after.free_since ?? 'null'}  free_reason=${after.free_reason ?? 'null'}  is_internal=${after.is_internal} (untouched)  is_demo=${after.is_demo} (untouched)`);
 }
 
 await prisma.$disconnect();
