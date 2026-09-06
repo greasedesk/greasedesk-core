@@ -165,6 +165,13 @@ export type AuditAction =
   // month: the act is "I checked these against the bills", and the per-month state is already on
   // the instances. Carries the count, the range and the total.
   | 'cost.instances_confirmed'
+  // A confirmation WITHDRAWN — the months go back to being estimates and the regeneration lock is
+  // released with them. Written when a confirmation was made in error; the row carries every
+  // cleared month so what it undid is recoverable from the row alone.
+  | 'cost.instances_unconfirmed'
+  // A dated rate removed. A rate says "the price changed from this month", so one recorded for a
+  // change that did not happen is a false fact about the business, not a spare row.
+  | 'cost.rate_removed'
   | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
                                 // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.
