@@ -55,9 +55,7 @@ try {
   // Clamped to YESTERDAY: still not today, still mid-month when the month is old enough, and never
   // ahead of the clock. The month buckets below are derived from whatever it lands on.
   const now = new Date();
-  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
-  const twelfth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 12));
-  const payMonth = twelfth < yesterday ? twelfth : yesterday;
+  const payMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), Math.min(12, now.getUTCDate() - 1)));
   const iso = payMonth.toISOString().slice(0, 10);
 
   // ── A CARD WITH AN ISSUED, UNPAID INVOICE, ISSUED BY THEN ──────────────────────────────────

@@ -103,6 +103,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
+    'date-constant-gate',
     'engine-room-palette-gate',
     'support-route-gate',
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
