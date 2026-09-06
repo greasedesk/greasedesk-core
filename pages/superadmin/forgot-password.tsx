@@ -37,7 +37,7 @@ export default function OperatorForgotPassword() {
                 <input type="email" inputMode="email" autoComplete="username" autoCapitalize="none" value={email} onChange={(e) => setEmail(e.target.value)} required
                   className="w-full min-h-[48px] border border-line rounded-lg px-3 text-ink focus:outline-none focus:ring-2 focus:ring-accent" />
               </div>
-              <button type="submit" disabled={busy} className="w-full min-h-[48px] bg-surface text-white font-medium rounded-xl disabled:opacity-50">
+              <button type="submit" disabled={busy} className="w-full min-h-[48px] bg-accent hover:bg-accent-hover text-white font-medium rounded-xl disabled:opacity-50">
                 {busy ? 'Sending…' : 'Send reset link'}
               </button>
             </form>

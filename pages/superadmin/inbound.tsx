@@ -23,7 +23,7 @@ export default function InboundUnresolved({ rows, bodyRows, role, totalInbound }
   return (
     <EngineRoomLayout role={role}>
       <Head><title>Unresolved inbound — Engine Room</title></Head>
-      <h1 className="text-xl font-semibold text-white mb-1">Unresolved inbound</h1>
+      <h1 className="text-xl font-semibold text-ink mb-1">Unresolved inbound</h1>
       <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>
         Messages that arrived but could not be placed on a conversation. They are recorded, never
         discarded — each row says why it could not be resolved. {totalInbound} inbound message{totalInbound === 1 ? '' : 's'} in total.
@@ -42,7 +42,7 @@ export default function InboundUnresolved({ rows, bodyRows, role, totalInbound }
               {rows.map((r) => (
                 <tr key={r.id} data-testid="unresolved-row" className="border-t" style={{ borderColor: 'var(--surface-muted)' }}>
                   <td className="px-3 py-2 whitespace-nowrap" style={{ color: 'var(--text)' }}>{r.at.replace('T', ' ').slice(0, 16)}</td>
-                  <td className="px-3 py-2 text-white break-all">{r.from}</td>
+                  <td className="px-3 py-2 text-ink break-all">{r.from}</td>
                   <td className="px-3 py-2" style={{ color: 'var(--text)' }}>{r.subject ?? '—'}</td>
                   <td className="px-3 py-2" style={{ color: 'var(--text)' }}>{r.tenant ?? <span style={{ color: 'var(--danger)' }}>unknown</span>}</td>
                   <td className="px-3 py-2" style={{ color: r.hasBody ? 'var(--text)' : 'var(--warn)' }}>{r.hasBody ? 'kept' : 'not retrieved'}</td>
@@ -53,7 +53,7 @@ export default function InboundUnresolved({ rows, bodyRows, role, totalInbound }
           </table>
         </div>
       )}
-      <h2 className="text-lg font-semibold text-white mt-8 mb-1">Bodies not retrieved</h2>
+      <h2 className="text-lg font-semibold text-ink mt-8 mb-1">Bodies not retrieved</h2>
       <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
         Placed on a conversation, but the message text could not be fetched. Retried hourly. Resend
         discards received mail after 30 days — the countdown is how long is left to recover it.
@@ -72,7 +72,7 @@ export default function InboundUnresolved({ rows, bodyRows, role, totalInbound }
               {bodyRows.map((r) => (
                 <tr key={r.id} data-testid="body-missing-row" className="border-t" style={{ borderColor: 'var(--surface-muted)' }}>
                   <td className="px-3 py-2 whitespace-nowrap" style={{ color: 'var(--text)' }}>{r.at.replace('T', ' ').slice(0, 16)}</td>
-                  <td className="px-3 py-2 text-white break-all">{r.from}</td>
+                  <td className="px-3 py-2 text-ink break-all">{r.from}</td>
                   <td className="px-3 py-2" style={{ color: 'var(--text)' }}>{r.subject ?? '—'}</td>
                   <td className="px-3 py-2" style={{ color: 'var(--text)' }}>{r.tenant ?? '—'}</td>
                   <td className="px-3 py-2 whitespace-nowrap" style={{ color: r.daysLeft <= 0 ? 'var(--danger)' : r.daysLeft < 7 ? 'var(--warn)' : 'var(--text)' }}>

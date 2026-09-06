@@ -37,7 +37,7 @@ function StepCard({ s }: { s: StepRow }) {
   return (
     <div className="rounded-xl border p-4 mb-3" style={{ borderColor: 'var(--surface-muted)', background: 'var(--surface)' }} data-step-key={s.step_key}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-semibold text-white">{s.step_key}</span>
+        <span className="text-sm font-semibold text-ink">{s.step_key}</span>
         <span className="text-xs font-mono" style={{ color: s.handlerKnown ? 'var(--text-muted)' : 'var(--danger)' }}>
           {s.handler_key}{!s.handlerKnown && ' — UNKNOWN (fails closed in the wizard)'}
         </span>
@@ -64,7 +64,7 @@ export default function SetupStepsAdmin({ steps, role }: PageProps) {
   return (
     <EngineRoomLayout role={role}>
       <Head><title>Setup steps — Engine Room</title></Head>
-      <h1 className="text-xl font-semibold text-white mb-1">Setup wizard steps</h1>
+      <h1 className="text-xl font-semibold text-ink mb-1">Setup wizard steps</h1>
       <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>
         Wording, order, required/enabled and country scope are editable. What a step writes to
         (handler) is code — retiring a handler makes its steps disappear from the wizard, never break it.

@@ -39,10 +39,10 @@ export default function OperatorSetPassword() {
           <h1 className="text-lg font-semibold text-ink mb-1 text-center">Set your password</h1>
           <p className="text-sm text-muted text-center mb-6">Engine Room access</p>
           {done ? (
-            <div className="p-3 rounded-lg bg-green-50 text-green-700 text-sm text-center">Password set. Redirecting to sign in…</div>
+            <div className="p-3 rounded-lg bg-ok-soft text-ok text-sm text-center">Password set. Redirecting to sign in…</div>
           ) : (
             <form onSubmit={submit} className="space-y-4">
-              {err && <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm text-center">{err}</div>}
+              {err && <div className="p-3 rounded-lg bg-danger-soft text-danger text-sm text-center">{err}</div>}
               <div>
                 <label className="block text-sm text-muted mb-1">New password</label>
                 <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} required minLength={8}
@@ -53,7 +53,7 @@ export default function OperatorSetPassword() {
                 <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8}
                   className="w-full min-h-[48px] border border-line rounded-lg px-3 text-ink focus:outline-none focus:ring-2 focus:ring-accent" />
               </div>
-              <button type="submit" disabled={busy || !token} className="w-full min-h-[48px] bg-surface text-white font-medium rounded-xl disabled:opacity-50">
+              <button type="submit" disabled={busy || !token} className="w-full min-h-[48px] bg-accent hover:bg-accent-hover text-white font-medium rounded-xl disabled:opacity-50">
                 {busy ? 'Saving…' : 'Set password'}
               </button>
             </form>

@@ -39,7 +39,7 @@ export default function EngineRoomDashboard({ role, scopeLabel, tenantCount, una
           <ComingTile title="Retained revenue (forecast)" note="After commission — reads the commission engine once rates & payments are live." />
           <div className="rounded-xl border border-line bg-surface p-5">
             <div className="text-sm text-muted">Tenants in scope</div>
-            <div className="mt-2 text-2xl font-semibold text-white tabular-nums">{tenantCount}</div>
+            <div className="mt-2 text-2xl font-semibold text-ink tabular-nums">{tenantCount}</div>
             <div className="mt-1 text-xs text-muted">Region-scoped to your access.</div>
           </div>
 
@@ -47,12 +47,12 @@ export default function EngineRoomDashboard({ role, scopeLabel, tenantCount, una
               A REAL figure, unlike the two tiles above, because this one can be wrong right now.
               Zero is stated rather than blanked: "none outstanding" is a fact worth showing, and
               a tile that only appears when something is broken is a tile nobody learns to read. */}
-          <div className={`rounded-xl border p-5 ${unaccrued > 0 ? 'border-amber-700/70 bg-amber-950/40' : 'border-line bg-surface'}`}
+          <div className={`rounded-xl border p-5 ${unaccrued > 0 ? 'border-warn bg-warn-soft' : 'border-line bg-surface'}`}
             data-testid="er-unaccrued-tile">
-            <div className={`text-sm ${unaccrued > 0 ? 'text-amber-200' : 'text-muted'}`}>Commission not accrued</div>
-            <div className={`mt-2 text-2xl font-semibold tabular-nums ${unaccrued > 0 ? 'text-amber-100' : 'text-white'}`}
+            <div className={`text-sm ${unaccrued > 0 ? 'text-warn' : 'text-muted'}`}>Commission not accrued</div>
+            <div className={`mt-2 text-2xl font-semibold tabular-nums ${unaccrued > 0 ? 'text-warn' : 'text-ink'}`}
               data-testid="er-unaccrued-count">{unaccrued}</div>
-            <div className={`mt-1 text-xs ${unaccrued > 0 ? 'text-amber-200/80' : 'text-muted'}`}>
+            <div className={`mt-1 text-xs ${unaccrued > 0 ? 'text-warn' : 'text-muted'}`}>
               {unaccrued > 0
                 ? 'Payments the engine refused to accrue — a rep is owed and unpaid. Open the tenant to see why.'
                 : 'No refused accruals outstanding.'}

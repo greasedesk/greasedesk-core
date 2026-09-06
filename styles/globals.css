@@ -43,8 +43,10 @@ html, body { overflow-x: clip; max-width: 100%; }
   --danger: #B91C1C;    --danger-soft: #FBEAEA;
 }
 
-/* THE ALL-DARK THEME. Wired in _document for /superadmin — the Engine Room is dark throughout,
-   in THIS palette, so an operator with both portals open sees one product rather than two. */
+/* An all-dark theme, complete but NOT WIRED TO A SELECTOR. It drove the Engine Room for part of a
+   day; the Engine Room now uses the light workspace like the tenant app, and the distinction
+   between the two is the hostname and the label rather than the colours. Kept because it is whole
+   and proves the token swap works end to end — nothing reads it today. */
 :root[data-theme="dark"] {
   --content-bg: #0F172A;
   --surface: #1E293B;

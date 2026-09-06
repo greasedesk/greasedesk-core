@@ -4,21 +4,20 @@
  * fixed left nav column with the wordmark at top, Settings + Sign out pinned at the bottom, main
  * content to the right.
  *
- * ── ONE PALETTE, TWO THEMES ─────────────────────────────────────────────────────────────────────
- * An operator with both portals open must never confuse them, and the distinction that carries that
- * is DARK THROUGHOUT against the tenant's light workspace — not a second set of colours. This shell
- * was built in raw slate, 320 hardcoded colours across the Engine Room against tailwind.config's
- * own instruction ("never raw slate/blue or hex"), and the result was a rail at slate-900 beside a
- * tenant rail at navy #0B1E3B: near enough to look like a mistake, far enough to be one.
+ * ── IT LOOKS LIKE THE PRODUCT, BECAUSE IT IS THE PRODUCT ────────────────────────────────────────
+ * Dark navy rail, light workspace, the same semantic tokens as the tenant app — bg-surface,
+ * text-ink, border-line, bg-accent. Nothing here is a second palette, and nothing here is a second
+ * theme: this reads as GreaseDesk because it is GreaseDesk.
  *
- * Everything here is now the SAME token the tenant app uses. The theme is stamped in _document for
- * /superadmin routes, so `--surface` resolves dark here and light there while the markup is
- * identical — and the rail and the accent are the brand's own values on both, unchanged by theme.
+ * WHAT TELLS AN OPERATOR WHICH PORTAL THEY ARE IN is the hostname — er.greasedesk.com serves the
+ * Engine Room and 404s every tenant route — and the "Engine Room" label under the logo. Not the
+ * colours. This shell argued for the opposite twice: first in raw slate, then in a dark theme, on
+ * the grounds that an operator with both open could confuse them. A URL bar and a label do that job
+ * without maintaining a separate look, and a portal that looks like a different product is a cost
+ * paid on every screen to solve a problem that only exists for a moment.
  *
- * The nav renders from the SESSION PRINCIPAL's role (erNavFor) — a link the role would 404 on is
- * never shown. That is a convenience, NOT the guard: every screen behind a nav item independently
- * enforces its own role in getServerSideProps (erMinRole), so a Support operator typing /operators
- * gets a real 404, not merely a missing link.
+ * Colours come from the tokens (tailwind.config / styles/globals.css) — no raw slate, no hex, no
+ * raw Tailwind colour scale. engine-room-palette-gate holds that, whichever theme is selected.
  */
 import Link from 'next/link';
 import { useRouter } from 'next/router';

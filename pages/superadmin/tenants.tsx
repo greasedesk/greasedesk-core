@@ -68,7 +68,7 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
       <div className="p-6" style={{ color: 'var(--text)' }}>
         <div className="max-w-6xl">
           <div className="flex items-baseline justify-between mb-6">
-            <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: 'var(--text-muted)' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
+            <h1 className="text-xl font-semibold text-ink">Tenants <span className="text-sm font-normal" style={{ color: 'var(--text-muted)' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
             {/* Count is CUSTOMER tenants only — internal (GreaseDesk-owned gate/test) tenants stay in
                 the list, badged, but never inflate the headline number. */}
             {/* BOTH NUMBERS. The count was correct — customer tenants only — but it sat beside a
@@ -116,15 +116,15 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
         {canAct && purgeFor && (
           <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setPurgeFor(null)}>
             <div className="max-w-md w-full rounded-xl p-6" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }} onClick={(e) => e.stopPropagation()}>
-              <h2 className="text-lg font-semibold text-white mb-2">Purge {purgeFor.name}</h2>
+              <h2 className="text-lg font-semibold text-ink mb-2">Purge {purgeFor.name}</h2>
               <p className="text-sm mb-4" style={{ color: 'var(--danger)' }}>Irreversible. Destroys all DB rows, R2 objects, and cancels the Stripe subscription. Type the tenant name to confirm.</p>
               <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{purgeFor.ref} · {purgeFor.id}</p>
               <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={purgeFor.name}
-                className="w-full rounded-lg px-3 py-2 text-white mb-4" style={{ background: 'var(--sidebar-bg)', border: '1px solid var(--border)' }} />
+                className="w-full rounded-lg px-3 py-2 bg-surface text-ink border border-line mb-4" />
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setPurgeFor(null)} className="text-sm px-3 py-2" style={{ color: 'var(--text-muted)' }}>Cancel</button>
                 <button disabled={typed.trim() !== purgeFor.name || busy === purgeFor.id} onClick={doPurge}
-                  className="text-sm px-4 py-2 rounded-lg text-white disabled:opacity-40" style={{ background: 'var(--danger)' }}>
+                  className="text-sm px-4 py-2 rounded-lg text-ink disabled:opacity-40" style={{ background: 'var(--danger)' }}>
                   {busy === purgeFor.id ? 'Purging…' : 'Purge forever'}
                 </button>
               </div>

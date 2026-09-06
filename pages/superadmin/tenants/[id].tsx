@@ -72,14 +72,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div className="py-2" style={{ borderBottom: '1px solid var(--border)' }}>
       <div className="text-xs mb-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
-      <div className="text-sm text-white">{children}</div>
+      <div className="text-sm text-ink">{children}</div>
     </div>
   );
 }
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl p-4 mb-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-      <h2 className="text-sm font-semibold text-white mb-2">{title}</h2>
+      <h2 className="text-sm font-semibold text-ink mb-2">{title}</h2>
       {children}
     </div>
   );
@@ -212,7 +212,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             <Link href="/superadmin/tenants" className="text-xs underline" style={{ color: 'var(--accent)' }}>← All tenants</Link>
           </div>
           <div className="flex items-baseline justify-between mb-5">
-            <h1 className="text-xl font-semibold text-white">
+            <h1 className="text-xl font-semibold text-ink">
               {d.business.tradingName || d.business.legalName}
               {d.isInternal && <span className="ml-2 text-xs px-2 py-0.5 rounded" style={{ background: 'var(--warn-soft)', color: 'var(--warn)', border: '1px solid var(--warn)' }}>internal</span>}
               {d.isTmbs && <span className="ml-2 text-xs" style={{ color: 'var(--warn)' }}>★live</span>}
@@ -246,7 +246,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
           <Section title={`Sites (${d.sites.length})`}>
             {d.sites.length === 0 ? <Muted>{NS}</Muted> : d.sites.map((s, i) => (
               <div key={i} className="py-2" style={{ borderBottom: '1px solid var(--border)' }}>
-                <div className="text-sm text-white font-medium">{s.name}</div>
+                <div className="text-sm text-ink font-medium">{s.name}</div>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-1 text-xs">
                   <div><span style={{ color: 'var(--text-muted)' }}>Address: </span><V v={s.address} /></div>
                   <div><span style={{ color: 'var(--text-muted)' }}>Phone: </span><V v={s.phone} /></div>
@@ -267,7 +267,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
                 <tbody>
                   {d.users.map((u, i) => (
                     <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td className="py-1.5 text-white">{u.name ? u.name : <Muted>{NS}</Muted>}</td>
+                      <td className="py-1.5 text-ink">{u.name ? u.name : <Muted>{NS}</Muted>}</td>
                       <td className="py-1.5">{u.email}</td>
                       <td className="py-1.5">{u.role}</td>
                       <td className="py-1.5">{u.active ? 'Active' : <span style={{ color: 'var(--danger)' }}>Deactivated</span>}</td>
@@ -296,17 +296,17 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
               already looking for something. The dashboard tile is the thing that says "go look". */}
           {d.refusals.length > 0 && (
             <div className="rounded-xl p-4 mb-4" style={{ background: 'var(--warn-soft)', border: '1px solid var(--warn)' }} data-testid="er-tenant-refusals">
-              <h2 className="text-sm font-semibold text-amber-200 mb-1">Commission not accrued ({d.refusals.length})</h2>
-              <p className="text-xs text-amber-200/70 mb-2">
+              <h2 className="text-sm font-semibold text-warn mb-1">Commission not accrued ({d.refusals.length})</h2>
+              <p className="text-xs text-warn mb-2">
                 The engine refused to accrue commission on these payments rather than invent a figure.
                 A rep is owed and unpaid until the cause is fixed and the payment re-processed.
               </p>
               <ul className="space-y-2">
                 {d.refusals.map((r) => (
-                  <li key={r.id} className="text-xs text-amber-100/90" data-testid={`er-refusal-${r.code}`}>
-                    <span className="font-mono text-amber-200">{r.code}</span>
-                    <span className="text-amber-200/60"> · {new Date(r.occurredAt).toLocaleString('en-GB', { timeZone: 'UTC' })} · payment {r.sourceRef}</span>
-                    <div className="text-amber-100/70">{r.message}</div>
+                  <li key={r.id} className="text-xs text-warn" data-testid={`er-refusal-${r.code}`}>
+                    <span className="font-mono text-warn">{r.code}</span>
+                    <span className="text-warn"> · {new Date(r.occurredAt).toLocaleString('en-GB', { timeZone: 'UTC' })} · payment {r.sourceRef}</span>
+                    <div className="text-warn">{r.message}</div>
                   </li>
                 ))}
               </ul>

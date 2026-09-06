@@ -26,8 +26,8 @@ const money = (pennies: number, currency: string) => {
   catch { return `${(pennies / 100).toFixed(2)} ${currency}`; }
 };
 const STATUS: Record<string, { label: string; cls: string }> = {
-  in_force: { label: 'In force', cls: 'bg-emerald-900/50 text-emerald-200 border-emerald-800' },
-  future: { label: 'Future', cls: 'bg-amber-900/50 text-amber-200 border-amber-800' },
+  in_force: { label: 'In force', cls: 'bg-ok-soft text-ok border-ok' },
+  future: { label: 'Future', cls: 'bg-warn-soft text-warn border-warn' },
   superseded: { label: 'Superseded', cls: 'bg-surface-muted text-muted border-line' },
 };
 const input = 'bg-surface-muted border border-line rounded-lg px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-accent focus:outline-none';
@@ -100,7 +100,7 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
           forward-dated row — the prior rate stays frozen up to the new date, so historical commission
           never moves. Only a future, unreferenced rate can be corrected or removed.{nowStr && <> Today is <span className="text-muted">{nowStr}</span>.</>}
         </p>
-        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
+        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         {/* ── HALF-CONFIGURED PAIRS ──────────────────────────────────────────────────────────
             Stated, never fixed. A country/currency with only one tier works until a tenant's
@@ -108,9 +108,9 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
             is a log line. Seeding the missing rate automatically would put a figure nobody chose
             into the table, so this says what is missing and leaves the number to the owner. */}
         {gaps.length > 0 && (
-          <div className="mb-4 rounded-xl border border-amber-700/60 bg-amber-950/40 p-4" data-testid="rate-tier-gaps">
-            <p className="text-sm font-medium text-amber-200">Incomplete rate coverage</p>
-            <ul className="mt-2 space-y-1 text-sm text-amber-100/90">
+          <div className="mb-4 rounded-xl border border-warn bg-warn-soft p-4" data-testid="rate-tier-gaps">
+            <p className="text-sm font-medium text-warn">Incomplete rate coverage</p>
+            <ul className="mt-2 space-y-1 text-sm text-warn">
               {gaps.map((g) => (
                 <li key={`${g.country}/${g.currency}`} data-testid={`rate-gap-${g.country}-${g.currency}`}>
                   <span className="font-medium">{g.country} · {g.currency}</span> has{' '}
@@ -119,7 +119,7 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs text-amber-200/70">
+            <p className="mt-2 text-xs text-warn">
               A tenant reaching twelve months on one of these moves to the missing tier, and every
               accrual for them is refused until a rate exists — their rep earns nothing in the
               meantime. Add the rate above when you have settled the figure.
@@ -169,7 +169,7 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
                             {r.editable ? (
                               <span className="flex gap-2">
                                 <button disabled={busy} onClick={() => correct(r)} className="rounded-lg border border-line text-ink hover:bg-surface-muted px-3 py-1 text-xs disabled:opacity-40">Correct</button>
-                                <button disabled={busy} onClick={() => remove(r)} className="rounded-lg border border-red-800 text-red-200 hover:bg-red-900/40 px-3 py-1 text-xs disabled:opacity-40">Remove</button>
+                                <button disabled={busy} onClick={() => remove(r)} className="rounded-lg border border-danger text-danger hover:bg-danger-soft px-3 py-1 text-xs disabled:opacity-40">Remove</button>
                               </span>
                             ) : <span className="text-xs text-muted" title={r.status === 'future' ? 'Referenced by commission — frozen' : 'In force or past — frozen'}>frozen</span>}
                           </td>

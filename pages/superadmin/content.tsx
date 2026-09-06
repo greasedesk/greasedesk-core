@@ -27,7 +27,7 @@ const canLegal = (role: string) => role === 'owner';
 
 function Preview({ body }: { body: string }) {
   return (
-    <div className="text-sm text-muted leading-relaxed [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-white [&_h1]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-white [&_h2]:mt-3 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-sky-400 [&_strong]:text-white [&_table]:w-full [&_th]:text-left [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_td]:border-t [&_td]:border-line [&_blockquote]:border-l-4 [&_blockquote]:border-amber-500 [&_blockquote]:bg-amber-950/40 [&_blockquote]:text-amber-200 [&_blockquote]:px-3 [&_blockquote]:py-2 [&_code]:font-mono [&_code]:text-xs [&_code]:bg-surface-muted [&_code]:px-1 [&_code]:rounded">
+    <div className="text-sm text-muted leading-relaxed [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-ink [&_h1]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-ink [&_h2]:mt-3 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-accent [&_strong]:text-ink [&_table]:w-full [&_th]:text-left [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_td]:border-t [&_td]:border-line [&_blockquote]:border-l-4 [&_blockquote]:border-warn [&_blockquote]:bg-warn-soft [&_blockquote]:text-warn [&_blockquote]:px-3 [&_blockquote]:py-2 [&_code]:font-mono [&_code]:text-xs [&_code]:bg-surface-muted [&_code]:px-1 [&_code]:rounded">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || '_Nothing to preview yet._'}</ReactMarkdown>
     </div>
   );
@@ -121,16 +121,16 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
             <h1 className="text-xl font-semibold">{sel ? `${sel.slug} · ${sel.country}` : 'Content'}</h1>
             {!sel && (
               <div className="flex gap-1 text-sm">
-                <button onClick={() => setMode('docs')} className={`px-3 py-1 rounded-lg ${mode === 'docs' ? 'bg-surface-muted text-white' : 'text-muted hover:text-white'}`}>Documents</button>
-                <button onClick={() => setMode('nav')} className={`px-3 py-1 rounded-lg ${mode === 'nav' ? 'bg-surface-muted text-white' : 'text-muted hover:text-white'}`}>Navigation</button>
+                <button onClick={() => setMode('docs')} className={`px-3 py-1 rounded-lg ${mode === 'docs' ? 'bg-surface-muted text-ink' : 'text-muted hover:text-ink'}`}>Documents</button>
+                <button onClick={() => setMode('nav')} className={`px-3 py-1 rounded-lg ${mode === 'nav' ? 'bg-surface-muted text-ink' : 'text-muted hover:text-ink'}`}>Navigation</button>
               </div>
             )}
           </div>
-          {sel ? <a href={publicUrl(sel.slug)} target="_blank" rel="noopener noreferrer" className="text-xs text-sky-400 hover:underline">↗ {publicUrl(sel.slug)}</a>
+          {sel ? <a href={publicUrl(sel.slug)} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">↗ {publicUrl(sel.slug)}</a>
             : mode === 'docs' ? <button onClick={() => setNc({ slug: '', title: '', type: canLegal(role) ? 'legal' : 'page', country: 'GB' })} className={btn}>New document</button> : null}
         </div>
-        {sel && <button onClick={backToList} className="text-sm text-muted hover:text-white mb-3 inline-block">← All documents</button>}
-        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
+        {sel && <button onClick={backToList} className="text-sm text-muted hover:text-ink mb-3 inline-block">← All documents</button>}
+        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         {!sel && mode === 'nav' && <NavManager />}
 
@@ -158,13 +158,13 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
               <tbody>
                 {docs.length === 0 ? <tr><td colSpan={7} className="px-3 py-6 text-muted text-center">No documents yet.</td></tr> : docs.map((r) => (
                   <tr key={`${r.slug}/${r.country}`} className="border-t border-line hover:bg-surface/50 cursor-pointer" onClick={() => openDoc(r.slug, r.country)}>
-                    <td className="px-3 py-2"><div className="text-white">{r.title} <span className="text-muted">→ open</span></div><div className="text-xs text-muted">{r.slug}</div></td>
-                    <td className="px-3 py-2"><span className={`text-xs rounded-full px-2 py-0.5 border ${r.type === 'legal' ? 'border-amber-800 text-amber-300' : 'border-line text-muted'}`}>{r.type}</span></td>
+                    <td className="px-3 py-2"><div className="text-ink">{r.title} <span className="text-muted">→ open</span></div><div className="text-xs text-muted">{r.slug}</div></td>
+                    <td className="px-3 py-2"><span className={`text-xs rounded-full px-2 py-0.5 border ${r.type === 'legal' ? 'border-warn text-warn' : 'border-line text-muted'}`}>{r.type}</span></td>
                     <td className="px-3 py-2 text-muted">{r.country}</td>
-                    <td className="px-3 py-2">{r.publishedVersion ? <a href={publicUrl(r.slug)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-xs text-sky-400 hover:underline font-mono">/{r.slug} ↗</a> : <span className="text-xs text-muted">unpublished</span>}</td>
+                    <td className="px-3 py-2">{r.publishedVersion ? <a href={publicUrl(r.slug)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-xs text-accent hover:underline font-mono">/{r.slug} ↗</a> : <span className="text-xs text-muted">unpublished</span>}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted">{r.publishedVersion ?? <span className="text-muted">—</span>}</td>
                     <td className="px-3 py-2 text-xs text-muted">{r.effectiveFrom ?? '—'}</td>
-                    <td className="px-3 py-2 text-right">{r.hasDraft && <span className="text-[10px] text-amber-400">draft in progress</span>}</td>
+                    <td className="px-3 py-2 text-right">{r.hasDraft && <span className="text-[10px] text-warn">draft in progress</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -186,9 +186,9 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
                   <button onClick={() => { void saveDraft(); }} disabled={busy} className="rounded-lg border border-line text-ink hover:bg-surface-muted px-4 py-2 text-sm">Save draft</button>
                   {draft.type === 'legal' && <div><label className="block text-xs text-muted mb-1">Effective date (required)</label><input type="date" value={effective} onChange={(e) => setEffective(e.target.value)} className={input} /></div>}
                   <button onClick={publish} disabled={busy} className={btn}>{draft.type === 'legal' ? 'Publish immutable version' : 'Publish'}</button>
-                  <button onClick={discard} disabled={busy} className="text-red-300 text-sm px-2 hover:text-red-200">Discard draft</button>
+                  <button onClick={discard} disabled={busy} className="text-danger text-sm px-2 hover:text-danger">Discard draft</button>
                 </div>
-                {draft.type === 'legal' && <p className="text-xs text-amber-300/80">⚠ Publishing a legal version freezes it forever — it can never be edited or deleted. Corrections mean publishing a new version.</p>}
+                {draft.type === 'legal' && <p className="text-xs text-warn">⚠ Publishing a legal version freezes it forever — it can never be edited or deleted. Corrections mean publishing a new version.</p>}
               </>
             ) : (
               <div className="space-y-3">
@@ -214,7 +214,7 @@ export default function ContentScreen({ role }: { role: OperatorRoleName }) {
                   <tbody>
                     {published.map((v, i) => (
                       <tr key={v.id} className="border-t border-line">
-                        <td className="px-4 py-2 font-mono text-xs text-ink">{v.version}{i === 0 && <span className="ml-2 text-[10px] text-emerald-400">current</span>}</td>
+                        <td className="px-4 py-2 font-mono text-xs text-ink">{v.version}{i === 0 && <span className="ml-2 text-[10px] text-ok">current</span>}</td>
                         <td className="px-4 py-2 text-xs text-muted">{v.effective_from ? v.effective_from.slice(0, 10) : '—'}</td>
                         <td className="px-4 py-2 text-xs text-muted">{v.published_at ? new Date(v.published_at).toLocaleString('en-GB') : '—'}</td>
                         <td className="px-4 py-2 text-xs text-muted font-mono">{v.created_by?.slice(0, 8) ?? '—'}</td>

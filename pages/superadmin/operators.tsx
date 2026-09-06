@@ -66,11 +66,11 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
       <Head><title>Engine Room — operators</title><meta name="robots" content="noindex" /></Head>
       <div className="p-6 max-w-5xl">
         <h1 className="text-xl font-semibold mb-4">Operators</h1>
-        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
+        {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
         {created && (
-          <div className="mb-4 rounded-xl border border-emerald-800 bg-emerald-950/60 p-4">
-            <div className="text-sm text-emerald-200 mb-2">
-              Created <span className="font-semibold text-white">{created.email}</span>. {created.emailSent ? 'A set-password email was sent — and' : 'Email not delivered;'} share this one-time set-password link with them:
+          <div className="mb-4 rounded-xl border border-ok bg-ok-soft p-4">
+            <div className="text-sm text-ok mb-2">
+              Created <span className="font-semibold text-ink">{created.email}</span>. {created.emailSent ? 'A set-password email was sent — and' : 'Email not delivered;'} share this one-time set-password link with them:
             </div>
             <div className="flex gap-2 items-center">
               <input readOnly value={created.link} onClick={(e) => (e.target as HTMLInputElement).select()} className="flex-1 bg-surface border border-line rounded-lg px-3 py-2 text-xs text-ink font-mono" />
@@ -105,9 +105,9 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
             </tr></thead>
             <tbody>
               {ops.map((o) => (
-                <tr key={o.id} className={`border-t border-line ${o.status === 'suspended' ? 'bg-red-950/30' : ''}`}>
+                <tr key={o.id} className={`border-t border-line ${o.status === 'suspended' ? 'bg-danger-soft' : ''}`}>
                   <td className="px-3 py-2">
-                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-muted">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}{o.twoFactorEnabled && <span className="ml-1 text-[10px] text-emerald-400" title="Two-factor authentication is on">🔒 2FA</span>}</div>
+                    <div className="text-ink whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-muted">you</span>}{o.pending && <span className="ml-1 text-[10px] text-warn">pending</span>}{o.twoFactorEnabled && <span className="ml-1 text-[10px] text-ok" title="Two-factor authentication is on">🔒 2FA</span>}</div>
                     <div className="text-xs text-muted">{o.email}</div>
                   </td>
                   <td className="px-3 py-2">
@@ -117,11 +117,11 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
                   </td>
                   <td className="px-3 py-2 text-muted">
                     {o.role === 'owner' ? <span className="text-muted">all</span> : (
-                      <button onClick={() => changeRegions(o)} className="underline decoration-dotted text-muted hover:text-white">{o.regions.join(', ') || '—'}</button>
+                      <button onClick={() => changeRegions(o)} className="underline decoration-dotted text-muted hover:text-ink">{o.regions.join(', ') || '—'}</button>
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${o.status === 'suspended' ? 'bg-red-900/60 text-red-200 border border-red-700' : 'bg-emerald-900/50 text-emerald-200 border border-emerald-800'}`}>
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${o.status === 'suspended' ? 'bg-danger-soft text-danger border border-danger' : 'bg-ok-soft text-ok border border-ok'}`}>
                       {o.status === 'suspended' ? 'Suspended' : 'Active'}
                     </span>
                   </td>
@@ -129,9 +129,9 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="flex gap-2">
                       {o.status === 'suspended'
-                        ? <button disabled={busy} onClick={() => unsuspend(o)} className="rounded-lg border border-emerald-700 text-emerald-200 hover:bg-emerald-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Un-suspend</button>
-                        : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} title={o.isSelf ? 'You cannot suspend yourself' : 'Suspend this operator'} className="rounded-lg border border-red-800 text-red-200 hover:bg-red-900/40 px-3 py-1 text-xs font-medium disabled:opacity-30">Suspend</button>}
-                      {o.twoFactorEnabled && <button disabled={busy} onClick={() => reset2fa(o)} title="Reset 2FA (lost-device recovery)" className="rounded-lg border border-amber-700 text-amber-200 hover:bg-amber-900/40 px-3 py-1 text-xs font-medium disabled:opacity-40">Reset&nbsp;2FA</button>}
+                        ? <button disabled={busy} onClick={() => unsuspend(o)} className="rounded-lg border border-ok text-ok hover:bg-ok-soft px-3 py-1 text-xs font-medium disabled:opacity-40">Un-suspend</button>
+                        : <button disabled={busy || o.isSelf} onClick={() => suspend(o)} title={o.isSelf ? 'You cannot suspend yourself' : 'Suspend this operator'} className="rounded-lg border border-danger text-danger hover:bg-danger-soft px-3 py-1 text-xs font-medium disabled:opacity-30">Suspend</button>}
+                      {o.twoFactorEnabled && <button disabled={busy} onClick={() => reset2fa(o)} title="Reset 2FA (lost-device recovery)" className="rounded-lg border border-warn text-warn hover:bg-warn-soft px-3 py-1 text-xs font-medium disabled:opacity-40">Reset&nbsp;2FA</button>}
                     </span>
                   </td>
                 </tr>

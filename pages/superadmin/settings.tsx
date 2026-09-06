@@ -40,7 +40,7 @@ export default function OperatorSettings({ role, email, name }: Props) {
       <Head><title>Engine Room — settings</title><meta name="robots" content="noindex" /></Head>
       <div className="p-6 max-w-2xl space-y-5">
         <h1 className="text-xl font-semibold">Your account</h1>
-        {msg && <div className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-emerald-900/50 text-emerald-200' : 'bg-red-900/50 text-red-200'}`}>{msg.text}</div>}
+        {msg && <div className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         <Card title="Name">
           <form onSubmit={async (e) => { e.preventDefault(); await call({ action: 'name', name: nm }); }} className="flex gap-2 items-end">

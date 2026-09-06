@@ -4,22 +4,25 @@
  * @gate-requires: server:3000
  *
  * ── WHAT WAS WRONG ──────────────────────────────────────────────────────────────────────────────
- * tailwind.config says it plainly: "Use these everywhere (bg-surface, text-ink, bg-accent, …);
- * never raw slate/blue or hex." AdminLayout obeys it — zero raw slate. The Engine Room did not:
- * 178 raw `slate-*` classes across pages/superadmin and 14 more in its layout, and NOT ONE token.
+ * tailwind.config says it plainly: "never raw slate/blue or hex", and "do not reintroduce a second
+ * palette". AdminLayout obeys it. The Engine Room did not: 320 hardcoded colours across 15 files —
+ * slate classes, and inline hex that had copied the RAIL's own values (#7C8AA3 is --sidebar-muted).
  *
- * The divergence was deliberate and argued for — an operator with both portals open must never
- * confuse them. The argument survives; the second palette does not. The tenant rail is already dark
- * navy (#0B1E3B) while the ER rail was slate-900 (#0F172A): near enough to look like a mistake,
- * far enough to be one. The distinction that actually reads is DARK THROUGHOUT against a light
- * workspace, and the token set has carried a dark theme all along — `:root[data-theme="dark"]`,
- * written as a scaffold and never wired to anything.
+ * ── THE RULE IS TOKENS, NOT A THEME ─────────────────────────────────────────────────────────────
+ * This gate briefly asserted that the Engine Room was DARK — that _document stamped data-theme and
+ * that --surface resolved to #1E293B. That was a fact about a decision, and the decision changed
+ * the same day: the workspace is light again, like the tenant app.
  *
- * ── WHY THE COMPUTED COLOUR, NOT JUST THE CLASS NAMES ───────────────────────────────────────────
- * A scan proves the raw classes are gone. It cannot prove the tokens RESOLVE: `bg-surface` on a
- * page where data-theme was never stamped is a white workspace wearing the right class name, and
- * the scan would be green. So this reads the custom properties off the served document and checks
- * they carry the dark values.
+ * What survives the decision is that every colour comes from a TOKEN. So that is what is asserted,
+ * and for ALL raw Tailwind scales rather than slate alone — the first version banned slate and hex
+ * and let 84 status classes through (bg-emerald-900/50, text-amber-200), tuned for a dark ground
+ * and wrong on a light one. A ban that names one colour family teaches the next person to reach for
+ * a different family.
+ *
+ * ── AND THE TOKENS MUST RESOLVE ─────────────────────────────────────────────────────────────────
+ * A scan proves the classes are gone; it cannot prove they RESOLVE. So the custom properties are
+ * read off the served document, and the check is that the workspace is the SAME ground the tenant
+ * app uses — not a particular colour this gate has opinions about.
  *
  * Read-only: no fixtures, no tenant, no credentials. /superadmin/login is pre-auth, which is why
  * the theme can be proved without standing up an operator.
@@ -55,14 +58,14 @@ const erFiles = [
 
 try {
   // ── 1. ONE PALETTE ───────────────────────────────────────────────────────────────────────────
-  console.log('\n— no second palette —');
+  console.log('\n— no second palette, and no third one —');
   const offenders = [];
   for (const f of erFiles) {
-    const raw = [...code(f).matchAll(/\b(?:bg|text|border|ring|divide|from|to|via)-slate-\d+/g)].length;
+    const raw = [...code(f).matchAll(/\b(?:bg|text|border|ring|divide|decoration|from|to|via)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d+/g)].length;
     const hex = [...code(f).matchAll(/#[0-9a-fA-F]{6}\b/g)].length;
     if (raw + hex) offenders.push(`${f.replace('pages/superadmin/', '')}:${raw}slate${hex ? `+${hex}hex` : ''}`);
   }
-  check('no raw slate or hex anywhere in the Engine Room', offenders.length === 0, offenders.join(' ') || `${erFiles.length} files clean`);
+  check('no raw Tailwind colour scale or hex anywhere in the Engine Room', offenders.length === 0, offenders.join(' ') || `${erFiles.length} files clean`);
   // POSITIVE: the scan must be looking at something. An empty file list would pass the check above.
   check('  …and the scan really covered the Engine Room', erFiles.length >= 14, `${erFiles.length} files`);
   const layout = code('components/layout/EngineRoomLayout.tsx');
@@ -98,13 +101,15 @@ try {
     .filter((f) => /greasedesk-logo-source\.png/.test(code(f)));
   check('  …and none of the three still names the old asset', stale.length === 0, stale.join(', ') || 'clean');
 
-  check('_document stamps the dark theme on Engine Room routes',
-    /data-theme/.test(doc) && /superadmin/.test(doc), 'SSR, so the page never paints light first');
+  // NOTHING STAMPS A THEME. _document briefly set data-theme for /superadmin; a leftover would put
+  // the workspace back on the dark tokens while every class name still looked right.
+  check('_document stamps no theme at all', !/data-theme/.test(doc),
+    'the Engine Room and the tenant app render on the same tokens, unswitched');
 
   // ── 4. AND THE TOKENS ACTUALLY RESOLVE ───────────────────────────────────────────────────────
   // The half a scan cannot reach: `bg-surface` with no data-theme is a WHITE workspace with the
   // right class name.
-  console.log('\n— and the tokens resolve to the dark values in the served page —');
+  console.log('\n— and the tokens resolve to the same values the tenant app uses —');
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   browser = await chromium.launch({ channel: 'chrome', args: ['--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1'] });
@@ -119,15 +124,14 @@ try {
       sidebar: v('--sidebar-bg'), accent: v('--accent'),
       bodyBg: getComputedStyle(document.body).backgroundColor };
   });
-  check('the Engine Room document is stamped dark', read.theme === 'dark', `data-theme=${read.theme}`);
-  check('  …so --surface is the dark surface, not white', read.surface.toUpperCase() === '#1E293B', read.surface);
-  check('  …and --text is the light ink', read.text.toUpperCase() === '#F1F5F9', read.text);
-  check('  …and the workspace ground is dark', read.content.toUpperCase() === '#0F172A', read.content);
-  // UNCHANGED BY THE THEME, and that is the point of one palette: the rail and the accent are the
-  // SAME brand values the tenant app uses, on both themes.
+  check('the Engine Room is NOT on a theme of its own', read.theme === null,
+    `data-theme=${read.theme} — the distinction from the tenant app is the hostname and the label`);
+  check('  …so the workspace is the tenant app\'s own surface', read.surface.toUpperCase() === '#FFFFFF', read.surface);
+  check('  …and the tenant app\'s own ink', read.text.toUpperCase() === '#0F1E33', read.text);
+  check('  …on the tenant app\'s own ground', read.content.toUpperCase() === '#F4F6FA', read.content);
   check('the rail is the tenant app\'s own navy', read.sidebar.toUpperCase() === '#0B1E3B', read.sidebar);
   check('  …and the accent is the tenant app\'s own blue', read.accent.toUpperCase() === '#2563EB', read.accent);
-  check('the page actually painted dark', /^rgb\(15, 23, 42\)$/.test(read.bodyBg), read.bodyBg);
+  check('the page painted on that ground', /^rgb\(244, 246, 250\)$/.test(read.bodyBg), read.bodyBg);
 
   const logo = await page.evaluate(async () => {
     const r = await fetch('/greasedesk-Logo.png', { method: 'GET' });
