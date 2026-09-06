@@ -32,8 +32,12 @@ const isNextInternal = (p: string) => p.startsWith('/_next/'); // matcher alread
  * been a permanently broken image. This opens exactly ONE file, by exact match: a public brand
  * asset that is already served to anyone who loads the marketing site, carrying no tenant data and
  * no behaviour. The door stays otherwise shut — a prefix or a wildcard here would re-open /public.
+ *
+ * EXACT MATCH, AND THE CASE IS PART OF IT: the file is greasedesk-Logo.png with a capital L, and
+ * this comparison is `===`. A lowercased constant would match nothing here and 404 the logo in
+ * production while working on a case-insensitive laptop.
  */
-const BRAND_ASSET = '/greasedesk-logo-source.png';
+const BRAND_ASSET = '/greasedesk-Logo.png';
 
 const notFound = () => new NextResponse('Not Found', { status: 404 });
 

@@ -30,6 +30,16 @@ import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, readdirSync, existsSync } = await import('node:fs');
 
+/**
+ * THE THREE PLACES THE BRAND ASSET IS NAMED, and the one thing that can silently break them.
+ *
+ * The file is greasedesk-Logo.png — CAPITAL L. macOS is case-insensitive, so a lowercased path
+ * resolves locally, passes every check that asks the filesystem, and 404s on Vercel. So the name is
+ * compared against readdirSync's OUTPUT, which is the real directory entry, rather than against
+ * existsSync, which would forgive the mistake this exists to catch.
+ */
+const BRAND_ASSET = '/greasedesk-Logo.png';
+
 const ER = 'http://er.greasedesk.com:3000';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -74,6 +84,20 @@ try {
 
   // ── 3. THE THEME IS WIRED ────────────────────────────────────────────────────────────────────
   const doc = code('pages/_document.tsx');
+  console.log('\n— one brand asset, named identically in three places —');
+  const publicNames = readdirSync('public');
+  check('the asset exists with EXACTLY that case', publicNames.includes(BRAND_ASSET.slice(1)),
+    `${BRAND_ASSET} — matched against the real directory entry, not a case-insensitive filesystem`);
+  check('BrandLogo points at it', code('components/BrandLogo.tsx').includes(`'${BRAND_ASSET}'`),
+    'the 1.93 MB glow render is not a UI asset');
+  check('the middleware opens exactly it', code('middleware.ts').includes(`BRAND_ASSET = '${BRAND_ASSET}'`),
+    'er. serves only the Engine Room, so this one path is the whole of /public it can reach');
+  // AND NOTHING STILL REACHES FOR THE OLD ONE. A stale reference would 404 on er. and weigh
+  // 1.93 MB everywhere else, which is the shape that survives review.
+  const stale = ['components/BrandLogo.tsx', 'middleware.ts', 'scripts/engine-room-palette-gate.mjs']
+    .filter((f) => /greasedesk-logo-source\.png/.test(code(f)));
+  check('  …and none of the three still names the old asset', stale.length === 0, stale.join(', ') || 'clean');
+
   check('_document stamps the dark theme on Engine Room routes',
     /data-theme/.test(doc) && /superadmin/.test(doc), 'SSR, so the page never paints light first');
 
@@ -106,7 +130,7 @@ try {
   check('the page actually painted dark', /^rgb\(15, 23, 42\)$/.test(read.bodyBg), read.bodyBg);
 
   const logo = await page.evaluate(async () => {
-    const r = await fetch('/greasedesk-logo-source.png', { method: 'GET' });
+    const r = await fetch('/greasedesk-Logo.png', { method: 'GET' });
     return { status: r.status, type: r.headers.get('content-type') };
   });
   check('the brand image actually loads on the er. host', logo.status === 200,

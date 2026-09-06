@@ -11,7 +11,23 @@
 import React from 'react';
 import Link from 'next/link';
 
-const LOGO_SRC = '/greasedesk-logo-source.png';
+/**
+ * THE FLAT LOCKUP, not the glow render.
+ *
+ * This pointed at greasedesk-logo-source.png: 1536x1024 and 1.93 MB, on every admin page, to draw
+ * something 132px wide. The weight was the GLOW — a soft radial gradient, which PNG compresses
+ * terribly — and two thirds of the canvas was empty padding around it, so the visible mark was
+ * smaller than the box suggested. It is a hero render that got wired into the UI.
+ *
+ * greasedesk-Logo.png is the same artwork, flat and tightly cropped: 1022x353 and 186 KB, already
+ * the OG/schema image (lib/company-info). At 1022px against a 132px render it is 7.7x — ample at
+ * any density — and one tenth the bytes.
+ *
+ * THE CAPITAL L IS LOAD-BEARING. macOS is case-insensitive and Vercel is not, so a lowercased path
+ * works locally and 404s in production. engine-room-palette-gate checks this string against the
+ * real directory listing, which is case-sensitive, rather than against a filesystem that forgives.
+ */
+const LOGO_SRC = '/greasedesk-Logo.png';
 
 export default function BrandLogo(
   { width = 140, href = '/admin/dashboard', slim = false, plate = true, maxHeight }:
