@@ -13,11 +13,11 @@ import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 import TwoFactorCard from '@/components/engine-room/TwoFactorCard';
 
 type Props = { role: OperatorRoleName; email: string; name: string };
-const input = 'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-slate-500 focus:outline-none';
-const btn = 'bg-slate-100 text-slate-900 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50';
+const input = 'w-full bg-surface-muted border border-line rounded-lg px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-accent focus:outline-none';
+const btn = 'bg-surface text-ink rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50';
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return <div className="rounded-xl border border-slate-800 bg-slate-900 p-5"><h2 className="text-sm font-semibold mb-3">{title}</h2>{children}</div>;
+  return <div className="rounded-xl border border-line bg-surface p-5"><h2 className="text-sm font-semibold mb-3">{title}</h2>{children}</div>;
 }
 
 export default function OperatorSettings({ role, email, name }: Props) {
@@ -44,25 +44,25 @@ export default function OperatorSettings({ role, email, name }: Props) {
 
         <Card title="Name">
           <form onSubmit={async (e) => { e.preventDefault(); await call({ action: 'name', name: nm }); }} className="flex gap-2 items-end">
-            <div className="flex-1"><label className="block text-xs text-slate-400 mb-1">Display name</label><input value={nm} onChange={(e) => setNm(e.target.value)} required className={input} /></div>
+            <div className="flex-1"><label className="block text-xs text-muted mb-1">Display name</label><input value={nm} onChange={(e) => setNm(e.target.value)} required className={input} /></div>
             <button className={btn} disabled={busy}>Save</button>
           </form>
         </Card>
 
         <Card title="Email">
           <form onSubmit={async (e) => { e.preventDefault(); if (await call({ action: 'email', email: em, currentPassword: emPw })) setEmPw(''); }} className="space-y-2">
-            <div><label className="block text-xs text-slate-400 mb-1">Email</label><input type="email" value={em} onChange={(e) => setEm(e.target.value)} required className={input} /></div>
-            <div><label className="block text-xs text-slate-400 mb-1">Current password (to confirm)</label><input type="password" autoComplete="current-password" value={emPw} onChange={(e) => setEmPw(e.target.value)} required className={input} /></div>
+            <div><label className="block text-xs text-muted mb-1">Email</label><input type="email" value={em} onChange={(e) => setEm(e.target.value)} required className={input} /></div>
+            <div><label className="block text-xs text-muted mb-1">Current password (to confirm)</label><input type="password" autoComplete="current-password" value={emPw} onChange={(e) => setEmPw(e.target.value)} required className={input} /></div>
             <button className={btn} disabled={busy}>Change email</button>
-            <p className="text-[11px] text-slate-500">The old address is notified. (Full new-address confirmation isn't built yet.)</p>
+            <p className="text-[11px] text-muted">The old address is notified. (Full new-address confirmation isn't built yet.)</p>
           </form>
         </Card>
 
         <Card title="Password">
           <form onSubmit={async (e) => { e.preventDefault(); if (await call({ action: 'password', currentPassword: curPw, newPassword: newPw, confirmPassword: confPw })) { setCurPw(''); setNewPw(''); setConfPw(''); } }} className="space-y-2">
-            <div><label className="block text-xs text-slate-400 mb-1">Current password</label><input type="password" autoComplete="current-password" value={curPw} onChange={(e) => setCurPw(e.target.value)} required className={input} /></div>
-            <div><label className="block text-xs text-slate-400 mb-1">New password</label><input type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} required minLength={8} className={input} /></div>
-            <div><label className="block text-xs text-slate-400 mb-1">Confirm new password</label><input type="password" autoComplete="new-password" value={confPw} onChange={(e) => setConfPw(e.target.value)} required minLength={8} className={input} /></div>
+            <div><label className="block text-xs text-muted mb-1">Current password</label><input type="password" autoComplete="current-password" value={curPw} onChange={(e) => setCurPw(e.target.value)} required className={input} /></div>
+            <div><label className="block text-xs text-muted mb-1">New password</label><input type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} required minLength={8} className={input} /></div>
+            <div><label className="block text-xs text-muted mb-1">Confirm new password</label><input type="password" autoComplete="new-password" value={confPw} onChange={(e) => setConfPw(e.target.value)} required minLength={8} className={input} /></div>
             <button className={btn} disabled={busy}>Change password</button>
           </form>
         </Card>

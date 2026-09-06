@@ -102,6 +102,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
+    'engine-room-palette-gate',
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
     'demo-fuel-gate', 'document-credit-gate', 'marketing-board-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
     'demo-subject-gate', 'due-items-gate', 'due-timing-gate', 'gate-hygiene-gate',

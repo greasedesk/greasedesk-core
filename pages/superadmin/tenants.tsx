@@ -65,34 +65,34 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
   return (
     <EngineRoomLayout role={role}>
       <Head><title>Engine Room — tenants</title><meta name="robots" content="noindex" /></Head>
-      <div className="p-6" style={{ color: '#C7D2E1' }}>
+      <div className="p-6" style={{ color: 'var(--text)' }}>
         <div className="max-w-6xl">
           <div className="flex items-baseline justify-between mb-6">
-            <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: '#7C8AA3' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
+            <h1 className="text-xl font-semibold text-white">Tenants <span className="text-sm font-normal" style={{ color: 'var(--text-muted)' }}>· {operatorEmail}{!canAct && ' · read-only'}</span></h1>
             {/* Count is CUSTOMER tenants only — internal (GreaseDesk-owned gate/test) tenants stay in
                 the list, badged, but never inflate the headline number. */}
             {/* BOTH NUMBERS. The count was correct — customer tenants only — but it sat beside a
                 longer list with nothing saying why, so it read as broken. A plausible number the
                 reader cannot reconcile costs more trust than a missing one. */}
-            <span className="text-xs" style={{ color: '#7C8AA3' }}>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
               {rows.filter((r) => !r.isInternal).length} customer tenants
               {rows.some((r) => r.isInternal) && ` · ${rows.filter((r) => r.isInternal).length} internal`}
             </span>
           </div>
-          {msg && <div className="mb-4 text-sm rounded-lg px-3 py-2" style={{ background: '#12294a', border: '1px solid #1C3257' }}>{msg}</div>}
-          <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid #1C3257' }}>
+          {msg && <div className="mb-4 text-sm rounded-lg px-3 py-2" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>{msg}</div>}
+          <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--border)' }}>
             <table className="w-full text-sm">
-              <thead style={{ background: '#12294a', color: '#7C8AA3' }}>
+              <thead style={{ background: 'var(--surface-muted)', color: 'var(--text-muted)' }}>
                 <tr className="text-left">
                   {['Name', 'Ref', 'ID', 'Created', 'Subscription', 'Sites', 'Users', 'Last activity', ''].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((t) => (
-                  <tr key={t.id} style={{ borderTop: '1px solid #1C3257', opacity: t.archivedAt ? 0.55 : 1 }}>
-                    <td className="px-3 py-2 font-medium whitespace-nowrap"><Link href={`/superadmin/tenants/${t.id}`} className="text-white hover:underline" style={{ color: '#8AB4F8' }}>{t.name}</Link>{t.isInternal && <span className="ml-1 text-xs px-1.5 py-0.5 rounded" style={{ background: '#3A2A0B', color: '#FCD34D' }}>internal</span>}{t.isTmbs && <span className="ml-1 text-xs" style={{ color: '#FCD34D' }}>★live</span>}{t.archivedAt && <span className="ml-1 text-xs" style={{ color: '#FCA5A5' }}>archived</span>}</td>
+                  <tr key={t.id} style={{ borderTop: '1px solid var(--border)', opacity: t.archivedAt ? 0.55 : 1 }}>
+                    <td className="px-3 py-2 font-medium whitespace-nowrap"><Link href={`/superadmin/tenants/${t.id}`} className="text-white hover:underline" style={{ color: 'var(--accent)' }}>{t.name}</Link>{t.isInternal && <span className="ml-1 text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}>internal</span>}{t.isTmbs && <span className="ml-1 text-xs" style={{ color: 'var(--warn)' }}>★live</span>}{t.archivedAt && <span className="ml-1 text-xs" style={{ color: 'var(--danger)' }}>archived</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{t.ref}</td>
-                    <td className="px-3 py-2 text-xs" style={{ color: '#7C8AA3' }}>{t.id.slice(0, 8)}…</td>
+                    <td className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>{t.id.slice(0, 8)}…</td>
                     <td className="px-3 py-2 whitespace-nowrap">{new Date(t.created).toLocaleDateString('en-GB')}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{t.subscriptionStatus ?? '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{t.siteCount}</td>
@@ -101,10 +101,10 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
                     <td className="px-3 py-2 whitespace-nowrap">
                       {canAct ? (
                         <span className="flex gap-2">
-                          <button disabled={busy === t.id} onClick={() => archive(t, !!t.archivedAt)} className="text-xs underline" style={{ color: '#8AB4F8' }}>{t.archivedAt ? 'Un-archive' : 'Archive'}</button>
-                          <button disabled={busy === t.id} onClick={() => { setPurgeFor(t); setTyped(''); }} className="text-xs underline" style={{ color: '#FCA5A5' }}>Purge</button>
+                          <button disabled={busy === t.id} onClick={() => archive(t, !!t.archivedAt)} className="text-xs underline" style={{ color: 'var(--accent)' }}>{t.archivedAt ? 'Un-archive' : 'Archive'}</button>
+                          <button disabled={busy === t.id} onClick={() => { setPurgeFor(t); setTyped(''); }} className="text-xs underline" style={{ color: 'var(--danger)' }}>Purge</button>
                         </span>
-                      ) : <span className="text-xs" style={{ color: '#7C8AA3' }}>—</span>}
+                      ) : <span className="text-xs" style={{ color: 'var(--text-muted)' }}>—</span>}
                     </td>
                   </tr>
                 ))}
@@ -115,16 +115,16 @@ export default function SuperAdminTenants({ tenants, operatorEmail, role, canAct
 
         {canAct && purgeFor && (
           <div className="fixed inset-0 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setPurgeFor(null)}>
-            <div className="max-w-md w-full rounded-xl p-6" style={{ background: '#12294a', border: '1px solid #1C3257' }} onClick={(e) => e.stopPropagation()}>
+            <div className="max-w-md w-full rounded-xl p-6" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }} onClick={(e) => e.stopPropagation()}>
               <h2 className="text-lg font-semibold text-white mb-2">Purge {purgeFor.name}</h2>
-              <p className="text-sm mb-4" style={{ color: '#FCA5A5' }}>Irreversible. Destroys all DB rows, R2 objects, and cancels the Stripe subscription. Type the tenant name to confirm.</p>
-              <p className="text-xs mb-2" style={{ color: '#7C8AA3' }}>{purgeFor.ref} · {purgeFor.id}</p>
+              <p className="text-sm mb-4" style={{ color: 'var(--danger)' }}>Irreversible. Destroys all DB rows, R2 objects, and cancels the Stripe subscription. Type the tenant name to confirm.</p>
+              <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{purgeFor.ref} · {purgeFor.id}</p>
               <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={purgeFor.name}
-                className="w-full rounded-lg px-3 py-2 text-white mb-4" style={{ background: '#0B1E3B', border: '1px solid #1C3257' }} />
+                className="w-full rounded-lg px-3 py-2 text-white mb-4" style={{ background: 'var(--sidebar-bg)', border: '1px solid var(--border)' }} />
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setPurgeFor(null)} className="text-sm px-3 py-2" style={{ color: '#7C8AA3' }}>Cancel</button>
+                <button onClick={() => setPurgeFor(null)} className="text-sm px-3 py-2" style={{ color: 'var(--text-muted)' }}>Cancel</button>
                 <button disabled={typed.trim() !== purgeFor.name || busy === purgeFor.id} onClick={doPurge}
-                  className="text-sm px-4 py-2 rounded-lg text-white disabled:opacity-40" style={{ background: '#B91C1C' }}>
+                  className="text-sm px-4 py-2 rounded-lg text-white disabled:opacity-40" style={{ background: 'var(--danger)' }}>
                   {busy === purgeFor.id ? 'Purging…' : 'Purge forever'}
                 </button>
               </div>

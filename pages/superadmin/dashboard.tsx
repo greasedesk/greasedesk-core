@@ -17,10 +17,10 @@ type PageProps = { role: OperatorRoleName; scopeLabel: string; tenantCount: numb
 
 function ComingTile({ title, note }: { title: string; note: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-      <div className="text-sm text-slate-400">{title}</div>
-      <div className="mt-2 text-2xl font-semibold text-slate-500">—</div>
-      <div className="mt-1 text-xs text-slate-500">{note}</div>
+    <div className="rounded-xl border border-line bg-surface p-5">
+      <div className="text-sm text-muted">{title}</div>
+      <div className="mt-2 text-2xl font-semibold text-muted">—</div>
+      <div className="mt-1 text-xs text-muted">{note}</div>
     </div>
   );
 }
@@ -32,34 +32,34 @@ export default function EngineRoomDashboard({ role, scopeLabel, tenantCount, una
       <div className="p-6 max-w-5xl">
         <div className="flex items-baseline justify-between mb-5">
           <h1 className="text-xl font-semibold">Dashboard</h1>
-          <span className="text-xs text-slate-400">scope: {scopeLabel} · {role.replace('_', ' ')}</span>
+          <span className="text-xs text-muted">scope: {scopeLabel} · {role.replace('_', ' ')}</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <ComingTile title="Total revenue (this month)" note="Arrives when billing goes live." />
           <ComingTile title="Retained revenue (forecast)" note="After commission — reads the commission engine once rates & payments are live." />
-          <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Tenants in scope</div>
+          <div className="rounded-xl border border-line bg-surface p-5">
+            <div className="text-sm text-muted">Tenants in scope</div>
             <div className="mt-2 text-2xl font-semibold text-white tabular-nums">{tenantCount}</div>
-            <div className="mt-1 text-xs text-slate-500">Region-scoped to your access.</div>
+            <div className="mt-1 text-xs text-muted">Region-scoped to your access.</div>
           </div>
 
           {/* ── COMMISSION THAT DID NOT ACCRUE ────────────────────────────────────────────────
               A REAL figure, unlike the two tiles above, because this one can be wrong right now.
               Zero is stated rather than blanked: "none outstanding" is a fact worth showing, and
               a tile that only appears when something is broken is a tile nobody learns to read. */}
-          <div className={`rounded-xl border p-5 ${unaccrued > 0 ? 'border-amber-700/70 bg-amber-950/40' : 'border-slate-800 bg-slate-900'}`}
+          <div className={`rounded-xl border p-5 ${unaccrued > 0 ? 'border-amber-700/70 bg-amber-950/40' : 'border-line bg-surface'}`}
             data-testid="er-unaccrued-tile">
-            <div className={`text-sm ${unaccrued > 0 ? 'text-amber-200' : 'text-slate-400'}`}>Commission not accrued</div>
+            <div className={`text-sm ${unaccrued > 0 ? 'text-amber-200' : 'text-muted'}`}>Commission not accrued</div>
             <div className={`mt-2 text-2xl font-semibold tabular-nums ${unaccrued > 0 ? 'text-amber-100' : 'text-white'}`}
               data-testid="er-unaccrued-count">{unaccrued}</div>
-            <div className={`mt-1 text-xs ${unaccrued > 0 ? 'text-amber-200/80' : 'text-slate-500'}`}>
+            <div className={`mt-1 text-xs ${unaccrued > 0 ? 'text-amber-200/80' : 'text-muted'}`}>
               {unaccrued > 0
                 ? 'Payments the engine refused to accrue — a rep is owed and unpaid. Open the tenant to see why.'
                 : 'No refused accruals outstanding.'}
             </div>
           </div>
         </div>
-        <p className="mt-6 text-sm text-slate-500">
+        <p className="mt-6 text-sm text-muted">
           Revenue and retained-revenue forecast will populate here from the commission engine once Stripe billing is live —
           forward-looking, after commission, region-scoped. Until then these tiles are intentionally blank rather than showing a fabricated zero.
         </p>

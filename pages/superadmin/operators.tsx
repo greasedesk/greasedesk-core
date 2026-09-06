@@ -59,7 +59,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
   const unsuspend = (o: Op) => call('PATCH', { id: o.id, action: 'unsuspend' });
   const reset2fa = (o: Op) => { if (confirm(`Reset two-factor authentication for ${o.email}?\n\nThey will sign in with their password alone and must re-enrol. Use this ONLY for a lost device + lost recovery codes — it lowers their account to single-factor until they re-enrol.`)) call('PATCH', { id: o.id, action: 'reset_2fa' }); };
 
-  const input = 'bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-slate-500 focus:outline-none';
+  const input = 'bg-surface-muted border border-line rounded-lg px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-accent focus:outline-none';
 
   return (
     <EngineRoomLayout role={role}>
@@ -73,51 +73,51 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
               Created <span className="font-semibold text-white">{created.email}</span>. {created.emailSent ? 'A set-password email was sent — and' : 'Email not delivered;'} share this one-time set-password link with them:
             </div>
             <div className="flex gap-2 items-center">
-              <input readOnly value={created.link} onClick={(e) => (e.target as HTMLInputElement).select()} className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono" />
-              <button onClick={() => { navigator.clipboard?.writeText(created.link); setMsg({ ok: true, text: 'Link copied.' }); }} className="bg-slate-100 text-slate-900 rounded-lg px-3 py-2 text-xs font-medium">Copy</button>
-              <button onClick={() => setCreated(null)} className="text-slate-400 text-xs px-2">Dismiss</button>
+              <input readOnly value={created.link} onClick={(e) => (e.target as HTMLInputElement).select()} className="flex-1 bg-surface border border-line rounded-lg px-3 py-2 text-xs text-ink font-mono" />
+              <button onClick={() => { navigator.clipboard?.writeText(created.link); setMsg({ ok: true, text: 'Link copied.' }); }} className="bg-surface text-ink rounded-lg px-3 py-2 text-xs font-medium">Copy</button>
+              <button onClick={() => setCreated(null)} className="text-muted text-xs px-2">Dismiss</button>
             </div>
-            <div className="text-[11px] text-slate-500 mt-2">Single-use · expires in 5 days. They set their own password — you never see it.</div>
+            <div className="text-[11px] text-muted mt-2">Single-use · expires in 5 days. They set their own password — you never see it.</div>
           </div>
         )}
 
         {/* Create */}
-        <form onSubmit={create} className="mb-6 rounded-xl border border-slate-800 bg-slate-900 p-4 flex flex-wrap items-end gap-3">
-          <div><label className="block text-xs text-slate-400 mb-1">Email</label><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={input} placeholder="name@greasedesk.com" /></div>
-          <div><label className="block text-xs text-slate-400 mb-1">Name</label><input required value={name} onChange={(e) => setName(e.target.value)} className={input} /></div>
-          <div><label className="block text-xs text-slate-400 mb-1">Role</label>
+        <form onSubmit={create} className="mb-6 rounded-xl border border-line bg-surface p-4 flex flex-wrap items-end gap-3">
+          <div><label className="block text-xs text-muted mb-1">Email</label><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={input} placeholder="name@greasedesk.com" /></div>
+          <div><label className="block text-xs text-muted mb-1">Name</label><input required value={name} onChange={(e) => setName(e.target.value)} className={input} /></div>
+          <div><label className="block text-xs text-muted mb-1">Role</label>
             <select value={newRole} onChange={(e) => setNewRole(e.target.value as OperatorRoleName)} className={input}>
               <option value="support">Support</option><option value="country_manager">Country manager</option><option value="owner">Owner</option>
             </select>
           </div>
-          <div><label className="block text-xs text-slate-400 mb-1">Regions {newRole === 'owner' && <span className="text-slate-600">(n/a)</span>}</label>
+          <div><label className="block text-xs text-muted mb-1">Regions {newRole === 'owner' && <span className="text-muted">(n/a)</span>}</label>
             <input value={newRole === 'owner' ? '' : regions} disabled={newRole === 'owner'} onChange={(e) => setRegions(e.target.value)} className={`${input} disabled:opacity-40`} placeholder="GB,IE" /></div>
-          <button disabled={busy} className="bg-slate-100 text-slate-900 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">Invite operator</button>
+          <button disabled={busy} className="bg-surface text-ink rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">Invite operator</button>
         </form>
 
         {/* Compact 6-column layout so the ACTION is always visible without horizontal scroll — the
             Suspend/Un-suspend control lives in its own right-hand column as a real button, not a
             far-right link that scrolled off the old 8-column table. */}
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <div className="overflow-x-auto rounded-xl border border-line">
           <table className="w-full text-sm">
-            <thead className="bg-slate-900 text-slate-400"><tr className="text-left">
+            <thead className="bg-surface text-muted"><tr className="text-left">
               {['Operator', 'Role', 'Regions', 'Status', 'Last login', 'Action'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}
             </tr></thead>
             <tbody>
               {ops.map((o) => (
-                <tr key={o.id} className={`border-t border-slate-800 ${o.status === 'suspended' ? 'bg-red-950/30' : ''}`}>
+                <tr key={o.id} className={`border-t border-line ${o.status === 'suspended' ? 'bg-red-950/30' : ''}`}>
                   <td className="px-3 py-2">
-                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-slate-500">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}{o.twoFactorEnabled && <span className="ml-1 text-[10px] text-emerald-400" title="Two-factor authentication is on">🔒 2FA</span>}</div>
-                    <div className="text-xs text-slate-400">{o.email}</div>
+                    <div className="text-white whitespace-nowrap">{o.name}{o.isSelf && <span className="ml-1 text-[10px] text-muted">you</span>}{o.pending && <span className="ml-1 text-[10px] text-amber-400">pending</span>}{o.twoFactorEnabled && <span className="ml-1 text-[10px] text-emerald-400" title="Two-factor authentication is on">🔒 2FA</span>}</div>
+                    <div className="text-xs text-muted">{o.email}</div>
                   </td>
                   <td className="px-3 py-2">
-                    <select value={o.role} disabled={busy} onChange={(e) => changeRole(o, e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100">
+                    <select value={o.role} disabled={busy} onChange={(e) => changeRole(o, e.target.value)} className="bg-surface-muted border border-line rounded px-2 py-1 text-xs text-ink">
                       <option value="support">Support</option><option value="country_manager">Country manager</option><option value="owner">Owner</option>
                     </select>
                   </td>
-                  <td className="px-3 py-2 text-slate-300">
-                    {o.role === 'owner' ? <span className="text-slate-600">all</span> : (
-                      <button onClick={() => changeRegions(o)} className="underline decoration-dotted text-slate-300 hover:text-white">{o.regions.join(', ') || '—'}</button>
+                  <td className="px-3 py-2 text-muted">
+                    {o.role === 'owner' ? <span className="text-muted">all</span> : (
+                      <button onClick={() => changeRegions(o)} className="underline decoration-dotted text-muted hover:text-white">{o.regions.join(', ') || '—'}</button>
                     )}
                   </td>
                   <td className="px-3 py-2">
@@ -125,7 +125,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
                       {o.status === 'suspended' ? 'Suspended' : 'Active'}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">{o.lastLoginAt ? new Date(o.lastLoginAt).toLocaleString('en-GB') : '—'}</td>
+                  <td className="px-3 py-2 text-xs text-muted whitespace-nowrap">{o.lastLoginAt ? new Date(o.lastLoginAt).toLocaleString('en-GB') : '—'}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="flex gap-2">
                       {o.status === 'suspended'
@@ -139,7 +139,7 @@ export default function Operators({ role, initial }: { role: OperatorRoleName; i
             </tbody>
           </table>
         </div>
-        <p className="mt-3 text-xs text-slate-500">No delete — operators are suspended, never removed, so the audit trail of what they did survives. Suspending the last active owner is refused.</p>
+        <p className="mt-3 text-xs text-muted">No delete — operators are suspended, never removed, so the audit trail of what they did survives. Suspending the last active owner is refused.</p>
       </div>
     </EngineRoomLayout>
   );

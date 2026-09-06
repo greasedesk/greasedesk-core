@@ -64,21 +64,21 @@ type Detail = {
 type PageProps = { role: OperatorRoleName; operatorEmail: string; d: Detail };
 
 const NS = 'not supplied';
-const Muted = ({ children }: { children: React.ReactNode }) => <span style={{ color: '#7C8AA3', fontStyle: 'italic' }}>{children}</span>;
+const Muted = ({ children }: { children: React.ReactNode }) => <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>{children}</span>;
 const V = ({ v }: { v: string | number | null | undefined }) =>
   v === null || v === undefined || v === '' ? <Muted>{NS}</Muted> : <>{v}</>;
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="py-2" style={{ borderBottom: '1px solid #16294733' }}>
-      <div className="text-xs mb-0.5" style={{ color: '#7C8AA3' }}>{label}</div>
+    <div className="py-2" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="text-xs mb-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
       <div className="text-sm text-white">{children}</div>
     </div>
   );
 }
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl p-4 mb-4" style={{ background: '#0E2340', border: '1px solid #1C3257' }}>
+    <div className="rounded-xl p-4 mb-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
       <h2 className="text-sm font-semibold text-white mb-2">{title}</h2>
       {children}
     </div>
@@ -200,31 +200,31 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
 
   const companyNumber =
     d.business.companyNumber.kind === 'value' ? <V v={d.business.companyNumber.value} />
-    : d.business.companyNumber.kind === 'na' ? <span style={{ color: '#7C8AA3' }}>not applicable</span>
+    : d.business.companyNumber.kind === 'na' ? <span style={{ color: 'var(--text-muted)' }}>not applicable</span>
     : <Muted>{NS}</Muted>;
 
   return (
     <EngineRoomLayout role={role}>
       <Head><title>Engine Room — {d.business.legalName}</title><meta name="robots" content="noindex" /></Head>
-      <div className="p-6" style={{ color: '#C7D2E1' }}>
+      <div className="p-6" style={{ color: 'var(--text)' }}>
         <div className="max-w-4xl">
           <div className="mb-4">
-            <Link href="/superadmin/tenants" className="text-xs underline" style={{ color: '#8AB4F8' }}>← All tenants</Link>
+            <Link href="/superadmin/tenants" className="text-xs underline" style={{ color: 'var(--accent)' }}>← All tenants</Link>
           </div>
           <div className="flex items-baseline justify-between mb-5">
             <h1 className="text-xl font-semibold text-white">
               {d.business.tradingName || d.business.legalName}
-              {d.isInternal && <span className="ml-2 text-xs px-2 py-0.5 rounded" style={{ background: '#3A2A0B', color: '#FCD34D', border: '1px solid #6b5010' }}>internal</span>}
-              {d.isTmbs && <span className="ml-2 text-xs" style={{ color: '#FCD34D' }}>★live</span>}
+              {d.isInternal && <span className="ml-2 text-xs px-2 py-0.5 rounded" style={{ background: 'var(--warn-soft)', color: 'var(--warn)', border: '1px solid var(--warn)' }}>internal</span>}
+              {d.isTmbs && <span className="ml-2 text-xs" style={{ color: 'var(--warn)' }}>★live</span>}
             </h1>
-            <span className="text-xs" style={{ color: '#7C8AA3' }}>{operatorEmail} · read-only</span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{operatorEmail} · read-only</span>
           </div>
 
           <Section title="Business">
             <Field label="Trading name"><V v={b.tradingName} /></Field>
             <Field label="Legal / company name"><V v={b.legalName} /></Field>
             <Field label="Tenant ref">{d.ref}</Field>
-            <Field label="Group ID"><span className="text-xs" style={{ color: '#9FB0C9' }}>{d.id}</span></Field>
+            <Field label="Group ID"><span className="text-xs" style={{ color: 'var(--text-muted)' }}>{d.id}</span></Field>
             <Field label="Company number">{companyNumber}</Field>
             <Field label={`${b.tax.label} number`}><V v={b.vatNumber} /></Field>
             {/* BOTH ROWS FROM ONE SHAPER (lib/tax::taxDisplay). They used to be a hardcoded "VAT
@@ -245,14 +245,14 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
 
           <Section title={`Sites (${d.sites.length})`}>
             {d.sites.length === 0 ? <Muted>{NS}</Muted> : d.sites.map((s, i) => (
-              <div key={i} className="py-2" style={{ borderBottom: '1px solid #16294733' }}>
+              <div key={i} className="py-2" style={{ borderBottom: '1px solid var(--border)' }}>
                 <div className="text-sm text-white font-medium">{s.name}</div>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-1 text-xs">
-                  <div><span style={{ color: '#7C8AA3' }}>Address: </span><V v={s.address} /></div>
-                  <div><span style={{ color: '#7C8AA3' }}>Phone: </span><V v={s.phone} /></div>
-                  <div><span style={{ color: '#7C8AA3' }}>Currency: </span><V v={s.currency} /></div>
-                  <div><span style={{ color: '#7C8AA3' }}>Opening hours: </span><V v={s.hours} /></div>
-                  <div><span style={{ color: '#7C8AA3' }}>Labour rate: </span>{s.labourRate === null ? <Muted>{NS}</Muted> : `£${s.labourRate.toFixed(2)}/hr`}</div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Address: </span><V v={s.address} /></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Phone: </span><V v={s.phone} /></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Currency: </span><V v={s.currency} /></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Opening hours: </span><V v={s.hours} /></div>
+                  <div><span style={{ color: 'var(--text-muted)' }}>Labour rate: </span>{s.labourRate === null ? <Muted>{NS}</Muted> : `£${s.labourRate.toFixed(2)}/hr`}</div>
                 </div>
               </div>
             ))}
@@ -261,16 +261,16 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
           <Section title={`Users (${d.users.length})`}>
             {d.users.length === 0 ? <Muted>{NS}</Muted> : (
               <table className="w-full text-sm">
-                <thead style={{ color: '#7C8AA3' }}><tr className="text-left text-xs">
+                <thead style={{ color: 'var(--text-muted)' }}><tr className="text-left text-xs">
                   <th className="py-1 font-medium">Name</th><th className="py-1 font-medium">Email</th><th className="py-1 font-medium">Role</th><th className="py-1 font-medium">Status</th><th className="py-1 font-medium">2FA</th>
                 </tr></thead>
                 <tbody>
                   {d.users.map((u, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid #16294733' }}>
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                       <td className="py-1.5 text-white">{u.name ? u.name : <Muted>{NS}</Muted>}</td>
                       <td className="py-1.5">{u.email}</td>
                       <td className="py-1.5">{u.role}</td>
-                      <td className="py-1.5">{u.active ? 'Active' : <span style={{ color: '#FCA5A5' }}>Deactivated</span>}</td>
+                      <td className="py-1.5">{u.active ? 'Active' : <span style={{ color: 'var(--danger)' }}>Deactivated</span>}</td>
                       {/* SUPPORT ACTION, DISABLE-ONLY. The sole owner of a single-admin garage has
                           nobody above them; without this their only remedy is a hand-written DELETE
                           against production. There is deliberately no way to turn 2FA ON from here. */}
@@ -278,7 +278,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
                         {u.twoFactorEnabled ? (
                           <button type="button" disabled={busy2fa === u.id} data-testid={`er-reset-2fa-${u.email}`}
                             onClick={() => reset2fa(u.id, u.email)}
-                            style={{ color: '#FCD34D' }} className="text-xs hover:underline disabled:opacity-40">
+                            style={{ color: 'var(--warn)' }} className="text-xs hover:underline disabled:opacity-40">
                             {busy2fa === u.id ? 'Resetting…' : '🔒 on — Reset'}
                           </button>
                         ) : <Muted>off</Muted>}
@@ -295,7 +295,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
               on every tenant is furniture, and this is the page an operator opens when they are
               already looking for something. The dashboard tile is the thing that says "go look". */}
           {d.refusals.length > 0 && (
-            <div className="rounded-xl p-4 mb-4" style={{ background: '#2A1D06', border: '1px solid #7A5A16' }} data-testid="er-tenant-refusals">
+            <div className="rounded-xl p-4 mb-4" style={{ background: 'var(--warn-soft)', border: '1px solid var(--warn)' }} data-testid="er-tenant-refusals">
               <h2 className="text-sm font-semibold text-amber-200 mb-1">Commission not accrued ({d.refusals.length})</h2>
               <p className="text-xs text-amber-200/70 mb-2">
                 The engine refused to accrue commission on these payments rather than invent a figure.
@@ -324,58 +324,58 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
                   the only clock they have and the change is local. */}
               {!trialOpen && (
                 <button type="button" onClick={openTrial} data-testid="er-trial-extend"
-                  className="text-xs ml-3 hover:underline" style={{ color: '#8AB4F8' }}>Extend</button>
+                  className="text-xs ml-3 hover:underline" style={{ color: 'var(--accent)' }}>Extend</button>
               )}
-              <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>
+              <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
                 {a.subscriptionStatus
                   ? '· Stripe owns this clock — the new date is read back from them'
                   : '· No subscription yet: this changes their trial date here only'}
               </span>
               {trialOpen && (
-                <div className="mt-3 pt-3" style={{ borderTop: '1px solid #2A3446' }} data-testid="er-trial-panel">
+                <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--surface-muted)' }} data-testid="er-trial-panel">
                   <div className="flex flex-wrap gap-3 items-start">
-                    <label className="text-xs" style={{ color: '#7C8AA3' }}>
+                    <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       New end date<br />
                       {/* `min` puts Stripe's 48-hour floor out of reach instead of explaining it after. */}
                       <input type="date" data-testid="er-trial-date" min={trialMin} value={trialDate}
                         onChange={(e) => setTrialDate(e.target.value)}
-                        className="mt-1 p-1.5 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }} />
+                        className="mt-1 p-1.5 rounded text-sm" style={{ background: 'var(--content-bg)', border: '1px solid var(--surface-muted)', color: 'var(--text)' }} />
                     </label>
-                    <label className="text-xs" style={{ color: '#7C8AA3' }}>
+                    <label className="text-xs" style={{ color: 'var(--text-muted)' }}>
                       Why<br />
                       {/* CHOSEN, never typed: "Sales" with a capital was a 400 from the server. */}
                       <select data-testid="er-trial-category" value={trialCat} onChange={(e) => setTrialCat(e.target.value)}
-                        className="mt-1 p-1.5 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }}>
+                        className="mt-1 p-1.5 rounded text-sm" style={{ background: 'var(--content-bg)', border: '1px solid var(--surface-muted)', color: 'var(--text)' }}>
                         {TRIAL_EXTENSION_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
                       </select>
                     </label>
                   </div>
-                  <label className="text-xs block mt-3" style={{ color: '#7C8AA3' }}>
+                  <label className="text-xs block mt-3" style={{ color: 'var(--text-muted)' }}>
                     What was agreed, and with whom (recorded on your ledger and theirs)<br />
                     <textarea data-testid="er-trial-note" rows={2} maxLength={500} value={trialNote}
                       onChange={(e) => setTrialNote(e.target.value)}
-                      className="mt-1 w-full p-2 rounded text-sm" style={{ background: '#0F1621', border: '1px solid #2A3446', color: '#C7D2E1' }} />
+                      className="mt-1 w-full p-2 rounded text-sm" style={{ background: 'var(--content-bg)', border: '1px solid var(--surface-muted)', color: 'var(--text)' }} />
                   </label>
                   {/* THE DELTA, BEFORE PRESSING. A wrong year is invisible in a date field and
                       obvious in "Extends by 395 days". Doubles as the live validation message. */}
                   <p className="text-xs mt-1" data-testid="er-trial-preview"
-                    style={{ color: trialCheck.ok ? '#7C8AA3' : '#FCD34D' }}>{trialPreview}</p>
+                    style={{ color: trialCheck.ok ? 'var(--text-muted)' : 'var(--warn)' }}>{trialPreview}</p>
                   <div className="flex gap-3 mt-2 items-center">
                     <button type="button" data-testid="er-trial-save" onClick={extendTrial}
                       disabled={!trialCheck.ok || busyTrial}
                       className="text-xs px-3 py-1.5 rounded disabled:opacity-40"
-                      style={{ background: '#1D4ED8', color: '#fff' }}>
+                      style={{ background: 'var(--accent-hover)', color: '#fff' }}>
                       {busyTrial ? 'Working…' : 'Extend the trial'}
                     </button>
                     <button type="button" onClick={() => setTrialOpen(false)}
-                      className="text-xs hover:underline" style={{ color: '#7C8AA3' }}>Cancel</button>
+                      className="text-xs hover:underline" style={{ color: 'var(--text-muted)' }}>Cancel</button>
                   </div>
                 </div>
               )}
               {/* INLINE, not alert() — the same modal Chrome offers to suppress. */}
               {trialResult && (
                 <p className="text-xs mt-2" data-testid="er-trial-result"
-                  style={{ color: trialResult.ok ? '#6EE7B7' : '#FCA5A5' }}>{trialResult.text}</p>
+                  style={{ color: trialResult.ok ? 'var(--ok)' : 'var(--danger)' }}>{trialResult.text}</p>
               )}
             </Field>
             <Field label="Modules entitled">{a.modules.length ? a.modules.join(', ') : <Muted>{NS}</Muted>}</Field>
@@ -383,13 +383,13 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             <Field label="Phone step">
               {a.phoneExempt ? (
                 <>
-                  <span style={{ color: '#FCD34D' }}>Exempt</span>
-                  <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>
+                  <span style={{ color: 'var(--warn)' }}>Exempt</span>
+                  <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
                     since {new Date(a.phoneExempt.at).toLocaleDateString('en-GB')} · {a.phoneExempt.reason || 'no reason recorded'}
                   </span>
                   <button type="button" disabled={busyExempt} onClick={() => setPhoneExempt(true)}
                     data-testid="er-phone-exempt-revoke"
-                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#8AB4F8' }}>
+                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: 'var(--accent)' }}>
                     {busyExempt ? 'Working…' : 'Remove exemption'}
                   </button>
                 </>
@@ -397,10 +397,10 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
                 <>
                   {a.phoneStepApplies
                     ? 'Required at signup'
-                    : <span style={{ color: '#7C8AA3' }}>Not required — signed up before the step existed</span>}
+                    : <span style={{ color: 'var(--text-muted)' }}>Not required — signed up before the step existed</span>}
                   <button type="button" disabled={busyExempt} onClick={() => setPhoneExempt(false)}
                     data-testid="er-phone-exempt"
-                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: '#FCD34D' }}>
+                    className="text-xs ml-3 hover:underline disabled:opacity-40" style={{ color: 'var(--warn)' }}>
                     {busyExempt ? 'Working…' : 'Exempt'}
                   </button>
                 </>
@@ -408,7 +408,7 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
             </Field>
             <Field label="Last activity">
               {a.lastActivity ? new Date(a.lastActivity).toLocaleString('en-GB') : <Muted>none recorded</Muted>}
-              <span className="text-xs ml-2" style={{ color: '#7C8AA3' }}>· basis: most recent recorded action in the tenant's audit log</span>
+              <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>· basis: most recent recorded action in the tenant's audit log</span>
             </Field>
             <Field label="Counts">
               <span className="tabular-nums">{a.counts.sites} sites · {a.counts.users} users · {a.counts.jobCards} job cards · {a.counts.invoices} invoices</span>

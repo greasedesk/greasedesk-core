@@ -2,6 +2,11 @@
  * File: components/BrandLogo.tsx
  * The GreaseDesk logo on a light "plate" so the fixed-colour transparent PNG (which has dark-navy
  * parts) always reads against the dark rail. One place to swap for a proper light/SVG variant later.
+ *
+ * THE PLATE IS bg-white, NOT bg-surface. It is not chrome that should follow the theme — it is a
+ * guaranteed light ground for artwork that cannot change colour. Under the Engine Room's dark theme
+ * bg-surface resolves to #1E293B, and the logo's dark-navy half vanished into the plate meant to
+ * rescue it. Identical in the tenant app, where --surface is #FFFFFF anyway.
  */
 import React from 'react';
 import Link from 'next/link';
@@ -26,7 +31,7 @@ export default function BrandLogo(
     />
   );
   const img = plate ? (
-    <span className={`inline-block bg-surface shadow-card ${slim ? 'rounded-lg p-1' : 'rounded-xl p-2.5'}`}>
+    <span className={`inline-block bg-white shadow-card ${slim ? 'rounded-lg p-1' : 'rounded-xl p-2.5'}`}>
       {image}
     </span>
   ) : image;

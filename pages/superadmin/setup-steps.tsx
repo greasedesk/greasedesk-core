@@ -17,7 +17,7 @@ type StepRow = { id: string; step_key: string; handler_key: string; handlerKnown
 type PageProps = { steps: StepRow[]; role: OperatorRoleName };
 
 const input = 'w-full p-2 rounded border text-sm';
-const inputStyle = { background: '#0F1B2D', borderColor: '#233247', color: '#E6ECF5' } as React.CSSProperties;
+const inputStyle = { background: 'var(--content-bg)', borderColor: 'var(--surface-muted)', color: 'var(--text)' } as React.CSSProperties;
 
 function StepCard({ s }: { s: StepRow }) {
   const [f, setF] = useState({ title: s.title, body: s.body, help_text: s.help_text, position: String(s.position), required: s.required, enabled: s.enabled, countries: s.countries?.join(',') ?? '' });
@@ -35,25 +35,25 @@ function StepCard({ s }: { s: StepRow }) {
     } finally { setBusy(false); }
   }
   return (
-    <div className="rounded-xl border p-4 mb-3" style={{ borderColor: '#233247', background: '#12203A' }} data-step-key={s.step_key}>
+    <div className="rounded-xl border p-4 mb-3" style={{ borderColor: 'var(--surface-muted)', background: 'var(--surface)' }} data-step-key={s.step_key}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-semibold text-white">{s.step_key}</span>
-        <span className="text-xs font-mono" style={{ color: s.handlerKnown ? '#7C8AA3' : '#F87171' }}>
+        <span className="text-xs font-mono" style={{ color: s.handlerKnown ? 'var(--text-muted)' : 'var(--danger)' }}>
           {s.handler_key}{!s.handlerKnown && ' — UNKNOWN (fails closed in the wizard)'}
         </span>
       </div>
-      <label className="block text-xs mb-1" style={{ color: '#7C8AA3' }}>Title</label>
+      <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Title</label>
       <input className={input} style={inputStyle} value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
-      <label className="block text-xs mb-1 mt-2" style={{ color: '#7C8AA3' }}>Body (supports {'{{currencySymbol}} {{taxLabel}} {{postcodeLabel}} {{phonePlaceholder}} {{testName}} {{countryName}}'})</label>
+      <label className="block text-xs mb-1 mt-2" style={{ color: 'var(--text-muted)' }}>Body (supports {'{{currencySymbol}} {{taxLabel}} {{postcodeLabel}} {{phonePlaceholder}} {{testName}} {{countryName}}'})</label>
       <textarea className={input} style={inputStyle} rows={2} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} />
-      <label className="block text-xs mb-1 mt-2" style={{ color: '#7C8AA3' }}>Help text</label>
+      <label className="block text-xs mb-1 mt-2" style={{ color: 'var(--text-muted)' }}>Help text</label>
       <input className={input} style={inputStyle} value={f.help_text} onChange={(e) => setF({ ...f, help_text: e.target.value })} />
-      <div className="flex flex-wrap items-center gap-4 mt-3 text-xs" style={{ color: '#B9C4D6' }}>
+      <div className="flex flex-wrap items-center gap-4 mt-3 text-xs" style={{ color: 'var(--text)' }}>
         <label>Position <input type="number" className="w-16 p-1 rounded border ml-1" style={inputStyle} value={f.position} onChange={(e) => setF({ ...f, position: e.target.value })} /></label>
         <label><input type="checkbox" checked={f.required} onChange={(e) => setF({ ...f, required: e.target.checked })} /> required</label>
         <label><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> enabled</label>
         <label>Countries <input className="w-28 p-1 rounded border ml-1" style={inputStyle} placeholder="all" value={f.countries} onChange={(e) => setF({ ...f, countries: e.target.value })} /></label>
-        <button onClick={save} disabled={busy} className="rounded px-3 py-1.5 text-xs font-semibold text-white" style={{ background: '#2563EB' }}>Save</button>
+        <button onClick={save} disabled={busy} className="rounded px-3 py-1.5 text-xs font-semibold text-white" style={{ background: 'var(--accent)' }}>Save</button>
         {msg && <span>{msg}</span>}
       </div>
     </div>
@@ -65,7 +65,7 @@ export default function SetupStepsAdmin({ steps, role }: PageProps) {
     <EngineRoomLayout role={role}>
       <Head><title>Setup steps — Engine Room</title></Head>
       <h1 className="text-xl font-semibold text-white mb-1">Setup wizard steps</h1>
-      <p className="text-sm mb-5" style={{ color: '#7C8AA3' }}>
+      <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>
         Wording, order, required/enabled and country scope are editable. What a step writes to
         (handler) is code — retiring a handler makes its steps disappear from the wizard, never break it.
       </p>

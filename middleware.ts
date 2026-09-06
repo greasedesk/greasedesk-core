@@ -5,7 +5,8 @@
  * separate cookie jar (cookies are host-only — see the guardrail in pages/api/auth/[...nextauth].ts),
  * a stricter CSP later, and an optional IP-allowlist later. There is exactly ONE door.
  *
- *   • On er.greasedesk.com — expose ONLY the Engine Room: /superadmin/* and /api/superadmin/*, plus
+ *   • On er.greasedesk.com — expose ONLY the Engine Room: /superadmin/* and /api/superadmin/*, the
+ *     brand image (one exact path, see BRAND_ASSET), plus
  *     the auth endpoints (so an operator can sign in there) and Next internals. EVERYTHING else,
  *     including "/", 404s. The tenant app is NOT reachable at er.
  *   • On the apex (greasedesk.com and anything else) — the Engine Room door is CLOSED: /superadmin/*
@@ -23,6 +24,16 @@ const ER_HOST = 'er.greasedesk.com';
 const isEngineRoom = (p: string) => p === '/superadmin' || p.startsWith('/superadmin/') || p.startsWith('/api/superadmin/');
 const isAuth = (p: string) => p.startsWith('/api/auth/'); // shared: operator login on er., tenant login on apex
 const isNextInternal = (p: string) => p.startsWith('/_next/'); // matcher already drops /_next/static + image
+/**
+ * The brand image, and nothing else from /public.
+ *
+ * er. serves ONLY the Engine Room, so every path under /public 404s here — which is why the shell
+ * carried a hand-drawn "ER" square instead of the product's logo: an <img> to /public would have
+ * been a permanently broken image. This opens exactly ONE file, by exact match: a public brand
+ * asset that is already served to anyone who loads the marketing site, carrying no tenant data and
+ * no behaviour. The door stays otherwise shut — a prefix or a wildcard here would re-open /public.
+ */
+const BRAND_ASSET = '/greasedesk-logo-source.png';
 
 const notFound = () => new NextResponse('Not Found', { status: 404 });
 
@@ -35,7 +46,7 @@ export function middleware(req: NextRequest) {
     // The ROOT is the front door: rewrite it to /superadmin, whose getServerSideProps routes on the
     // session principal (operator → role landing; wrong class → 404; logged out → login).
     if (pathname === '/') return NextResponse.rewrite(new URL('/superadmin', req.url));
-    if (isEngineRoom(pathname) || isAuth(pathname) || isNextInternal(pathname)) return NextResponse.next();
+    if (isEngineRoom(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
     return notFound(); // every tenant route still 404s on er.
   }
 

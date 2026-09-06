@@ -43,7 +43,8 @@ html, body { overflow-x: clip; max-width: 100%; }
   --danger: #B91C1C;    --danger-soft: #FBEAEA;
 }
 
-/* Scaffold for a future all-dark theme (not wired to a selector yet — proves the token swap). */
+/* THE ALL-DARK THEME. Wired in _document for /superadmin — the Engine Room is dark throughout,
+   in THIS palette, so an operator with both portals open sees one product rather than two. */
 :root[data-theme="dark"] {
   --content-bg: #0F172A;
   --surface: #1E293B;
@@ -55,6 +56,11 @@ html, body { overflow-x: clip; max-width: 100%; }
   --ok-soft: #0F2E1C;
   --warn-soft: #3A2A0C;
   --danger-soft: #3A1414;
+  /* The BASE status colours need a dark variant too, not just their soft grounds: #B45309 on
+     #0F172A is unreadable, which is exactly why the Engine Room reached for its own hex. */
+  --ok: #6EE7B7;
+  --warn: #FCD34D;
+  --danger: #FCA5A5;
 }
 
 html,
