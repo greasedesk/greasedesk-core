@@ -16,16 +16,32 @@
  *   • a WEEKLY overhead — the new model has monthly/quarterly/annual, and ×52÷12 would bake an
  *     approximation into a stored amount where the old model at least computed it on the fly
  *
- *   node scripts/migrate-overheads-to-costs.mjs GB-GD2236 GB-GD2369 GB-GD2237
- *   node scripts/migrate-overheads-to-costs.mjs --dry-run GB-GD2236
+ * ── WHAT THE CARRY ASSUMES, AND WHERE THAT IS WRITTEN DOWN ──────────────────────────────────────
+ * The old register had NO DATES. So active_from is the reporting anchor, and the rate in force at
+ * that date is today's figure — inferred, not known. There is no evidence about what the rent was
+ * in April; this is the honest default and it is still an assumption, baked in permanently.
+ *
+ * Nothing about a Cost row says that. Six months from now it reads as a figure somebody typed. So
+ * each carried cost writes an AuditLog row on the tenant's own ledger naming the overhead it came
+ * from, the anchor, and the fact that the rate is inferred.
+ *
+ * ── IT APPLIES ONLY WHEN TOLD TO ────────────────────────────────────────────────────────────────
+ * This used to WRITE by default and take --dry-run as the opt-out, which is the wrong way round for
+ * a script that alters a tenant's reported figures — and out of step with set-tenants-free and
+ * clear-stranded-subscriptions, which both require an explicit flag. A bare run is now a dry run.
+ *
+ *   node scripts/migrate-overheads-to-costs.mjs GB-GD1967              (dry run)
+ *   node scripts/migrate-overheads-to-costs.mjs --apply GB-GD1967
  */
 import './_gate-preflight.mjs';
 const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { regenerate } = await import('../lib/costs.ts');
+const { writeAudit } = await import('../lib/audit.ts');
 
 const args = process.argv.slice(2);
-const dry = args.includes('--dry-run');
+// DRY BY DEFAULT. --dry-run is still accepted so the documented invocation keeps working.
+const dry = !args.includes('--apply');
 const refs = args.filter((a) => !a.startsWith('--'));
 if (!refs.length) { console.error('Name the tenants by ref.'); process.exit(2); }
 
@@ -78,7 +94,27 @@ for (const ref of refs) {
       select: { id: true },
     });
     const r = await regenerate(cost.id, from, horizon);
-    console.log(`   ${o.name.padEnd(24)} ${m(o.ex_vat_amount_pennies).padStart(11)} ${o.period.padEnd(8)} → ${r.written} instances`);
+    // THE ASSUMPTION, ON THE TENANT'S OWN LEDGER. user_id null: nobody inside the garage did this.
+    await prisma.$transaction(async (tx) => {
+      await writeAudit(tx, {
+        groupId: g.id, userId: null, entity: 'cost', entityId: cost.id,
+        action: 'cost.migrated_from_overhead',
+        diff: {
+          name: o.name,
+          fromOverheadId: o.id,
+          amountPennies: o.ex_vat_amount_pennies,
+          period: o.period,
+          cadence: CADENCE[o.period],
+          charge: 'spread',
+          activeFrom: from.toISOString(),
+          instancesWritten: r.written,
+          // The two things a reader six months from now cannot recover from the row itself.
+          activeFromIs: 'the tenant reporting anchor — the old register held no dates',
+          rateIsInferred: 'the amount in force at that date is TODAY\'s figure; what it was in April is not known',
+        },
+      });
+    });
+    console.log(`   ${o.name.padEnd(24)} ${m(o.ex_vat_amount_pennies).padStart(11)} ${o.period.padEnd(8)} → ${r.written} instances, audited`);
   }
 }
 await prisma.$disconnect();

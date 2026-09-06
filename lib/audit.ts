@@ -152,6 +152,11 @@ export type AuditAction =
   // live subscription overtook — user_id is null either way, because nobody INSIDE did it.
   | 'billing.free_flag_set'
   | 'billing.free_flag_cleared'
+  // A standing cost carried across from the retired Overhead register. Recorded because the carry
+  // BAKES IN AN ASSUMPTION: the old register held no dates, so active_from is the reporting anchor
+  // and the rate at that date is today's figure, inferred rather than known. Nothing else records
+  // that, and six months from now the Cost row looks like a fact somebody entered.
+  | 'cost.migrated_from_overhead'
   | 'billing.country_not_sent'  // the Stripe customer could not be created, so Checkout guessed
                                 // the country instead of being told: { intendedCountry, detail, stripeCode }
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.

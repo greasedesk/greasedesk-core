@@ -61,29 +61,45 @@ try {
     `months=${w.months} — twelve months of payroll against five months of records is the defect`);
   check('  …and the cost base counted exactly those months', cb.months === 5, `months=${cb.months}`);
 
-  // ── THE COST BASE IS WITHHELD ON THIS TENANT ────────────────────────────────────────────────
-  // An EMPTY register withholds the cost base rather than reporting a smaller one — a cost base
-  // with nothing in it is unknown, not low. So the figure this gate used to pin (£7,175.01 a month)
-  // is not available, and asserting it would be asserting a number the product refuses to show.
+  // ── THE FIGURE, PINNED AGAIN ────────────────────────────────────────────────────────────────
+  // This gate used to pin £7,175.01 a month. When costs moved from the Overhead register to
+  // Cost/CostInstance, TMBS was not carried across, the register went empty, and the assertion was
+  // replaced with "the cost base is WITHHELD" — true, and worth nothing as a regression check: a
+  // withheld figure is the same absence whatever the arithmetic underneath does.
   //
-  // WHY THE REGISTER IS EMPTY, stated correctly. This said TMBS's Overhead rows "were retired when
-  // costs moved to Cost/CostInstance". They were not: all three are active right now — Building
-  // Rent, Yard Rent and Business Rates. What is empty is the COST table, because TMBS has never
-  // been carried across (scripts/migrate-overheads-to-costs has run for the demo tenants only).
-  // The claim was about data and nothing checked it; the rows outlived the sentence describing them.
+  // TMBS was carried across on 2026-09-06 (scripts/migrate-overheads-to-costs, 42 instances), so
+  // there is a figure again and it is pinned again. The withheld branch is still covered — by
+  // costs-gate, in a browser, on the gate tenant whose register really is empty.
   //
-  // So this assertion holds for a reason that can change on a day somebody runs that migration —
-  // at which point the honest move is to pin the carried figure, not to relax the check.
-  check('an empty cost register WITHHOLDS the cost base', cb.registerEmpty === true,
-    'a smaller cost base and a lower break-even are exactly what a garage would act on');
-  check('  …and does not smuggle a figure out anyway',
-    cb.costBasePennies === undefined && cb.breakEvenCentihours === undefined, JSON.stringify(Object.keys(cb)));
+  // WHY THE COSTS HALF IS AN EXACT NUMBER AND THE WAGES HALF IS NOT. £11,242.20 is fully
+  // determined by three rates and a calendar: Building Rent £1,656.77 and Yard Rent £525.00 monthly
+  // over five months, plus £800.00 of annual Business Rates spread across twelve. Nothing but a
+  // deliberate edit moves it. The wage bill is a live payroll on a real tenant, and hardcoding it
+  // would turn the next salary change into a failing gate that is telling the truth — so it is READ
+  // and the RELATIONSHIP is asserted instead.
+  check('the costs half of the cost base is exactly the carried register', cb.overheadsPennies === 1_124_220,
+    `${cb.overheadsPennies}p — £1,656.77 + £525.00 monthly x5, plus £800.00 annual spread over 12`);
+  check('  …and the cost base is the wage bill plus it, nothing else',
+    cb.costBasePennies === cb.wageBillPennies + cb.overheadsPennies,
+    `${cb.costBasePennies} vs ${cb.wageBillPennies} + ${cb.overheadsPennies}`);
+  check('  …and it is no longer withheld', cb.registerEmpty === undefined && typeof cb.costBasePennies === 'number',
+    `registerEmpty=${cb.registerEmpty}`);
+  // BREAK-EVEN DERIVED, NOT COPIED. Reading the rate rather than writing 75 keeps this true when the
+  // garage changes what it charges, and still catches the tile dividing by the wrong thing.
+  const labour = await prisma.serviceCatalogue.findFirst({
+    where: { group_id: TMBS, service_code: 'LABOUR_HR' }, select: { default_labour_rate: true } });
+  const ratePounds = Number(labour?.default_labour_rate ?? 0);
+  check('break-even is the cost base at the labour rate', ratePounds > 0
+    && cb.breakEvenCentihours === Math.round((cb.costBasePennies / (ratePounds * 100)) * 100),
+    `${(cb.breakEvenCentihours / 100).toFixed(2)}h at £${ratePounds}/hr against £${(cb.costBasePennies / 100).toFixed(2)}`);
 
   // THE DISCRIMINATING HALF, kept — on the wage bill, which is windowed and present. Clipping
   // `from` while leaving `months` at twelve produces a window that LOOKS right and a total 2.4×
   // too big, and that is the failure this gate exists to catch.
   const pnl = await T.MONTH_TILE_COMPUTES.pnl(ctx);
-  const oneMonthWages = 717_501 - 223_501; // measured: the wage half of the old monthly cost base
+  // The wage half of the old monthly cost base, measured when this gate was written. Kept as the
+  // ORDER OF MAGNITUDE the check needs, not as a figure anything reads.
+  const oneMonthWages = 717_501 - 223_501;
   check('  …and the windowed total moved with it, not just the window',
     pnl.wageBill < oneMonthWages * 12 * 0.8,
     `£${(pnl.wageBill / 100).toFixed(2)} over ${cb.months} months — twelve would be far more`);
