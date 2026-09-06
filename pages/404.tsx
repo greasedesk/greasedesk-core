@@ -19,14 +19,23 @@ export default function NotFound() {
   return (
     <>
       <Head><title>Not found — GreaseDesk</title></Head>
-      <main className="min-h-screen flex items-center justify-center p-6" style={{ background: '#0B1E3B', color: '#C7D2E1' }}>
-        <div className="max-w-md w-full text-center rounded-2xl p-8" style={{ background: '#12294a', border: '1px solid #1C3257' }}>
+      <main className="min-h-screen flex items-center justify-center p-6 bg-sidebar text-sidebar-fg">
+        <div className="max-w-md w-full text-center rounded-2xl p-8 bg-surface border border-line">
           <div className="text-5xl mb-4">🔧</div>
-          <h1 className="text-2xl font-semibold mb-2" style={{ color: '#FFFFFF' }}>Not found</h1>
-          <p className="text-sm mb-6">This page doesn’t exist, or it doesn’t belong to your account. You’re still signed in — nothing’s wrong with your session.</p>
-          <Link href={isAdmin ? '/admin/dashboard' : '/'} className="inline-block rounded-lg px-5 py-2.5 text-sm font-medium text-white" style={{ background: '#2563EB' }}>
+          <h1 className="text-2xl font-semibold mb-2 text-ink">Not found</h1>
+          <p className="text-sm text-muted mb-6">This page doesn’t exist, or it doesn’t belong to your account. You’re still signed in — nothing’s wrong with your session.</p>
+          <Link href={isAdmin ? '/admin/dashboard' : '/'} className="inline-block rounded-lg px-5 py-2.5 text-sm font-medium text-white bg-accent hover:bg-accent-hover">
             {isAdmin ? 'Back to dashboard' : 'Back to home'}
           </Link>
+          {/* A GARAGE THAT HITS A DEAD LINK HAS A PROBLEM AND NOWHERE TO SAY SO. Only offered to a
+              signed-in tenant: /admin/support would bounce anyone else to the login screen, which
+              is a worse dead end than the one they just hit. */}
+          {isAdmin && (
+            <p className="text-sm text-muted mt-5">
+              Expected something here?{' '}
+              <Link href="/admin/support" className="text-accent hover:underline">Tell us</Link>.
+            </p>
+          )}
         </div>
       </main>
     </>

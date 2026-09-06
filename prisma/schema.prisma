@@ -819,6 +819,17 @@ model Rep {
   name           String
   ref_code       String   @unique // the `?ref=<code>` marketing token that attributes a signup
   country_code   String   @default("GB")
+  /// THE PUBLISHED CONTACT NUMBER, and deliberately not the login email's neighbour.
+  /// NULL = this rep has not published a number, which is an ordinary state and not a missing
+  /// field: a garage sees the line omitted rather than a placeholder, and no `tel:` is rendered.
+  /// Written ONLY through lib/tenant-rep::repPhoneFields, which derives the dialable form the same
+  /// way customerPhoneFields does — a number that is published is a number that gets dialled, so it
+  /// is stored dialable rather than reformatted at every render.
+  phone          String?
+  /// The dialable form of `phone`. NULL when there is no number, or when what was typed could not
+  /// be resolved to E.164 — honest-null, in step with Customer.phone_e164: an unresolvable number
+  /// is still shown to a human, it just cannot be made into a link.
+  phone_e164     String?
   payout_details Json?
   status         String   @default("active") // 'active' | 'suspended'
   created_at     DateTime @default(now())

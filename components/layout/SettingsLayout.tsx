@@ -92,9 +92,13 @@ const TABS: TopTab[] = [
       // href resolved per-user in hrefFor — the placeholder is never navigated to.
       { name: 'My Account', href: '/admin/settings/users' },
       { name: 'Licence & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
-      // NO GATE (ruling 2026-08-09): knowing who to call is not privileged, and the person who
-      // answers the phone in a workshop is rarely the account holder.
-      { name: 'My Rep', href: '/admin/settings/rep' },
+    ],
+    // My Rep was a TAB here. Knowing who to call is not a setting, and four levels down under a
+    // label naming a person most garages do not have is not where anyone looks when the diary is
+    // broken. It is in the main rail now, with the GreaseDesk number leading it; the route stays as
+    // a redirect. The ruling that it carries NO GATE (2026-08-09) travels with the page.
+    pointers: [
+      { text: 'Who to call, and who introduced you to GreaseDesk, live under', linkText: 'Support', href: '/admin/support' },
     ],
   },
 ];

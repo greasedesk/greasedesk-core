@@ -219,8 +219,17 @@ export default function AdminLayout({ children, fullHeight = false }: AdminLayou
           <NavList pathname={router.pathname} siteQuery={siteQuery} locations={locations} primarySiteId={primarySiteId} t={t} canViewInvoices={canViewInvoices} isAdmin={isAdmin} messagesCount={messagesCount} />
         </nav>
 
-        {/* Settings (cog) sits at the bottom, directly above Sign Out. */}
+        {/* SUPPORT AND SETTINGS SIT AT THE BOTTOM, directly above Sign Out.
+            Support is NOT one of the items above: those are the work, ordered as the work happens.
+            This is reached when something is wrong, which is the same reason Settings is here and
+            not up there — and it goes ABOVE Settings because a garage that cannot use the product
+            is in more trouble than one changing a preference. No role gate: the person who picks up
+            the phone in a workshop is rarely the account holder. */}
         <div className="shrink-0 pt-3 mt-2 border-t border-sidebar-line space-y-1">
+          <Link href="/admin/support" className={navLink(router.pathname.startsWith('/admin/support'))}>
+            <span className="mr-3 text-lg">🛟</span>
+            {t('nav.support')}
+          </Link>
           <Link href="/admin/settings" className={navLink(router.pathname.startsWith('/admin/settings'))}>
             <span className="mr-3 text-lg">⚙️</span>
             {t('nav.settings')}
@@ -279,7 +288,11 @@ export default function AdminLayout({ children, fullHeight = false }: AdminLayou
                 marketingCount={marketingCount}
               />
             </nav>
-            <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/settings'))}`}>
+            <Link href="/admin/support" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/support'))}`}>
+              <span className="mr-3 text-lg">🛟</span>
+              {t('nav.support')}
+            </Link>
+            <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={navLink(router.pathname.startsWith('/admin/settings'))}>
               <span className="mr-3 text-lg">⚙️</span>
               {t('nav.settings')}
             </Link>
