@@ -254,7 +254,16 @@ function TechStep({ state, currencySymbol, busy, setBusy, setErr, reload, advanc
   );
 }
 
-// ---- Step 5: costs (existing /api/overheads rows, edit-in-place) ----
+// ---- Step 5: costs (/api/costs — the model this step was always named for) ----
+//
+// IT WROTE THE OTHER REGISTER. This component has been called CostsStep since it was written, and
+// it posted to /api/overheads — the dated-less register Cost replaced. Two tenants now carry six
+// rows in each, saying the same thing twice.
+//
+// NO WEEKLY. The old register normalised x52/12 on the fly; Cost has monthly/quarterly/annual and
+// stores what you typed. Offering "per week" here would either bake an approximation into a stored
+// amount or be refused by the API after the fact — the migration script refuses weekly rows for the
+// same reason rather than guessing a cadence on the garage's behalf.
 function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr, reload, advance }: any) {
   const items = state?.items ?? [];
   const [name, setName] = useState('');
@@ -263,9 +272,29 @@ function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr
   async function add() {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/overheads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, exVatAmountPennies: Math.round(Number(amount) * 100), period, allocations: [{ siteId: primarySiteId, percent: 100 }] }) });
+      // APPLIES FROM THIS MONTH. A cost entered during setup is one the garage is paying now; the
+      // API resolves the month itself and refuses anything that is not one.
+      const activeFrom = new Date().toISOString().slice(0, 10);
+      const r = await fetch('/api/costs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, cadence: period, charge: 'spread', activeFrom,
+          amountPennies: Math.round(Number(amount) * 100), siteId: primarySiteId }),
+      });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(d?.message || 'Could not add cost.'); return; }
+      // ── AND GENERATE ITS INSTANCES ──────────────────────────────────────────────────────────
+      // POST creates the cost, its first rate and its allocation — no instances. A Cost row with
+      // none is worse than no cost at all: costsInWindow withholds the cost base only when there
+      // are no cost ROWS, so an ungenerated cost turns "unknown" into a confident £0.00, which
+      // lib/costs's own header measures at £11,175 of imaginary profit on TMBS. A failure here is
+      // reported rather than swallowed — the row exists and the figure it feeds would be wrong.
+      if (d?.id) {
+        const gen = await fetch('/api/costs', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ costId: d.id }),
+        });
+        if (!gen.ok) { setErr('The cost was saved but its months could not be worked out. Open Costs and press Generate.'); }
+      }
       setName(''); setAmount('');
       await reload();
     } finally { setBusy(false); }
@@ -277,7 +306,7 @@ function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr
           {items.map((o: any) => (
             <li key={o.id} className="flex justify-between border border-line rounded-lg px-3 py-2">
               <span className="text-ink">{o.name}</span>
-              <span className="text-muted">{currencySymbol}{(o.exVatAmountPennies / 100).toFixed(2)} / {o.period}</span>
+              <span className="text-muted">{o.amountPennies == null ? '—' : `${currencySymbol}${(o.amountPennies / 100).toFixed(2)}`} / {o.cadence}</span>
             </li>
           ))}
         </ul>
@@ -286,8 +315,8 @@ function CostsStep({ state, currencySymbol, primarySiteId, busy, setBusy, setErr
         <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="e.g. Rent" data-testid="cost-name" />
         <input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} className={inputClass} placeholder={`Amount (${currencySymbol}, ex tax)`} data-testid="cost-amount" />
         <select value={period} onChange={(e) => setPeriod(e.target.value)} className={inputClass}>
-          <option value="weekly">per week</option>
           <option value="monthly">per month</option>
+          <option value="quarterly">per quarter</option>
           <option value="annual">per year</option>
         </select>
       </div>

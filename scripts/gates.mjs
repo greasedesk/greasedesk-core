@@ -144,6 +144,7 @@ const TIERS = {
     'free-tenant-gate',
     'free-not-checkout-gate',
     'free-reconcile-gate',
+    'overheads-retired-gate',
     'billed-party-gate',
     'lookup-reset-gate',
   ],

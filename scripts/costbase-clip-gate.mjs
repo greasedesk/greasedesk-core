@@ -61,11 +61,19 @@ try {
     `months=${w.months} — twelve months of payroll against five months of records is the defect`);
   check('  …and the cost base counted exactly those months', cb.months === 5, `months=${cb.months}`);
 
-  // ── THE COST BASE IS NOW WITHHELD ON THIS TENANT ────────────────────────────────────────────
-  // TMBS's Overhead rows were retired when costs moved to Cost/CostInstance, and an EMPTY register
-  // withholds the cost base rather than reporting a smaller one — a cost base with nothing in it is
-  // unknown, not low. So the figure this gate used to pin (£7,175.01 a month) no longer exists, and
-  // asserting it would be asserting a number the product deliberately refuses to show.
+  // ── THE COST BASE IS WITHHELD ON THIS TENANT ────────────────────────────────────────────────
+  // An EMPTY register withholds the cost base rather than reporting a smaller one — a cost base
+  // with nothing in it is unknown, not low. So the figure this gate used to pin (£7,175.01 a month)
+  // is not available, and asserting it would be asserting a number the product refuses to show.
+  //
+  // WHY THE REGISTER IS EMPTY, stated correctly. This said TMBS's Overhead rows "were retired when
+  // costs moved to Cost/CostInstance". They were not: all three are active right now — Building
+  // Rent, Yard Rent and Business Rates. What is empty is the COST table, because TMBS has never
+  // been carried across (scripts/migrate-overheads-to-costs has run for the demo tenants only).
+  // The claim was about data and nothing checked it; the rows outlived the sentence describing them.
+  //
+  // So this assertion holds for a reason that can change on a day somebody runs that migration —
+  // at which point the honest move is to pin the carried figure, not to relax the check.
   check('an empty cost register WITHHOLDS the cost base', cb.registerEmpty === true,
     'a smaller cost base and a lower break-even are exactly what a garage would act on');
   check('  …and does not smuggle a figure out anyway',

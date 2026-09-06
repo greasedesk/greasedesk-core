@@ -19,7 +19,7 @@ type SubTab = Gate & { name: string; href: string };
 /** A pointer to somewhere OUTSIDE Settings. Rendered as a line of text, never as a tab: a tab that
  *  navigates out of Settings looks like part of Settings and isn't, which is disorienting. */
 type Pointer = { text: string; linkText: string; href: string };
-type TopTab = Gate & { name: string; key: string; href: string; match: string[]; subtabs?: SubTab[]; pointer?: Pointer };
+type TopTab = Gate & { name: string; key: string; href: string; match: string[]; subtabs?: SubTab[]; pointers?: Pointer[] };
 
 const TABS: TopTab[] = [
   {
@@ -39,7 +39,7 @@ const TABS: TopTab[] = [
   },
   {
     name: 'Company Profile', key: 'company', href: '/admin/settings/company/account', adminOnly: true,
-    match: ['/admin/settings/company', '/admin/settings/financial', '/admin/settings/headcount', '/admin/settings/overheads'],
+    match: ['/admin/settings/company', '/admin/settings/financial', '/admin/settings/headcount', '/admin/settings/overheads'], // the last two are redirects; kept so a deep link still highlights this tab
     subtabs: [
       { name: 'Account Details', href: '/admin/settings/company/account', adminOnly: true },
       { name: 'Company Details', href: '/admin/settings/company/details', adminOnly: true },
@@ -47,9 +47,13 @@ const TABS: TopTab[] = [
       // Headcount was a TAB here that redirected straight to /admin/hr — it looked like part of
       // Settings and threw you out of it. Now a pointer line where the tab sat. The
       // /admin/settings/headcount route stays as a redirect so existing deep links survive.
-      { name: 'Overheads', href: '/admin/settings/overheads', adminOnly: true },
     ],
-    pointer: { text: 'Staff records, headcount and employment history live under', linkText: 'HR', href: '/admin/hr' },
+    pointers: [
+      { text: 'Staff records, headcount and employment history live under', linkText: 'HR', href: '/admin/hr' },
+      // Overheads was a TAB here, editing a register with no dates. The same treatment Headcount
+      // got: the route stays as a redirect, the tab does not.
+      { text: 'Rent, rates, insurance and other standing costs live under', linkText: 'Costs', href: '/admin/costs' },
+    ],
   },
   {
     name: 'Invoicing', key: 'invoicing', href: '/admin/settings/invoicing', adminOnly: true,
@@ -164,13 +168,17 @@ export default function SettingsLayout({ isAdmin = false, isManager = false, sel
           })}
         </div>
       )}
-      {active?.pointer && (
-        <p className="text-xs text-muted mb-6" data-testid="settings-pointer">
-          {active.pointer.text}{' '}
-          <Link href={active.pointer.href} className="text-accent hover:underline">{active.pointer.linkText}</Link>.
-        </p>
-      )}
-      {subtabs.length > 0 && !active?.pointer && <div className="mb-4" />}
+      {active?.pointers?.length ? (
+        <div className="mb-6 space-y-1" data-testid="settings-pointer">
+          {active.pointers.map((p) => (
+            <p key={p.href} className="text-xs text-muted">
+              {p.text}{' '}
+              <Link href={p.href} className="text-accent hover:underline">{p.linkText}</Link>.
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {subtabs.length > 0 && !active?.pointers?.length && <div className="mb-4" />}
       {children}
     </>
   );

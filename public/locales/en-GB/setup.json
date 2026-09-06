@@ -22,7 +22,7 @@
     "resources": { "label": "Lifts & bays", "why": "needed to schedule jobs in the diary" },
     "employees": { "label": "Employees", "why": "your mechanics and staff for the roster and reports" },
     "company_number": { "label": "Company number", "why": "shown on your invoices (limited companies)" },
-    "overheads": { "label": "Overheads", "why": "fixed costs, so your margins are accurate" }
+    "overheads": { "label": "Costs", "why": "what you pay whether you sell anything or not, so your margins are accurate" }
   },
   "allDoneTitle": "You’re all set",
   "allDoneBody": "Everything that applies to your garage is set up.",

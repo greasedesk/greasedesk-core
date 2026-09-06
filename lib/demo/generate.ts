@@ -37,6 +37,7 @@ import { computeQuoteTotals, penniesToPounds } from '@/lib/quote-totals';
 import { freezeQuoteVersion } from '@/lib/quote-version';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { dueDateFor } from '@/lib/account-terms';
+import { regenerate } from '@/lib/costs';
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
 import {
   DISTRIBUTIONS, FOOTPRINT_RATIO, ARCHETYPES, VEHICLE_MIX, FUEL_MIX, FIRST_NAMES, LAST_NAMES,
@@ -651,17 +652,33 @@ export async function generateDemoTenant(opts: {
     catalogueIdByKey.set(a.key, ci.id);
   }
 
-  // ── OVERHEADS. A setup signal, and the P&L is thin without them. ─────────────────────────────
-  for (const [name, pennies, period] of [
-    ['Workshop rent', 2_200_00, 'monthly'], ['Business rates', 480_00, 'monthly'],
-    ['Insurance', 310_00, 'monthly'], ['Utilities', 265_00, 'monthly'],
-    ['Software & subscriptions', 145_00, 'monthly'], ['Waste disposal', 90_00, 'monthly'],
-  ] as Array<[string, number, string]>) {
-    const o = await prisma.overhead.create({
-      data: { group_id: group.id, name, ex_vat_amount_pennies: pennies, vat_rate: 20, period: period as any, is_active: true },
+  // ── COSTS. A setup signal, and the P&L is thin without them. ─────────────────────────────────
+  // WRITTEN AS Cost, NOT Overhead. This wrote the dateless register that Cost replaced, which is
+  // why Marketbridge and Kingsford each ended up holding six rows in EACH table saying the same
+  // thing — the generator kept producing a shape nothing reads any more.
+  //
+  // active_from is the history start, so the twelve months of work these tenants show have a cost
+  // base for every month of it. A cost that began after the invoices did would leave the earliest
+  // months reporting revenue against nothing.
+  const costFrom = new Date(Date.UTC(historyFrom.getUTCFullYear(), historyFrom.getUTCMonth(), 1));
+  const costTo = new Date(Date.UTC(now.getUTCFullYear() + 1, now.getUTCMonth() + 3, 1));
+  for (const [name, pennies] of [
+    ['Workshop rent', 2_200_00], ['Business rates', 480_00],
+    ['Insurance', 310_00], ['Utilities', 265_00],
+    ['Software & subscriptions', 145_00], ['Waste disposal', 90_00],
+  ] as Array<[string, number]>) {
+    const c = await prisma.cost.create({
+      data: {
+        group_id: group.id, name, cadence: 'monthly', charge: 'spread', active_from: costFrom, is_active: true,
+        rates: { create: [{ effective_from: costFrom, amount_pennies: pennies }] },
+        allocations: { create: [{ group_id: group.id, site_id: site.id, percent: 100 }] },
+      },
       select: { id: true },
     });
-    await prisma.costAllocation.create({ data: { group_id: group.id, site_id: site.id, overhead_id: o.id, percent: 100 } });
+    // AND ITS INSTANCES. A Cost with none is not an absent cost base, it is a cost base of NOUGHT:
+    // costsInWindow withholds only when there are no cost ROWS. A demo showing a confident £0.00 of
+    // standing costs would show a net profit nobody could earn.
+    await regenerate(c.id, costFrom, costTo);
   }
 
   // ── PAYMENT METHODS, so a paid invoice can say HOW. ──────────────────────────────────────────

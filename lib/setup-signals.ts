@@ -46,7 +46,7 @@ const SUBSCRIBED = new Set(['trialing', 'active']);
 export async function getSetupSignals(groupId: string, primarySiteId: string | null): Promise<SetupSummary> {
   const [
     siteCount, labourSvc, group, billing,
-    resourceCount, employeeCount, overheadCount,
+    resourceCount, employeeCount, costCount,
   ] = await Promise.all([
     prisma.site.count({ where: { group_id: groupId } }),
     prisma.serviceCatalogue.findFirst({ where: { group_id: groupId, service_code: 'LABOUR_HR', default_labour_rate: { not: null } }, select: { id: true } }),
@@ -54,7 +54,7 @@ export async function getSetupSignals(groupId: string, primarySiteId: string | n
     prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true } }),
     prisma.resource.count({ where: { site: { group_id: groupId } } }),
     prisma.costPerson.count({ where: { group_id: groupId, is_active: true } }),
-    prisma.overhead.count({ where: { group_id: groupId } }),
+    prisma.cost.count({ where: { group_id: groupId, is_active: true } }),
   ]);
 
   const diaryHref = primarySiteId ? `/admin/diary?site=${encodeURIComponent(primarySiteId)}` : '/admin/diary';
@@ -79,7 +79,12 @@ export async function getSetupSignals(groupId: string, primarySiteId: string | n
     { key: 'resources',      state: resourceCount > 0 ? 'done' : 'todo',                         gated: false, canBeNA: false, href: diaryHref },
     { key: 'employees',      state: naState(employeeCount > 0, !!group?.employees_not_applicable), gated: false, canBeNA: true,  href: '/admin/hr' },
     { key: 'company_number', state: naState(!!(group?.company_number && group.company_number.trim()), !!group?.company_number_not_applicable), gated: false, canBeNA: true, href: '/admin/settings/company/details' },
-    { key: 'overheads',      state: overheadCount > 0 ? 'done' : 'todo',                         gated: false, canBeNA: false, href: '/admin/settings/overheads' },
+    // ── THE SIGNAL A TENANT COULD NOT SATISFY ───────────────────────────────────────────────────
+    // This counted Overhead rows, so a garage that had entered every standing cost in Costs still
+    // read `todo`, and the only way to clear it was the Settings panel now retired. The KEY stays
+    // `overheads`: it is persisted in operator-editable wizard step config and keyed in setup.json,
+    // and renaming it to gain nothing visible would invalidate both.
+    { key: 'overheads',      state: costCount > 0 ? 'done' : 'todo',                         gated: false, canBeNA: false, href: '/admin/costs' },
   ];
 
   const applicable = signals.filter((s) => s.state !== 'not_applicable');

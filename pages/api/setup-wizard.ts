@@ -10,7 +10,7 @@
  *          references resources); list mode (other) updates in place by id.
  *
  * Technicians write via /api/setup-wizard/technician (create+invite) and /api/headcount (edit /
- * mark-left); overheads via /api/overheads; contact via /api/company — the EXISTING models, no
+ * mark-left); costs via /api/costs; contact via /api/company — the EXISTING models, no
  * parallels.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -49,12 +49,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           user: { select: { email: true, role: true, can_invoice: true, is_active: true } },
         },
       }),
-      prisma.overhead.findMany({ where: { group_id: groupId, is_active: true }, orderBy: { created_at: 'asc' }, select: { id: true, name: true, ex_vat_amount_pennies: true, vat_rate: true, period: true } }),
+      // COSTS, not the Overhead register. The wizard step is called `overheads_basic` and its
+      // component has always been named CostsStep; it wrote the register Cost replaced months ago,
+      // which is how two tenants ended up holding six Overhead rows and six Cost rows saying the
+      // same thing. The KEY stays — operators can reorder these steps and the choice is persisted.
+      prisma.cost.findMany({
+        where: { group_id: groupId, is_active: true }, orderBy: { created_at: 'asc' },
+        select: { id: true, name: true, cadence: true,
+          // The rate in force NOW. A cost is a series of dated rates, so there is no single amount
+          // on the row to read — the latest effective one is what a person just typed in.
+          rates: { orderBy: { effective_from: 'desc' }, take: 1, select: { amount_pennies: true } },
+          _count: { select: { instances: true } } },
+      }),
     ]);
 
     const resources = resourcesRaw as Array<{ id: string; name: string; type: string; is_active: boolean }>;
     const people = peopleRaw as any[];
-    const overheads = overheadsRaw as Array<{ id: string; name: string; ex_vat_amount_pennies: number; vat_rate: unknown; period: string }>;
+    const overheads = overheadsRaw as Array<{ id: string; name: string; cadence: string;
+      rates: Array<{ amount_pennies: number }>; _count: { instances: number } }>;
     const byType = (t: string) => resources.filter((r) => r.type === t);
     const active = (rs: typeof resources) => rs.filter((r) => r.is_active);
     const site = await prisma.site.findUnique({ where: { id: siteId }, select: { open_days: true } });
@@ -73,7 +85,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           login: p.user ? { email: p.user.email, role: p.user.role, canInvoice: p.user.can_invoice, status: p.user.is_active ? 'active' : 'invited' } : null,
         })),
       },
-      overheads_basic: { items: overheads.map((o: any) => ({ id: o.id, name: o.name, exVatAmountPennies: o.ex_vat_amount_pennies, vatRate: Number(o.vat_rate), period: o.period })) },
+      // `instanceCount` is reported because a cost with none is a cost base of NOUGHT rather than an
+      // unknown one — see the note on the create path in setup-wizard.tsx.
+      overheads_basic: { items: overheads.map((o) => ({
+        id: o.id, name: o.name, amountPennies: o.rates[0]?.amount_pennies ?? null,
+        cadence: o.cadence, instanceCount: o._count.instances,
+      })) },
       contact_details: { phone: group?.phone ?? '', whatsapp: group?.whatsapp ?? '' },
       company_number: {
         companyNumber: (group as any)?.company_number ?? '',
