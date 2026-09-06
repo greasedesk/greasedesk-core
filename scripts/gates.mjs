@@ -93,6 +93,7 @@ const val = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : nu
  */
 const TIERS = {
   money: [
+    'flat-commission-gate',
     'account-terms-gate', 'application-fee-gate', 'card-fulfilment-gate', 'commission-fixed-clock-gate',
     'commission-refusal-gate', 'counter-payment-gate', 'credit-note-gate', 'invoice-pay-link-gate',
     'never-subscribes-gate', 'payment-intent-gate', 'payment-invariant-gate', 'pay-refusal-gate',

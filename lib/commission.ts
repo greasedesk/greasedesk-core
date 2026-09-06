@@ -47,8 +47,28 @@ type Db = PrismaClient | Prisma.TransactionClient;
  */
 type RootClient = Db & { $transaction: unknown };
 
+/**
+ * The tier VALUES that exist in the data. Kept as a type because CommissionEntry.tier is part of a
+ * frozen money record and the historical CommissionRate rows genuinely carried both — deleting the
+ * concept from the type would rewrite what was true.
+ *
+ * ── BUT NOTHING DERIVES IT ANY MORE ─────────────────────────────────────────────────────────────
+ * Commission was £35 then £30 for the first twelve payments and £12.50 thereafter, with
+ * tierForTenure choosing between them from the tenant's activation date. The model is now FLAT —
+ * £30 a month for as long as the garage is a customer — so there is no boundary to compute and
+ * tenure decides nothing. A rate is resolved by date alone.
+ */
 export type Tier = 'first_12m' | 'thereafter';
-export const TIER_BOUNDARY_MONTHS = 12; // elapsed < 12 → first_12m (the twelve intro payments)
+
+/**
+ * The one tier every rate is written and resolved on now.
+ *
+ * `thereafter` rather than `first_12m` deliberately: it already means "the ongoing rate", which is
+ * exactly what a flat model has. Keeping `first_12m` as the sole value would leave every future row
+ * labelled with a twelve-month window that no longer exists — a name that will read as meaningful
+ * to whoever finds it next year.
+ */
+export const ONGOING_TIER: Tier = 'thereafter';
 
 export type Payment = { ref: string; collected_at: Date; amount_pennies: number; currency: string };
 export type Refund = { ref: string; payment_ref: string; amount_pennies: number; refunded_at: Date };
@@ -73,9 +93,6 @@ export function elapsedMonths(a: Date, b: Date): number {
   let m = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth());
   if (b.getUTCDate() < a.getUTCDate()) m -= 1;
   return m;
-}
-export function tierForTenure(activation: Date, collectedAt: Date): Tier {
-  return elapsedMonths(activation, collectedAt) < TIER_BOUNDARY_MONTHS ? 'first_12m' : 'thereafter';
 }
 export function periodOf(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -143,55 +160,21 @@ export function isCommissionError(e: unknown, code?: CommissionErrorCode): boole
 }
 
 /** Both tiers a tenant passes through. Every country/currency needs a rate for each, eventually. */
-export const TIERS: Tier[] = ['first_12m', 'thereafter'];
-
 /**
- * A COUNTRY/CURRENCY WITH ONE TIER AND NOT THE OTHER — a landmine with a twelve-month fuse.
- *
- * tierForTenure returns `thereafter` at the twelve-month mark, so a pair carrying only `first_12m`
- * works perfectly until a tenant's first anniversary and then refuses every accrual, paying that
- * tenant's rep nothing. Production is in exactly that state today: GB/GBP has first_12m at £35 and
- * no thereafter. Nothing is at risk yet — there are no active attributions — which is precisely why
- * it would go unnoticed until someone asks where their money went.
- *
- * NOT auto-seeded, deliberately: a commission rate is an owner-made act (see the Rates screen's
- * append-only-forward rule) and a figure that appeared in a migration is a figure nobody chose.
- * Being TOLD is the fix; inventing one is not.
- *
- * Pure, so the Engine Room and the gate assert the same rule rather than two copies of it.
+ * ── tierGaps WAS HERE, AND IS RETIRED ───────────────────────────────────────────────────────────
+ * It refused a (country, currency) pair that carried one tier and not the other, because a tenant
+ * crossing twelve months would fall into a tier with no rate and the engine would throw. With a
+ * flat model there is one tier, so "both present" is not a property to check — a pair either has a
+ * rate or it does not, which resolveRate already refuses by name (NO_RATE).
  */
-export function tierGaps(rates: Array<{ country_code: string; currency: string; tier: string }>): Array<{
-  country: string; currency: string; has: Tier[]; missing: Tier[];
-}> {
-  const byPair = new Map<string, Set<string>>();
-  for (const r of rates) {
-    const k = `${r.country_code}/${r.currency}`;
-    (byPair.get(k) ?? byPair.set(k, new Set()).get(k)!).add(r.tier);
-  }
-  const gaps: Array<{ country: string; currency: string; has: Tier[]; missing: Tier[] }> = [];
-  for (const [k, tiers] of byPair) {
-    const missing = TIERS.filter((t) => !tiers.has(t));
-    // A pair with NEITHER tier cannot appear here — it has no rows and so no key. Only a partially
-    // configured pair is a gap; an entirely unconfigured country is a country we do not operate in.
-    if (missing.length && missing.length < TIERS.length) {
-      const [country, currency] = k.split('/');
-      gaps.push({ country, currency, has: TIERS.filter((t) => tiers.has(t)), missing });
-    }
-  }
-  return gaps.sort((a, b) => `${a.country}${a.currency}`.localeCompare(`${b.country}${b.currency}`));
-}
 
-// ── DB reads ─────────────────────────────────────────────────────────────────────────────────────
+/** The tenant facts the engine needs: when they activated (the trial gate) and where they are taxed. */
 async function loadTenant(db: Db, groupId: string): Promise<Tenant> {
   const g = await (db as any).group.findUnique({ where: { id: groupId }, select: { id: true, trial_ends_at: true, tax_country_code: true } });
   if (!g) throw new CommissionError(COMMISSION_ERROR.TENANT_NOT_FOUND, `COMMISSION: tenant ${groupId} not found`, { groupId });
   return { groupId: g.id, activation: g.trial_ends_at ?? null, country: g.tax_country_code };
 }
 
-/**
- * The only revenue stream that exists today: the platform subscription. Named rather than inlined
- * so the resolver, the entry writer and the Engine Room rates screen cannot drift on the spelling.
- */
 export const SUBSCRIPTION = 'subscription';
 
 /** Rate at a payment's collected_at: latest effective_from ≤ collected_at. THROWS if none (honest-null). */
@@ -235,7 +218,9 @@ async function attributionsAt(db: Db, groupId: string, at: Date) {
 // ── THE CORE: per-payment lines (shared by forecast AND materialise, so they cannot diverge) ──────
 export async function linesForPayment(db: Db, tenant: Tenant, p: Payment): Promise<CommissionLine[]> {
   if (!tenant.activation || p.collected_at < tenant.activation) return []; // TRIAL GATE (== activation accrues)
-  const tier = tierForTenure(tenant.activation, p.collected_at);
+  // ONE TIER. The trial gate above still uses `activation` — a payment before it accrues nothing —
+  // but nothing about the AMOUNT depends on how long they have been a customer.
+  const tier = ONGOING_TIER;
   const rate = await resolveRate(db, tenant.country, p.currency, tier, p.collected_at); // keyed by collected_at
   const attrs = await attributionsAt(db, tenant.groupId, p.collected_at);
   const split = splitAmount(rate.amount_pennies, attrs.map((a) => ({ id: a.id, bp: a.share_bp })));

@@ -872,7 +872,16 @@ model CommissionRate {
    */
   revenue_stream String   @default("subscription")
   effective_from DateTime
-  amount_pennies Int // flat commission per collected month at this tier, in `currency`
+  amount_pennies Int // flat commission per collected month, in `currency`
+  /// THE REDUCED RATE, paid when the month's VISIT did not happen. On this timeline and not a
+  /// percentage applied at payout, for the reason the full amount is here: what the reduced rate
+  /// WAS in March must not move when it changes in April.
+  ///
+  /// NULL = this rate row predates the visit gate — the three GB/GBP rows written before
+  /// 2026-09-06 do, and that is true rather than unfilled. A payout meeting a NULL must refuse
+  /// rather than invent a figure, the same honest-null discipline resolveRate applies when no rate
+  /// exists at all. NOT a default of zero: zero is a decision, and an undecided rate is not one.
+  amount_unvisited_pennies Int?
   created_by     String? // operator id (audit)
   created_at     DateTime @default(now())
 

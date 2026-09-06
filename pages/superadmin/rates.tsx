@@ -13,7 +13,6 @@ import type { GetServerSideProps } from 'next';
 import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/operator-auth';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 // The gap rule lives with the engine that suffers from it, not in this page — one rule, two readers.
-import { tierGaps } from '@/lib/commission';
 
 type Rate = {
   id: string; country_code: string; currency: string; tier: string;
@@ -82,10 +81,6 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
     }
   }
 
-  // Asked of EVERY row, in force or not: the gap is about whether the KEY exists at all, not about
-  // which rate is current. A superseded thereafter rate still means the tier is configured.
-  const gaps = tierGaps(rates);
-
   // Group by country/currency/tier so the timeline per key is obvious.
   const groups = new Map<string, Rate[]>();
   for (const r of rates) { const k = `${r.country_code}/${r.currency}/${r.tier}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
@@ -96,36 +91,19 @@ export default function RatesScreen({ role }: { role: OperatorRoleName }) {
       <div className="p-6 max-w-4xl">
         <h1 className="text-xl font-semibold mb-1">Commission rates</h1>
         <p className="text-sm text-muted mb-4">
-          Flat commission per collected month, by country, currency and tier. Amending a rate adds a new
-          forward-dated row — the prior rate stays frozen up to the new date, so historical commission
-          never moves. Only a future, unreferenced rate can be corrected or removed.{nowStr && <> Today is <span className="text-muted">{nowStr}</span>.</>}
+          Flat commission per collected month, by country and currency — the same amount whether a
+          garage joined last month or four years ago. Amending a rate adds a new forward-dated row —
+          the prior rate stays frozen up to the new date, so historical commission never moves. Only
+          a future, unreferenced rate can be corrected or removed. The reduced figure is what is paid
+          when that month's visit did not happen.{nowStr && <> Today is <span className="text-muted">{nowStr}</span>.</>}
         </p>
         {msg && <div className={`mb-4 text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
-        {/* ── HALF-CONFIGURED PAIRS ──────────────────────────────────────────────────────────
-            Stated, never fixed. A country/currency with only one tier works until a tenant's
-            first anniversary and then refuses every accrual for them — and the only trace today
-            is a log line. Seeding the missing rate automatically would put a figure nobody chose
-            into the table, so this says what is missing and leaves the number to the owner. */}
-        {gaps.length > 0 && (
-          <div className="mb-4 rounded-xl border border-warn bg-warn-soft p-4" data-testid="rate-tier-gaps">
-            <p className="text-sm font-medium text-warn">Incomplete rate coverage</p>
-            <ul className="mt-2 space-y-1 text-sm text-warn">
-              {gaps.map((g) => (
-                <li key={`${g.country}/${g.currency}`} data-testid={`rate-gap-${g.country}-${g.currency}`}>
-                  <span className="font-medium">{g.country} · {g.currency}</span> has{' '}
-                  {g.has.map((t) => TIER_LABEL[t] ?? t).join(' and ')} but no{' '}
-                  <span className="font-medium">{g.missing.map((t) => TIER_LABEL[t] ?? t).join(' or ')}</span>.
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-xs text-warn">
-              A tenant reaching twelve months on one of these moves to the missing tier, and every
-              accrual for them is refused until a rate exists — their rep earns nothing in the
-              meantime. Add the rate above when you have settled the figure.
-            </p>
-          </div>
-        )}
+        {/* ── THE HALF-CONFIGURED-PAIR WARNING IS GONE ──────────────────────────────────────
+            It said a country carried one tier and not the other, which mattered when a tenant
+            crossing twelve months fell into a tier with no rate. Commission is flat now: one tier,
+            so "both present" is not a property. A pair either has a rate or it does not, and
+            resolveRate refuses that by name. */}
 
         {/* Add / forward-amend */}
         <form onSubmit={add} className="mb-6 rounded-xl border border-line bg-surface p-4 flex flex-wrap items-end gap-3">

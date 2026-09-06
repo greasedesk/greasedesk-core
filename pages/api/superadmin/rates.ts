@@ -29,11 +29,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { SUBSCRIPTION } from '@/lib/commission';
+import { ONGOING_TIER, SUBSCRIPTION } from '@/lib/commission';
 import { requireOperatorApi } from '@/lib/operator-auth';
 
-const TIERS = ['first_12m', 'thereafter'] as const;
-type Tier = (typeof TIERS)[number];
+// ONE TIER. The taper is retired (lib/commission), so a first_12m row would be a rate the engine
+// never asks for — money config that looks live and is not. Historical rows keep their values.
+type Tier = 'first_12m' | 'thereafter';
 const COUNTRY_RE = /^[A-Z]{2}$/;   // ISO-2, e.g. GB
 const CURRENCY_RE = /^[A-Z]{3}$/;  // ISO-4217, e.g. GBP
 
@@ -113,7 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!COUNTRY_RE.test(country_code)) return res.status(400).json({ message: 'Country must be a 2-letter ISO code (e.g. GB).' });
     if (!CURRENCY_RE.test(currency)) return res.status(400).json({ message: 'Currency is required (3-letter ISO code, e.g. GBP).' });
-    if (!TIERS.includes(tier)) return res.status(400).json({ message: 'Tier is required (first_12m or thereafter).' });
+    if (tier !== ONGOING_TIER) return res.status(400).json({ message: `Commission is a single flat rate — a new rate is written on "${ONGOING_TIER}". The tiered rows are frozen history.` });
     if (amount_pennies === null) return res.status(400).json({ message: 'Amount must be a whole number of pennies (≥ 0).' });
     if (!effective_from) return res.status(400).json({ message: 'Effective-from must be a valid date (YYYY-MM-DD).' });
 

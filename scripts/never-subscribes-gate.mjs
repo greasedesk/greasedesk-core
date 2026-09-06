@@ -65,14 +65,21 @@ check('the OLD rule (is_demo alone) leaves it TODO', oldState === 'todo',
 // ── 4. A PAYING TENANT IS UNAFFECTED ─────────────────────────────────────────────────────────────
 console.log('\n— the exemption does not leak to a customer —');
 const real = await prisma.group.findFirst({
-  where: { is_demo: false, OR: [{ is_internal: null }, { is_internal: false }] },
+  // FREE TOO. This asked for not-demo and not-internal and said nothing about free, so it picked
+  // US-GD2175 — set free on 2026-09-05, and exempt ever since. A tenant that "must still be able to
+  // reach checkout" is one neverSubscribes says NOTHING about, which means all three flags.
+  where: { is_demo: false, OR: [{ is_internal: null }, { is_internal: false }], free_since: null },
   select: { id: true, ref: true },
 });
 if (real) {
   check(`${real.ref} does NOT get the exemption`, neverSubscribes(await prisma.group.findUnique({
-    where: { id: real.id }, select: { is_demo: true, is_internal: true },
+    // AND THE ROW MUST BE ABLE TO ANSWER. Selecting two of the three flags starved the predicate,
+    // exactly as three production callers were found doing on 2026-09-06: it returned false because
+    // free_since was undefined, not because the tenant pays.
+    where: { id: real.id }, select: { is_demo: true, is_internal: true, free_since: true },
   })) === false, 'its subscription signal must still depend on a real Stripe status');
-} else check('a non-internal tenant exists to test against', false, 'none found — the check above is vacuous');
+} else check('a tenant that can actually subscribe exists to test against', false,
+  'none found — every tenant is demo, internal or free, so the checks below would be vacuous');
 
 // ── 5. THE READER USES THE NAMED QUESTION ────────────────────────────────────────────────────────
 console.log('\n— asked by name, not by flag —');
