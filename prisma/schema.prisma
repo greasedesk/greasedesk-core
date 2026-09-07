@@ -1033,9 +1033,92 @@ model RepVisit {
   recorded_by      String?
   created_at       DateTime @default(now())
 
+  answer RepVisitAnswer?
+  lead   RepLead?
+
   @@unique([group_id, code_step]) // single-use: a code cannot be spent twice, whoever forwarded it
   @@index([group_id, satisfies_period])
   @@index([party_type, party_id])
+}
+
+/**
+ * WHAT THE REP WROTE UP — its own row, so RepVisit has nothing to update.
+ *
+ * The scan facts are evidence and the answers are notes, and they have different rules. Keeping
+ * them in one table would have made "the visit is immutable" a convention somebody has to obey;
+ * split, there is simply nothing on RepVisit to write to, and rep-answers-gate can scan for
+ * `repVisit.update` and mean it.
+ *
+ * THREE-STATE ON NOT NULL COLUMNS, with `not_asked` as a value and the `_at` column carrying the
+ * absence — lib/due-items::responseAtFor, followed rather than re-decided. See lib/rep-answers.
+ */
+model RepVisitAnswer {
+  id                  String   @id @default(uuid())
+  visit_id            String   @unique // 0..1 per visit, by the index rather than by convention
+  app_working         String // lib/rep-answers APP_WORKING — 'working' | 'problems' | 'not_asked'
+  /// What the problem was. NULL = none was described, which is only legitimate when the answer is
+  /// not `problems`: lib/rep-answers::refuseAnswer requires prose beside a problem. A REFUSAL and
+  /// not a CHECK on purpose — Postgres can demand non-emptiness, it cannot judge a description.
+  app_working_note    String?
+  /// NULL when app_working is `not_asked`, and set otherwise — including for a negative answer,
+  /// because `problems` was asked and answered. RepVisitAnswer_asked_at_chk holds the pairing.
+  app_working_at      DateTime?
+  using_it            String // 'daily' | 'sometimes' | 'barely' | 'not_asked'
+  /// NULL when using_it is `not_asked`; set for every real answer, `barely` included.
+  using_it_at         DateTime?
+  whats_missing_state String // 'not_asked' | 'nothing' | 'said' — three states, one of which has prose
+  /// What they said was missing. NULL unless the state is `said`, and non-blank when it is:
+  /// RepVisitAnswer_missing_chk. A nullable string alone could not tell "nothing, we're happy"
+  /// from "nobody asked", which is the collision the three-state shape exists to avoid.
+  whats_missing_text  String?
+  /// NULL when whats_missing_state is `not_asked`. `nothing` DOES stamp — it was asked and answered.
+  whats_missing_at    DateTime?
+  created_at          DateTime @default(now())
+  /// NULL until the first correction. Answers are notes and may be edited; every edit also writes a
+  /// SuperAdminAudit row (lib/rep-answers::auditAnswerEdit) — the PLATFORM ledger, never the
+  /// tenant's, because a garage must not be able to read what a rep recorded about them.
+  updated_at          DateTime?
+
+  visit RepVisit @relation(fields: [visit_id], references: [id], onDelete: Cascade)
+}
+
+/**
+ * THE PAYMENTS AND FINANCE ANSWER, which is a lead and has a life of its own — someone follows it
+ * up weeks later, and it converts or dies long after the visit is history. Its own row for that
+ * reason, 0..1 per visit.
+ *
+ * INTEREST AND STATUS ARE TWO AXES: interest is what the garage SAID, status is what we DID. See
+ * lib/rep-answers::refuseLead for why collapsing them hides the expensive case.
+ */
+model RepLead {
+  id           String    @id @default(uuid())
+  visit_id     String    @unique
+  /// Who they use for card payments today. NULL = not established — the commonest outcome of a
+  /// short visit, and not the same as "nobody", which is a provider answer of its own.
+  provider     String?
+  /// What they pay now, in pennies. NULL = not established, including the frequent "they didn't
+  /// know". Never 0 as a stand-in: zero is a rate somebody quoted, absence is not.
+  pays_now_pennies Int?
+  /// When their current contract ends. NULL = not established or they did not know.
+  contract_end DateTime?
+  interest     String // lib/rep-answers LEAD_INTEREST — 'interested' | 'not_interested' | 'not_asked'
+  /// NULL when interest is `not_asked`; set for both real answers, `not_interested` included —
+  /// that one is the lead OUTCOME and the most useful thing a rep learns. RepLead_asked_at_chk.
+  interest_at  DateTime?
+  /// When somebody should come back to it. NULL = none set. Overdue is DERIVED from this against
+  /// the clock and never stored, so it cannot go stale.
+  follow_up_on DateTime?
+  status       String    @default("open") // 'open' | 'converted' | 'declined' — writers set it explicitly
+  /// NULL exactly while the status is `open`. RepLead_closure_chk holds the pairing, so a closed
+  /// lead can never be missing its date and an open one can never carry a stale one.
+  closed_at    DateTime?
+  created_at   DateTime  @default(now())
+  /// NULL until the first edit — same rule, and the same platform-ledger audit, as the answers.
+  updated_at   DateTime?
+
+  visit RepVisit @relation(fields: [visit_id], references: [id], onDelete: Cascade)
+
+  @@index([status, follow_up_on]) // the open-lead queue, ordered by when somebody owes it a call
 }
 
 // PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT
@@ -1066,6 +1149,14 @@ model SuperAdminAudit {
   // whose author is not a person; a sentinel operator id would be a lie in the one table whose job
   // is saying who did what. Every operator-initiated action still sets it.
   operator_user_id     String? // the ACTING operator's id; NULL when the platform itself acted
+  /// THE ACTING REP, when a rep did it — today only `rep.answer_edited`, where a rep corrects what
+  /// they wrote up after a visit. A rep is not an operator and must not be recorded as one.
+  ///
+  /// NULL = no rep acted. With operator_user_id ALSO null that still means "the platform itself
+  /// acted" — the sentinel above is unchanged, because this column carries the second actor rather
+  /// than overloading the first. SuperAdminAudit_one_actor_chk holds them to at most one between
+  /// them, so a row can never claim two authors.
+  actor_rep_id         String?
   action               String // 'tenant.archived|unarchived|purged' | 'operator.created|role_changed|regions_changed|suspended|unsuspended'
   // EXTENDED for operator-target actions (this table was tenant-target only). One of target_group_id
   // (tenant actions) or target_operator_id (operator-management actions) is set; the other is null.
@@ -1519,6 +1610,12 @@ model User {
   primary_site_id String? // admin-set landing/default site (must be one of the user's assigned sites)
   role_id         String?
   is_active       Boolean  @default(true)
+  /// Stamped by the tenant authorize() on a successful sign-in, mirroring Operator.last_login_at.
+  /// NULL = never signed in since this column existed — which is EVERY user today, and stays the
+  /// honest answer for anyone who has not logged in since. Deliberately not backfilled from
+  /// created_at: an account's creation is not a login, and a made-up timestamp here would be
+  /// indistinguishable from a real one for exactly the question this column exists to answer.
+  last_login_at   DateTime?
   is_owner        Boolean  @default(false) // immutable: marks the one primary-subscriber per group
   // Per-user grant (ADMIN-set, off by default): a trusted STANDARD mechanic may RAISE an invoice
   // (in_progress→invoiced) at an assigned site, without being promoted to SITE_MANAGER. Grants ONLY

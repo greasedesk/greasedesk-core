@@ -69,6 +69,13 @@ export const authOptions: NextAuthOptions = {
           if (!v.ok) throw new Error(v.lockedOut ? 'TWO_FACTOR_LOCKED' : 'TWO_FACTOR_REQUIRED');
         }
 
+        // ── THE LOGIN STAMP ────────────────────────────────────────────────────────────────
+        // AFTER the second factor, not before: a stamp taken earlier records a login that never
+        // happened, and the column exists precisely to answer "are they using it". Fire-and-forget
+        // for the reason the operator provider already is — a telemetry write must never cost
+        // somebody their session. Nothing reads it yet.
+        await prisma.user.update({ where: { id: user.id }, data: { last_login_at: new Date() } }).catch(() => {});
+
         // Returned object is put into the JWT / session.
         return {
           id: user.id,
