@@ -23,6 +23,8 @@ const prisma = await gatePrisma();
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
 const CUST = 'Schedule Fixture Owner';
+const NOW = new Date();
+const DAY = 86_400_000;
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (t) => t.replace(/^\s*\*\s?/gm, ' ').replace(/\s+/g, ' ');
@@ -187,9 +189,23 @@ try {
   const site = await zzSite(prisma);
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900321' }, select: { id: true } });
+  // ── THE MOT DATE IS A BAND, NOT A DAY ────────────────────────────────────────────────────────
+  // It shipped as a literal, 2026-11-30, and the assertion below pinned the string it renders as.
+  // That is a gate whose answer changes because of the day it ran: the same written-down date is a
+  // car nearly three months from its MOT in September, one INSIDE the 30-day MOT-due window in
+  // November (WINDOW_DAYS, lib/marketing-lists.ts — it would have joined the marketing list), and
+  // a LAPSED car in December. Three different cars, one fixture. Written as an offset the car is
+  // always the same distance out, so the band is fixed by construction rather than by the
+  // calendar. 85 clears both edges — well past 30 days, nowhere near a year.
+  //
+  // The mint refreshes the expiry from DVSA (lib/mot-mint-refresh, no proximity condition), which
+  // is why the assertion has to read what the car HOLDS rather than a string typed here: ZZ76SCH
+  // is not a real registration, DVSA does not answer, and the planted value is what survives.
+  const motExpiry = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), NOW.getUTCDate()) + 85 * DAY);
+  const motExpiryLabel = motExpiry.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const veh = await prisma.vehicle.create({
     data: { group_id: ZZ, registration: 'ZZ76SCH', registration_normalized: 'ZZ76SCH', make: 'Sched', model: 'Fixture',
-      mot_expiry: new Date('2026-11-30T00:00:00.000Z') },
+      mot_expiry: motExpiry },
     select: { id: true } });
   await prisma.vehicleOwnership.create({ data: { vehicle_id: veh.id, customer_id: cust.id, is_current: true, valid_from: new Date() } });
 
@@ -821,7 +837,8 @@ try {
     /Next oil service due in 27,000 miles or by May 2028, whichever comes first/.test(snap), snap.slice(0, 400));
   check('  …and the mileage-only row beside it', /Rear brake pads due in 16,000 miles/.test(snap), snap.slice(0, 400));
   check('  …with the MOT once, from the car', (snap.match(/MOT Expiry/g) ?? []).length === 1
-    && /30 November 2026/.test(snap));
+    && snap.includes(`MOT Expiry ${motExpiryLabel}`),
+    `expected the fixture's own expiry, ${motExpiryLabel}`);
   check('  …and no arrival figure anywhere in it', !/60,000/.test(snap),
     'the arrival reading is a visit measurement and must never reach a customer document');
   // ── 7b. THE DEPARTURE MILEAGE IS A MEASUREMENT, NOT A DEFAULT ────────────────────────────────

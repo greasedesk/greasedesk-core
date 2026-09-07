@@ -176,9 +176,17 @@ try {
   // early) so the first check must change it — which is the branch a made-up plate can never reach.
   console.log('\n— a plate DVSA knows —');
   const REAL = 'K15NAL';
+  const NOW_D = new Date();
+  // PLANTED RELATIVE TO NOW, and never equal to what DVSA holds. This was a literal a year before
+  // the real expiry — which made the gate assert a fact about a stranger's car, true only until
+  // K15NAL is next tested. Twenty days out keeps the comment above honest (days away, not lapsed)
+  // and is a date no real vehicle record will coincidentally carry; the check below proves it
+  // differed rather than assuming it.
+  const DAY = 86_400_000;
+  const planted = new Date(Date.UTC(NOW_D.getUTCFullYear(), NOW_D.getUTCMonth(), NOW_D.getUTCDate()) + 20 * DAY);
   const real = await prisma.vehicle.create({
     data: { group_id: ZZ, registration: REAL, registration_normalized: REAL, make: 'Fixture', model: 'Real',
-      year: 2015, mot_expiry: new Date('2026-09-11T00:00:00.000Z') },
+      year: 2015, mot_expiry: planted },
     select: { id: true },
   });
   fix.real = real.id;
@@ -191,15 +199,21 @@ try {
   }, real.id);
   check('DVSA answers for a real plate', hit.body?.outcome?.kind !== 'no_answer',
     `${hit.body?.outcome?.kind}: ${hit.body?.outcome?.sentence}`);
-  check('  …the held date was a year out, so this is the CHANGED branch',
-    hit.body?.outcome?.kind === 'changed' && /2027/.test(hit.body?.outcome?.sentence ?? ''),
-    hit.body?.outcome?.sentence);
+  // NOT a pinned year in the sentence: what is being tested is that the held date was wrong and the
+  // refresh corrected it, which is the branch a made-up plate can never reach.
+  check('  …the held date was wrong, so this is the CHANGED branch',
+    hit.body?.outcome?.kind === 'changed', hit.body?.outcome?.sentence);
   const w1 = await prisma.vehicle.findUnique({ where: { id: real.id },
     select: { mot_expiry: true, mot_checked_at: true, last_mot_mileage: true } });
   check('  …and NOW mot_checked_at is stamped, because something was learned', w1?.mot_checked_at != null,
     w1?.mot_checked_at?.toISOString() ?? 'null');
-  check('  …the expiry was written', w1?.mot_expiry?.toISOString().slice(0, 10) === '2027-09-11',
-    w1?.mot_expiry?.toISOString().slice(0, 10));
+  // WHAT DVSA ACTUALLY RETURNED, captured once and reused. The old assertion named 2027-09-11 —
+  // K15NAL's expiry on the day this was written — so it would go red the day that car is retested,
+  // reporting a broken refresh when nothing had broken.
+  const captured = w1?.mot_expiry ?? null;
+  check('  …the expiry was written, and is not the one we planted',
+    captured != null && captured.getTime() !== planted.getTime(),
+    `${captured?.toISOString().slice(0, 10)} replaced the planted ${planted.toISOString().slice(0, 10)}`);
   check('  …and the odometer history came with it, as the sweep does',
     (await prisma.vehicleOdometerReading.count({ where: { vehicle_id: real.id, source: 'mot' } })) > 1,
     'a per-row check must not produce worse rates than the sweep');
@@ -229,11 +243,15 @@ try {
     check('a checked row shows a time on it once DVSA has answered',
       await realRow.locator('[data-testid="marketing-checked-at"]').count() === 1);
   } else {
-    // 2027 is outside the 30-day window, so the renewed car correctly leaves the list on reload.
-    check('the renewed car is off the list on the next load, which is the point',
-      (await prisma.vehicle.findUnique({ where: { id: real.id }, select: { mot_expiry: true } }))
-        ?.mot_expiry?.toISOString().slice(0, 10) === '2027-09-11',
-      'the row stayed put while it was being worked; the list reconciles when it is next built');
+    // WHY it left is derived, not assumed. This said "2027 is outside the 30-day window" — true of
+    // the expiry that car happened to hold, and the branch would have gone on passing for the wrong
+    // reason if a renewal ever brought the date inside the window.
+    const now2 = await prisma.vehicle.findUnique({ where: { id: real.id }, select: { mot_expiry: true } });
+    const outsideWindow = captured != null && captured.getTime() > NOW_D.getTime() + 30 * DAY;
+    check('the renewed car is off the list because its expiry is outside the 30-day window',
+      outsideWindow && now2?.mot_expiry?.getTime() === captured?.getTime(),
+      `${captured?.toISOString().slice(0, 10)} is ${Math.round(((captured?.getTime() ?? 0) - NOW_D.getTime()) / DAY)} days out`
+      + ' — the row stayed put while it was being worked; the list reconciles when it is next built');
   }
 
   // ── 5. THE ENDPOINT'S OWN REFUSALS ───────────────────────────────────────────────────────────
