@@ -40,12 +40,40 @@
  * so does the after-count — recomputing it from the group would find no users, count zero
  * subject-rows, and cheerfully report a clean purge over the top of whatever remained.
  *
+ *   RepVisitAnswer / RepLead
+ *        no group_id of their own — they hang off RepVisit, which survives (below), so they survive
+ *        with it. Swept by the visit ids, captured before the transaction like every other subject
+ *        list. See WHAT IS DELIBERATELY LEFT for why the visit stays and these two do not.
+ *
  * ── WHAT IS DELIBERATELY LEFT ───────────────────────────────────────────────────────────────────
- * CommissionEntry and TenantAttribution also carry group_id with no cascade, and they STAY. They
- * are our own accounts payable — what we owe a rep for the introduction — and they hold no personal
- * data about the tenant's people, only the id of a group that no longer exists, exactly as
- * SuperAdminAudit.target_group_id does. Erasing a customer must not erase our books. They are named
- * here so nobody later reads the sweep, notices the gap, and "fixes" it.
+ * THE TEST IS TWO-PART, AND BOTH HALVES MUST HOLD. A row stays only if it is OUR OWN BOOKS *and* it
+ * holds no personal data about the tenant's people. A row that is only one of the two goes with the
+ * tenant. Erasing a customer must not erase our books; keeping our books must not keep their people.
+ *
+ * CommissionEntry and TenantAttribution carry group_id with no cascade, and they STAY. They are our
+ * own accounts payable — what we owe a rep for the introduction — and they hold no personal data
+ * about the tenant's people, only the id of a group that no longer exists, exactly as
+ * SuperAdminAudit.target_group_id does.
+ *
+ * RepVisit STAYS, on the same two-part test:
+ *   · OUR BOOKS — it is the SUPPORTING DOCUMENT for them. Once the visit gate is wired it decides
+ *     £30 against £12.50, and CommissionEntry.visited freezes which branch was taken. Delete the
+ *     visits and every surviving entry becomes a figure nobody can defend, to the rep who was paid
+ *     or to anyone auditing us. That is a worse gap than the one CommissionEntry was kept to avoid.
+ *   · NO PERSONAL DATA ABOUT THE TENANT'S PEOPLE — party_id is the REP's id, our own person; the
+ *     scan time, the period, the consumed code step and the source are our commercial process; and
+ *     group_id / site_id are ids of rows that no longer exist.
+ *
+ * ITS ANSWERS DO NOT, and the split is the two-part test doing its job. RepVisitAnswer decides no
+ * money at all — the commission reads the SCAN, which is why a visit with no answers is still a
+ * visit — and `app_working_note` and `whats_missing_text` are unbounded prose a rep wrote about a
+ * garage. We cannot know what is in them. RepLead goes with it: today nothing pays on a lead, so it
+ * is not our books either, and what it holds is commercial intelligence about a customer we have
+ * been asked to erase.
+ *
+ * They are all named here so nobody later reads the sweep, notices the gap, and "fixes" it — and
+ * purge-completeness-gate now derives this list from the schema, so a table added with a bare
+ * group_id is a red gate rather than a silence.
  *
  * ── WHY AN UNCONFIRMED CANCEL MUST ABORT ────────────────────────────────────────────────────────
  * `Group.billing.stripe_subscription_id` is the ONLY route from the product to the subscription.
@@ -98,13 +126,19 @@ export type PurgeResult = {
 
 /** The identifiers the subject-keyed tables are addressed by. Captured ONCE, before anything is
  *  deleted, then handed to both counts and to the sweep — see the header. */
-export type PurgeSubjects = { userIds: string[]; emails: string[] };
+export type PurgeSubjects = { userIds: string[]; emails: string[]; visitIds: string[] };
 
 export async function collectPurgeSubjects(groupId: string): Promise<PurgeSubjects> {
   const users = (await prisma.user.findMany({
     where: { group_id: groupId }, select: { id: true, email: true },
   })) as Array<{ id: string; email: string }>;
-  return { userIds: users.map((u) => u.id), emails: users.map((u) => u.email) };
+  // THE VISIT IDS, captured here for the same reason as the user ids: RepVisit SURVIVES the purge,
+  // so its children could still be found afterwards — but the count and the sweep must agree on one
+  // list taken at one moment, or they are answering about different sets of rows.
+  const visits = (await prisma.repVisit.findMany({
+    where: { group_id: groupId }, select: { id: true },
+  })) as Array<{ id: string }>;
+  return { userIds: users.map((u) => u.id), emails: users.map((u) => u.email), visitIds: visits.map((v) => v.id) };
 }
 
 /** Comprehensive tenant row-count across every table holding this tenant's data (direct group_id,
@@ -174,13 +208,20 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
   // The six with no path back to Group. Counted by the captured identifiers, never re-derived.
   const ids = subjects?.userIds ?? [];
   const emails = subjects?.emails ?? [];
-  const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits] = await Promise.all([
+  const visitIds = subjects?.visitIds ?? [];
+  const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits,
+    repVisitAnswers, repLeads] = await Promise.all([
     ids.length ? prisma.twoFactorSecret.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.deliveredCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.twoFactorRecoveryCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     emails.length ? prisma.verificationToken.count({ where: { identifier: { in: emails } } }) : 0,
     prisma.countryWaitlist.count({ where: { group_id: groupId } }),
     prisma.authRateLimit.count({ where: { key: { in: tenantRateLimitKeys(groupId, ids) } } }),
+    // BY THE CAPTURED VISIT IDS, never re-derived from the group. RepVisit survives, so re-deriving
+    // would find the visits again and count their (deleted) children as zero for the right reason
+    // by luck rather than by construction — the same trap the user ids above are captured against.
+    visitIds.length ? prisma.repVisitAnswer.count({ where: { visit_id: { in: visitIds } } }) : 0,
+    visitIds.length ? prisma.repLead.count({ where: { visit_id: { in: visitIds } } }) : 0,
   ]);
 
   return {
@@ -198,6 +239,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     VinReadShadow: vinReadShadow, UploadTelemetry: uploadTelemetry,
     TwoFactorSecret: twoFactorSecrets, DeliveredCode: deliveredCodes, TwoFactorRecoveryCode: recoveryCodes,
     VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
+    RepVisitAnswer: repVisitAnswers, RepLead: repLeads,
   };
 }
 
@@ -285,6 +327,13 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
       await tx.twoFactorRecoveryCode.deleteMany({ where: { subject_type: 'tenant', subject_id: { in: subjects.userIds } } });
     }
     // The identifier IS the email address, so these rows are PII whether or not they have expired.
+    // The rep's notes about this garage — not our books, and unbounded prose about their people.
+    // The VISIT itself stays: see WHAT IS DELIBERATELY LEFT.
+    if (subjects.visitIds.length) {
+      await tx.repVisitAnswer.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
+      await tx.repLead.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
+    }
+
     if (subjects.emails.length) {
       await tx.verificationToken.deleteMany({ where: { identifier: { in: subjects.emails } } });
     }

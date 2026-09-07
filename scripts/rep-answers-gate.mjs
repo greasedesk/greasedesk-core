@@ -195,8 +195,21 @@ try {
 
   // ── 7. STILL DORMANT ─────────────────────────────────────────────────────────────────────────
   console.log('\n— and nothing reads any of it —');
-  const readers = sources.filter((f) => /repVisitAnswer\.(find|count|aggregate)|repLead\.(find|count|aggregate)/.test(readFileSync(f, 'utf8')));
+  // ONE NAMED EXCEPTION, and it is not a read of an answer. lib/tenant-purge COUNTS these rows
+  // before and after an erasure to prove they are gone — the honest-after-count rule that exists
+  // because a purge once reported a clean sweep over a real mobile number. Counting rows is not
+  // reading what a rep wrote, so the exception is named rather than the claim weakened; the
+  // narrower assertion below is what stops it widening into one.
+  const PURGE = 'lib/tenant-purge.ts';
+  const readers = sources.filter((f) => f !== PURGE
+    && /repVisitAnswer\.(find|count|aggregate)|repLead\.(find|count|aggregate)/.test(readFileSync(f, 'utf8')));
   check('nothing reads an answer or a lead', readers.length === 0, readers.join(', '));
+  const purgeSrc = readFileSync(PURGE, 'utf8');
+  const verbs = [...purgeSrc.matchAll(/\b(?:repVisitAnswer|repLead)\.(\w+)\(/g)].map((m) => m[1]);
+  check('  …and the purge only counts and deletes them', verbs.every((v) => v === 'count' || v === 'deleteMany'),
+    [...new Set(verbs)].join(', ') || 'none');
+  check('  …never selecting a column', !/repVisitAnswer[\s\S]{0,120}app_working_note|repLead[\s\S]{0,120}provider/.test(purgeSrc),
+    'the prose is what erasure is about — an after-count must never have to look at it');
   // THE LOGIN STAMP NEEDS A NARROWER CLAIM. Operator.last_login_at has existed for weeks and IS
   // read, in the Engine Room operator list — the first version of this check flagged those two
   // files and was measuring the wrong column. So: every mention on the TENANT model must be the
