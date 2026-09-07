@@ -92,14 +92,38 @@ try {
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
 
+  // ── WAIT FOR THE ANSWER, NOT FOR TWO SECONDS ─────────────────────────────────────────────────
+  // The three ticks below were `click(); await page.waitForTimeout(2000);` and on 2026-09-07 that
+  // reported a working feature as broken — twice, reproducibly, on a run that took 24.8s against
+  // the previous day's 15s. Nothing had changed: the route and the component last moved on 08-26,
+  // this file on 08-30. The write was never lost, only LATE — it landed after the 2s read and
+  // before the reload eleven lines down, so the same run failed "it records a time AND an author"
+  // and then passed "the audit keeps BOTH events", which cannot be true unless the tick's own
+  // audit row exists. Three assertions said the write happened; two, read at a fixed mark, said it
+  // had not. A gate that contradicts itself inside one run is not measuring the code.
+  //
+  // The endpoint's OWN RESPONSE is the condition. pages/api/intake-items awaits its transaction and
+  // only then returns 200, so a resolved POST means the row is committed — no polling, no guess.
+  // It is also strictly louder than the timeout was: a 500, or a click that never fires, now names
+  // itself, where waitForTimeout could only ever report the absence that came after it.
+  const tick = async (act) => {
+    const settled = page.waitForResponse(
+      (r) => r.url().includes('/api/intake-items') && r.request().method() === 'POST',
+      { timeout: 20000 },
+    ).catch(() => null);
+    const [resp] = await Promise.all([settled, act()]);
+    return resp;
+  };
+
   console.log('\n— the desktop checklist —');
   await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=intake`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="intake-checklist"]', { timeout: 25000 });
   const deskTick = page.locator('[data-testid="intake-diag-scan-done"]');
   check('the desktop offers a tick', await deskTick.count() === 1,
     'the only control it had was Skip');
-  await deskTick.click();
-  await page.waitForTimeout(2000);
+  const deskResp = await tick(() => deskTick.click());
+  check('  …the endpoint answers the tick', deskResp?.status() === 200,
+    deskResp ? `HTTP ${deskResp.status()}` : 'no POST to /api/intake-items within 20s — the click never reached it');
   const after = await prisma.jobCard.findUnique({ where: { id: card.id }, select: { diag_scan_at: true, diag_scan_by: true } });
   check('  …and it records a time AND an author', after?.diag_scan_at != null && after?.diag_scan_by != null,
     JSON.stringify(after));
@@ -110,8 +134,9 @@ try {
   await page.waitForSelector('[data-testid="intake-checklist"]', { timeout: 25000 });
   const undo = page.locator('[data-testid="intake-undo-diag-scan"]');
   check('a ticked scan can be untucked', await undo.count() === 1, 'a mis-tap must not be permanent');
-  await undo.click();
-  await page.waitForTimeout(2000);
+  const undoResp = await tick(() => undo.click());
+  check('  …the endpoint answers the undo', undoResp?.status() === 200,
+    undoResp ? `HTTP ${undoResp.status()}` : 'no POST to /api/intake-items within 20s');
   const cleared = await prisma.jobCard.findUnique({ where: { id: card.id }, select: { diag_scan_at: true, diag_scan_by: true } });
   check('  …and the card forgets it', cleared?.diag_scan_at === null && cleared?.diag_scan_by === null, JSON.stringify(cleared));
   check('  …while the audit keeps BOTH events',
@@ -124,8 +149,9 @@ try {
   const phoneTick = page.locator('[data-testid="intake-diag-scan-done"]');
   check('the phone offers the same tick', await phoneTick.count() === 1,
     'the scan is run at the car, so the phone is where it will be confirmed');
-  await phoneTick.click();
-  await page.waitForTimeout(2000);
+  const phoneResp = await tick(() => phoneTick.click());
+  check('  …the phone endpoint answers too', phoneResp?.status() === 200,
+    phoneResp ? `HTTP ${phoneResp.status()}` : 'no POST to /api/intake-items within 20s');
   check('  …and it writes the same fact',
     (await prisma.jobCard.findUnique({ where: { id: card.id }, select: { diag_scan_at: true } }))?.diag_scan_at != null);
 } catch (e) {
