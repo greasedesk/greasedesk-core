@@ -969,6 +969,16 @@ model CommissionEntry {
   source_ref     String // idempotency key: payment ref (accrual) or refund ref (clawback)
   payment_ref    String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
   status         String   @default("pending") // 'pending' | 'paid' | 'void'
+  /// WHICH BRANCH OF THE RATE THIS ENTRY USED — true = the full amount_pennies, false = the reduced
+  /// amount_unvisited_pennies. Frozen here rather than inferred, because inference breaks exactly
+  /// where it matters: a share below 10000bp, or the two amounts ever coinciding, and the ledger
+  /// can no longer say which figure it booked.
+  ///
+  /// NULL = no visit decision was applied to this entry. Today that is EVERY entry — the visit gate
+  /// is dormant (nothing reads amount_unvisited_pennies) — and it stays the truthful answer for
+  /// every row written before it is wired. Deliberately NOT defaulted to false: false is the
+  /// decision "they had no visit", and an undecided entry has not made it.
+  visited        Boolean?
   payout_id      String? // set when a payout run pays it; a paid accrual is never mutated by a later clawback
   created_at     DateTime @default(now())
 
@@ -976,6 +986,56 @@ model CommissionEntry {
   @@index([group_id, period])
   @@index([party_id, status])
   @@index([payment_ref])
+}
+
+/**
+ * A REP VISIT — the evidence that somebody actually turned up, and the month it pays for.
+ *
+ * This is what makes CommissionRate.amount_unvisited_pennies reachable (£12.50 against £30.00). The
+ * rule lives in lib/rep-visit and nothing reads the reduced rate yet; rep-visit-gate pins that.
+ *
+ * The scan facts are IMMUTABLE. A visit is evidence, and evidence that can be edited afterwards is
+ * notes. The answers a rep writes up that evening are notes, and they are DELIBERATELY NOT BUILT
+ * here — the four questions and the payments lead are their own slice, with their own three-state
+ * shapes. NOT BUILT — no column on this model holds an answer, and none is implied by one.
+ */
+model RepVisit {
+  id               String   @id @default(uuid())
+  group_id         String // the garage. The commission is per tenant, so this is the axis that counts
+  site_id          String // the screen that displayed the code — a scan always comes from somewhere
+  /// PARTY, not rep_id. TenantAttribution already lets a garage attribute to a rep AND a regional
+  /// manager at once, and a rep_id column would make the regional manager's visit unrecordable —
+  /// a migration over evidence rather than over config. Same two columns, same spelling.
+  party_type       String // 'rep' | 'operator'
+  party_id         String
+  scanned_at       DateTime // server time, never the phone's
+  /// THE MONTH THIS VISIT PAYS FOR, frozen at write from the SITE's timezone. NULL = a genuine
+  /// visit that satisfied no month — a second call inside one month, or one inside fourteen days of
+  /// the last. Recorded rather than refused: discarding it would record less than happened, and the
+  /// rep who turned up twice would watch their second call vanish. Only a non-NULL visit anchors
+  /// the fourteen-day window (lib/rep-visit::refuseVisit).
+  satisfies_period String?
+  source           String // lib/rep-visit VISIT_SOURCES — 'scan' | 'operator'. RepVisit_source_chk
+  /// THE TOTP STEP THE QR CODE CARRIED, consumed once. A screenshot forwarded inside the ±1-step
+  /// window is the attack the unique index below closes — lib/two-factor deliberately does NOT make
+  /// login codes single-use, and says so; here it is the whole point.
+  ///
+  /// NULL = this visit was not scanned; an operator recorded it. The unique index tolerates that
+  /// because Postgres allows many nulls in one, so operator visits never collide with each other
+  /// while two scans of the same step still cannot both land.
+  code_step        Int?
+  /// WHY an operator recorded a visit nobody scanned — a flat tablet, a screen nobody could reach.
+  /// NULL = a scanned visit, where the scan IS the evidence and demanding prose as well would be
+  /// theatre. RepVisit_evidence_chk makes it mandatory, and non-blank, the other way round.
+  reason           String?
+  /// The operator who recorded it. NULL = it was scanned, so no operator acted — the same honest
+  /// sentinel SuperAdminAudit.operator_user_id uses for actions the platform took by itself.
+  recorded_by      String?
+  created_at       DateTime @default(now())
+
+  @@unique([group_id, code_step]) // single-use: a code cannot be spent twice, whoever forwarded it
+  @@index([group_id, satisfies_period])
+  @@index([party_type, party_id])
 }
 
 // PLATFORM audit trail for operator actions (archive/purge). DELIBERATELY its own table, NOT

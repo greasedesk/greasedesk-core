@@ -286,14 +286,31 @@ export async function accruePayment(db: RootClient, groupId: string, p: Payment)
  * run; if still `pending`, the two net to zero and no cash ever moves. Idempotent on the refund ref.
  */
 export async function clawbackRefund(db: RootClient, groupId: string, r: Refund, orig: Payment): Promise<{ written: number; noop: number }> {
-  const tenant = await loadTenant(db, groupId);
   const fraction = Math.min(1, r.amount_pennies / orig.amount_pennies);
   let written = 0, noop = 0;
-  for (const l of await linesForPayment(db, tenant, orig)) {
+  // ── REVERSE WHAT WAS BOOKED, NOT WHAT WOULD BE BOOKED NOW ──────────────────────────────────────
+  // This used to recompute through linesForPayment, which asks TODAY's rate and TODAY's
+  // attribution. Between an accrual and its refund a territory can hand over and a rate can be
+  // amended — and both happen on purpose, so this was not a remote possibility. The clawback then
+  // reversed a figure that was never booked, against a party who was never paid.
+  //
+  // The entries ARE the freeze: rate_id, share_bp, tier, currency and (once the visit gate is
+  // wired) `visited` are all already on them. Reading them makes the reversal arithmetic on
+  // recorded money instead of a second opinion about it. The forecast in computeCommission still
+  // COMPUTES, and should: an open month has nothing materialised to read.
+  //
+  // A refund whose payment never accrued now writes NOTHING. Recomputing could invent a negative
+  // where no positive was ever booked — a payment refused at accrual time (no rate, shares that do
+  // not sum), the config then fixed, and the refund arriving into a world that would have accrued.
+  const accruals = await (db as any).commissionEntry.findMany({
+    where: { group_id: groupId, payment_ref: orig.ref, kind: 'accrual' },
+    select: { party_type: true, party_id: true, tier: true, rate_id: true, share_bp: true, amount_pennies: true, currency: true, visited: true },
+  });
+  for (const a of accruals) {
     const res = await insertIdempotent(db, {
-      group_id: groupId, party_type: l.party_type, party_id: l.party_id, period: periodOf(r.refunded_at),
-      kind: 'clawback', revenue_stream: SUBSCRIPTION, tier: l.tier, rate_id: l.rate_id, share_bp: l.share_bp,
-      amount_pennies: -Math.round(l.amount_pennies * fraction), currency: l.currency,
+      group_id: groupId, party_type: a.party_type, party_id: a.party_id, period: periodOf(r.refunded_at),
+      kind: 'clawback', revenue_stream: SUBSCRIPTION, tier: a.tier, rate_id: a.rate_id, share_bp: a.share_bp,
+      amount_pennies: -Math.round(a.amount_pennies * fraction), currency: a.currency, visited: a.visited,
       source_ref: r.ref, payment_ref: orig.ref, status: 'pending',
     });
     res === 'written' ? written++ : noop++;
