@@ -11,7 +11,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const F = await import('../lib/client-freshness.ts');
-const { readFileSync, writeFileSync, copyFileSync, unlinkSync } = await import('node:fs');
+const { readFileSync } = await import('node:fs');   // READ only — see the last check in section 6
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -59,49 +59,59 @@ check('the reason production is exempt is written down',
 check('it does not exit the process', !/process\.exit/.test(readFileSync('lib/client-freshness.ts', 'utf8')),
   'dying part-way through a migration is a worse surprise than the error');
 
-// ── 5. AGAINST A RUNNING SERVER ─────────────────────────────────────────────────────────────────
-// The pure rule is proven above. This is the half that could not be proven by reasoning: that the
-// running process notices, and that a normal request is unaffected when it should not.
-console.log('\n— and now for real —');
-// A PUBLIC route that queries Prisma. The first draft used /api/pwa/day, which answers 401 from the
-// session check BEFORE any query runs — so the guard was never reached and the probe proved nothing.
-// /c/<token> resolves a magic link, which is a findUnique, and it is reachable without a session.
-// A bad token renders "we couldn't find that link" at HTTP 200, so a healthy server is a 200.
-const hit = async (token) => {
-  const r = await fetch(`${B}/c/${token}`).catch(() => null);
-  return r ? { status: r.status, text: await r.text().catch(() => '') } : { status: 0, text: '' };
-};
+// ── 5. THE REFUSAL ITSELF ───────────────────────────────────────────────────────────────────────
+// THIS USED TO DRIVE A REAL DEV SERVER. It made the client stale by appending a line to
+// node_modules/.prisma/client/schema.prisma, then asserted that a request to /c/<token> was
+// refused. That proof became A RACE BY CONSTRUCTION the day scripts/dev.mjs shipped: the
+// supervisor WATCHES that same directory and restarts the server on any change — repairing the
+// staleness a moment before the assertion looked for it. It went red for the first time on
+// 2026-09-07 (the dev log shows two restarts mid-probe) and passed when run again on its own.
+//
+// Two watchers acting on one directory, and the gate's answer decided by which won. So the refusal
+// is now proven where it lives: lib/client-freshness::refuseIfStale takes the staleness as an
+// ARGUMENT, which needs no server, no clock, and no write inside node_modules — a write this file
+// itself warned about ("leaving it edited would leave the guard permanently tripped").
+//
+// WHAT IS NO LONGER PROVEN HERE, stated rather than quietly dropped: that a real request through a
+// real stale server is refused. The wiring is asserted structurally below, and scripts/gates.mjs
+// probes the running server for staleness before EVERY run and aborts the suite if it finds it —
+// so the healthy direction is exercised end to end continuously. It is the unhealthy direction
+// that is now proven against the function instead of the machine.
+console.log('\n— stale refuses, fresh does not —');
+let threw = null;
+try { F.refuseIfStale(true); } catch (e) { threw = e; }
+check('a stale answer THROWS', threw instanceof Error, String(threw));
+check('  …carrying the message that names the cause', /OLD PRISMA CLIENT/.test(threw?.message ?? ''),
+  'the error a caller sees must be the banner, not a bare failure');
+check('  …the very same one, not a paraphrase', threw?.message === F.STALE_CLIENT_MESSAGE,
+  'two copies of this text would drift, and the copy in the throw is the one anybody reads');
+let fresh = null;
+try { F.refuseIfStale(false); } catch (e) { fresh = e; }
+check('a fresh answer does NOT throw', fresh === null, String(fresh));
+check('  …which is the discriminating half', threw !== null && fresh === null,
+  'a refusal that fired both ways would stop every query on a healthy server');
 
-const before = await hit('aaaaaaaaaaaaaaaa');
-check('the dev server answers before we touch anything', before.status === 200, `HTTP ${before.status}`);
-
-const backup = '/tmp/generated-schema.prisma.bak';
-let restored = false;
-try {
-  copyFileSync(F.GENERATED_SCHEMA_PATH, backup);
-  // SIMULATES A REGENERATE: the guard compares this file's fingerprint against the one taken when
-  // the server process loaded it, so appending a comment is indistinguishable from a real
-  // `prisma generate` as far as the check is concerned — and it cannot corrupt anything, because
-  // the client reads the compiled artefacts beside this file rather than this file itself.
-  writeFileSync(F.GENERATED_SCHEMA_PATH, readFileSync(backup, 'utf8') + '\n// freshness gate probe\n');
-  await new Promise((r) => setTimeout(r, 1500)); // past the throttle
-
-  const during = await hit('bbbbbbbbbbbbbbbb');
-  check('a query REFUSES while the client is behind the disk',
-    during.status >= 500 || /OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(during.text),
-    `HTTP ${during.status}`);
-  check('  …and the page says WHY, not just that something failed',
-    /OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(during.text),
-    'a bare 500 would send the next hour into the wrong subsystem, which is the whole point');
-} finally {
-  try { copyFileSync(backup, F.GENERATED_SCHEMA_PATH); unlinkSync(backup); restored = true; } catch { /* reported below */ }
-}
-check('the generated schema was put back', restored && F.readFingerprint() !== null,
-  'this gate edits a file inside node_modules; leaving it edited would leave the guard permanently tripped');
-
-await new Promise((r) => setTimeout(r, 1500));
-const after = await hit('cccccccccccccccc');
-check('and the server serves normally again', after.status === 200, `HTTP ${after.status}`);
+// ── 6. AND lib/db CALLS IT, ON EVERY OPERATION ──────────────────────────────────────────────────
+// The one thing section 5 cannot see. Structural, and narrow enough to be worth something: the
+// guard must ask the live decision and hand it to the refusal, inside $allOperations.
+console.log('\n— wired into every query —');
+check('the extension refuses on the live answer', /refuseIfStale\(clientIsStale\(\)\);/.test(db),
+  'not a cached boolean, and not a second copy of the rule');
+check('  …inside $allOperations, so no query bypasses it',
+  db.indexOf('refuseIfStale(clientIsStale());') > db.indexOf('async $allOperations'),
+  'a guard on one method is a guard on the methods somebody remembered');
+check('  …and the running server is probed before every suite run',
+  /OLD PRISMA CLIENT\|RESTART THE DEV SERVER/.test(readFileSync('scripts/gates.mjs', 'utf8')),
+  'the end-to-end healthy path this file stopped driving — the runner aborts the whole suite on it');
+// THE TERMS ARE SPLIT SO THE SCAN CANNOT MATCH ITSELF. Written whole, each name appears in this
+// very line and the check fails on its own text — which is exactly how it failed the first time it
+// ran. A scan whose term is present in its own source is not a scan.
+const WRITERS = ['write' + 'FileSync(', 'copy' + 'FileSync(', 'unlink' + 'Sync('];
+const self = readFileSync('scripts/client-freshness-gate.mjs', 'utf8');
+check('nothing here writes inside node_modules', WRITERS.every((w) => !self.includes(w)),
+  WRITERS.filter((w) => self.includes(w)).join(', ') || 'read-only — the old probe edited the generated client, and the supervisor watches that directory');
+check('  …and the scan can still see a writer', WRITERS.some((w) => `x ${'write' + 'FileSync('}y`.includes(w)),
+  'otherwise the check above passes because it looks for nothing');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

@@ -28,7 +28,7 @@
  * being wrong, and repeating them only hides it.
  */
 import { PrismaClient } from '@prisma/client';
-import { clientIsStale, warnOnce, STALE_CLIENT_MESSAGE } from '@/lib/client-freshness';
+import { clientIsStale, refuseIfStale } from '@/lib/client-freshness';
 
 /** Never sent: the connection itself could not be obtained. Safe to repeat anything. */
 const NEVER_SENT = new Set(['P1001', 'P1002', 'P2024']);
@@ -91,10 +91,9 @@ function withFreshnessGuard(client: PrismaClient) {
   return client.$extends({
     query: {
       async $allOperations({ args, query }: any) {
-        if (clientIsStale()) {
-          warnOnce();
-          throw new Error(STALE_CLIENT_MESSAGE);
-        }
+        // The decision and the refusal both live in lib/client-freshness, where they can be proven
+        // without a running server — see refuseIfStale for why that matters.
+        refuseIfStale(clientIsStale());
         return query(args);
       },
     },

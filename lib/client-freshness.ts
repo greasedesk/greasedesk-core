@@ -126,3 +126,31 @@ export function warnOnce(): void {
   banneredAt = Date.now();
   console.error(STALE_CLIENT_MESSAGE);
 }
+
+/**
+ * THE REFUSAL ITSELF — banner once, then throw with the message.
+ *
+ * ── WHY THIS IS HERE AND NOT INLINE IN lib/db ───────────────────────────────────────────────────
+ * It was three lines inside the $allOperations extension, and the only way to prove them was to
+ * make a real dev server stale and watch a real request fail. That proof is a RACE BY
+ * CONSTRUCTION now that scripts/dev.mjs exists: the gate makes the client stale by writing to
+ * node_modules/.prisma/client, and the supervisor WATCHES that directory and restarts the server —
+ * repairing the staleness the assertion was about to look for. On 2026-09-07 that gate went red
+ * for the first time, and the dev log showed the supervisor restarting twice mid-probe. Run again
+ * on its own it passed. A gate that depends on which of two watchers wins is measuring the
+ * machine.
+ *
+ * Taking `stale` as an ARGUMENT is what makes the refusal provable without a server, without a
+ * clock, and without writing inside node_modules at all — the gate can simply call it both ways.
+ *
+ * ── WHAT THIS DOES NOT PROVE, SAID OUT LOUD ─────────────────────────────────────────────────────
+ * That lib/db actually calls it on every query. That is asserted structurally beside the other
+ * wiring checks, and it is also the thing scripts/gates.mjs probes before EVERY run: the runner
+ * aborts the whole suite if the dev server on 3000 is stale. So the healthy direction is exercised
+ * end-to-end continuously; what stopped being exercised is the unhealthy one, deliberately.
+ */
+export function refuseIfStale(stale: boolean): void {
+  if (!stale) return;
+  warnOnce();
+  throw new Error(STALE_CLIENT_MESSAGE);
+}
