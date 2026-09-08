@@ -1,7 +1,7 @@
 /**
  * File: scripts/engine-room-palette-gate.mjs
  * THE ENGINE ROOM IS DARK IN THE SAME PALETTE, NOT A SECOND ONE.
- * @gate-requires: server:3000
+ * @gate-requires: server
  *
  * ── WHAT WAS WRONG ──────────────────────────────────────────────────────────────────────────────
  * tailwind.config says it plainly: "never raw slate/blue or hex", and "do not reintroduce a second

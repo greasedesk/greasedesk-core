@@ -1,7 +1,7 @@
 /**
  * File: scripts/lookup-reset-gate.mjs
  * A LOOKUP'S ANSWER BELONGS TO THE REGISTRATION IT CAME FROM.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── THE BUG ─────────────────────────────────────────────────────────────────────────────────────
  * Type a wrong plate, press Look up, notice the mistake, correct the plate, press Look up again —

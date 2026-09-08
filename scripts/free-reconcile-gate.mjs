@@ -1,7 +1,7 @@
 /**
  * File: scripts/free-reconcile-gate.mjs
  * FREE AND SUBSCRIBED ARE MUTUALLY EXCLUSIVE, AND SOMETHING NOTICES.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
  * TMBS was set free on 5 September and took a real subscription on 6 September. Nothing in the

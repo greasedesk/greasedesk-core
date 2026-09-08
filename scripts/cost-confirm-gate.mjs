@@ -1,7 +1,7 @@
 /**
  * File: scripts/cost-confirm-gate.mjs
  * CONFIRMING A COST MONTH IS A RECORD OF CHECKING — and £0.00 is not a confirmation.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── THE ZERO ────────────────────────────────────────────────────────────────────────────────────
  * The Costs table puts an "actual" box and a Save beside every month. Clicking Save with the box

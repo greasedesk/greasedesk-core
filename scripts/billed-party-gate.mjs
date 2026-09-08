@@ -1,7 +1,7 @@
 /**
  * File: scripts/billed-party-gate.mjs
  * WHO THE INVOICE IS ADDRESSED TO, WHEN THAT IS NOT THE PERSON WHOSE CAR IT IS.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── WHY ─────────────────────────────────────────────────────────────────────────────────────────
  * A garage bills an employer for an employee's company car every week and had NO path to it. The

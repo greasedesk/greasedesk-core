@@ -1,7 +1,7 @@
 /**
  * File: scripts/overheads-retired-gate.mjs
  * THE OVERHEADS REGISTER IS RETIRED — nothing writes it, and everything that asked it now asks Costs.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── WHAT WAS ACTUALLY WRONG ─────────────────────────────────────────────────────────────────────
  * Overhead held one amount with no dates, so a rent rise silently restated every closed month. Cost

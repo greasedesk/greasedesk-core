@@ -36,10 +36,10 @@ const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_mo
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const INV = 'b5c2ccd2-7b07-40e7-9228-067b25171750';
-// PORT 3000, the port `npm run dev` uses. This defaulted to 3112 — not a decision, just whatever
-// the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
-// on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
-// overrides, which is what a genuinely different server is for.
+// THE CONFIGURED ORIGIN — gateOrigin(), whose port is scripts/_dev-port::DEV_PORT and nowhere else.
+// This once defaulted to 3112, then to a hardcoded 3000: neither was a decision, just whatever the
+// author had running that afternoon. Six gates carried defaults like it and skipped on every
+// machine but one. GATE_BASE still overrides, which is what a genuinely different server is for.
 const B = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };

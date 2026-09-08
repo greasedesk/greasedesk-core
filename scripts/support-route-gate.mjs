@@ -1,7 +1,7 @@
 /**
  * File: scripts/support-route-gate.mjs
  * A GARAGE WITH A BROKEN DIARY CAN FIND US.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── WHAT WAS WRONG ──────────────────────────────────────────────────────────────────────────────
  * The support number existed and was good. It was four levels down — Settings → Account → My Rep —

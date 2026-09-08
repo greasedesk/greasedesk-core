@@ -155,6 +155,8 @@ export function describeError(e) {
  *
  * Exported rather than automatic: it costs a fetch, and only browser-driving gates need it.
  */
+import { DEV_PORT } from './_dev-port.mjs';
+
 /**
  * ── A GATE THAT DECLINED TO START IS NOT A GATE THAT FAILED ─────────────────────────────────────
  * EXIT CODE 4, RESERVED. Seven gates refuse to start when the world is not clean enough to test in
@@ -189,7 +191,7 @@ export function declineToRun(reason) {
  * declares its own, which is what stops the copied idiom coming back.
  */
 export function gateOrigin() {
-  return process.env.GATE_BASE ?? 'http://localhost:3000';
+  return process.env.GATE_BASE ?? `http://localhost:${DEV_PORT}`;
 }
 
 /**

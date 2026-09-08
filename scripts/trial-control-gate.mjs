@@ -1,7 +1,7 @@
 /**
  * File: scripts/trial-control-gate.mjs
  * THE TRIAL EXTENSION CONTROL, DRIVEN THE WAY AN OPERATOR DRIVES IT.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── THE GAP THIS CLOSES, TWICE OVER ─────────────────────────────────────────────────────────────
  * The addressee endpoint shipped with no control at all behind a green gate, because the gate drove

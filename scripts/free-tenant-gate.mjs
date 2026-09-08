@@ -1,7 +1,7 @@
 /**
  * File: scripts/free-tenant-gate.mjs
  * A TENANT THAT PAYS NOTHING IS NOT TOLD WHAT IT WILL BE CHARGED.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── THE DEFECT THIS STARTED FROM ────────────────────────────────────────────────────────────────
  * The dashboard banner refused on `is_demo` alone. ZZ Gate Garage is `is_internal` with a

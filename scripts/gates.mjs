@@ -31,6 +31,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import http from 'node:http';
+import { DEV_PORT } from './_dev-port.mjs';
 
 /** Mirrors _gate-preflight::EXIT_UNRUN — the runner cannot import it, it runs before any gate. */
 const EXIT_UNRUN = 4;
@@ -173,7 +174,7 @@ function discover() {
 
 // THE ONE ORIGIN. Mirrors _gate-preflight::gateOrigin — the runner cannot import it, because this
 // file must run before any gate loads, but gate-origin-gate asserts the two agree.
-const ORIGIN = process.env.GATE_BASE ?? 'http://localhost:3000';
+const ORIGIN = process.env.GATE_BASE ?? `http://localhost:${DEV_PORT}`;
 const ORIGIN_PORT = Number(new URL(ORIGIN).port || 80);
 
 /**
@@ -190,7 +191,11 @@ function requirements(file) {
   if (declared) {
     const parts = declared[1].split(',').map((s) => s.trim()).filter(Boolean);
     return {
-      ports: parts.filter((p) => p.startsWith('server:')).map((p) => Number(p.split(':')[1])),
+      // `server` alone means THE configured origin. A declaration naming a port would be a second
+      // place the number lives, which is the whole point of _dev-port. `server:NNNN` is still
+      // parsed, for a gate that genuinely needs a different one.
+      ports: parts.filter((p) => p === 'server' || p.startsWith('server:'))
+        .map((p) => (p === 'server' ? ORIGIN_PORT : Number(p.split(':')[1]))),
       db: parts.includes('db'),
       declared: true,
     };

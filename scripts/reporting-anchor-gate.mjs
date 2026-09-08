@@ -1,7 +1,7 @@
 /**
  * File: scripts/reporting-anchor-gate.mjs
  * @gate-timeout: 300
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ONE ANCHOR, AND EVERY TILE BEHIND IT.
  *

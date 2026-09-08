@@ -33,6 +33,8 @@ import path from 'node:path';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const CLIENT_DIR = path.join(ROOT, 'node_modules', '.prisma', 'client');
 const SCHEMA_COPY = path.join(CLIENT_DIR, 'schema.prisma');
+import { DEV_PORT } from './_dev-port.mjs';
+
 const args = process.argv.slice(2);
 
 const read = () => (existsSync(SCHEMA_COPY) ? readFileSync(SCHEMA_COPY, 'utf8') : null);
@@ -43,7 +45,12 @@ let stopping = false;
 
 function start() {
   loaded = read(); // the bytes THIS server process is about to load
-  child = spawn('npx', ['next', 'dev', ...args], { cwd: ROOT, stdio: 'inherit', env: process.env });
+  // --port EXPLICITLY, and never a fallback. `next dev` with no port picks 3000 and SILENTLY WALKS
+  // when it is taken; that silence is what let two gates drive another application for a day and a
+  // half. Passed here, a clash is an error somebody reads instead of a move nobody notices.
+  // An explicit --port on the command line still wins: `npm run dev -- --port 3999` is a decision.
+  const port = args.includes('--port') || args.includes('-p') ? [] : ['--port', String(DEV_PORT)];
+  child = spawn('npx', ['next', 'dev', ...port, ...args], { cwd: ROOT, stdio: 'inherit', env: process.env });
   child.on('exit', (code, signal) => {
     child = null;
     if (stopping || restarting) return;

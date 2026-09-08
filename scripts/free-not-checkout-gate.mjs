@@ -1,7 +1,7 @@
 /**
  * File: scripts/free-not-checkout-gate.mjs
  * A TENANT THAT WILL NEVER PAY IS NEVER SENT TO CHECKOUT.
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * ── THE DEFECT THIS STARTED FROM, AND WHO CAUSED IT ─────────────────────────────────────────────
  * TMBS was set free on 5 September. On 6 September at 07:25 a script nulled its stranded Stripe

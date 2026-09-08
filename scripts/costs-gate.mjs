@@ -1,7 +1,7 @@
 /**
  * File: scripts/costs-gate.mjs
  * @gate-timeout: 240
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * A COST LANDS IN THE MONTHS IT APPLIES TO, AND THE CHARGE RULE ONLY DISTRIBUTES IT.
  *

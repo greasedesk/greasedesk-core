@@ -1,7 +1,7 @@
 /**
  * File: scripts/dashboard-period-copy-gate.mjs
  * @gate-timeout: 240
- * @gate-requires: server:3000, db
+ * @gate-requires: server, db
  *
  * THE TILES MUST NAME THE PERIOD THEY ARE SHOWING.
  *
