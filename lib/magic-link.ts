@@ -69,11 +69,14 @@ import crypto from 'crypto';
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { hashToken } from '@/lib/tokens';
+import { MAGIC_LINK_DAYS } from '@/lib/magic-link-days';
 import { takeToken } from '@/lib/auth-rate-limit';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export const MAGIC_LINK_DAYS = 14;
+// Defined in lib/magic-link-days, which imports NOTHING — see that file for the customer pay
+// page this move fixes. Re-exported so server-side callers here keep one import.
+export { MAGIC_LINK_DAYS } from '@/lib/magic-link-days';
 
 /**
  * ── HOW LONG A PAY LINK LIVES ───────────────────────────────────────────────────────────────────

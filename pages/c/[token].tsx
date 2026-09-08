@@ -32,7 +32,11 @@ import React from 'react';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
-import { resolveMagicLink, MAGIC_LINK_DAYS, type MagicPurpose } from '@/lib/magic-link';
+import { resolveMagicLink, type MagicPurpose } from '@/lib/magic-link';
+// FROM THE CONSTANTS MODULE, not from lib/magic-link. This constant is used at module scope, in
+// DENIED_COPY below, which ships to the browser — importing it from lib/magic-link put PrismaClient
+// in this page's bundle and killed every piece of client JavaScript on it. See lib/magic-link-days.
+import { MAGIC_LINK_DAYS } from '@/lib/magic-link-days';
 import { clientIp } from '@/lib/auth-rate-limit';
 import { buildQuoteDoc, type QuoteDoc } from '@/lib/quote-doc';
 import DocumentCredit from '@/components/DocumentCredit';

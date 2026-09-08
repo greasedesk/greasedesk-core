@@ -16,7 +16,9 @@
  * means the list can never disagree with what the customer's link actually does.
  */
 import { prisma } from '@/lib/db';
-import { MAGIC_LINK_DAYS } from '@/lib/magic-link';
+// From the constants module: this file is reached by the Quotes page's client half, and
+// lib/magic-link would bring lib/db with it. See lib/magic-link-days.
+import { MAGIC_LINK_DAYS } from '@/lib/magic-link-days';
 import { isBookedCard, statusSubset } from '@/lib/jobcard-status';
 import { acceptanceProvenance, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
 
