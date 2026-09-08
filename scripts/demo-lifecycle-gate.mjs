@@ -26,7 +26,7 @@
  *      runs, and that set changes without the script knowing.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 import { createServer } from 'node:http';
 import bcrypt from 'bcryptjs';
@@ -159,9 +159,8 @@ try {
     if (excludedIds.size) {
       console.log(`\n(${excludedIds.size} tenant(s) were declared out of scope and are not listed above.)`);
     }
-    console.log('\nThe sweep would have them in scope. Purge or park them first, then re-run.');
     await prisma.$disconnect();
-    process.exit(2);
+    declineToRun('demo tenants exist that this gate did not create — purge or park them first.');
   }
 
   const expiredId = await tenant('expired', { isDemo: true, expiresAt: new Date(Date.now() - DAY) });

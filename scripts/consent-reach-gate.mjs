@@ -24,7 +24,7 @@
  * preconditions pass and the button renders without any real charge being possible.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { buildInvoiceDoc } = await import('../lib/invoice-doc.ts');
@@ -38,7 +38,7 @@ const INV = 'b5c2ccd2-7b07-40e7-9228-067b25171750';
 // the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
 // on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
 // overrides, which is what a genuinely different server is for.
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const VIEWPORTS = [['desktop', 1280, 800], ['mobile', 375, 812]];
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -55,7 +55,7 @@ let linkId = null;
 let browser = null;
 try {
   const stale = await prisma.providerConnection.count({ where: { group_id: ZZ } });
-  if (stale) throw new Error(`REFUSING: ZZ already has ${stale} ProviderConnection row(s)`);
+  if (stale) declineToRun(`REFUSING: ZZ already has ${stale} ProviderConnection row(s)`);
   connId = (await prisma.providerConnection.create({
     data: {
       group_id: ZZ, provider: 'stripe', external_id: 'acct_gatefixture', livemode: false,

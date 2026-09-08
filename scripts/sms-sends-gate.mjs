@@ -12,7 +12,7 @@
  * ZZ, and every row this run writes is removed. It refuses to start if a previous run left anything.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { NOTIFICATION_TEMPLATES } = await import('../lib/notification-templates.ts');
@@ -26,7 +26,7 @@ const made = [];
 
 try {
   const stale = await prisma.smsTopUp.count();
-  if (stale) throw new Error(`REFUSING: ${stale} top-up row(s) already present`);
+  if (stale) declineToRun(`REFUSING: ${stale} top-up row(s) already present`);
 
   // ── 1. THE TEMPLATES CAN ACTUALLY BE SENT BY SMS ───────────────────────────────────────────
   console.log('\n— the templated sends —');

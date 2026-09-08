@@ -16,7 +16,7 @@
  * own reaper, not an audit log; deleting rows this run created is not the AuditLog rule.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refusePayment } = await import('../lib/invoice-payment-intent.ts');
@@ -28,7 +28,7 @@ const GATE_REF = 'GB-GD2141';
 // the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
 // on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
 // overrides, which is what a genuinely different server is for.
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 

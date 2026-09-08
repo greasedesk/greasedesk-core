@@ -21,14 +21,14 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const REG = 'ZZ76TYM';
 const CUST = 'Tyre Memory Fixture';
 const out = [];
@@ -38,7 +38,7 @@ let fix = null, browser = null;
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   const site = await zzSite(prisma);
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST, phone: '07700 900654' }, select: { id: true } });

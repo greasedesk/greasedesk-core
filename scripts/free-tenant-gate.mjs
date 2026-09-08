@@ -31,7 +31,7 @@
  * asserted field by field in teardown.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
@@ -40,7 +40,7 @@ const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const TMBS = '854d38e7-6dd4-4836-af61-a0d169639a78';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');

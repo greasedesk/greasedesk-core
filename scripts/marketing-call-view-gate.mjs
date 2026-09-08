@@ -35,7 +35,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('playwright-core');
 const T = await import('../lib/tyres.ts');
@@ -45,7 +45,7 @@ const prisma = await gatePrisma();
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const CUST = 'Call View Fixture Holder';
 const REGS = ['ZZ76CVA', 'ZZ76CVB'];
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 
 // Descriptions chosen to appear NOWHERE else — not in the app, not in this gate's own prose, not in
 // each other. A search term that its own fixture also matches is how two correct checks were
@@ -80,10 +80,10 @@ const textOf = async (sel) => { const l = await one(sel); return l ? (await l.in
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: REGS } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
 
   const site = await zzSite(prisma);
-  if (!site) throw new Error('REFUSING: ZZ Gate Garage has no site');
+  if (!site) declineToRun('REFUSING: ZZ Gate Garage has no site');
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST }, select: { id: true } });
   fix = { cust: cust.id, vehs: [], cards: [] };
 

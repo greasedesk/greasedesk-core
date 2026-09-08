@@ -27,7 +27,7 @@
  * derives from Stripe, and ZZ has no subscription).
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, declineToRun, erOrigin, ER_RESOLVER_ARGS, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
@@ -39,7 +39,7 @@ const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const PAGE = 'pages/superadmin/tenants/[id].tsx';
 const OP_EMAIL = 'zz-trial-control-gate@greasedesk.test';
 const OP_PASS = 'TrialControlGate!2026';
-const ER = 'http://er.greasedesk.com:3000';
+const ER = erOrigin();   // the SAME port as every other gate — see _gate-preflight
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
@@ -48,7 +48,7 @@ let fix = null, browser = null, clickErr = null;
 
 try {
   const stale = await prisma.operator.count({ where: { email: OP_EMAIL } });
-  if (stale) throw new Error('REFUSING: an operator from a previous run is still present');
+  if (stale) declineToRun('REFUSING: an operator from a previous run is still present');
 
   // ── 1. THE PROMPTS ARE GONE AND EVERY HANDLER CATCHES ────────────────────────────────────────
   console.log('\n— the page no longer asks in dialogs —');
@@ -110,7 +110,7 @@ try {
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
   // THE HOST RULE IS WHAT MAKES THE ENGINE ROOM REACHABLE. Without it middleware 404s every
   // /superadmin path on localhost and this whole section would test a Not Found page.
-  browser = await chromium.launch({ channel: 'chrome', args: ['--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1'] });
+  browser = await chromium.launch({ channel: 'chrome', args: ER_RESOLVER_ARGS });
   // A VIEWPORT THAT FITS THE PAGE. The tenant detail runs to ~1700px and the control sits near the
   // bottom, so at the default 720 the click was resolving an element outside the viewport and
   // timing out on actionability — a failure about scroll position, not about the control.
@@ -230,7 +230,7 @@ try {
     result.slice(0, 160) || '(no inline result)');
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));
-  await explainIfClientStale('http://localhost:3000');
+  await explainIfClientStale();   // the default IS gateOrigin() — see _gate-preflight
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

@@ -17,7 +17,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const R = await import('../lib/schedule-reread.ts');
 const prisma = await gatePrisma();
@@ -51,7 +51,7 @@ try {
 
   // ── 2. A REAL WRITE, AND EVERY OTHER COLUMN HELD STILL ───────────────────────────────────────
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST }, select: { id: true } });
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: REG, registration_normalized: REG,

@@ -41,7 +41,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
@@ -59,14 +59,14 @@ const B = { reg: 'ZZ07LKB', make: 'Autobianchi', model: 'Bianchina', colour: 'Te
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 /** Comments stripped: a rule named in prose is not a rule applied in code. */
 const prose = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 let fix = null, browser = null;
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: { in: [A.owner, B.owner] } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. THE RULE, AS PURE FUNCTIONS ───────────────────────────────────────────────────────────
   console.log('\n— the rule —');

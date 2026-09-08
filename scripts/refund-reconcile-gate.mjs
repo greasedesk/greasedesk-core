@@ -21,7 +21,7 @@
  * uses a ZZ invoice and removes every row it writes. Refuses to start on leftovers.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { reconcileInvoice } = await import('../lib/payments.ts');
@@ -44,7 +44,7 @@ let payId = null;
 let invId = null, cacheBefore;
 try {
   const stale = await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } });
-  if (stale) throw new Error(`REFUSING: ${stale} refund row(s) from a previous run`);
+  if (stale) declineToRun(`REFUSING: ${stale} refund row(s) from a previous run`);
 
   // ── 1. THE CONTRACT ────────────────────────────────────────────────────────────────────────
   console.log('\n— the event contract —');

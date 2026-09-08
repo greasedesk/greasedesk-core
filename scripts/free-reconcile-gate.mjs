@@ -35,7 +35,7 @@
  * never deleted (standing rule). This gate therefore adds a few rows to ZZ's ledger on every run.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const F = await import('../lib/free-tenant.ts').catch(() => ({}));
@@ -45,7 +45,7 @@ const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const OPERATOR_ID = 'acab39ee-aea8-4ae8-b855-312007bebdb2';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const resSpy = () => ({ code: null, body: null, status(c) { this.code = c; return { json: (b) => { this.body = b; } }; } });

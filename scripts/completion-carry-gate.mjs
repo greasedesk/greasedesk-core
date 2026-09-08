@@ -24,13 +24,13 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('playwright-core');
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const REG = 'ZZ76CRY';
 const REG2 = 'ZZ76CRZ';
 const CUST = 'Carry Forward Fixture';
@@ -41,7 +41,7 @@ let fix = null, browser = null;
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: [REG, REG2] } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);

@@ -7,7 +7,7 @@
  * and asserts up front that it owns nothing else.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { dueDateFor, normaliseTermsDays, isAccountCustomer, overdueWhere, daysOverdue, MAX_TERMS_DAYS } = await import('../lib/account-terms.ts');
@@ -55,7 +55,7 @@ const stamp = `zz-terms-${Date.now()}`;
 let custId = null;
 try {
   const mine = await prisma.customer.count({ where: { group_id: ZZ, name: { startsWith: 'ZZ Terms Fixture' } } });
-  if (mine > 0) { console.log(`\nREFUSING — ${mine} fixture customers already on ZZ; clean them first.`); process.exit(2); }
+  if (mine > 0) declineToRun(`${mine} fixture customers already on ZZ; clean them first.`);
 
   const c = await prisma.customer.create({ data: { group_id: ZZ, name: `ZZ Terms Fixture ${stamp}`, account_terms_days: 30, account_name: 'ZZ Haulage Ltd' }, select: { id: true, account_terms_days: true } });
   custId = c.id;

@@ -29,14 +29,14 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. One cost is created and deleted by its own id.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const C = await import('../lib/costs.ts').catch(() => ({}));
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const M = (p) => `£${(p / 100).toFixed(2)}`;

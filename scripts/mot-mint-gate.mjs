@@ -18,7 +18,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const M = await import('../lib/mot-mint-refresh.ts');
 const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
@@ -40,7 +40,7 @@ const answers = { make: 'MINI', model: 'COOPER', colour: 'Red', fuel: 'Petrol', 
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST }, select: { id: true } });
   fix = { cust: cust.id, vehs: [], cards: [], invoices: [] };

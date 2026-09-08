@@ -30,6 +30,10 @@
  *   node scripts/gates.mjs --list          print the plan and prerequisites, run nothing
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import http from 'node:http';
+
+/** Mirrors _gate-preflight::EXIT_UNRUN — the runner cannot import it, it runs before any gate. */
+const EXIT_UNRUN = 4;
 import { spawn } from 'node:child_process';
 // THE RUNNER HAD NO DATABASE_URL. Nothing here loaded .env — each gate loaded it for itself — so
 // the tuning below had nothing to tune and would have handed every child a URL consisting of
@@ -104,7 +108,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
-    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate',
+    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate',
     'engine-room-palette-gate',
     'support-route-gate',
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
@@ -167,6 +171,11 @@ function discover() {
     .sort();
 }
 
+// THE ONE ORIGIN. Mirrors _gate-preflight::gateOrigin — the runner cannot import it, because this
+// file must run before any gate loads, but gate-origin-gate asserts the two agree.
+const ORIGIN = process.env.GATE_BASE ?? 'http://localhost:3000';
+const ORIGIN_PORT = Number(new URL(ORIGIN).port || 80);
+
 /**
  * WHAT A GATE NEEDS, read from the gate itself.
  *
@@ -186,16 +195,48 @@ function requirements(file) {
       declared: true,
     };
   }
-  const ports = [...new Set([...src.matchAll(/localhost:(\d{4})/g)].map((m) => Number(m[1])))];
+  // NEEDS THE SERVER, inferred from the HELPER it calls rather than a port literal it contains.
+  // The literals are gone — gateOrigin() and erOrigin() are the single source (see
+  // _gate-preflight and gate-origin-gate) — so scanning for `localhost:3000` now finds nothing and
+  // would quietly report every browser gate as needing no server at all.
+  const needsServer = /\bgateOrigin\(|\berOrigin\(|\bserverReady\(/.test(src);
+  const ports = needsServer ? [ORIGIN_PORT] : [];
   return { ports, db: /PrismaClient|lib\/db\.ts/.test(src), declared: false };
 }
 
-const probe = async (port) => {
-  try {
-    const r = await fetch(`http://localhost:${port}/`, { signal: AbortSignal.timeout(4000) });
-    return r.status > 0;
-  } catch { return false; }
-};
+/**
+ * ── IS THIS GREASEDESK, OR JUST SOMETHING THAT ANSWERS? ─────────────────────────────────────────
+ * This asked `r.status > 0` — true of ANY http response, including a 404 from an unrelated app. On
+ * 2026-09-08 another project on this machine held port 3000, and the runner cheerfully reported the
+ * server up while two gates drove that application for a day and a half. Their reds were not reds.
+ *
+ * So: identity, and a GreaseDesk-specific one. middleware.ts serves /superadmin ONLY on
+ * er.greasedesk.com and 404s it everywhere else — a behaviour no generic Next app has. One request
+ * with that Host answers both "is this GreaseDesk" and "is the host routing the two er. gates
+ * depend on actually working". Measured against both apps: GreaseDesk 200, the other 404.
+ *
+ * Returns a REASON rather than a boolean, because "nothing answered" and "something answered and it
+ * was not us" need different sentences from the caller.
+ */
+const identify = (origin) => new Promise((resolve) => {
+  // NODE:HTTP, NOT FETCH. `Host` is a forbidden header name in fetch — undici strips it silently,
+  // so the request goes out as localhost, middleware 404s /superadmin, and the check fails against
+  // GreaseDesk itself. Found by pointing it at a server known to be GreaseDesk and watching it
+  // refuse. The raw client sets the header the resolver rule would have produced.
+  const u = new URL(origin);
+  const req = http.request({
+    hostname: u.hostname, port: u.port, path: '/superadmin/login', method: 'GET',
+    headers: { Host: 'er.greasedesk.com' }, timeout: 6000,
+  }, (res) => {
+    res.resume();
+    resolve(res.statusCode === 200
+      ? { ok: true }
+      : { ok: false, why: `answered ${res.statusCode} on /superadmin/login as er.greasedesk.com — GreaseDesk answers 200` });
+  });
+  req.on('timeout', () => { req.destroy(); resolve({ ok: false, why: `nothing answered on ${origin} within 6s` }); });
+  req.on('error', () => resolve({ ok: false, why: `nothing answered on ${origin}` }));
+  req.end();
+});
 
 /**
  * ── IS THE SERVER ON THIS PORT RUNNING A CLIENT IT HAS OUTLIVED? ────────────────────────────────
@@ -213,9 +254,9 @@ const probe = async (port) => {
  * The route is any page that touches the database; /c/<16 chars> is a customer magic-link path that
  * always does and needs no session. What is being read is the guard's own banner, not a 500.
  */
-const staleClient = async (port) => {
+const staleClient = async (origin) => {
   try {
-    const r = await fetch(`http://localhost:${port}/c/aaaaaaaaaaaaaaaa`, { signal: AbortSignal.timeout(6000) });
+    const r = await fetch(`${origin}/c/aaaaaaaaaaaaaaaa`, { signal: AbortSignal.timeout(6000) });
     return /OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(await r.text());
   } catch { return false; } // unreachable is a different problem, and `probe` already reports it
 };
@@ -287,16 +328,38 @@ if (has('--resume')) plan = plan.filter((g) => !prior[g]);
 const needed = new Set();
 const reqs = {};
 for (const g of plan) { reqs[g] = requirements(path.join(ROOT, 'scripts', `${g}.mjs`)); reqs[g].ports.forEach((p) => needed.add(p)); }
+if (has('--list')) {
+  for (const g of plan) {
+    const r = reqs[g];
+    console.log(`${g.padEnd(32)} ${(tierOf(g) ?? '?').padEnd(6)} ${r.ports.length ? `server:${r.ports.join(',')}` : '—'} ${r.db ? 'db' : ''} ${r.declared ? '(declared)' : ''}`);
+  }
+  console.log(`\n${plan.length} gates. Ports needed: ${needed.size ? ORIGIN : 'none'}`);
+  process.exit(0);
+}
+
+// IDENTITY BEFORE ANYTHING. A suite that cannot confirm what it is testing has no counts to
+// report, so this refuses the whole run rather than proceeding with a warning.
 const up = {};
-for (const p of needed) up[p] = await probe(p);
+if (needed.size) {
+  const id = await identify(ORIGIN);
+  if (!id.ok) {
+    console.error(`\n  ${ORIGIN} IS NOT GREASEDESK.\n`);
+    console.error(`  ${id.why}.`);
+    console.error('  On 2026-09-08 another project on this machine held port 3000 and the runner');
+    console.error('  reported the server up for a day and a half while two gates drove it.');
+    console.error('  NOTHING HAS BEEN RUN, and there are no counts: a suite that cannot confirm');
+    console.error('  what it is testing has nothing to say about it.\n');
+    console.error('  Start GreaseDesk there, or set GATE_BASE to where it is.\n');
+    process.exit(3);
+  }
+  for (const p of needed) up[p] = true;
+}
 
 // ── REFUSE THE WHOLE RUN RATHER THAN MISREPORT IT ───────────────────────────────────────────────
 // A stale client does not fail one gate honestly, it fails every gate dishonestly. Aborting here
 // costs one restart; not aborting costs an afternoon reading the wrong files.
-const stalePorts = [];
-for (const p of needed) if (up[p] && await staleClient(p)) stalePorts.push(p);
-if (stalePorts.length) {
-  console.error(`\n  THE DEV SERVER ON ${stalePorts.join(', ')} IS RUNNING AN OLD PRISMA CLIENT.\n`);
+if (needed.size && await staleClient(ORIGIN)) {
+  console.error(`\n  THE DEV SERVER AT ${ORIGIN} IS RUNNING AN OLD PRISMA CLIENT.\n`);
   console.error('  `prisma generate` has run since it started, so lib/db refuses every query — which');
   console.error('  looks like InvalidCredentials on login and 500s everywhere else, not like this.');
   console.error('  NOTHING HAS BEEN RUN: every gate would have failed for a reason that is not theirs.\n');
@@ -304,14 +367,7 @@ if (stalePorts.length) {
   process.exit(3);
 }
 
-if (has('--list')) {
-  for (const g of plan) {
-    const r = reqs[g];
-    console.log(`${g.padEnd(32)} ${(tierOf(g) ?? '?').padEnd(6)} ${r.ports.length ? `server:${r.ports.join(',')}` : '—'} ${r.db ? 'db' : ''} ${r.declared ? '(declared)' : ''}`);
-  }
-  console.log(`\n${plan.length} gates. Ports needed: ${[...needed].map((p) => `${p}=${up[p] ? 'up' : 'DOWN'}`).join(' ') || 'none'}`);
-  process.exit(0);
-}
+
 
 const results = { ...prior };
 for (const g of plan) {
@@ -337,27 +393,43 @@ for (const g of plan) {
     // names, a magic-link token in a URL. This file is gitignored and never leaves the machine,
     // which is the only reason keeping it is acceptable; it is a local debugging artefact, not
     // something to copy into an issue without reading it first.
-    results[g] = { ...res, tier: tierOf(g), log: res.code === 0 ? undefined : res.log };
-    const state = res.code === 0 ? 'ok  ' : 'RED ';
-    console.log(`${state}  ${g.padEnd(32)} ${String(res.seconds).padStart(6)}s  ${res.failures != null ? `${res.failures} of ${res.assertions}` : ''}`);
-    if (res.code !== 0 && res.firstFailure) console.log(`        ${res.firstFailure}`);
+    // ── FOUR STATES, NOT THREE ────────────────────────────────────────────────────────────────
+    // EXIT_UNRUN (4) means the gate DECLINED TO START — leftover fixtures, a pay run already open.
+    // It is not green and it is not red: a red says the code under test is broken, and a decline
+    // says nothing was tested. Reporting the second as the first is how a reader learns to skim
+    // reds, which is how "body padding-bottom 0px" sat for two days over a dead customer pay page.
+    const unrun = res.code === EXIT_UNRUN;
+    const reason = unrun ? (res.log.match(/UNRUN — ([^\n]+)/) ?? [])[1] ?? 'declined to start' : null;
+    results[g] = { ...res, unrun, reason, tier: tierOf(g), log: res.code === 0 ? undefined : res.log };
+    const state = res.code === 0 ? 'ok   ' : unrun ? 'UNRUN' : 'RED  ';
+    console.log(`${state} ${g.padEnd(32)} ${String(res.seconds).padStart(6)}s  ${!unrun && res.failures != null ? `${res.failures} of ${res.assertions}` : ''}`);
+    if (unrun) console.log(`        ${reason}`);
+    else if (res.code !== 0 && res.firstFailure) console.log(`        ${res.firstFailure}`);
   }
   writeFileSync(RESULTS, JSON.stringify(results, null, 1));
 }
 
 // ── THE SUMMARY, WITH THREE STATES ─────────────────────────────────────────────────────────────
 const all = Object.values(results);
-const red = all.filter((r) => !r.skipped && r.code !== 0);
+const unrunGates = all.filter((r) => !r.skipped && r.unrun);
+const red = all.filter((r) => !r.skipped && !r.unrun && r.code !== 0);
 const skipped = all.filter((r) => r.skipped);
 const green = all.filter((r) => !r.skipped && r.code === 0);
 const secs = green.concat(red).reduce((a, r) => a + (r.seconds ?? 0), 0);
 
 console.log(`\n${'='.repeat(76)}`);
-console.log(`${green.length} green · ${red.length} RED · ${skipped.length} SKIPPED (not run — see below) · ${Math.round(secs)}s`);
+// FOUR NUMBERS, ALWAYS. Unrun is never folded into green or red — a tier that reads
+// "27 green · 1 red" when a clause declined to start is a tier reporting coverage it does not have.
+console.log(`${green.length} green · ${red.length} RED · ${unrunGates.length} UNRUN · ${skipped.length} SKIPPED (not run — see below) · ${Math.round(secs)}s`);
 if (red.length) {
   console.log('\nRED:');
   for (const r of red) console.log(`  ${r.gate.padEnd(32)} ${r.failures != null ? `${r.failures} of ${r.assertions}` : `exit ${r.code}`}  ${r.firstFailure ?? ''}`);
 }
+// SAME RULE AS SKIPPED, and for the same reason: printed even at zero, so the reader keeps looking.
+console.log(`\nUNRUN: ${unrunGates.length}`);
+for (const r of unrunGates) console.log(`  ${r.gate.padEnd(32)} ${r.reason}`);
+if (unrunGates.length) console.log('\n  An unrun gate has told you nothing. Clear what it needs and run again.');
+
 // PRINTED EVEN WHEN THERE ARE NONE. "0 skipped" is the sentence that makes a green run mean
 // something; a summary that mentions skips only when they exist trains the reader not to look.
 console.log(`\nSKIPPED: ${skipped.length}`);
@@ -365,4 +437,6 @@ for (const r of skipped) console.log(`  ${r.gate.padEnd(32)} ${r.reason}`);
 if (skipped.length) console.log('\n  A skipped gate has told you nothing. Start what it needs and run again.');
 console.log(`${'='.repeat(76)}\n`);
 
-process.exit(red.length ? 1 : 0);
+// 1 = something is broken. 5 = nothing is broken and something was not tested. Distinct, because a
+// caller that treats them the same is a caller that cannot tell coverage from correctness.
+process.exit(red.length ? 1 : unrunGates.length ? 5 : 0);

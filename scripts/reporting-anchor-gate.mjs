@@ -21,12 +21,12 @@
  * long-term — it fails if a compute starts clipping for itself again.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, serverReady, ZZ_GROUP } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, serverReady, ZZ_GROUP, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
 const { chromium } = await import('playwright-core');
 
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const prose = (f) => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');

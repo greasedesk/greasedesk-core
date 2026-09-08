@@ -17,7 +17,7 @@
  * the invoice cache is CAPTURED AND RESTORED, never recomputed.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundLines, refundState } = await import('../lib/invoice-refund-state.ts');
@@ -31,7 +31,7 @@ const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 // the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
 // on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
 // overrides, which is what a genuinely different server is for.
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const MARK = 're_surf_';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -39,7 +39,7 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 let invId = null, cacheBefore, payId = null, linkId = null, browser = null;
 const madeRefunds = [];
 try {
-  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) throw new Error('REFUSING: leftovers');
+  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) declineToRun('REFUSING: leftovers');
 
   // ── 1. ONE FORMATTER, SO THE DATE CANNOT DIVERGE ───────────────────────────────────────────
   console.log('\n— the shared copy —');

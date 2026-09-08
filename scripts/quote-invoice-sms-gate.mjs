@@ -20,7 +20,7 @@
  * removed in the finally. It refuses to start if a previous run left any behind.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { smsAllowance } = await import('../lib/sms-allowance.ts');
@@ -33,7 +33,7 @@ const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 // the author had running that afternoon. Six gates carried defaults like it, so six gates skipped
 // on every machine but one; both of the two tested pass unchanged against 3000. GATE_BASE still
 // overrides, which is what a genuinely different server is for.
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const MARK = 'qisgate_';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -42,7 +42,7 @@ let filled = 0;
 let browser = null;
 try {
   const pre = await prisma.notificationLog.count({ where: { provider_message_id: { startsWith: MARK } } });
-  if (pre) throw new Error(`REFUSING: ${pre} filler row(s) from a previous run still present`);
+  if (pre) declineToRun(`REFUSING: ${pre} filler row(s) from a previous run still present`);
 
   // ── 0. THE DELETED ROUTE ───────────────────────────────────────────────────────────────────
   console.log('\n— the route that sent dead links —');

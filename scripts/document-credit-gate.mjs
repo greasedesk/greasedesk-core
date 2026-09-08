@@ -21,7 +21,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, describeError } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync, readdirSync, writeFileSync, mkdtempSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
@@ -134,7 +134,7 @@ try {
 
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));
-  await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
+  await explainIfClientStale();
 }
 
 console.log(`\n${out.filter((x) => x === 'F').length} failures of ${out.length}`);

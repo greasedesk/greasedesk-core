@@ -30,7 +30,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('playwright-core');
 const { readFileSync } = await import('node:fs');
@@ -41,14 +41,14 @@ const WITH = 'ZZ76MSA';
 const WITHOUT = 'ZZ76MSB';
 // A THIRD CAR, so the mismatch case is a real other vehicle and not WITH under another name.
 const OTHER = 'ZZ76MSC';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 let fix = null, browser = null;
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: [WITH, WITHOUT, OTHER] } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   await zzSite(prisma);
   fix = { regs: [WITH, WITHOUT, OTHER] };
 

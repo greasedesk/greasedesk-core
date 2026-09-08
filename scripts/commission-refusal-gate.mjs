@@ -18,7 +18,7 @@
  * if anything from a previous run survives. Nothing touches ZZ or TMBS.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { accrueFromInvoicePaid } = await import('../lib/commission-billing.ts');
@@ -39,7 +39,7 @@ const invoice = (id, paidAt = '2026-03-01') => ({
 let gid = null;
 try {
   const stale = await prisma.group.count({ where: { tax_country_code: COUNTRY } });
-  if (stale) throw new Error(`REFUSING: ${stale} tenant(s) from a previous run still on ${COUNTRY}`);
+  if (stale) declineToRun(`REFUSING: ${stale} tenant(s) from a previous run still on ${COUNTRY}`);
 
   const g = await prisma.group.create({
     data: {

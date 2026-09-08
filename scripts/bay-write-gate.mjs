@@ -12,7 +12,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, readdirSync } = await import('node:fs');
@@ -23,7 +23,7 @@ const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const REG = 'ZZ76BAY';
 const CUST = 'Bay Write Fixture';
 const out = [];
@@ -33,7 +33,7 @@ let fix = null, browser = null;
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. THE RULE, PURE ────────────────────────────────────────────────────────────────────────
   console.log('\n— when a job stops taking bay data —');

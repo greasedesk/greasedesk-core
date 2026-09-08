@@ -13,7 +13,7 @@
  * a true record of something that happened.
  */
 import './_gate-preflight.mjs';
-const { zzSite, describeError } = await import('./_gate-preflight.mjs');
+const { zzSite, describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 import { Prisma } from '@prisma/client';
@@ -64,7 +64,7 @@ const auditCount = async (cardId, action) =>
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: { startsWith: 'ZZ-FULFIL-' } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. A PAYMENT WE DID NOT START ──────────────────────────────────────────────────────────
   console.log('\n— an intent we never created —');

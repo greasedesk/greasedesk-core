@@ -155,7 +155,61 @@ export function describeError(e) {
  *
  * Exported rather than automatic: it costs a fetch, and only browser-driving gates need it.
  */
-export async function explainIfClientStale(base = process.env.GATE_BASE ?? 'http://localhost:3000') {
+/**
+ * ── A GATE THAT DECLINED TO START IS NOT A GATE THAT FAILED ─────────────────────────────────────
+ * EXIT CODE 4, RESERVED. Seven gates refuse to start when the world is not clean enough to test in
+ * — leftover fixtures on ZZ, a platform-wide pay run already open. Every one of them threw, landed
+ * in its own catch, and reported as a RED indistinguishable from a real assertion failure.
+ *
+ * A red says "the code under test is broken". A refusal says "I could not test the code". Reporting
+ * the second as the first is smaller than the reverse, and it still trains the reader to look past
+ * reds — which is exactly how `body padding-bottom 0px` sat for two days over a customer pay page
+ * with no Pay button.
+ *
+ * So: print the reason, exit 4, and let the runner count it as UNRUN. Not green, not red, and never
+ * absorbed into either. 3 is taken by the stale-client abort; 2 was account-terms-gate's ad-hoc
+ * version of this and is now this.
+ */
+export const EXIT_UNRUN = 4;
+export function declineToRun(reason) {
+  console.log(`\nUNRUN — ${reason}`);
+  console.log('  Nothing was tested. This is not a failure of the code under test.');
+  process.exit(EXIT_UNRUN);
+}
+
+/**
+ * ── THE ONE PLACE A GATE LEARNS WHERE THE SERVER IS ─────────────────────────────────────────────
+ * `process.env.GATE_BASE ?? 'http://localhost:3000'` was written out FORTY-FIVE TIMES, once per
+ * gate, and worked forty-five times by everyone copying it correctly. On 2026-09-08 another
+ * project took port 3000 on this machine; GATE_BASE moved the forty-five, and the two gates that
+ * had spelled the origin their own way carried on driving the other application for a day and a
+ * half. Their reds were not reds — they were a suite testing something else and saying nothing.
+ *
+ * So the origin is derived HERE and nowhere else. gate-origin-gate asserts that no gate file
+ * declares its own, which is what stops the copied idiom coming back.
+ */
+export function gateOrigin() {
+  return process.env.GATE_BASE ?? 'http://localhost:3000';
+}
+
+/**
+ * The Engine Room's own origin, on the SAME port as everything else.
+ *
+ * middleware.ts serves /superadmin only on er.greasedesk.com and 404s it everywhere else, so a gate
+ * on localhost cannot see the portal at all. The two gates that drive it launch Chromium with
+ * `--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1` so the browser genuinely sends that Host
+ * and the real middleware runs. The HOSTNAME is essential and the PORT is not — which is exactly
+ * the distinction the hardcoded literal lost. Derived from gateOrigin so one env var moves both.
+ */
+export function erOrigin() {
+  const { port, protocol } = new URL(gateOrigin());
+  return `${protocol}//er.greasedesk.com${port ? `:${port}` : ''}`;
+}
+
+/** The resolver rule that makes erOrigin() reachable. Beside the origin, so they cannot drift. */
+export const ER_RESOLVER_ARGS = ['--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1'];
+
+export async function explainIfClientStale(base = gateOrigin()) {
   try {
     const r = await fetch(`${base}/c/aaaaaaaaaaaaaaaa`);
     const t = await r.text();
@@ -283,7 +337,7 @@ export async function zzSite(prisma) {
  *
  * Returns rather than throws, because the caller owns its own check() and its own wording.
  */
-export async function serverReady(pathname = '/admin/login', base = process.env.GATE_BASE ?? 'http://localhost:3000') {
+export async function serverReady(pathname = '/admin/login', base = gateOrigin()) {
   let status = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {

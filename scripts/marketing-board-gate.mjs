@@ -10,7 +10,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
@@ -28,11 +28,11 @@ const base = { motBand: null, motDays: null, battery: null, lowestTreadTenths: n
 
 let fix = null;
 let browser = null;
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: CUST } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. WHAT MAKES A LEAD HOT ─────────────────────────────────────────────────────────────────
   console.log('\n— money available this week —');
@@ -452,7 +452,7 @@ try {
   // said a fault had occurred and still not which one. describeError names the class instead.
   const msg = describeError(e);
   check('gate run completed', false, `${kind}: ${msg}`.slice(0, 240) + ` @ ${where}`.slice(0, 120));
-  await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
+  await explainIfClientStale();
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

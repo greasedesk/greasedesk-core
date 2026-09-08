@@ -26,7 +26,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { issueInvoiceForCard, snapshotInvoiceLines } = await import('../lib/invoice-issue.ts');
 const { chromium } = await import('playwright-core');
@@ -38,7 +38,7 @@ const REG = 'ZZ76QLO';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 let fix = null, browser = null;
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 
 // Descriptions that appear nowhere else and are ORDER-BEARING, so a reordering is visible as a
 // sequence rather than as a set: the assertion is about position, not membership.
@@ -46,7 +46,7 @@ const L = (n) => `QLO line ${n} of five`;
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST }, select: { id: true } });
   const veh = await prisma.vehicle.create({ data: { group_id: ZZ, registration: REG,

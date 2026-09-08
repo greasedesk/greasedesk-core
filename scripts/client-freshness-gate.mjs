@@ -9,13 +9,14 @@
  * Writes NO fixtures — the rule is pure and the integration half runs against a real dev server.
  */
 import './_gate-preflight.mjs';
+const { gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const F = await import('../lib/client-freshness.ts');
 const { readFileSync } = await import('node:fs');   // READ only — see the last check in section 6
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 
 // ── 1. THE RULE IS THREE-WAY ────────────────────────────────────────────────────────────────────
 console.log('\n— stale, fresh, and cannot tell —');

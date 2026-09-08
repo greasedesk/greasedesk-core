@@ -17,10 +17,10 @@
  * DISTRIBUTION — which would make a garage's yearly cost depend on a display preference.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP, serverReady } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, serverReady, gateOrigin } = await import('./_gate-preflight.mjs');
 const { chromium } = await import('playwright-core');
 const { readFileSync } = await import('node:fs');
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const prose = (f) => readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 import './_ts.mjs';
 

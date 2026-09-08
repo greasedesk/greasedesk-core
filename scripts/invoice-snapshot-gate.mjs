@@ -16,7 +16,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, existsSync, readdirSync, statSync } = await import('node:fs');
@@ -43,14 +43,14 @@ const FIRM_AFTER = 'Rebuilt Haulage Limited';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 /** The protected count, read the same way the check below reads it — one definition, two uses. */
 const notOnReissuePinned = () => S.INVOICE_SNAPSHOTS.filter((x) => x.policy !== 'rebuild').length;
 let fix = null, browser = null;
 
 try {
   const stale = await prisma.customer.count({ where: { group_id: ZZ, name: { in: [CUST, CUST_AFTER] } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture(s) from a previous run still present`);
 
   // ── 1. THE REGISTER IS TOTAL ─────────────────────────────────────────────────────────────────
   // Read from the SCHEMA, so a column added tomorrow is caught by this gate and not by a customer.
@@ -329,7 +329,7 @@ try {
     freshDoc?.combinedBlocks === false);
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));
-  await explainIfClientStale(process.env.GATE_BASE ?? 'http://localhost:3000');
+  await explainIfClientStale();
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {

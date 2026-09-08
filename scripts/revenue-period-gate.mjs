@@ -24,7 +24,7 @@
  * ZZ only. Every row is removed and the invoice cache is captured and restored, never recomputed.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { receivedInPeriod, reconcileInvoice } = await import('../lib/payments.ts');
@@ -58,7 +58,7 @@ async function oldBasis(siteIds, from, to) {
 let driftSiteId = null, payId = null, invId = null, cacheBefore, nullSitePayId = null, nullSiteInvId = null, nullSiteCache;
 const madeRefunds = [];
 try {
-  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) throw new Error('REFUSING: leftovers');
+  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) declineToRun('REFUSING: leftovers');
   const siteIds = (await prisma.site.findMany({ where: { group_id: ZZ }, select: { id: true } })).map((s) => s.id);
 
   // THE FIXTURE MUST BE PAID IN A CLOSED MONTH — before the one the refund lands in, or "closed"

@@ -21,7 +21,7 @@
  * connection. If either is occupied it refuses and writes nothing. Enforced here, not remembered.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 import Stripe from 'stripe';
 const { prisma } = await import('../lib/db.ts');
@@ -251,7 +251,7 @@ try {
      FROM "Group" WHERE id = $1`, gateGroupId);
   const occupied = Object.entries(preCols[0]).filter(([k, v]) => v !== null && v !== false);
   if (preConn !== 0 || occupied.length) {
-    throw new Error(`REFUSING: ${GATE_REF} is not clean — ${preConn} connection row(s), legacy columns set: ${occupied.map(([k]) => k).join(', ') || 'none'}`);
+    declineToRun(`REFUSING: ${GATE_REF} is not clean — ${preConn} connection row(s), legacy columns set: ${occupied.map(([k]) => k).join(', ') || 'none'}`);
   }
   check('the gate tenant is the only thing in scope, and it is empty', true, `${g.group_name}: 0 rows, 0 legacy columns set`);
 

@@ -22,7 +22,7 @@
  * this gate cannot run until it is closed and the fixture window is clear.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, serverReady } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, serverReady, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync, readdirSync, statSync } = await import('node:fs');
 const { join } = await import('node:path');
@@ -139,7 +139,7 @@ try {
   // ── 6. AGAINST THE DATABASE ──────────────────────────────────────────────────────────────────
   console.log('\n— and now for real —');
   const existing = await prisma.repPayRun.count();
-  if (existing) throw new Error(`REFUSING: ${existing} RepPayRun row(s) already exist — a run is platform-wide and this gate must not collide with a real one`);
+  if (existing) declineToRun(`REFUSING: ${existing} RepPayRun row(s) already exist — a run is platform-wide and this gate must not collide with a real one`);
   const rate = await prisma.commissionRate.findFirst({ where: { country_code: 'GB', currency: 'GBP' }, orderBy: { effective_from: 'desc' }, select: { id: true, amount_pennies: true } });
   check('the live GB/GBP rate is readable and flat', rate?.amount_pennies === 3000, money(rate?.amount_pennies ?? 0));
 

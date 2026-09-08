@@ -28,7 +28,7 @@
  * the theme can be proved without standing up an operator.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, erOrigin, ER_RESOLVER_ARGS } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, readdirSync, existsSync } = await import('node:fs');
@@ -43,7 +43,7 @@ const { readFileSync, readdirSync, existsSync } = await import('node:fs');
  */
 const BRAND_ASSET = '/greasedesk-Logo.png';
 
-const ER = 'http://er.greasedesk.com:3000';
+const ER = erOrigin();   // the SAME port as every other gate — see _gate-preflight
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 /** Code only. A comment may say what the file no longer does. */
@@ -112,7 +112,7 @@ try {
   console.log('\n— and the tokens resolve to the same values the tenant app uses —');
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
-  browser = await chromium.launch({ channel: 'chrome', args: ['--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1'] });
+  browser = await chromium.launch({ channel: 'chrome', args: ER_RESOLVER_ARGS });
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
   await page.goto(`${ER}/superadmin/login`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(300);

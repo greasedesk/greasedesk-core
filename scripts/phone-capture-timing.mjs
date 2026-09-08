@@ -16,7 +16,7 @@
  *                    a mileage basis. Not "every tyre split": that car goes on a ramp, not a form.
  */
 import './_gate-preflight.mjs';
-const { explainIfClientStale, serverReady } = await import('./_gate-preflight.mjs');
+const { explainIfClientStale, serverReady, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { PrismaClient } = await import('@prisma/client');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -24,7 +24,7 @@ const { readFileSync } = await import('node:fs');
 const prisma = new PrismaClient();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const PACE = Number(process.env.PACE_MS ?? 600);
 /** Per keystroke on a phone keyboard. ~3 characters a second, which is a realistic thumb. */
 const KEY_MS = Number(process.env.KEY_MS ?? 330);

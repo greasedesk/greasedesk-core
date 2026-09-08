@@ -35,7 +35,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS. LX13ZPO is not touched.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('playwright-core');
 const { JOB_STATUSES } = await import('../lib/jobcard-status.ts');
@@ -48,7 +48,7 @@ try { D = await import('../lib/duplicate-cards.ts'); } catch { /* named below */
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const CUST = 'Duplicate Card Fixture Holder';
 const REGS = ['ZZ76DUP', 'ZZ76CLS', 'ZZ76TWO'];
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 let fix = null, browser = null;
@@ -91,7 +91,7 @@ try {
 
   // ── 2. THE ENDPOINT ──────────────────────────────────────────────────────────────────────────
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: { in: REGS } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const resource = await prisma.resource.findFirst({ where: { site_id: site.id }, select: { id: true, name: true } });
   const cust = await prisma.customer.create({ data: { group_id: ZZ, name: CUST }, select: { id: true } });

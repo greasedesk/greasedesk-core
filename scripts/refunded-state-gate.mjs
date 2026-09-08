@@ -7,7 +7,7 @@
  * the £50 had gone back. Nothing on the page was wrong except the only thing the reader cared about.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { refundState, hasRefund } = await import('../lib/invoice-refund-state.ts');
@@ -26,10 +26,10 @@ let payId = null, invId = null, cacheBefore, cardBefore = null, cardId = null;
 let openId = null, openCacheBefore, pay2Id = null, linkId = null;
 // PORT 3000, the port `npm run dev` uses. This defaulted to 3111 — not a decision, just whatever
 // the author had running that afternoon. GATE_BASE still overrides.
-const B = process.env.GATE_BASE ?? 'http://localhost:3000';
+const B = gateOrigin();
 const madeRefunds = [];
 try {
-  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) throw new Error('REFUSING: leftovers');
+  if (await prisma.refund.count({ where: { refund_id: { startsWith: MARK } } })) declineToRun('REFUSING: leftovers');
 
   // ── 1. THE PURE RULE ───────────────────────────────────────────────────────────────────────
   console.log('\n— the rule —');

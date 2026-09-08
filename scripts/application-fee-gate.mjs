@@ -14,7 +14,7 @@
  * It refuses to start if a previous run left anything behind.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+const { describeError, declineToRun } = await import('./_gate-preflight.mjs');
 const { readFileSync } = await import('node:fs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
@@ -82,7 +82,7 @@ try {
   const g = await prisma.group.findUnique({ where: { ref: GATE_REF }, select: { id: true } });
   if (!g) throw new Error(`gate tenant ${GATE_REF} not found`);
   const pre = await prisma.applicationFeeRate.count({ where: { country_code: CC } });
-  if (pre) throw new Error(`REFUSING: ${pre} fixture rate(s) from a previous run still present`);
+  if (pre) declineToRun(`REFUSING: ${pre} fixture rate(s) from a previous run still present`);
 
   let threw = null;
   try { await resolveFeeRate(prisma, { groupId: g.id, country: CC, currency: CUR, at: D('2026-06-01') }); }

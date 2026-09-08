@@ -23,14 +23,14 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('playwright-core');
 const { readFileSync } = await import('node:fs');
 const prisma = await gatePrisma();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
-const BASE = process.env.GATE_BASE ?? 'http://localhost:3000';
+const BASE = gateOrigin();
 const CUST = 'Invoice Blocks Fixture';
 const MEASURED = '(1) Front left — 5.0 / 5.0 / 5.0mm\n(2) Battery — 12.47V, 74% charge, 83% health against 760 CCA EN';
 const NEEDS = '(1) MOT Expiry 28 April 2027\n(2) Rear brake pads due in 4,000 miles';
@@ -53,7 +53,7 @@ const mk = async (site, tag, seq, snaps) => {
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: { startsWith: 'ZZ76B' } } });
-  if (stale) throw new Error(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
+  if (stale) declineToRun(`REFUSING: ${stale} fixture vehicle(s) from a previous run still present`);
   const site = await zzSite(prisma);
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
