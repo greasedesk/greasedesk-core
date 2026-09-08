@@ -54,6 +54,7 @@ export const ER_NAV: ErNavItem[] = [
   { href: '/superadmin/tenants', label: 'Tenants', minRole: 'support' },
   { href: '/superadmin/operators', label: 'Operators', minRole: 'owner' },
   { href: '/superadmin/reps', label: 'Reps', minRole: 'country_manager' },
+  { href: '/superadmin/pay-runs', label: 'Sales Commission', minRole: 'country_manager' },
   { href: '/superadmin/rates', label: 'Rates', minRole: 'owner' },
   // Content (legal + marketing pages). The SCREEN is owner + CM (Support 404s); within it, `legal`
   // actions are Owner-only, enforced server-side in the API — a CM can edit `page`, not `legal`.

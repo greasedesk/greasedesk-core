@@ -29,7 +29,7 @@ const prisma = await gatePrisma();
 const PASS = [], FAIL = [];
 const chk = (n, c, x = '') => { (c ? PASS : FAIL).push(n); console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? `  ${x}` : '')); };
 const D = (s) => new Date(s + (s.length === 10 ? 'T00:00:00.000Z' : ''));
-const created = { groups: [], countries: new Set() };
+const created = { groups: [], countries: new Set(), runs: [] };
 async function mkTenant(country, activation) { const g = await prisma.group.create({ data: { group_name: 'CX ' + country, billing_email: `cx-${randomUUID()}@gd.invalid`, tax_country_code: country, trial_ends_at: activation ? D(activation) : null } }); created.groups.push(g.id); created.countries.add(country); return g.id; }
 const mkRate = (country, currency, tier, eff, amt) => prisma.commissionRate.create({ data: { country_code: country, currency, tier, effective_from: D(eff), amount_pennies: amt } });
 const mkAttr = (gid, pt, pid, bp, eff, ended) => prisma.tenantAttribution.create({ data: { group_id: gid, party_type: pt, party_id: pid, role: pt === 'rep' ? 'referrer' : 'regional', share_bp: bp, effective_from: D(eff), ended_at: ended ? D(ended) : null, source: 'manual' } });
@@ -77,7 +77,17 @@ try {
     const netX = (await entriesFor(g, { payment_ref: 'pX' })).reduce((a, e) => a + e.amount_pennies, 0); const accX = (await entriesFor(g, { source_ref: 'pX', kind: 'accrual' }))[0];
     chk('C4a refund pre-payout: net(pX)=0, original still pending', netX === 0 && accX.status === 'pending');
     await E.accruePayment(prisma, g, pay('pY', '2025-04-01')); const accY = (await entriesFor(g, { source_ref: 'pY', kind: 'accrual' }))[0];
-    await prisma.commissionEntry.update({ where: { id: accY.id }, data: { status: 'paid', payout_id: 'run-1' } });
+    // PAID NOW MEANS RELEASED-THEN-PAID. CommissionEntry_release_chk refuses a paid line with no run,
+    // no released_at and no released_by — which is what this fixture used to be, and it could not
+    // have happened under the model the constraint describes. So the fixture walks the real states:
+    // a CLOSED throwaway run (an open one would collide with the platform-wide single-open index),
+    // the line released into it, then paid.
+    const runY = await prisma.repPayRun.create({ data: { period: '2025-04', scheduled_on: D('2025-04-25'),
+      status: 'closed', closed_at: D('2025-04-26'), closed_by: 'fixed-clock', signoff: 'fixture run',
+      snapshot_parties: 1, snapshot_line_count: 1, snapshot_amount_pennies: 3500 }, select: { id: true } });
+    created.runs.push(runY.id);
+    await prisma.commissionEntry.update({ where: { id: accY.id }, data: { status: 'paid', pay_run_id: runY.id,
+      released_at: D('2025-04-26'), released_by: 'fixed-clock' } });
     await E.clawbackRefund(prisma, g, { ref: 'rY', payment_ref: 'pY', amount_pennies: 10000, refunded_at: D('2025-05-05') }, pay('pY', '2025-04-01'));
     const accY2 = await prisma.commissionEntry.findUnique({ where: { id: accY.id } }); const clawY = (await entriesFor(g, { source_ref: 'rY', kind: 'clawback' }))[0];
     chk('C4b refund post-payout: accrual stays paid (untouched), clawback pending debt -3500', accY2.status === 'paid' && clawY.status === 'pending' && clawY.amount_pennies === -3500);
@@ -143,5 +153,8 @@ try {
   for (const g of created.groups) { try { await prisma.commissionEntry.deleteMany({ where: { group_id: g } }); await prisma.tenantAttribution.deleteMany({ where: { group_id: g } }); } catch {} }
   try { await prisma.commissionRate.deleteMany({ where: { country_code: { in: [...created.countries] } } }); } catch {}
   for (const g of created.groups) { try { await prisma.group.delete({ where: { id: g } }); } catch {} }
+  // AFTER the entries: the pay-run FK is RESTRICT, deliberately — deleting a run that holds released
+  // lines would delete the record of money somebody approved.
+  for (const id of created.runs) { try { await prisma.repPayRun.delete({ where: { id } }); } catch (e) { console.log('teardown run:', String(e).slice(0, 90)); } }
   await prisma.$disconnect(); try { rmSync(TMP, { recursive: true, force: true }); } catch {}
 }

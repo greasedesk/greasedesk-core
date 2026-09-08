@@ -40,6 +40,10 @@
  * so does the after-count — recomputing it from the group would find no users, count zero
  * subject-rows, and cheerfully report a clean purge over the top of whatever remained.
  *
+ *   CommissionEntryNote
+ *        hangs off CommissionEntry, which SURVIVES (our books). The entry's coded reasons name
+ *        nobody; the note explaining one is unbounded prose about somebody's garage. Swept by the
+ *        entry ids, captured before the transaction because the parent outlives the sweep.
  *   RepVisitAnswer / RepLead / RepVisitNote
  *        no group_id of their own — they hang off RepVisit, which survives (below), so they survive
  *        with it. Swept by the visit ids, captured before the transaction like every other subject
@@ -131,7 +135,7 @@ export type PurgeResult = {
 
 /** The identifiers the subject-keyed tables are addressed by. Captured ONCE, before anything is
  *  deleted, then handed to both counts and to the sweep — see the header. */
-export type PurgeSubjects = { userIds: string[]; emails: string[]; visitIds: string[] };
+export type PurgeSubjects = { userIds: string[]; emails: string[]; visitIds: string[]; commissionEntryIds: string[] };
 
 export async function collectPurgeSubjects(groupId: string): Promise<PurgeSubjects> {
   const users = (await prisma.user.findMany({
@@ -143,7 +147,15 @@ export async function collectPurgeSubjects(groupId: string): Promise<PurgeSubjec
   const visits = (await prisma.repVisit.findMany({
     where: { group_id: groupId }, select: { id: true },
   })) as Array<{ id: string }>;
-  return { userIds: users.map((u) => u.id), emails: users.map((u) => u.email), visitIds: visits.map((v) => v.id) };
+  // The entries themselves SURVIVE (our books) — only the prose hanging off them goes, so the ids
+  // must be captured here for the same reason the visit ids are: the parent outlives the sweep.
+  const entries = (await prisma.commissionEntry.findMany({
+    where: { group_id: groupId }, select: { id: true },
+  })) as Array<{ id: string }>;
+  return {
+    userIds: users.map((u) => u.id), emails: users.map((u) => u.email),
+    visitIds: visits.map((v) => v.id), commissionEntryIds: entries.map((e) => e.id),
+  };
 }
 
 /** Comprehensive tenant row-count across every table holding this tenant's data (direct group_id,
@@ -214,8 +226,9 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
   const ids = subjects?.userIds ?? [];
   const emails = subjects?.emails ?? [];
   const visitIds = subjects?.visitIds ?? [];
+  const entryIds = subjects?.commissionEntryIds ?? [];
   const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits,
-    repVisitAnswers, repLeads, repVisitNotes] = await Promise.all([
+    repVisitAnswers, repLeads, repVisitNotes, commissionEntryNotes] = await Promise.all([
     ids.length ? prisma.twoFactorSecret.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.deliveredCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.twoFactorRecoveryCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
@@ -228,6 +241,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     visitIds.length ? prisma.repVisitAnswer.count({ where: { visit_id: { in: visitIds } } }) : 0,
     visitIds.length ? prisma.repLead.count({ where: { visit_id: { in: visitIds } } }) : 0,
     visitIds.length ? prisma.repVisitNote.count({ where: { visit_id: { in: visitIds } } }) : 0,
+    entryIds.length ? prisma.commissionEntryNote.count({ where: { entry_id: { in: entryIds } } }) : 0,
   ]);
 
   return {
@@ -246,6 +260,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     TwoFactorSecret: twoFactorSecrets, DeliveredCode: deliveredCodes, TwoFactorRecoveryCode: recoveryCodes,
     VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
     RepVisitAnswer: repVisitAnswers, RepLead: repLeads, RepVisitNote: repVisitNotes,
+    CommissionEntryNote: commissionEntryNotes,
   };
 }
 
@@ -341,6 +356,13 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
       // The sentence beside the code. RepVisit keeps the CODE — that is the audit answer and it
       // names no one — while whatever a person typed about this garage leaves with the garage.
       await tx.repVisitNote.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
+    }
+
+    // THE SENTENCE BESIDE A COMMISSION DECISION. CommissionEntry STAYS — it is our accounts payable
+    // and its coded reasons name nobody — but a note explaining a hold is unbounded prose about
+    // somebody's garage. Same two-part test, same split, as RepVisitNote one sweep up.
+    if (subjects.commissionEntryIds.length) {
+      await tx.commissionEntryNote.deleteMany({ where: { entry_id: { in: subjects.commissionEntryIds } } });
     }
 
     if (subjects.emails.length) {

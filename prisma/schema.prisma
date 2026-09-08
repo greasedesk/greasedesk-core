@@ -989,7 +989,28 @@ model CommissionEntry {
   currency       String
   source_ref     String // idempotency key: payment ref (accrual) or refund ref (clawback)
   payment_ref    String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
-  status         String   @default("pending") // 'pending' | 'paid' | 'void'
+  /// lib/rep-pay-run ENTRY_STATUSES — 'pending' | 'held' | 'released' | 'billed' | 'paid' | 'void'.
+  /// CommissionEntry_status_chk holds the set; the transitions live in lib/rep-pay-run, not here.
+  /// `void` is terminal from ANY state, including released — a voided line that was already in a
+  /// CLOSED run keeps its pay_run_id, because a closed run never moves again.
+  status         String   @default("pending")
+  /// WHY an area manager held this line — a code from lib/rep-pay-run HOLD_REASONS, never a
+  /// sentence. Prose that could name a person goes in CommissionEntryNote.
+  ///
+  /// NULL = this line is not held. CommissionEntry_hold_chk pairs the two exactly, so a released
+  /// line cannot carry a stale hold reason and a held line cannot carry none.
+  held_reason    String?
+  /// WHY a line was released despite failing the fourteen-day rule, or with no matching visit at
+  /// all — a code from RELEASE_OVERRIDE_REASONS.
+  ///
+  /// NULL = it needed no override, which is the ordinary case. An override recorded against a line
+  /// that did not need one makes the audit unreadable, so lib/rep-pay-run refuses that too.
+  release_override_reason String?
+  /// When the manager released it. NULL = not released — see shown_as_visited, which is null for
+  /// the same reason and must never disagree with this one.
+  released_at    DateTime?
+  /// The operator who released it. NULL until released.
+  released_by    String?
   /// THE PICTURE THE AREA MANAGER WAS SHOWN when they released this entry — true = the month read
   /// as visited, false = it did not and they released it anyway.
   ///
@@ -1004,13 +1025,88 @@ model CommissionEntry {
   /// defaulted: false is the decision "released without a visit", and an unreleased entry has made
   /// no decision at all.
   shown_as_visited Boolean?
-  payout_id      String? // set when a payout run pays it; a paid accrual is never mutated by a later clawback
+  /// THE RUN THIS LINE WAS RELEASED INTO. Renamed 2026-09-08 from `payout_id`: a rep is
+  /// self-employed and invoices us for SALES COMMISSION — "payout" is the wrong noun and it had no
+  /// writer, so the window to rename was open.
+  ///
+  /// NULL = not released into any run. A released line belongs to exactly ONE run, ever: a held
+  /// line released after its original run closed joins whichever run is open at that moment, and
+  /// never returns to the one it missed.
+  pay_run_id     String?
+  pay_run        RepPayRun? @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
+  notes          CommissionEntryNote[]
   created_at     DateTime @default(now())
 
   @@unique([source_ref, party_id, kind]) // a re-delivered webhook is a no-op
   @@index([group_id, period])
   @@index([party_id, status])
   @@index([payment_ref])
+  @@index([pay_run_id])
+}
+
+/**
+ * A SALES COMMISSION PAY RUN — platform-wide, dated, and closed by a person.
+ *
+ * Not per rep. One run is open at a time across the whole platform, enforced by a PARTIAL UNIQUE
+ * INDEX on the open status rather than by application logic a second writer could skip. The screen
+ * filters one rep's slice out of it.
+ *
+ * `scheduled_on` makes a run ELIGIBLE to close. It never closes it: nothing in this system pays
+ * itself, and a date that closed a run would be a payment nobody signed for.
+ *
+ * IMMUTABLE ONCE CLOSED. One predicate — lib/rep-pay-run::canEditPayRun, the canEditInvoice shape —
+ * and every caller asks it rather than re-deriving "closed" for itself. No line may join, leave or
+ * change afterwards, which is why the totals are SNAPSHOT at close rather than recomputed on read:
+ * a figure that is recalculated is a figure that can move.
+ */
+model RepPayRun {
+  id           String   @id @default(uuid())
+  period       String // 'YYYY-MM' the run is FOR. Lines from earlier periods appear as arrears.
+  scheduled_on DateTime // the fixed day it becomes eligible to close — a prompt, never a trigger
+  status       String // lib/rep-pay-run PAY_RUN_STATUSES — 'open' | 'closed'. One open, platform-wide.
+  opened_at    DateTime @default(now())
+  /// The operator who opened it. NULL = opened by the platform rather than a person — the same
+  /// honest sentinel SuperAdminAudit.operator_user_id uses.
+  opened_by    String?
+  /// NULL exactly while the run is open. RepPayRun_closure_chk pairs these four with the status, so
+  /// a closed run can never be missing its signoff and an open one can never carry a stale one.
+  closed_at    DateTime?
+  closed_by    String?
+  /// What the person signed off. NULL while open; non-blank at close, and the close is REFUSED
+  /// without it — a run closed with no words is a payment nobody explained.
+  signoff      String?
+  /// TOTALS FROZEN AT CLOSE, not recomputed on read. NULL while open, because an open run's totals
+  /// are a live figure and pretending otherwise would put a number on a screen that moves.
+  snapshot_parties        Int?
+  snapshot_line_count     Int?
+  snapshot_amount_pennies Int?
+
+  entries CommissionEntry[]
+
+  @@index([status, scheduled_on])
+}
+
+/**
+ * THE SENTENCE BESIDE A CODE — whatever the manager wanted to add about a hold or an override.
+ *
+ * Its own row because the codes on CommissionEntry are the audit answer and name nobody, while a
+ * note about why a garage disputed a visit is unbounded text about somebody's business. Same split,
+ * and the same reason, as RepVisitNote one model over.
+ */
+model CommissionEntryNote {
+  id         String   @id @default(uuid())
+  entry_id   String
+  /// 'hold' | 'release_override' — which decision this sentence explains.
+  kind       String
+  body       String
+  /// The operator who wrote it. NULL is not expected and the writer always sets it; it is nullable
+  /// only because an operator row can be purged out from under a note that must survive.
+  written_by String?
+  created_at DateTime @default(now())
+
+  entry CommissionEntry @relation(fields: [entry_id], references: [id], onDelete: Cascade)
+
+  @@index([entry_id])
 }
 
 /**
