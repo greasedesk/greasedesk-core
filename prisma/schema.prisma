@@ -625,6 +625,30 @@ model ApplicationFeeRate {
   min_fee_pennies Int?
   cap_fee_pennies Int?
 
+  /**
+   * WHAT WAS TRUE OF THE VAT WHEN THIS RATE PRICED A PAYMENT — 'not_registered' | 'standard_exclusive'.
+   * ApplicationFeeRate_vat_chk holds the set.
+   *
+   * NOT NULL, AND NO DEFAULT, which is the whole point. `fee_rate_id` is FROZEN onto every payment,
+   * so a row that cannot say what its VAT position was leaves that payment's history ambiguous
+   * forever — and TMBS already carries ten payments with a frozen rate id. A default would answer
+   * the question on the writer's behalf, which is the failure lib/due-items describes: it looks
+   * like it is recording something while making the interesting value vanishingly rare.
+   *
+   * The treatment was settled 2026-08-15 (lib/application-fee): the fee is a separate taxable
+   * supply, standard-rated and EXCLUSIVE — 0.25% PLUS VAT — once we are registered. We are not, so
+   * every row today reads `not_registered`, and that is a fact rather than a placeholder.
+   *
+   * THIS COLUMN DOES NOT SAY HOW THE VAT IS COLLECTED. Whether it rides inside Stripe's single
+   * application_fee_amount or is billed on a separate consolidated invoice is a different fact —
+   * about how we pull money, not about what the fee is — and it is NOT DECIDED. It gets its own
+   * shape on registration day; a value for it here would answer it by accident.
+   *
+   * Added ahead of need for the reason min_fee_pennies and cap_fee_pennies were: adding a column
+   * afterwards is a migration over money already charged.
+   */
+  vat_treatment  String
+
   effective_from DateTime
   created_by     String? // operator id (audit)
   created_at     DateTime @default(now())

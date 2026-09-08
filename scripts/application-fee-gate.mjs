@@ -15,6 +15,7 @@
  */
 import './_gate-preflight.mjs';
 const { describeError } = await import('./_gate-preflight.mjs');
+const { readFileSync } = await import('node:fs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { applicationFeePennies, resolveFeeRate } = await import('../lib/application-fee.ts');
@@ -36,7 +37,9 @@ const D = (s) => new Date(s);
 
 const made = [];
 const mk = async (o) => {
-  const r = await prisma.applicationFeeRate.create({ data: { country_code: CC, currency: CUR, ...o }, select: { id: true } });
+  // vat_treatment is NOT NULL with no default: every writer says what was true of the fee it
+  // priced. A fixture is no exception — a default here would be the one place the rule did not hold.
+  const r = await prisma.applicationFeeRate.create({ data: { country_code: CC, currency: CUR, vat_treatment: 'not_registered', ...o }, select: { id: true } });
   made.push(r.id);
   return r.id;
 };
@@ -155,6 +158,62 @@ try {
   const fixturesLeft = await prisma.applicationFeeRate.count({ where: { country_code: CC } });
   check('this run created no real rate and left no fixture', fixturesLeft === 0,
     `${real} real rate row(s) untouched, ${fixturesLeft} fixture(s) left`);
+  // ── THE VAT DISCRIMINATOR ──────────────────────────────────────────────────────────────────
+  // WHY IT EXISTS AT ALL, before anything needs it. This table's own comment already gives the
+  // argument — min_fee_pennies and cap_fee_pennies are present and null "because fee_rate_id is
+  // FROZEN, so adding a column afterwards is a migration over money already charged". That
+  // reasoning was never applied to VAT, which is the one axis certain to change: the treatment was
+  // settled on 2026-08-15 as standard-rated and EXCLUSIVE *once we are registered*, and we are not.
+  // TMBS already carries ten payments with a frozen fee_rate_id, so "money already charged" stopped
+  // being hypothetical in August.
+  console.log('\n— what was true of the VAT when this rate priced a payment —');
+  const schema = readFileSync('prisma/schema.prisma', 'utf8');
+  const model = schema.split('model ApplicationFeeRate {')[1]?.split('\n}')[0] ?? '';
+  check('the rate says what its VAT treatment was', /vat_treatment\s+String\b/.test(model));
+  check('  …and every row must say it', !/vat_treatment\s+String\?/.test(model) && !/vat_treatment[^\n]*@default/.test(model),
+    'NOT NULL and no default: a row that cannot say is a row whose frozen history is ambiguous, which is the whole reason for the column');
+  check('  …from a closed set', /ApplicationFeeRate_vat_chk/.test(readFileSync('prisma/migrations/20260908110000_application_fee_vat/migration.sql', 'utf8')));
+
+  // THE TREATMENT IS NOT THE COLLECTION. Whether the VAT rides inside Stripe's single
+  // application_fee_amount or is billed on a separate consolidated invoice is a different fact —
+  // about how we pull money, not about what the fee is — and it is NOT DECIDED. Encoding it here
+  // would be a decision nobody made, recorded as though they had.
+  const mig = readFileSync('prisma/migrations/20260908110000_application_fee_vat/migration.sql', 'utf8');
+  check('the set records the TREATMENT, not how it is collected',
+    !/deduction|invoiced|grossed/i.test(mig.split('ApplicationFeeRate_vat_chk')[1]?.split(';')[0] ?? ''),
+    'the collection question is open, and a value for it here would answer it by accident');
+
+  const live = await prisma.applicationFeeRate.findFirst({
+    where: { group_id: null, country_code: 'GB', currency: 'GBP' },
+    select: { vat_treatment: true, basis_points: true, effective_from: true },
+  });
+  check('the live GB/GBP row states the PRE-REGISTRATION truth', live?.vat_treatment === 'not_registered',
+    `${live?.vat_treatment} — not a guess about what happens on registration day`);
+  check('  …and the rate itself did not move', live?.basis_points === 25
+    && live?.effective_from.toISOString().slice(0, 10) === '2026-08-15',
+    `${live?.basis_points}bp from ${live?.effective_from.toISOString().slice(0, 10)}`);
+
+  // ASKED OF POSTGRES, in a transaction that always rolls back. A CHECK has drifted from the code
+  // twice in this schema and enum-drift-gate compares pg_enum, which is a different object.
+  const tryVat = async (v) => {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.applicationFeeRate.create({ data: { country_code: CC, currency: CUR, basis_points: 25, effective_from: new Date(), vat_treatment: v } });
+        throw new Error('ROLLBACK');
+      });
+      return 'accepted';
+    } catch (e) { return /ROLLBACK/.test(String(e?.message)) ? 'accepted' : describeError(e); }
+  };
+  check('an invented treatment is refused by the database', /23514/.test(await tryVat('vat_free_because_i_said_so')));
+  check('  …while a real one is accepted', (await tryVat('not_registered')) === 'accepted');
+  check('  …and nothing was kept', (await prisma.applicationFeeRate.count({ where: { country_code: CC } })) === 0);
+
+  // ── AND NOTHING READS IT YET ───────────────────────────────────────────────────────────────
+  // Collection is not built and must not be: it is a decision for registration day. This is what
+  // keeps the column a record rather than a half-wired behaviour.
+  check('no code reads the treatment', !/vat_treatment/.test(readFileSync('lib/application-fee.ts', 'utf8')),
+    'the column records what was true; nothing acts on it until registration day says how');
+
   // The live default is a fact worth printing on every run: a silently deleted rate stops all
   // card payments, and this is the cheapest place to notice.
   const gb = await prisma.applicationFeeRate.findFirst({ where: { group_id: null, country_code: 'GB', currency: 'GBP' }, select: { basis_points: true, effective_from: true } });
