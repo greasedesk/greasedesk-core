@@ -132,6 +132,33 @@ try {
     'a screenshot forwarded inside the window is the attack; single-use is what closes it');
   check('CommissionEntry can freeze which rate branch it used', /visited\s+Boolean\?/.test(schema.split('model CommissionEntry {')[1]?.split('\n}')[0] ?? ''));
 
+  // ── 4b. THE REASON IS A CODE, AND THE PROSE LEFT ─────────────────────────────────────────────
+  // `reason` shipped as free prose on operator-recorded visits — and RepVisit SURVIVES a purge, so
+  // "Dave's tablet was flat" was a name we kept after an erasure. It is now a value from a closed
+  // set (lib/rep-visit UNSCANNED_REASONS), which is the audit answer to "why was this not
+  // scanned?" and holds nothing about the garage's people. Anything a person wants to type moves
+  // to RepVisitNote, which goes with the tenant exactly as the answers do.
+  console.log('\n— why a visit was not scanned is a code, not a sentence —');
+  check('the set is closed and small', V.UNSCANNED_REASONS.length >= 3 && V.UNSCANNED_REASONS.length <= 6,
+    V.UNSCANNED_REASONS.join(', '));
+  check('  …and carries no “other”', !V.UNSCANNED_REASONS.includes('other'),
+    'the prose that would explain it is erased with the tenant, so `other` degrades to noise exactly when the audit needs it');
+  check('  …and every value is a case where the rep WAS THERE',
+    !V.UNSCANNED_REASONS.some((r) => /not_attend|absent|no_visit/.test(r)),
+    'a visit nobody attended is not a visit with a reason — it is a month with no visit, and recording one would pay for a fiction');
+  check('an operator visit needs a reason from the set', V.refuseUnscanned('operator', null)?.code === 'reason_required');
+  check('  …and refuses one that is not in it', V.refuseUnscanned('operator', 'because')?.code === 'bad_reason');
+  check('  …while a real code is accepted', V.refuseUnscanned('operator', V.UNSCANNED_REASONS[0]) === null);
+  check('a scan carries no reason at all', V.refuseUnscanned('scan', null) === null);
+  check('  …and is refused if it invents one', V.refuseUnscanned('scan', V.UNSCANNED_REASONS[0])?.code === 'bad_reason',
+    'the scan IS the evidence; a reason beside it is a contradiction');
+  const rvSchema = readFileSync('prisma/schema.prisma', 'utf8');
+  const noteModel = rvSchema.split('model RepVisitNote {')[1]?.split('\n}')[0] ?? '';
+  check('the prose has its own row', noteModel.length > 0 && /visit_id\s+String\s+@unique/.test(noteModel));
+  check('  …which the purge sweeps with the tenant', /repVisitNote\.deleteMany\(/.test(readFileSync('lib/tenant-purge.ts', 'utf8')),
+    'free text about a garage must not outlive the garage');
+  check('  …while the visit and its CODE do not', /RepVisit STAYS, on the same two-part test/.test(readFileSync('lib/tenant-purge.ts', 'utf8')));
+
   // ── 5. THE CHECK CONSTRAINT, ASKED OF THE DATABASE ───────────────────────────────────────────
   // NOT asserted by reading the migration file. A CHECK has drifted from the code twice here
   // (MarketingContact_reason_check, then CostAllocation_one_owner_chk) and enum-drift-gate does not
@@ -159,11 +186,18 @@ try {
   const refused = (r) => /23514/.test(r);
   const noReason = await tryInsert({ source: 'operator', reason: null });
   check('an operator visit with no reason is refused', refused(noReason), noReason.slice(0, 90));
-  const blank = await tryInsert({ source: 'operator', reason: '   ' });
-  check('  …and a blank one too', refused(blank), 'whitespace is not a reason');
-  check('  …while a real one is accepted', (await tryInsert({ source: 'operator', reason: 'Tablet flat; visit confirmed by phone' })) === 'accepted');
+  // THE SENTENCE THAT USED TO BE ACCEPTED. This check read "…while a real one is accepted" and
+  // passed a prose reason; it failed the moment RepVisit_reason_chk landed, which is the constraint
+  // doing its job. Kept as the case rather than deleted — a sentence being refused IS the change.
+  const sentence = await tryInsert({ source: 'operator', reason: 'Tablet flat; visit confirmed by phone' });
+  check('  …and a SENTENCE is refused, where it used to be accepted', refused(sentence),
+    'the prose moved to RepVisitNote, which leaves with the tenant');
+  check('  …while a code from the set is accepted',
+    (await tryInsert({ source: 'operator', reason: V.UNSCANNED_REASONS[0] })) === 'accepted');
   check('a scanned visit needs no reason', (await tryInsert({ source: 'scan', reason: null })) === 'accepted',
-    'the scan IS the evidence — demanding prose as well would be theatre');
+    'the scan IS the evidence — demanding a reason as well would be theatre');
+  check('  …and is refused if it carries one', refused(await tryInsert({ source: 'scan', reason: V.UNSCANNED_REASONS[0] })),
+    'a reason beside a scan is a contradiction, not extra detail — the pairing now bites both ways');
   const scanNoStep = await tryInsert({ source: 'scan', reason: null, code_step: null });
   check('  …but it DOES need the step it consumed', refused(scanNoStep),
     'a scan with no code proved nothing, and the unique index has nothing to protect');

@@ -31,6 +31,52 @@ export const VISIT_MIN_DAYS = 14;
 export const VISIT_SOURCES = ['scan', 'operator'] as const;
 export type VisitSource = (typeof VISIT_SOURCES)[number];
 
+/**
+ * WHY A VISIT THAT HAPPENED COULD NOT BE SCANNED — a code, not a sentence.
+ *
+ * It shipped as free prose, and RepVisit SURVIVES a tenant purge (it is the supporting document for
+ * the commission ledger). So "Dave's tablet was flat" was a name we kept after an erasure. A value
+ * from a closed set is the audit answer to "why was this not scanned?" and holds nothing about the
+ * garage's people; anything a person wants to type goes to RepVisitNote, which goes with the tenant.
+ *
+ * ── EVERY VALUE IS A CASE WHERE THE REP WAS THERE ───────────────────────────────────────────────
+ * That is the line, and it is why "the rep could not attend" and "the garage was closed" are NOT
+ * here. A visit nobody attended is not a visit with a reason — it is a month with no visit, and
+ * recording one would set satisfies_period and pay the full rate for a meeting that never happened.
+ * If a wasted journey should ever be credited, that is a recorded ATTEMPT and a different thing
+ * from evidence that somebody was seen; it wants its own shape rather than a value smuggled in here.
+ *
+ * ── AND THERE IS NO `other` ─────────────────────────────────────────────────────────────────────
+ * The prose that would explain an `other` lives in RepVisitNote, which is erased with the tenant —
+ * so `other` degrades to noise at exactly the moment the audit needs it. When a case does not fit,
+ * the set is wrong and gets amended by a migration, the same deliberate act MarketingContact.reason
+ * has twice made.
+ */
+export const UNSCANNED_REASONS = [
+  'screen_unavailable',    // no working device to display the code — flat tablet, broken screen
+  'no_one_could_sign_in',  // a device, but nobody on site who could sign in to show it
+  'scan_failed',           // the code was displayed and the read did not complete
+  'code_expired',          // displayed, but stale by the time it was read — the window was too tight
+] as const;
+export type UnscannedReason = (typeof UNSCANNED_REASONS)[number];
+
+export type UnscannedRefusal = { code: 'reason_required' | 'bad_reason'; message: string };
+
+/**
+ * The reason and the source must agree. A scan IS the evidence, so a reason beside one is a
+ * contradiction rather than extra detail; an operator-recorded visit has no evidence but the reason,
+ * so it must carry one. RepVisit_evidence_chk holds the same pairing at the database.
+ */
+export function refuseUnscanned(source: string, reason: string | null | undefined): UnscannedRefusal | null {
+  if (source === 'scan') {
+    return reason == null ? null
+      : { code: 'bad_reason', message: 'A scanned visit needs no reason — the scan is the evidence.' };
+  }
+  if (reason == null) return { code: 'reason_required', message: 'Say why this visit could not be scanned.' };
+  return (UNSCANNED_REASONS as readonly string[]).includes(reason) ? null
+    : { code: 'bad_reason', message: 'That is not one of the reasons this form offers.' };
+}
+
 /** A visit already on the record. `satisfies_period` NULL = a real visit that earned no month. */
 export type PriorVisit = { scanned_at: Date; satisfies_period: string | null };
 

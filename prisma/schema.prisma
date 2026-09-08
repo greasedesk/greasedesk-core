@@ -1024,9 +1024,13 @@ model RepVisit {
   /// because Postgres allows many nulls in one, so operator visits never collide with each other
   /// while two scans of the same step still cannot both land.
   code_step        Int?
-  /// WHY an operator recorded a visit nobody scanned — a flat tablet, a screen nobody could reach.
-  /// NULL = a scanned visit, where the scan IS the evidence and demanding prose as well would be
-  /// theatre. RepVisit_evidence_chk makes it mandatory, and non-blank, the other way round.
+  /// WHY an operator recorded a visit nobody scanned — a CODE from lib/rep-visit UNSCANNED_REASONS,
+  /// never a sentence. This row outlives a tenant purge (it is the ledger's supporting document), so
+  /// free prose here was a name we kept after an erasure; it now lives in RepVisitNote, which goes
+  /// with the tenant. RepVisit_reason_chk holds the set.
+  ///
+  /// NULL = a scanned visit, where the scan IS the evidence and a reason beside it is a
+  /// contradiction rather than extra detail. RepVisit_evidence_chk holds that pairing both ways.
   reason           String?
   /// The operator who recorded it. NULL = it was scanned, so no operator acted — the same honest
   /// sentinel SuperAdminAudit.operator_user_id uses for actions the platform took by itself.
@@ -1035,10 +1039,33 @@ model RepVisit {
 
   answer RepVisitAnswer?
   lead   RepLead?
+  note   RepVisitNote?
 
   @@unique([group_id, code_step]) // single-use: a code cannot be spent twice, whoever forwarded it
   @@index([group_id, satisfies_period])
   @@index([party_type, party_id])
+}
+
+/**
+ * THE SENTENCE BESIDE THE CODE — whatever a person wanted to add about an unscanned visit.
+ *
+ * Its own row for one reason: RepVisit SURVIVES a tenant purge and this must not. The code on the
+ * visit answers "why was this not scanned?" for the ledger; this answers "what actually happened?"
+ * for whoever reads it next week, and it is unbounded text about somebody's garage. Same split, and
+ * the same reason, as the answers one model down.
+ */
+model RepVisitNote {
+  id         String   @id @default(uuid())
+  visit_id   String   @unique // 0..1 per visit, by the index rather than by convention
+  /// The free text. NOT NULL — a note row that exists with nothing in it is a row nobody meant to
+  /// write; the absence of a note is the absence of the ROW, which is a state the unique index
+  /// above already expresses.
+  body       String
+  created_at DateTime @default(now())
+  /// NULL until the first correction — the same rule the answers use.
+  updated_at DateTime?
+
+  visit RepVisit @relation(fields: [visit_id], references: [id], onDelete: Cascade)
 }
 
 /**

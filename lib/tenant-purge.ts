@@ -40,10 +40,10 @@
  * so does the after-count — recomputing it from the group would find no users, count zero
  * subject-rows, and cheerfully report a clean purge over the top of whatever remained.
  *
- *   RepVisitAnswer / RepLead
+ *   RepVisitAnswer / RepLead / RepVisitNote
  *        no group_id of their own — they hang off RepVisit, which survives (below), so they survive
  *        with it. Swept by the visit ids, captured before the transaction like every other subject
- *        list. See WHAT IS DELIBERATELY LEFT for why the visit stays and these two do not.
+ *        list. See WHAT IS DELIBERATELY LEFT for why the visit stays and these three do not.
  *
  * ── WHAT IS DELIBERATELY LEFT ───────────────────────────────────────────────────────────────────
  * THE TEST IS TWO-PART, AND BOTH HALVES MUST HOLD. A row stays only if it is OUR OWN BOOKS *and* it
@@ -63,6 +63,11 @@
  *   · NO PERSONAL DATA ABOUT THE TENANT'S PEOPLE — party_id is the REP's id, our own person; the
  *     scan time, the period, the consumed code step and the source are our commercial process; and
  *     group_id / site_id are ids of rows that no longer exist.
+ *
+ * ITS `reason` STAYS TOO, and only because it stopped being prose: it is now a CODE from a closed
+ * set (lib/rep-visit UNSCANNED_REASONS, RepVisit_reason_chk), which answers "why was this not
+ * scanned?" and names nobody. It shipped as free text, which meant "Dave's tablet was flat" was a
+ * name we kept after an erasure — the sentence now lives in RepVisitNote and leaves with the garage.
  *
  * ITS ANSWERS DO NOT, and the split is the two-part test doing its job. RepVisitAnswer decides no
  * money at all — the commission reads the SCAN, which is why a visit with no answers is still a
@@ -210,7 +215,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
   const emails = subjects?.emails ?? [];
   const visitIds = subjects?.visitIds ?? [];
   const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits,
-    repVisitAnswers, repLeads] = await Promise.all([
+    repVisitAnswers, repLeads, repVisitNotes] = await Promise.all([
     ids.length ? prisma.twoFactorSecret.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.deliveredCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.twoFactorRecoveryCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
@@ -222,6 +227,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     // by luck rather than by construction — the same trap the user ids above are captured against.
     visitIds.length ? prisma.repVisitAnswer.count({ where: { visit_id: { in: visitIds } } }) : 0,
     visitIds.length ? prisma.repLead.count({ where: { visit_id: { in: visitIds } } }) : 0,
+    visitIds.length ? prisma.repVisitNote.count({ where: { visit_id: { in: visitIds } } }) : 0,
   ]);
 
   return {
@@ -239,7 +245,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     VinReadShadow: vinReadShadow, UploadTelemetry: uploadTelemetry,
     TwoFactorSecret: twoFactorSecrets, DeliveredCode: deliveredCodes, TwoFactorRecoveryCode: recoveryCodes,
     VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
-    RepVisitAnswer: repVisitAnswers, RepLead: repLeads,
+    RepVisitAnswer: repVisitAnswers, RepLead: repLeads, RepVisitNote: repVisitNotes,
   };
 }
 
@@ -332,6 +338,9 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     if (subjects.visitIds.length) {
       await tx.repVisitAnswer.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
       await tx.repLead.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
+      // The sentence beside the code. RepVisit keeps the CODE — that is the audit answer and it
+      // names no one — while whatever a person typed about this garage leaves with the garage.
+      await tx.repVisitNote.deleteMany({ where: { visit_id: { in: subjects.visitIds } } });
     }
 
     if (subjects.emails.length) {
