@@ -3,11 +3,11 @@
  * File: scripts/rep-visit-gate.mjs
  * A VISIT IS EVIDENCE, AND THE MONTH IT PAYS FOR IS FROZEN WHEN IT HAPPENS.
  *
- * RepVisit exists to make CommissionRate.amount_unvisited_pennies reachable. That column has held
- * £12.50 against a £30.00 full rate since 2026-09-06 and NOTHING HAS EVER READ IT: linesForPayment
- * splits `rate.amount_pennies` unconditionally. This slice builds the record and the rule and
- * leaves that true — the dormancy section below is what keeps it true, deliberately, so the gate
- * goes red the day someone wires the money without saying so.
+ * RepVisit was built to make a REDUCED RATE reachable — £12.50 for a garage-month whose visit did
+ * not happen. That rate is gone (2026-09-08): a garage-month is paid at £30 or it is HELD, and a
+ * held month is a decision an area manager makes rather than a smaller number somebody is paid
+ * without being asked. So the visit prices nothing. It is evidence, shown to a person, and what
+ * they decided is frozen on the entry. See docs/rep-system.md.
  *
  * ── WHY THE RULE IS TWO CLAUSES ────────────────────────────────────────────────────────────────
  * One visit per calendar month, and at least fourteen days since the last. Each covers what the
@@ -130,7 +130,14 @@ try {
   check('the consumed code step cannot be spent twice',
     /@@unique\(\[group_id, code_step\]\)/.test(model),
     'a screenshot forwarded inside the window is the attack; single-use is what closes it');
-  check('CommissionEntry can freeze which rate branch it used', /visited\s+Boolean\?/.test(schema.split('model CommissionEntry {')[1]?.split('\n}')[0] ?? ''));
+  // RENAMED 2026-09-08. `visited` described which of two amounts was used, and there is one amount.
+  // The column survives because the new model has a question of the same shape: at release, what
+  // picture was the manager shown? Re-deriving it later would show a different one, because an
+  // operator-recorded visit can be added afterwards.
+  const entryModel = schema.split('model CommissionEntry {')[1]?.split('\n}')[0] ?? '';
+  check('CommissionEntry freezes the picture the manager was shown', /shown_as_visited\s+Boolean\?/.test(entryModel));
+  check('  …and no longer claims to record a rate branch', !/\bvisited\s+Boolean/.test(entryModel),
+    'a column that keeps its old name ends up meaning two things');
 
   // ── 4b. THE REASON IS A CODE, AND THE PROSE LEFT ─────────────────────────────────────────────
   // `reason` shipped as free prose on operator-recorded visits — and RepVisit SURVIVES a purge, so
@@ -216,26 +223,27 @@ try {
     tax_country_code: cc, trial_ends_at: D('2026-01-01') }, select: { id: true } });
   created.groups.push(g.id);
   const repA = randomUUID(), repB = randomUUID();
-  await prisma.commissionRate.create({ data: { country_code: cc, currency: 'GBP', tier: C.ONGOING_TIER, effective_from: D('2026-01-01'), amount_pennies: 3000, amount_unvisited_pennies: 1250 } });
+  await prisma.commissionRate.create({ data: { country_code: cc, currency: 'GBP', tier: C.ONGOING_TIER, effective_from: D('2026-01-01'), amount_pennies: 3000 } });
   await prisma.tenantAttribution.create({ data: { group_id: g.id, party_type: 'rep', party_id: repA, role: 'referrer', share_bp: 10000, effective_from: D('2026-01-01'), source: 'manual' } });
   const pay = { ref: `pi_${randomUUID()}`, collected_at: D('2026-03-05'), amount_pennies: 7500, currency: 'GBP' };
   await C.accruePayment(prisma, g.id, pay);
-  const accrual = await prisma.commissionEntry.findFirst({ where: { group_id: g.id, kind: 'accrual' }, select: { party_id: true, amount_pennies: true, visited: true, rate_id: true } });
+  const accrual = await prisma.commissionEntry.findFirst({ where: { group_id: g.id, kind: 'accrual' }, select: { party_id: true, amount_pennies: true, shown_as_visited: true, rate_id: true } });
   check('the accrual booked the full rate to the rep who signed them', accrual?.amount_pennies === 3000 && accrual?.party_id === repA, JSON.stringify(accrual));
-  check('  …and recorded that NO visit decision was applied', accrual?.visited === null,
-    'the gate is dormant — null is the truthful answer, and a default of false would be a decision nobody made');
+  check('  …and recorded that it has NOT been released', accrual?.shown_as_visited === null,
+    'the release is not built, so null is the truthful answer — false would be the decision "released without a visit", which nobody has made');
 
   // THE WORLD MOVES: the territory hands over, and the rate is amended upward.
   await prisma.tenantAttribution.updateMany({ where: { group_id: g.id, party_id: repA }, data: { ended_at: D('2026-04-01') } });
   await prisma.tenantAttribution.create({ data: { group_id: g.id, party_type: 'rep', party_id: repB, role: 'referrer', share_bp: 10000, effective_from: D('2026-04-01'), source: 'manual' } });
-  await prisma.commissionRate.create({ data: { country_code: cc, currency: 'GBP', tier: C.ONGOING_TIER, effective_from: D('2026-04-01'), amount_pennies: 5000, amount_unvisited_pennies: 2000 } });
+  await prisma.commissionRate.create({ data: { country_code: cc, currency: 'GBP', tier: C.ONGOING_TIER, effective_from: D('2026-04-01'), amount_pennies: 5000 } });
 
   await C.clawbackRefund(prisma, g.id, { ref: `re_${randomUUID()}`, refunded_at: D('2026-05-10'), amount_pennies: 7500 }, pay);
-  const claw = await prisma.commissionEntry.findFirst({ where: { group_id: g.id, kind: 'clawback' }, select: { party_id: true, amount_pennies: true, rate_id: true, visited: true } });
+  const claw = await prisma.commissionEntry.findFirst({ where: { group_id: g.id, kind: 'clawback' }, select: { party_id: true, amount_pennies: true, rate_id: true, shown_as_visited: true } });
   check('the clawback reverses the ACCRUAL', claw?.amount_pennies === -3000, JSON.stringify(claw));
   check('  …to the rep who was actually paid', claw?.party_id === repA, 'a hand-over must not move an old month’s debt onto the new rep');
   check('  …carrying the same frozen rate', claw?.rate_id === accrual?.rate_id);
-  check('  …and the same visit decision', claw?.visited === accrual?.visited);
+  check('  …and the same release picture', claw?.shown_as_visited === accrual?.shown_as_visited,
+    'a clawback reverses what was booked, including what the manager was looking at when they released it');
   // THE DISCRIMINATING HALF: the world today says £50.00 and repB, so the two answers do not merely
   // happen to agree — the freeze is what produced −£30.00 against repA.
   const rateNow = await prisma.commissionRate.findFirst({ where: { country_code: cc, currency: 'GBP', effective_from: { lte: D('2026-05-10') } }, orderBy: { effective_from: 'desc' }, select: { amount_pennies: true } });
@@ -253,12 +261,37 @@ try {
   // ── 7. STILL DORMANT ─────────────────────────────────────────────────────────────────────────
   console.log('\n— and none of it touches the money yet —');
   const comm = prose(readFileSync('lib/commission.ts', 'utf8'));
-  check('lib/commission does not read amount_unvisited_pennies', !/amount_unvisited_pennies/.test(comm),
-    'the reduced rate stays unreachable until a slice says otherwise, and this check is how that stays true');
-  check('  …and nothing else at runtime does either',
-    !/amount_unvisited_pennies/.test(prose(readFileSync('lib/rep-visit.ts', 'utf8'))));
-  check('linesForPayment still splits the FULL rate', /splitAmount\(rate\.amount_pennies,/.test(comm),
-    'the shape that has to change when the gate is wired — pinned so the change is deliberate');
+  // THE REDUCED RATE IS GONE, not merely unread. It was £12.50 for a month whose visit did not
+  // happen; there is now one amount and a held month is a person's decision. So this is no longer
+  // a dormancy ratchet waiting to be released — it is permanent, and says so.
+  check('nothing anywhere reads a reduced rate', !/amount_unvisited_pennies/.test(comm)
+    && !/amount_unvisited_pennies/.test(prose(readFileSync('lib/rep-visit.ts', 'utf8'))),
+    'one amount: £30 or held');
+  check('linesForPayment splits the one rate', /splitAmount\(rate\.amount_pennies,/.test(comm),
+    'no branch to choose, so nothing here has to change again');
+
+  // ── THE THIRD STATE ──────────────────────────────────────────────────────────────────────────
+  // monthNeedsVisit was a PRICING rule: it stopped the reduced rate being charged for a month in
+  // which a visit was arithmetically impossible. With one amount it prices nothing, and it becomes
+  // the predicate that gives the area manager's list its third state. A garage that joined on the
+  // 28th showing as "no visit" beside nineteen real misses is twenty conversations where there
+  // should be nineteen.
+  console.log('\n— visited, not visited, and not expected —');
+  const feb = (d) => ({ activation: D(`2026-02-${d}`), period: '2026-02' });
+  const st = (args) => V.visitState({ ...args, timeZone: LDN });
+  check('a satisfied month is VISITED', st({ ...feb('01'), satisfied: true }) === 'visited');
+  check('an unsatisfied month somebody was here for is NOT VISITED', st({ ...feb('01'), satisfied: false }) === 'not_visited');
+  check('a month they were barely in is NOT EXPECTED', st({ ...feb('16'), satisfied: false }) === 'not_expected',
+    'thirteen days — the fourteen-day clause made a visit impossible, and that is not a missed visit');
+  check('  …and the boundary is the same one monthNeedsVisit uses', st({ ...feb('15'), satisfied: false }) === 'not_visited',
+    '15th to 28th inclusive is fourteen days, so a visit WAS expected');
+  check('a month they were barely in but DID visit is still VISITED', st({ ...feb('16'), satisfied: true }) === 'visited',
+    'evidence beats expectation — they turned up, and the list must not hide it');
+  check('no activation at all is NOT EXPECTED', st({ activation: null, period: '2026-02', satisfied: false }) === 'not_expected',
+    'nothing accrues before activation, so there is no month to have missed');
+  check('the three states are a closed set', Array.isArray(V.VISIT_STATES) && V.VISIT_STATES.length === 3
+    && ['visited', 'not_visited', 'not_expected'].every((x) => V.VISIT_STATES.includes(x)),
+    (V.VISIT_STATES ?? []).join(', '));
   check('nothing writes a RepVisit yet', (await prisma.repVisit.count()) === 0,
     'the model and the rule land before any surface — dormant means no rows');
 } catch (e) {

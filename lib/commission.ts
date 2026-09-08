@@ -304,13 +304,13 @@ export async function clawbackRefund(db: RootClient, groupId: string, r: Refund,
   // not sum), the config then fixed, and the refund arriving into a world that would have accrued.
   const accruals = await (db as any).commissionEntry.findMany({
     where: { group_id: groupId, payment_ref: orig.ref, kind: 'accrual' },
-    select: { party_type: true, party_id: true, tier: true, rate_id: true, share_bp: true, amount_pennies: true, currency: true, visited: true },
+    select: { party_type: true, party_id: true, tier: true, rate_id: true, share_bp: true, amount_pennies: true, currency: true, shown_as_visited: true },
   });
   for (const a of accruals) {
     const res = await insertIdempotent(db, {
       group_id: groupId, party_type: a.party_type, party_id: a.party_id, period: periodOf(r.refunded_at),
       kind: 'clawback', revenue_stream: SUBSCRIPTION, tier: a.tier, rate_id: a.rate_id, share_bp: a.share_bp,
-      amount_pennies: -Math.round(a.amount_pennies * fraction), currency: a.currency, visited: a.visited,
+      amount_pennies: -Math.round(a.amount_pennies * fraction), currency: a.currency, shown_as_visited: a.shown_as_visited,
       source_ref: r.ref, payment_ref: orig.ref, status: 'pending',
     });
     res === 'written' ? written++ : noop++;

@@ -897,15 +897,12 @@ model CommissionRate {
   revenue_stream String   @default("subscription")
   effective_from DateTime
   amount_pennies Int // flat commission per collected month, in `currency`
-  /// THE REDUCED RATE, paid when the month's VISIT did not happen. On this timeline and not a
-  /// percentage applied at payout, for the reason the full amount is here: what the reduced rate
-  /// WAS in March must not move when it changes in April.
-  ///
-  /// NULL = this rate row predates the visit gate — the three GB/GBP rows written before
-  /// 2026-09-06 do, and that is true rather than unfilled. A payout meeting a NULL must refuse
-  /// rather than invent a figure, the same honest-null discipline resolveRate applies when no rate
-  /// exists at all. NOT a default of zero: zero is a decision, and an undecided rate is not one.
-  amount_unvisited_pennies Int?
+  // REMOVED 2026-09-08 — amount_unvisited_pennies. It held £12.50 for a month whose visit did not
+  // happen. There is no £12.50: a garage-month is paid at £30 or it is HELD, and a held month is a
+  // person's decision rather than a smaller number. Dropped rather than nulled, because NULL on
+  // that column already meant "this row predates the visit gate" — nulling the row written FOR the
+  // gate would have been a lie in the one place the schema is meant to be honest. Safe because
+  // CommissionEntry had zero rows, so no rate_id was frozen anywhere; see docs/rep-system.md.
   created_by     String? // operator id (audit)
   created_at     DateTime @default(now())
 
@@ -993,16 +990,20 @@ model CommissionEntry {
   source_ref     String // idempotency key: payment ref (accrual) or refund ref (clawback)
   payment_ref    String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
   status         String   @default("pending") // 'pending' | 'paid' | 'void'
-  /// WHICH BRANCH OF THE RATE THIS ENTRY USED — true = the full amount_pennies, false = the reduced
-  /// amount_unvisited_pennies. Frozen here rather than inferred, because inference breaks exactly
-  /// where it matters: a share below 10000bp, or the two amounts ever coinciding, and the ledger
-  /// can no longer say which figure it booked.
+  /// THE PICTURE THE AREA MANAGER WAS SHOWN when they released this entry — true = the month read
+  /// as visited, false = it did not and they released it anyway.
   ///
-  /// NULL = no visit decision was applied to this entry. Today that is EVERY entry — the visit gate
-  /// is dormant (nothing reads amount_unvisited_pennies) — and it stays the truthful answer for
-  /// every row written before it is wired. Deliberately NOT defaulted to false: false is the
-  /// decision "they had no visit", and an undecided entry has not made it.
-  visited        Boolean?
+  /// RENAMED 2026-09-08 from `visited`, which described which of two rate amounts was used. There
+  /// is one amount now, so that meaning is gone; the column survives because the new model asks a
+  /// question of the same shape. Frozen rather than derived, because an operator-recorded visit can
+  /// be added AFTERWARDS — re-deriving it later would show a different picture than the one the
+  /// manager actually decided on, which is the whole point of recording it.
+  ///
+  /// NULL = this entry has not been released. Today that is every entry, because the release is
+  /// NOT BUILT (docs/rep-system.md §5) and nothing moves an entry off `pending`. Deliberately not
+  /// defaulted: false is the decision "released without a visit", and an unreleased entry has made
+  /// no decision at all.
+  shown_as_visited Boolean?
   payout_id      String? // set when a payout run pays it; a paid accrual is never mutated by a later clawback
   created_at     DateTime @default(now())
 

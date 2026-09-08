@@ -181,14 +181,44 @@ export function activeDaysInMonth(activation: Date | null, period: string, timeZ
 }
 
 /**
- * Does this month require a visit at all?
+ * Was a visit EXPECTED in this month at all?
  *
- * A month the garage was in for fewer than VISIT_MIN_DAYS asks for nothing and pays the full rate.
- * Charging the reduced rate for a month in which a visit was ARITHMETICALLY IMPOSSIBLE under the
- * fourteen-day clause would be a penalty for the calendar. The same rule covers a tenant's final
- * month without needing a second concept, and it is anchored on `activation` — the instant
- * lib/commission's trial gate already uses, so "when did they become chargeable" has one answer.
+ * A month the garage was in for fewer than VISIT_MIN_DAYS could not have had one: the fourteen-day
+ * clause makes it arithmetically impossible. Anchored on `activation` — the instant
+ * lib/commission's trial gate already uses, so "when did they become chargeable" has one answer —
+ * and it covers a tenant's final month without needing a second concept.
+ *
+ * ── IT USED TO PRICE SOMETHING. IT NOW ONLY DESCRIBES. ──────────────────────────────────────────
+ * This was a PRICING rule: it stopped the reduced rate being charged for a month in which a visit
+ * was impossible. There is no reduced rate — a garage-month is £30 or it is HELD — so it prices
+ * nothing, and it survives as the predicate that gives the area manager's list its third state.
+ * A garage that joined on the 28th showing as "no visit" beside nineteen real misses is twenty
+ * conversations where there should be nineteen. See docs/rep-system.md §5.
  */
 export function monthNeedsVisit(activation: Date | null, period: string, timeZone: string): boolean {
   return activeDaysInMonth(activation, period, timeZone) >= VISIT_MIN_DAYS;
+}
+
+/** What the manager's list shows against a garage for a month. Three states, not a boolean. */
+export const VISIT_STATES = ['visited', 'not_visited', 'not_expected'] as const;
+export type VisitState = (typeof VISIT_STATES)[number];
+
+/**
+ * The state to show for one garage-month.
+ *
+ * EVIDENCE BEATS EXPECTATION: a garage that was here for three days and STILL got a visit reads
+ * `visited`, not `not_expected`. The exemption exists to stop a manager being asked about a month
+ * nobody could have visited — not to hide a visit that happened.
+ *
+ * This decides nothing about money. Under the released model the manager may release an unvisited
+ * month, and frequently will; `shown_as_visited` on the entry freezes which of these they saw.
+ */
+export function visitState(args: {
+  activation: Date | null;
+  period: string;
+  timeZone: string;
+  satisfied: boolean;
+}): VisitState {
+  if (args.satisfied) return 'visited';
+  return monthNeedsVisit(args.activation, args.period, args.timeZone) ? 'not_visited' : 'not_expected';
 }

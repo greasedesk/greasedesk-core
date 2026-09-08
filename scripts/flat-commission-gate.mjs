@@ -65,8 +65,22 @@ try {
   console.log('\n— the reduced rate is dated and frozen, like the full one —');
   const schema = readFileSync('prisma/schema.prisma', 'utf8');
   const model = /^model CommissionRate \{([\s\S]*?)^\}/m.exec(schema)?.[1] ?? '';
-  check('CommissionRate carries amount_unvisited_pennies', /amount_unvisited_pennies\s+Int\?/.test(model),
-    'nullable: the frozen rows predate the concept and must not be given an invented figure');
+  // INVERTED 2026-09-08. The reduced rate is gone: a garage-month is £30 or it is HELD, and a held
+  // month is a decision a person makes, not a smaller number. The column was dropped rather than
+  // nulled — NULL there already meant "this row predates the visit gate", so nulling the row
+  // written FOR that gate would have been a lie in the one place the schema is meant to be honest.
+  // Safe because CommissionEntry had zero rows, so no rate_id was frozen anywhere. That window is
+  // now closed: after the first accrual, dropping removes context from money already booked.
+  // THE MODEL'S CODE, not its comments. The schema still NAMES the dropped column, in the note
+  // recording why it went — and a file must be able to say what it no longer does. Same strip
+  // date-constant-gate uses for the same reason.
+  const modelCode = model.split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*|\/\/\/)/.test(l)).join('\n');
+  check('CommissionRate no longer carries a reduced amount', !/amount_unvisited_pennies/.test(modelCode),
+    'one amount. £30 or held');
+  check('  …and the schema still says why it went', /amount_unvisited_pennies/.test(model),
+    'the removal is a decision, and a decision with no record is one somebody undoes');
+  check('  …and no code reads one', !/amount_unvisited_pennies/.test(code('lib/commission.ts')),
+    'the column is gone; a reader would not compile, and this says so before it has to');
 
   // ── 3. THE LIVE TIMELINE ─────────────────────────────────────────────────────────────────────
   const rates = await prisma.commissionRate.findMany({
@@ -74,9 +88,8 @@ try {
     orderBy: { effective_from: 'asc' },
   });
   const frozen = rates.filter((r) => r.effective_from < new Date('2026-09-06'));
-  check('the three frozen rows are untouched', frozen.length === 3
-    && frozen.every((r) => r.amount_unvisited_pennies === null),
-    frozen.map((r) => `${r.tier} ${M(r.amount_pennies)} unvisited=${M(r.amount_unvisited_pennies)}`).join(' | '));
+  check('the three frozen rows are untouched', frozen.length === 3,
+    frozen.map((r) => `${r.tier} ${M(r.amount_pennies)}`).join(' | '));
   check('  …including the £12.50 taper row, which was real and stays', 
     frozen.some((r) => r.tier === 'thereafter' && r.amount_pennies === 1250),
     'history is frozen; the amendment is forward');
@@ -110,9 +123,11 @@ try {
   check('  …and that is the SAME rate row, not two that happen to match',
     Array.isArray(fresh) && Array.isArray(old) && fresh[0]?.rate_id === old[0]?.rate_id,
     `${fresh[0]?.rate_id?.slice(0, 8)} vs ${old[0]?.rate_id?.slice(0, 8)} — one timeline, resolved by date alone`);
-  check('  …carrying the reduced amount for a month with no visit',
-    (rates.find((r) => r.id === fresh[0]?.rate_id)?.amount_unvisited_pennies ?? null) !== null,
-    M(rates.find((r) => r.id === fresh[0]?.rate_id)?.amount_unvisited_pennies));
+  // AND A MONTH WITH NO VISIT IS WORTH THE SAME. There is no second amount to resolve; whether the
+  // visit happened decides nothing here, and is a thing a person is SHOWN at release.
+  check('  …and a month with no visit resolves the very same figure',
+    Array.isArray(fresh) && fresh[0]?.amount_pennies === FLAT,
+    'the visit informs a judgement; it does not price anything');
 
   // ── 5. THE WRITE SURFACE OFFERS ONE TIER ─────────────────────────────────────────────────────
   console.log('\n— and nobody can add a rate the engine will never ask for —');
