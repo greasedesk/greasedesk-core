@@ -16,7 +16,7 @@
  * harmless and reads as self-contained.
  */
 import './_gate-preflight.mjs';
-const { gateOrigin, erOrigin } = await import('./_gate-preflight.mjs');
+const { gateOrigin, erOrigin, repOrigin } = await import('./_gate-preflight.mjs');
 const { readFileSync, readdirSync } = await import('node:fs');
 
 const SELF = 'gate-origin-gate.mjs';
@@ -88,6 +88,17 @@ check('gateOrigin and erOrigin agree on the port', new URL(erOrigin()).port === 
 check('  …and differ only in the host', new URL(erOrigin()).hostname === 'er.greasedesk.com'
   && new URL(gateOrigin()).hostname !== 'er.greasedesk.com',
   'the hostname is what middleware.ts routes on; the port is what GATE_BASE moves');
+// THE SECOND ISOLATED HOST, HELD TO THE SAME RULE. reps.greasedesk.com arrived on 2026-09-09 by
+// copying the erOrigin arrangement, and a copied arrangement is exactly what this gate exists to
+// watch: the two hosts must move together on the port and differ only in the name.
+check('repOrigin agrees on the port too', new URL(repOrigin()).port === new URL(gateOrigin()).port,
+  `${gateOrigin()} / ${repOrigin()}`);
+check('  …and is a third distinct host', new URL(repOrigin()).hostname === 'reps.greasedesk.com'
+  && new URL(repOrigin()).hostname !== new URL(erOrigin()).hostname,
+  'three origins, three cookie jars — the isolation is the hostname, not the guard');
+check('  …with its own resolver rule beside it',
+  /reps\.greasedesk\.com 127\.0\.0\.1/.test(readFileSync(`scripts/${SOURCE}`, 'utf8')),
+  'a host that resolves nowhere is a gate that 404s for a reason nobody reads');
 check('the resolver rule lives beside the origin it serves',
   /er\.greasedesk\.com 127\.0\.0\.1/.test(readFileSync(`scripts/${SOURCE}`, 'utf8')),
   'a host that resolves nowhere is a gate that 404s for a reason nobody reads');

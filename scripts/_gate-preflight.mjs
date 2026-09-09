@@ -211,6 +211,22 @@ export function erOrigin() {
 /** The resolver rule that makes erOrigin() reachable. Beside the origin, so they cannot drift. */
 export const ER_RESOLVER_ARGS = ['--host-resolver-rules=MAP er.greasedesk.com 127.0.0.1'];
 
+/**
+ * The rep portal's own origin, on the SAME port again.
+ *
+ * Second instance of the erOrigin arrangement, and written the same way ON PURPOSE: middleware.ts
+ * serves /rep only on reps.greasedesk.com and 404s it everywhere else, so a gate on localhost
+ * cannot see the portal at all. The HOSTNAME is what middleware branches on and the PORT is what
+ * GATE_BASE moves — derived from gateOrigin so one env var still moves all three.
+ */
+export function repOrigin() {
+  const { port, protocol } = new URL(gateOrigin());
+  return `${protocol}//reps.greasedesk.com${port ? `:${port}` : ''}`;
+}
+
+/** The resolver rule that makes repOrigin() reachable. Beside the origin, so they cannot drift. */
+export const REP_RESOLVER_ARGS = ['--host-resolver-rules=MAP reps.greasedesk.com 127.0.0.1'];
+
 export async function explainIfClientStale(base = gateOrigin()) {
   try {
     const r = await fetch(`${base}/c/aaaaaaaaaaaaaaaa`);

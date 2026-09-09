@@ -9,19 +9,40 @@
  *     brand image (one exact path, see BRAND_ASSET), plus
  *     the auth endpoints (so an operator can sign in there) and Next internals. EVERYTHING else,
  *     including "/", 404s. The tenant app is NOT reachable at er.
- *   • On the apex (greasedesk.com and anything else) — the Engine Room door is CLOSED: /superadmin/*
- *     and /api/superadmin/* 404 (single door, at er. only). The tenant app is otherwise untouched.
+ *   • On reps.greasedesk.com — expose ONLY the rep portal: /rep/* and /api/rep/*, on the same
+ *     terms. A rep is self-employed, belongs to no garage, and invoices US; the portal must not sit
+ *     on the tenant origin, where it would share the tenant cookie jar. EVERYTHING else 404s.
+ *   • On the apex (greasedesk.com and anything else) — BOTH other doors are CLOSED: /superadmin/*,
+ *     /api/superadmin/*, /rep/* and /api/rep/* all 404. The tenant app is otherwise untouched.
  *
  * 404 not redirect, and not 403: undiscoverable, and we never leak that the door moved. The operator
- * GUARDS (lib/operator-auth) are unchanged and still fire — this only decides which host may reach
- * them; a non-operator hitting er./superadmin/* still 404s at the guard.
+ * and rep GUARDS (lib/operator-auth, lib/rep-auth) are unchanged and still fire — this only decides
+ * which host may reach them; a non-operator hitting er./superadmin/* still 404s at the guard, and a
+ * signed-out rep hitting reps./rep gets the application's 404, not this one.
+ *
+ * ── /rep MOVED. IT WAS REACHABLE ON THE APEX UNTIL 2026-09-09 ───────────────────────────────────
+ * pages/rep/* shipped with layer 1 and has been served at greasedesk.com/rep ever since, on the
+ * tenant origin and therefore in the tenant cookie jar. Nothing depended on that — no gate drove it
+ * and no link pointed at it — which is why the move is a middleware change rather than a migration.
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 const ER_HOST = 'er.greasedesk.com';
+const REP_HOST = 'reps.greasedesk.com';
 
 const isEngineRoom = (p: string) => p === '/superadmin' || p.startsWith('/superadmin/') || p.startsWith('/api/superadmin/');
+/**
+ * EXACT SEGMENT OR NOTHING, and the two halves are written differently for the same reason.
+ *
+ * `startsWith('/api/rep')` would also match /api/reports/vat-summary — a tenant's VAT return, which
+ * exists — so the api half takes the exact path or a trailing slash and never a bare prefix.
+ * `startsWith('/rep')` matches nothing today, but /admin/settings/rep sits one directory up and the
+ * next path of that shape is one rename away, so the page half is written the same way rather than
+ * relying on today's filenames. rep-host-gate DRIVES both paths; a matcher that reads as correct
+ * can still be wrong about the one path nobody listed.
+ */
+const isRepPortal = (p: string) => p === '/rep' || p.startsWith('/rep/') || p === '/api/rep' || p.startsWith('/api/rep/');
 const isAuth = (p: string) => p.startsWith('/api/auth/'); // shared: operator login on er., tenant login on apex
 const isNextInternal = (p: string) => p.startsWith('/_next/'); // matcher already drops /_next/static + image
 /**
@@ -54,8 +75,17 @@ export function middleware(req: NextRequest) {
     return notFound(); // every tenant route still 404s on er.
   }
 
-  // Apex / any other host: the Engine Room is not here.
-  if (isEngineRoom(pathname)) return notFound();
+  if (host === REP_HOST) {
+    // reps. is the rep portal and NOTHING else. Same shape as er. above, deliberately: one door,
+    // one rewrite at the root, and an allow-list rather than a block-list — a block-list on a host
+    // this isolated is a list somebody forgets to add to.
+    if (pathname === '/') return NextResponse.rewrite(new URL('/rep', req.url));
+    if (isRepPortal(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
+    return notFound(); // the tenant app AND the Engine Room both 404 on reps.
+  }
+
+  // Apex / any other host: neither the Engine Room nor the rep portal is here.
+  if (isEngineRoom(pathname) || isRepPortal(pathname)) return notFound();
   return NextResponse.next(); // tenant app unchanged
 }
 

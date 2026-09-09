@@ -115,6 +115,7 @@ const TIERS = {
   ],
   core: [
     'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate',
+    'rep-host-gate',
     'engine-room-palette-gate',
     'support-route-gate',
     'admin-shell-gate', 'client-freshness-gate', 'customer-answers-gate', 'data-start-clip-gate',
