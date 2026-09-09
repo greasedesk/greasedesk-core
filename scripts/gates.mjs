@@ -8,14 +8,19 @@
  * count stale from the moment a fifth intake item landed. A suite you have to remember to run is a
  * suite that measures whoever is remembering.
  *
- * ── A SKIP IS NOT A PASS, AND IT IS NOT A FAILURE ───────────────────────────────────────────────
- * Gates need different things: a dev server on 3000, 3111 or 3112, a database, a browser. A gate
- * whose prerequisite is missing has told you NOTHING, and the one thing that must never happen is a
- * real failure hiding behind an environment excuse. So there are three states, not two, and SKIPPED
- * is printed as loudly as RED — with the reason and the command that would fix it. The headline
- * always names the skip count, even when it is zero.
+ * ── NOT RUN IS NOT A PASS, AND IT IS NOT A FAILURE ──────────────────────────────────────────────
+ * Gates need different things: a dev server, a database, a browser. A gate whose prerequisite is
+ * missing has told you NOTHING, and the one thing that must never happen is a real failure hiding
+ * behind an environment excuse. So there are three states, not two, and UNRUN is printed as loudly
+ * as RED — with the reason and what would fix it. The headline always names the unrun count, even
+ * when it is zero.
  *
  * Honest-null, applied to a test suite: "not run" is a different fact from "passed".
+ *
+ * UNRUN HAS TWO CAUSES and one meaning. The gate started and declined (exit 4: leftover fixtures, a
+ * pay run already open), or the runner never started it because a requirement it declared was not
+ * met. They are counted together because nothing was tested either way, and told apart on the line,
+ * because clearing a fixture and starting a server are different people's afternoons.
  *
  * ── THE EXIT CODE IS THE CONTRACT ───────────────────────────────────────────────────────────────
  * Gates report in at least three different formats (`check`/`chk`/bare asserts). Parsing output
@@ -175,7 +180,18 @@ function discover() {
 // THE ONE ORIGIN. Mirrors _gate-preflight::gateOrigin — the runner cannot import it, because this
 // file must run before any gate loads, but gate-origin-gate asserts the two agree.
 const ORIGIN = process.env.GATE_BASE ?? `http://localhost:${DEV_PORT}`;
-const ORIGIN_PORT = Number(new URL(ORIGIN).port || 80);
+
+/**
+ * A DECLARATION NAMES AN ORIGIN, NOT A PORT NUMBER IN ISOLATION. `server` is the configured one;
+ * `server:NNNN` is the SAME HOST on a different port, so a run pointed elsewhere by GATE_BASE
+ * carries the whole declaration with it rather than half of it.
+ */
+const originFor = (spec) => {
+  if (spec === 'server') return ORIGIN;
+  const u = new URL(ORIGIN);
+  u.port = String(Number(spec.split(':')[1]));
+  return u.origin;
+};
 
 /**
  * WHAT A GATE NEEDS, read from the gate itself.
@@ -194,8 +210,12 @@ function requirements(file) {
       // `server` alone means THE configured origin. A declaration naming a port would be a second
       // place the number lives, which is the whole point of _dev-port. `server:NNNN` is still
       // parsed, for a gate that genuinely needs a different one.
-      ports: parts.filter((p) => p === 'server' || p.startsWith('server:'))
-        .map((p) => (p === 'server' ? ORIGIN_PORT : Number(p.split(':')[1]))),
+      //
+      // The spec string is KEPT ALONGSIDE the origin it resolves to, because an unmet requirement
+      // has to be reportable in the words the gate used. "needs a server" names nothing; "declares
+      // server:9999 → http://localhost:9999, nothing answered" names the line to go and read.
+      servers: parts.filter((p) => p === 'server' || p.startsWith('server:'))
+        .map((spec) => ({ spec, origin: originFor(spec) })),
       db: parts.includes('db'),
       declared: true,
     };
@@ -205,8 +225,8 @@ function requirements(file) {
   // _gate-preflight and gate-origin-gate) — so scanning for `localhost:3000` now finds nothing and
   // would quietly report every browser gate as needing no server at all.
   const needsServer = /\bgateOrigin\(|\berOrigin\(|\bserverReady\(/.test(src);
-  const ports = needsServer ? [ORIGIN_PORT] : [];
-  return { ports, db: /PrismaClient|lib\/db\.ts/.test(src), declared: false };
+  const servers = needsServer ? [{ spec: 'server', origin: ORIGIN }] : [];
+  return { servers, db: /PrismaClient|lib\/db\.ts/.test(src), declared: false };
 }
 
 /**
@@ -332,21 +352,42 @@ if (has('--resume')) plan = plan.filter((g) => !prior[g]);
 // dev server is reported as one fact rather than rediscovered by twenty gates in a row.
 const needed = new Set();
 const reqs = {};
-for (const g of plan) { reqs[g] = requirements(path.join(ROOT, 'scripts', `${g}.mjs`)); reqs[g].ports.forEach((p) => needed.add(p)); }
+for (const g of plan) { reqs[g] = requirements(path.join(ROOT, 'scripts', `${g}.mjs`)); reqs[g].servers.forEach((sv) => needed.add(sv.origin)); }
+
+// ── WHICH TIERS RAN WITHOUT ANYTHING CONFIRMING WHAT THEY WERE TESTING ─────────────────────────
+// A tier where no gate asks for a server is never identity-checked, because there is nothing to
+// check. That is fine and it is also worth SAYING: the manual tier reads the repo and the database
+// and is entirely capable of going green while the app under test is a different app, or absent.
+// Left unsaid, "0 UNRUN" invites the reader to hear a guarantee the run never made.
+const tierIn = (g) => tierOf(g) ?? 'untiered';
+const tiersInPlan = [...new Set(plan.map(tierIn))];
+const uncheckedTiers = tiersInPlan.filter((t) => !plan.some((g) => tierIn(g) === t && reqs[g].servers.length));
 if (has('--list')) {
   for (const g of plan) {
     const r = reqs[g];
-    console.log(`${g.padEnd(32)} ${(tierOf(g) ?? '?').padEnd(6)} ${r.ports.length ? `server:${r.ports.join(',')}` : '—'} ${r.db ? 'db' : ''} ${r.declared ? '(declared)' : ''}`);
+    console.log(`${g.padEnd(32)} ${(tierOf(g) ?? '?').padEnd(6)} ${r.servers.length ? r.servers.map((sv) => sv.origin).join(',') : '—'} ${r.db ? 'db' : ''} ${r.declared ? '(declared)' : ''}`);
   }
-  console.log(`\n${plan.length} gates. Ports needed: ${needed.size ? ORIGIN : 'none'}`);
+  console.log(`\n${plan.length} gates. Origins needed: ${needed.size ? [...needed].join(', ') : 'none'}`);
   process.exit(0);
 }
 
-// IDENTITY BEFORE ANYTHING. A suite that cannot confirm what it is testing has no counts to
-// report, so this refuses the whole run rather than proceeding with a warning.
+// ── ONE PROBE PER ORIGIN, AND A REQUIREMENT IS SATISFIED ONLY BY ITS OWN ───────────────────────
+// This block used to end `for (const p of needed) up[p] = true` — every requirement marked
+// satisfied as a SIDE EFFECT of the configured origin answering. A gate declaring server:9999, a
+// port nothing listens on, ran anyway, and the suite reported 0 skipped. The header humans read as
+// a guard had been decoration since the identity change that introduced the line.
+//
+// Now: each distinct origin is probed once, by the same identity probe, and a gate's requirement
+// is met only if ITS origin's own result says so.
 const up = {};
-if (needed.size) {
-  const id = await identify(ORIGIN);
+for (const origin of needed) up[origin] = await identify(origin);
+
+// IDENTITY BEFORE ANYTHING. A suite that cannot confirm what it is testing has no counts to
+// report, so this refuses the whole run rather than proceeding with a warning. This applies to the
+// CONFIGURED origin only: it is what nearly every gate uses, so its absence is a mass misreport
+// rather than one gate's problem. An origin some single gate declared for itself fails that gate.
+if (needed.has(ORIGIN)) {
+  const id = up[ORIGIN];
   if (!id.ok) {
     console.error(`\n  ${ORIGIN} IS NOT GREASEDESK.\n`);
     console.error(`  ${id.why}.`);
@@ -357,13 +398,12 @@ if (needed.size) {
     console.error('  Start GreaseDesk there, or set GATE_BASE to where it is.\n');
     process.exit(3);
   }
-  for (const p of needed) up[p] = true;
 }
 
 // ── REFUSE THE WHOLE RUN RATHER THAN MISREPORT IT ───────────────────────────────────────────────
 // A stale client does not fail one gate honestly, it fails every gate dishonestly. Aborting here
 // costs one restart; not aborting costs an afternoon reading the wrong files.
-if (needed.size && await staleClient(ORIGIN)) {
+if (needed.has(ORIGIN) && await staleClient(ORIGIN)) {
   console.error(`\n  THE DEV SERVER AT ${ORIGIN} IS RUNNING AN OLD PRISMA CLIENT.\n`);
   console.error('  `prisma generate` has run since it started, so lib/db refuses every query — which');
   console.error('  looks like InvalidCredentials on login and 500s everywhere else, not like this.');
@@ -377,10 +417,14 @@ if (needed.size && await staleClient(ORIGIN)) {
 const results = { ...prior };
 for (const g of plan) {
   const r = reqs[g];
-  const missing = r.ports.filter((p) => !up[p]);
-  if (missing.length) {
-    results[g] = { gate: g, skipped: true, reason: `needs a server on ${missing.join(', ')}`, tier: tierOf(g) };
-    console.log(`SKIP  ${g.padEnd(32)} needs a server on ${missing.join(', ')}`);
+  // AN UNMET REQUIREMENT IS UNRUN, NOT A FOURTH WORD FOR IT. The gate never started, so it has
+  // told you nothing — the same fact as a gate that started and declined. The reason names the
+  // declaration and what the probe found, so the reader is not left to guess which of the two.
+  const unmetReqs = r.servers.filter((sv) => !up[sv.origin].ok);
+  if (unmetReqs.length) {
+    const why = unmetReqs.map((sv) => `declares ${sv.spec} — ${up[sv.origin].why}`).join('; ');
+    results[g] = { gate: g, unrun: true, unmet: true, reason: why, tier: tierOf(g) };
+    console.log(`UNRUN ${g.padEnd(32)} ${why}`);
   } else {
     const res = await run(g);
     // ── THE TAIL IS KEPT FOR RED GATES ONLY ──────────────────────────────────────────────────
@@ -416,30 +460,34 @@ for (const g of plan) {
 
 // ── THE SUMMARY, WITH THREE STATES ─────────────────────────────────────────────────────────────
 const all = Object.values(results);
-const unrunGates = all.filter((r) => !r.skipped && r.unrun);
-const red = all.filter((r) => !r.skipped && !r.unrun && r.code !== 0);
-const skipped = all.filter((r) => r.skipped);
-const green = all.filter((r) => !r.skipped && r.code === 0);
+const unrunGates = all.filter((r) => r.unrun);
+const red = all.filter((r) => !r.unrun && r.code !== 0);
+// A STRICT SUBSET, NOT A FIFTH STATE. Both kinds of unrun mean nothing was tested; this number
+// says how many of them were the ENVIRONMENT rather than the gate's own precondition, because
+// those are fixed by different people doing different things.
+const unmet = unrunGates.filter((r) => r.unmet);
+const green = all.filter((r) => !r.unrun && r.code === 0);
 const secs = green.concat(red).reduce((a, r) => a + (r.seconds ?? 0), 0);
 
 console.log(`\n${'='.repeat(76)}`);
 // FOUR NUMBERS, ALWAYS. Unrun is never folded into green or red — a tier that reads
 // "27 green · 1 red" when a clause declined to start is a tier reporting coverage it does not have.
-console.log(`${green.length} green · ${red.length} RED · ${unrunGates.length} UNRUN · ${skipped.length} SKIPPED (not run — see below) · ${Math.round(secs)}s`);
+console.log(`${green.length} green · ${red.length} RED · ${unrunGates.length} UNRUN · ${unmet.length} of those an unmet requirement · ${Math.round(secs)}s`);
 if (red.length) {
   console.log('\nRED:');
   for (const r of red) console.log(`  ${r.gate.padEnd(32)} ${r.failures != null ? `${r.failures} of ${r.assertions}` : `exit ${r.code}`}  ${r.firstFailure ?? ''}`);
 }
-// SAME RULE AS SKIPPED, and for the same reason: printed even at zero, so the reader keeps looking.
+// PRINTED EVEN AT ZERO, so the reader keeps looking for it. A line that appears only when there is
+// bad news is a line nobody reads on a good day, and then nobody reads on a bad one either.
 console.log(`\nUNRUN: ${unrunGates.length}`);
 for (const r of unrunGates) console.log(`  ${r.gate.padEnd(32)} ${r.reason}`);
 if (unrunGates.length) console.log('\n  An unrun gate has told you nothing. Clear what it needs and run again.');
 
-// PRINTED EVEN WHEN THERE ARE NONE. "0 skipped" is the sentence that makes a green run mean
-// something; a summary that mentions skips only when they exist trains the reader not to look.
-console.log(`\nSKIPPED: ${skipped.length}`);
-for (const r of skipped) console.log(`  ${r.gate.padEnd(32)} ${r.reason}`);
-if (skipped.length) console.log('\n  A skipped gate has told you nothing. Start what it needs and run again.');
+// PRINTED EVEN WHEN THERE IS NOTHING TO SAY, by the same rule as UNRUN above: a line that appears
+// only when it is bad news is a line the reader stops looking for.
+console.log(uncheckedTiers.length
+  ? `\nNO IDENTITY CHECK: ${uncheckedTiers.join(', ')}\n  No gate in ${uncheckedTiers.length > 1 ? 'those tiers' : 'that tier'} asks for a server, so nothing confirmed what was under test.\n  Green there means the repo and the database are right — not that GreaseDesk was running.`
+  : '\nIDENTITY: every tier in this run had at least one gate probe the server.');
 console.log(`${'='.repeat(76)}\n`);
 
 // 1 = something is broken. 5 = nothing is broken and something was not tested. Distinct, because a

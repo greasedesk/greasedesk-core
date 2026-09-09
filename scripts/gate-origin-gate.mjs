@@ -92,5 +92,47 @@ check('the resolver rule lives beside the origin it serves',
   /er\.greasedesk\.com 127\.0\.0\.1/.test(readFileSync(`scripts/${SOURCE}`, 'utf8')),
   'a host that resolves nowhere is a gate that 404s for a reason nobody reads');
 
+// ── 4. A DECLARATION IS HONOURED, OR THE GATE IS UNRUN ─────────────────────────────────────────
+/**
+ * `@gate-requires: server:9999` — a port nothing listens on — RAN ANYWAY, and the suite reported
+ * nothing skipped. The runner collected each declared origin into a set and then marked the whole
+ * set satisfied unconditionally, so a requirement was met the moment ANY check passed. For a day
+ * the header was decoration: humans read it as a guard, the runner did not act on it at all.
+ *
+ * The rule is that a requirement is satisfied only by its OWN probe result. What follows bans the
+ * shape that broke it, because the line that broke it was one line long and looked like bookkeeping.
+ */
+console.log('\n— a requirement is satisfied only by its own probe —');
+
+/** Assignments that mark a satisfaction map true without consulting anything. Exported to be proven. */
+export function blanketSatisfaction(src) {
+  return [...code(src).matchAll(/\b(up|probed|satisfied)\[[^\]]+\]\s*=\s*(true|1|\{\s*ok:\s*true)/g)].map((m) => m[0]);
+}
+check('the historical line is FLAGGED',
+  blanketSatisfaction('for (const p of needed) up[p] = true;').length === 1,
+  'the exact line that made every @gate-requires header decoration');
+check('  …and so is a hand-built pass result', blanketSatisfaction('up[o] = { ok: true };').length === 1,
+  'satisfying a probe by writing its answer is the same defect wearing the probe\'s shape');
+check('probing for the answer is not', blanketSatisfaction('for (const o of needed) up[o] = await identify(o);').length === 0);
+check('  …nor is a comment quoting the ban',
+  blanketSatisfaction('// never write: for (const p of needed) up[p] = true\nup[o] = await identify(o);').length === 0,
+  'a file must be able to say what it no longer does — this gate holds the banned line in its own cases above');
+check('the runner satisfies nothing wholesale', blanketSatisfaction(runnerSrc).length === 0,
+  blanketSatisfaction(runnerSrc).join(', ') || 'no unconditional satisfaction in gates.mjs');
+
+// A MALFORMED DECLARATION IS THE SAME DEFECT, WRITTEN BY THE GATE INSTEAD. `server 3000` and
+// `sever` both parse to zero requirements, which reads as "needs nothing" and runs — silently,
+// and only for the one gate whose author made the typo, which is the hardest kind to notice.
+const malformed = [];
+for (const f of files) {
+  const d = (readFileSync(`scripts/${f}`, 'utf8').match(/@gate-requires:\s*([^\n]+)/) ?? [])[1];
+  if (!d) continue;
+  for (const p of d.split(',').map((x) => x.trim()).filter(Boolean)) {
+    if (!/^(server(:\d{2,5})?|db|none)$/.test(p)) malformed.push(`${f}: "${p}"`);
+  }
+}
+check('every declaration in the suite is a token the runner acts on', malformed.length === 0,
+  malformed.join('\n    ') || 'server, server:NNNN, db, none — nothing else');
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);
