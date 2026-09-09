@@ -277,14 +277,20 @@ const identify = (origin) => new Promise((resolve) => {
  * rather than throw, so the catch never runs and the explainer never fires. On 2026-09-06 that
  * turned one cause into eleven unrelated-looking reds across the core tier, three times in a day.
  *
- * The route is any page that touches the database; /c/<16 chars> is a customer magic-link path that
- * always does and needs no session. What is being read is the guard's own banner, not a 500.
+ * ── AND IT IS NO LONGER ASKED ON A CUSTOMER PATH ───────────────────────────────────────────────
+ * This fetched /c/aaaaaaaaaaaaaaaa, a customer magic-link route rate-limited at 60 per IP per hour,
+ * and read the guard's banner out of the HTML. One per runner invocation, plus one per FAILING gate
+ * from explainIfClientStale — measured at 23 per full sweep against a budget of 60, so under three
+ * sweeps an hour before the suite locked itself out and gates began failing on the limiter rather
+ * than on anything they test.
+ *
+ * /api/dev/client-freshness exists for this, is 404 in production, and is not rate limited.
  */
 const staleClient = async (origin) => {
   try {
-    const r = await fetch(`${origin}/c/aaaaaaaaaaaaaaaa`, { signal: AbortSignal.timeout(6000) });
-    return /OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(await r.text());
-  } catch { return false; } // unreachable is a different problem, and `probe` already reports it
+    const r = await fetch(`${origin}/api/dev/client-freshness`, { signal: AbortSignal.timeout(6000) });
+    return /"stale"\s*:\s*true/.test(await r.text());
+  } catch { return false; } // unreachable is a different problem, and the identity probe reports it
 };
 
 /**
@@ -415,6 +421,32 @@ if (needed.has(ORIGIN) && await staleClient(ORIGIN)) {
 
 
 
+// ── THE SUITE'S OWN RATE-LIMIT CARRY-OVER, CLEARED ONCE, OUT LOUD ──────────────────────────────
+// The gates drive real customer surfaces, so they spend real limiter budget: measured on
+// 2026-09-09 from a cleared baseline, a full sweep costs 23 of magic:ip's 60 per hour. Past that,
+// gates fail on the limiter instead of on what they test — five did — and the counts start
+// depending on how recently somebody last ran, which is a number nobody states.
+//
+// ONCE, HERE, BEFORE THE FIRST GATE. Never between gates: a gate that asserts "the Nth request is
+// refused" must still be able to, inside its own run. None does today; that is why it is checked.
+//
+// NO LIMIT IS WEAKENED. magic:ip is still 60, repauth:ip still 30. What goes is the carry-over
+// between runs, which exists only because one machine is every caller.
+const reap = await new Promise((resolve) => {
+  const p = spawn(process.execPath, [path.join(ROOT, 'scripts', '_reap-loopback-limits.mjs'), ORIGIN],
+    { cwd: ROOT, env: process.env, stdio: ['ignore', 'pipe', 'ignore'] });
+  let buf = '';
+  p.stdout.on('data', (d) => { buf += d; });
+  p.on('close', () => { try { resolve(JSON.parse(buf)); } catch { resolve({ ok: false, reason: 'no_answer' }); } });
+  p.on('error', () => resolve({ ok: false, reason: 'no_answer' }));
+});
+// PRINTED EVEN AT ZERO, and printed again in the summary. Same rule as UNRUN and the identity line:
+// a line that only appears when something happened is a line nobody looks for on the day it matters.
+const reapLine = reap.ok
+  ? `LIMITER: cleared ${reap.cleared} loopback row(s)${reap.keys.length ? ` — ${reap.keys.join(', ')}` : ''}; ${reap.untouched} other key(s) untouched`
+  : `LIMITER: NOT cleared (${reap.reason}${reap.host ? ` — ${reap.host}` : ''}) — the suite's own carry-over is still in place`;
+console.log(`\n${reapLine}`);
+
 const results = { ...prior };
 for (const g of plan) {
   const r = reqs[g];
@@ -486,6 +518,15 @@ if (unrunGates.length) console.log('\n  An unrun gate has told you nothing. Clea
 
 // PRINTED EVEN WHEN THERE IS NOTHING TO SAY, by the same rule as UNRUN above: a line that appears
 // only when it is bad news is a line the reader stops looking for.
+// THE COST, STATED. Absorbed silently, this reads as free; it is not, and the number is what tells
+// a reader whether the suite is close to spending a budget it does not own.
+console.log(`\n${reapLine}`);
+console.log('  Budget, re-measured 2026-09-09 after the diagnostics moved off /c/:');
+console.log('    core 0  ·  money 17 magic:ip + 7 repauth:ip  ·  slow 3 magic:ip  ·  the runner itself 0');
+console.log('    A full sweep spends 20 of magic:ip\'s 60/hour and 7 of repauth:ip\'s 30.');
+console.log('    Previously 23, plus one more for EVERY gate that failed — reds caused exhaustion and');
+console.log('    exhaustion caused reds. That amplifier is gone; the remaining spend is gates driving');
+console.log('    real customer links, which is what they are for. No limit is weakened.');
 console.log(uncheckedTiers.length
   ? `\nNO IDENTITY CHECK: ${uncheckedTiers.join(', ')}\n  No gate in ${uncheckedTiers.length > 1 ? 'those tiers' : 'that tier'} asks for a server, so nothing confirmed what was under test.\n  Green there means the repo and the database are right — not that GreaseDesk was running.`
   : '\nIDENTITY: every tier in this run had at least one gate probe the server.');

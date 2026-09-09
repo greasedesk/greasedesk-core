@@ -227,11 +227,25 @@ export function repOrigin() {
 /** The resolver rule that makes repOrigin() reachable. Beside the origin, so they cannot drift. */
 export const REP_RESOLVER_ARGS = ['--host-resolver-rules=MAP reps.greasedesk.com 127.0.0.1'];
 
-export async function explainIfClientStale(base = gateOrigin()) {
+/**
+ * ── OFF THE CUSTOMER BUDGET (2026-09-09) ───────────────────────────────────────────────────────
+ * This asked /c/aaaaaaaaaaaaaaaa — a CUSTOMER MAGIC LINK path, rate-limited at 60 per IP per hour —
+ * and read the guard's banner out of the HTML. Twenty-five gates call this FROM THEIR CATCH, so
+ * every red spent one: reds caused exhaustion, exhaustion caused reds, and five gates went red for
+ * that reason alone. A diagnostic must not spend a budget that belongs to customers.
+ *
+ * It now asks /api/dev/client-freshness, which exists for this and answers a boolean.
+ *
+ * ALWAYS THE CONFIGURED ORIGIN, whatever 'base' a caller passes: it is ONE PROCESS behind all three
+ * hosts, and er./reps. 404 everything outside their own allow-lists — so a gate that passed erOrigin
+ * here would have got a 404 and read it as "not stale", which is the wrong answer arrived at
+ * silently. The parameter is kept so the twenty-five call sites need no edit.
+ */
+export async function explainIfClientStale(_base = gateOrigin()) {
   try {
-    const r = await fetch(`${base}/c/aaaaaaaaaaaaaaaa`);
+    const r = await fetch(`${gateOrigin()}/api/dev/client-freshness`);
     const t = await r.text();
-    if (/OLD PRISMA CLIENT|RESTART THE DEV SERVER/i.test(t)) {
+    if (/"stale"\s*:\s*true/.test(t)) {
       console.log('\n  ⚠  THE DEV SERVER IS RUNNING AN OLD PRISMA CLIENT — restart it and re-run.');
       console.log('     (This failure is almost certainly that, not the thing being tested.)\n');
       return true;

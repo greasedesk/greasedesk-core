@@ -12,7 +12,7 @@ import './_gate-preflight.mjs';
 const { gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const F = await import('../lib/client-freshness.ts');
-const { readFileSync } = await import('node:fs');   // READ only — see the last check in section 6
+const { readFileSync, existsSync } = await import('node:fs'); // READ only — see the last check in section 6
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -101,9 +101,29 @@ check('the extension refuses on the live answer', /refuseIfStale\(clientIsStale\
 check('  …inside $allOperations, so no query bypasses it',
   db.indexOf('refuseIfStale(clientIsStale());') > db.indexOf('async $allOperations'),
   'a guard on one method is a guard on the methods somebody remembered');
+// ── THE PROBE MOVED OFF THE CUSTOMER PATH (2026-09-09), AND THE CLAUSE MOVED WITH IT ──────────
+// This asserted the runner still matched the guard's BANNER TEXT, which was true only while the
+// probe fetched /c/<token> and read HTML. That path was a customer magic-link route rate-limited at
+// 60 per IP per hour: the runner spent one per invocation and 25 gates spent one each TIME THEY
+// FAILED, so reds caused exhaustion and exhaustion caused reds. Five gates went red on it.
+//
+// What is pinned now is stronger than the old clause, because it is the rule rather than the
+// spelling: the diagnostic is asked on a route that EXISTS FOR IT, and it is not asked on a
+// customer surface. Both halves, because either alone would pass on the arrangement that broke.
+const runnerSrc = readFileSync('scripts/gates.mjs', 'utf8');
+const preflightSrc = readFileSync('scripts/_gate-preflight.mjs', 'utf8');
+const codeOf = (t) => t.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+const DEV_PROBE = '/api/dev/client' + '-freshness';
 check('  …and the running server is probed before every suite run',
-  /OLD PRISMA CLIENT\|RESTART THE DEV SERVER/.test(readFileSync('scripts/gates.mjs', 'utf8')),
-  'the end-to-end healthy path this file stopped driving — the runner aborts the whole suite on it');
+  codeOf(runnerSrc).includes(DEV_PROBE),
+  'the runner aborts the whole suite on a stale client, and it still asks something to find out');
+check('  …on a route that exists for the diagnostic', existsSync('pages' + DEV_PROBE + '.ts'),
+  'a diagnostic sharing a route with a customer surface is what put five gates on the limiter');
+check('  …which 404s in production', /NODE_ENV === 'production'/.test(readFileSync('pages' + DEV_PROBE + '.ts', 'utf8')),
+  'it reports a state that cannot occur in production, so it has no reason to be reachable there');
+check('  …and neither probe touches a customer magic link any more',
+  !codeOf(runnerSrc).includes('/c/aaaa') && !codeOf(preflightSrc).includes('/c/aaaa'),
+  'the comments still say what changed; the code no longer does it');
 // THE TERMS ARE SPLIT SO THE SCAN CANNOT MATCH ITSELF. Written whole, each name appears in this
 // very line and the check fails on its own text — which is exactly how it failed the first time it
 // ran. A scan whose term is present in its own source is not a scan.

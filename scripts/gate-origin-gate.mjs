@@ -145,5 +145,54 @@ for (const f of files) {
 check('every declaration in the suite is a token the runner acts on', malformed.length === 0,
   malformed.join('\n    ') || 'server, server:NNNN, db, none — nothing else');
 
+// ── 5. THE SUITE MAY CLEAR ITS OWN CARRY-OVER, AND NOTHING ELSE ───────────────────────────────
+/**
+ * The runner deletes rate-limit rows this machine wrote against itself, once per run, so the tier
+ * counts stop depending on how recently somebody last ran. It deletes from a table that also holds
+ * REAL PEOPLE'S rows — seventeen of them the day this was written — so the two safety properties
+ * are proved here rather than read in the file.
+ *
+ * A destructive helper with a code-shaped safety claim and no gate is the shape the standing rule
+ * exists for: "this cannot reach anything else" expires the moment somebody edits the pattern.
+ */
+console.log('\n— the limiter reaper reaches this machine and nothing else —');
+const REAP = await import('./_reap-loopback-limits.mjs');
+
+check('a loopback key is matched', REAP.LOOPBACK_KEY.test('magic:ip:::1'));
+check('  …in all three spellings a local client produces',
+  ['magic:ip:::1', 'repauth:ip:127.0.0.1', 'pay:ip:::ffff:127.0.0.1'].every((k) => REAP.LOOPBACK_KEY.test(k)),
+  'a raw node socket, a Chromium one, and the plain v4 form');
+check('a REAL address is NOT matched',
+  ['magic:ip:83.104.131.111', 'magic:ip:31.94.9.53', 'pay:ip:2a00:23c7:1:1'].every((k) => !REAP.LOOPBACK_KEY.test(k)),
+  'these are live rows in that table; a prefix sweep would take every one of them');
+check('  …nor is an address that merely CONTAINS a loopback form',
+  !REAP.LOOPBACK_KEY.test('magic:ip:127.0.0.10') && !REAP.LOOPBACK_KEY.test('magic:ip:1.127.0.0.1.9'),
+  'anchored at the end, so 127.0.0.10 is a different machine and stays');
+check('  …nor a key with no address at all', !REAP.LOOPBACK_KEY.test('pay:link:abc') && !REAP.LOOPBACK_KEY.test('email:deadbeef'),
+  'only address-keyed rows can be attributed to this machine');
+
+check('a loopback ORIGIN is accepted', ['http://localhost:3010', 'http://127.0.0.1:3010'].every(REAP.isLoopbackOrigin));
+check('  …and a real one is REFUSED', !REAP.isLoopbackOrigin('https://greasedesk.com')
+  && !REAP.isLoopbackOrigin('https://staging.greasedesk.com'),
+  'GATE_BASE can point at staging, where these rows belong to real people');
+check('  …as is anything unparseable', !REAP.isLoopbackOrigin('') && !REAP.isLoopbackOrigin('not a url'),
+  'fails closed: an origin it cannot read is not one it may delete against');
+
+// AND THE DELETE ITSELF IS BY EXACT KEY. A pattern would make every clause above decoration.
+const reapSrc = readFileSync('scripts/_reap-loopback-limits.mjs', 'utf8');
+check('the delete is by exact equality, never a pattern',
+  /DELETE FROM "AuthRateLimit" WHERE "key" = \$1/.test(reapSrc) && !/LIKE|startsWith|startsWith:/.test(code(reapSrc)),
+  'the fixture-teardown rule, applied to somebody else’s rows: by the OWN identifier, never a shape');
+check('  …and the runner clears once, before the first gate',
+  /_reap-loopback-limits\.mjs/.test(runnerSrc)
+  // ANCHORED ON THE LINE THAT ACTUALLY RUNS A GATE. 'for (const g of plan)' appears THREE times —
+  // the first is the requirements scan, which happens before the reaper and made this clause fail
+  // against correct code. The run itself is the only ordering that matters.
+  && runnerSrc.indexOf('_reap-loopback-limits.mjs') < runnerSrc.indexOf('await run(g)'),
+  'never between gates: a gate asserting "the Nth request is refused" must still be able to');
+check('  …and says so in the summary, not only the header',
+  (runnerSrc.match(/reapLine/g) ?? []).length >= 3,
+  'a suite that quietly clears its own obstacles is the defect it was built to stop');
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);
