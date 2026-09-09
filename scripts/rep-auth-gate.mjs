@@ -200,10 +200,22 @@ try {
   const repApis = existsSync('pages/api/rep')
     ? readdirSync('pages/api/rep', { recursive: true }).filter((f) => /\.ts$/.test(String(f))).map((f) => `pages/api/rep/${f}`)
     : [];
-  const writes = repApis.filter((f) => /rep\.update|repUpdate/.test(code(src(f)))
-    && /email|bank_account_name|bank_sort_code|bank_account_number/.test(code(src(f))));
+  // ANCHORED AS A PROPERTY KEY, NOT A SUBSTRING. Bare /email/ also matches contact_email — the
+  // address a rep publishes ON THEIR INVOICE, which they absolutely may edit — so the first version
+  // of this flagged the profile route for doing exactly what it is for. The credential is the
+  // column literally named 'email', and the discriminator is the underscore in front of the other.
+  // Same trap as /RepVisit/ matching RepVisitAnswer; that is now nine instances in this suite.
+  const FORBIDDEN_KEYS = /(^|[^_\w])(email|bank_account_name|bank_sort_code|bank_account_number)\s*:/;
+  const writes = repApis.filter((f) => /rep\.update|repUpdate/.test(code(src(f))) && FORBIDDEN_KEYS.test(code(src(f))));
   check('no rep-facing route writes either', writes.length === 0, writes.join(', ') || `${repApis.length} rep routes, none writing the credential`);
   check('  …and the sweep really looked at something', repApis.length >= 1, `${repApis.length} routes under pages/api/rep`);
+  // THE SCAN BITES. A negative assertion passes on a blank page, and this one now excludes a
+  // legitimate near-miss — so both halves are proved on constructed sources rather than trusted.
+  const bites = (s) => /(^|[^_\w])(email|bank_account_name|bank_sort_code|bank_account_number)\s*:/.test(s);
+  check('  …and it FLAGS a route that would write the credential', bites('prisma.rep.update({ data: { email: x } })'));
+  check('  …while contact_email is not the credential', !bites('prisma.rep.update({ data: { contact_email: x } })'),
+    'the address on their invoice is theirs to change; the one they sign in with is not');
+  check('  …and a sort code is still caught', bites('data: { bank_sort_code: x }'));
 } catch (e) {
   check('run completed', false, describeError(e));
 } finally {

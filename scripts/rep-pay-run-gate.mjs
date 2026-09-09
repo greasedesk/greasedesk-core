@@ -24,7 +24,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError, serverReady, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
-const { readFileSync, readdirSync, statSync } = await import('node:fs');
+const { readFileSync, readdirSync, statSync, existsSync } = await import('node:fs');
 const { join } = await import('node:path');
 const { randomUUID } = await import('node:crypto');
 const R = await import('../lib/rep-pay-run.ts');
@@ -259,8 +259,22 @@ try {
   check('both respect the region scope', /operatorTenantScope/.test(apiSrc),
     'an operator with no regions matches nothing, and still does here');
   check('the screen is gated by the same minRole the nav filters on', /erMinRole\('\/superadmin\/pay-runs'\)/.test(page));
-  check('nothing rep-facing was added', !readdirSync('pages/rep').some((f) => /pay|run|commission/i.test(f)),
-    'no rep-facing surface in this slice');
+  // ── THIS CLAUSE IS SCOPED, NOT DELETED ───────────────────────────────────────────────────────
+  // It used to read "nothing rep-facing was added", which was the pay-run slice's own constraint:
+  // that slice built the RELEASE screen and was explicitly forbidden a rep surface, so the check
+  // pinned the boundary while it mattered. On 2026-09-09 the rep portal was commissioned and
+  // /rep/runs/[id] exists by instruction — the clause had done its job and was now asserting the
+  // absence of something somebody had since asked for.
+  //
+  // What is STILL true, and what this now pins: the release decision is operator-only. A rep may
+  // read their own closed runs; nothing on their side may hold, release, or close anything.
+  const repSurfaces = readdirSync('pages/rep', { recursive: true }).map(String)
+    .concat(existsSync('pages/api/rep') ? readdirSync('pages/api/rep', { recursive: true }).map((f) => `api/${f}`) : []);
+  const strip = (t) => t.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const releasers = repSurfaces.filter((f) => /\.tsx?$/.test(f))
+    .filter((f) => /releaseEntry|holdEntry|closeRun|refuseRelease|refuseHold/.test(strip(readFileSync(`pages/${f.startsWith('api/') ? `api/rep/${f.slice(4)}` : `rep/${f}`}`, 'utf8'))));
+  check('no rep-facing surface releases, holds or closes anything', releasers.length === 0,
+    releasers.join(', ') || `${repSurfaces.length} rep files, none touching the release path`);
   check('the garage-invoice re-issue path is untouched',
     !/invoice-void|canEditInvoice|assignInvoiceNumber/.test(libSrc),
     'a different document class; it must not inherit that rule and this must not inherit its');
