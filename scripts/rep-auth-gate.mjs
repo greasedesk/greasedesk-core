@@ -180,6 +180,29 @@ try {
   check('  …and the portal it lands on runs without throwing either', pageErrors.length === 0,
     pageErrors[0] ?? 'still no uncaught error after the navigation');
 
+  // ── AND THE BARE DOMAIN, WITH A SESSION, IS THE PORTAL ───────────────────────────────────────
+  // The other half of the front door. rep-host-gate proves a visitor with no session lands on the
+  // sign-in page; this proves the same URL serves the portal once they have one. Both halves,
+  // because a root that always showed the sign-in page would pass the other clause and be just as
+  // wrong — it would send a signed-in rep back to sign in again.
+  await page.goto(`${REP}/`, { waitUntil: 'domcontentloaded' });
+  check('the bare root serves the PORTAL to a signed-in rep',
+    await page.locator('[data-testid="rep-home"]').count() === 1,
+    `${page.url()} — the session decides which page the root serves, not whether it serves one`);
+  check('  …without bouncing them to sign in again', !/\/rep\/login/.test(page.url()), page.url());
+
+  // ── AND ITS 404 OFFERS A DOOR A REP CAN USE ──────────────────────────────────────────────────
+  // The destination is chosen in a useEffect from window.location, so only a browser runs it — the
+  // served HTML carries the default. Driven here, with a session, because after the sign-in
+  // redirect a SIGNED-OUT visitor can no longer reach a 404 on this host at all.
+  await page.goto(`${REP}/rep/runs/does-not-exist`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="not-found"]');
+  const doorHref = await page.locator('[data-testid="not-found"] a').first().getAttribute('href');
+  check('the 404 sends a rep to the rep portal, not a tenant dashboard', doorHref === '/',
+    `${doorHref} — "Back to dashboard" is a dead end on a host where every tenant route 404s`);
+  check('  …and offers no tenant support link', await page.locator('[data-testid="not-found"] a[href="/admin/support"]').count() === 0,
+    'it does not exist on this host — middleware 404s it — so offering it is a second dead end');
+
   const cookies = await ctx.cookies();
   const session = cookies.find((c) => /next-auth\.session-token/.test(c.name));
   check('  …and the session cookie is host-only to the rep host', !!session && session.domain.replace(/^\./, '') === 'reps.greasedesk.com',

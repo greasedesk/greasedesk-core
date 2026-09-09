@@ -55,13 +55,20 @@ const ask = (host, path) => new Promise((resolve, reject) => {
   }, (res) => {
     let body = '';
     res.setEncoding('utf8');
-    res.on('data', (c) => { if (body.length < 2048) body += c; });
-    res.on('end', () => resolve({ status: res.statusCode, body }));
+    res.on('data', (c) => { if (body.length < 4096) body += c; });
+    res.on('end', () => resolve({ status: res.statusCode, body, location: res.headers.location ?? null }));
   });
   req.on('timeout', () => { req.destroy(); reject(new Error(`timeout on ${host}${path}`)); });
   req.on('error', reject);
   req.end();
 });
+
+/** Follow up to two redirects, so a clause can assert where a visitor ACTUALLY lands. */
+const askFollow = async (host, path) => {
+  let r = await ask(host, path), hops = 0;
+  while (r.status >= 300 && r.status < 400 && r.location && hops++ < 2) r = await ask(host, r.location);
+  return r;
+};
 
 /** The middleware refused: its own literal body, which no page produces. */
 const blocked = (r) => r.status === 404 && r.body.trim() === 'Not Found';
@@ -84,6 +91,16 @@ try {
   const root = await ask(REP_HOST, '/');
   check('the root answers exactly as /rep does', reached(root) && root.status === repOnRep.status && root.body === repOnRep.body,
     `/ → ${root.status}, /rep → ${repOnRep.status} — rewritten, the way er. rewrites to /superadmin`);
+  // ── THE BARE DOMAIN IS WHAT A REP WILL TYPE ──────────────────────────────────────────────────
+  // It rewrote to /rep unconditionally, and /rep refused anyone without a session — so the front
+  // door 404'd for exactly the person it exists for. The session decides WHICH page the root
+  // serves, never WHETHER it serves one.
+  const landed = await askFollow(REP_HOST, '/');
+  check('the bare root does NOT 404 a visitor with no session', landed.status === 200,
+    `${landed.status} — a rep typing reps.greasedesk.com is the commonest way in, not an edge case`);
+  check('  …and lands them on the sign-in page', /data-testid="rep-request"/.test(landed.body),
+    'the link-request form, positively identified — an absence check would pass on a blank page');
+
   check('an operator or rep can still sign in there', (await ask(REP_HOST, '/api/auth/csrf')).status === 200,
     'the auth endpoints are shared by all three hosts, or nobody reaches any of them');
   check('the brand asset resolves', (await ask(REP_HOST, '/greasedesk-Logo.png')).status === 200,
@@ -104,6 +121,30 @@ try {
   check('  …and its api too', blocked(await ask(APEX.hostname, '/api/rep/whoami')));
   check('/rep 404s on er.', blocked(await ask(ER_HOST, '/rep')),
     'already true — er. 404s everything outside the Engine Room — and asserted so it stays true');
+
+  // ── 3b. THE 404 SPEAKS FOR THE HOST IT IS ON ─────────────────────────────────────────────────
+  // One page serves three hosts with three audiences. Its copy was written for a tenant user who
+  // mistyped a URL inside the app — "You're still signed in, nothing's wrong with your session" —
+  // which on the rep host tells a stranger with no account that their session is fine. The page
+  // holds no session data and never did; it was a guess that happened to be right for one audience.
+  console.log('\n— and the 404 claims nothing it cannot know —');
+  // DRIVEN WHERE A SIGNED-OUT VISITOR CAN ACTUALLY REACH IT, which is not the rep host.
+  //
+  // The first version of this asked reps.greasedesk.com/rep/runs/<bad id> — and once the sign-in
+  // redirect above landed, that path 307s to the login page and never renders a 404 at all. A
+  // signed-out visitor CANNOT reach this page on the rep host any more, so a clause aimed there
+  // was aimed at a state nothing can be in: green forever, proving nothing.
+  //
+  // The apex is where it bites hardest anyway, and always did: greasedesk.com/<typo> renders this
+  // page to a stranger on the PUBLIC SITE and told them their session was fine. Biggest audience,
+  // least likely to have a session, and the claim was wrong for every one of them.
+  const stranger = await ask(APEX.hostname, '/no-such-page');
+  check('a signed-out stranger on the apex gets the application 404',
+    /data-testid="not-found"/.test(stranger.body),
+    `${stranger.status} — asserted POSITIVELY first, because the claim check below is a negative and a negative passes on a blank page`);
+  check('  …and it makes no claim about their session',
+    !/still signed in|nothing.s wrong with your session/i.test(stranger.body),
+    'the page holds no session data and never did — it was a guess that was right for one audience of three');
 
   // ── 4. THE SUBSTRING TRAP ─────────────────────────────────────────────────────────────────────
   console.log('\n— a path that merely starts the same way is not the rep portal —');

@@ -87,7 +87,7 @@ export default function RepHome({ name, runs, profileMissing }: Props) {
 
 export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   const gate = await requireRepPage(ctx);
-  if (!gate.ok) return { notFound: true };
+  if (!gate.ok) return gate.result;   // redirect to sign-in, or 404 for a wrong actor class
 
   const rep = await prisma.rep.findUnique({ where: { id: gate.rep.repId } });
   if (!rep) return { notFound: true };
