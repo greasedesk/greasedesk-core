@@ -16,7 +16,7 @@ import { execSync } from 'child_process';
 import { rmSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 
 // Absolute temp dir at the invocation cwd (repo root) so the compile target and the dynamic import
 // agree regardless of where this script file sits.
@@ -29,7 +29,7 @@ const prisma = await gatePrisma();
 const PASS = [], FAIL = [];
 const chk = (n, c, x = '') => { (c ? PASS : FAIL).push(n); console.log((c ? 'PASS ' : 'FAIL ') + n + (x ? `  ${x}` : '')); };
 const D = (s) => new Date(s + (s.length === 10 ? 'T00:00:00.000Z' : ''));
-const created = { groups: [], countries: new Set(), runs: [] };
+const created = { groups: [], countries: new Set(), runs: [], reps: [], invoices: [] };
 async function mkTenant(country, activation) { const g = await prisma.group.create({ data: { group_name: 'CX ' + country, billing_email: `cx-${randomUUID()}@gd.invalid`, tax_country_code: country, trial_ends_at: activation ? D(activation) : null } }); created.groups.push(g.id); created.countries.add(country); return g.id; }
 const mkRate = (country, currency, tier, eff, amt) => prisma.commissionRate.create({ data: { country_code: country, currency, tier, effective_from: D(eff), amount_pennies: amt } });
 const mkAttr = (gid, pt, pid, bp, eff, ended) => prisma.tenantAttribution.create({ data: { group_id: gid, party_type: pt, party_id: pid, role: pt === 'rep' ? 'referrer' : 'regional', share_bp: bp, effective_from: D(eff), ended_at: ended ? D(ended) : null, source: 'manual' } });
@@ -86,8 +86,29 @@ try {
       status: 'closed', closed_at: D('2025-04-26'), closed_by: 'fixed-clock', signoff: 'fixture run',
       snapshot_parties: 1, snapshot_line_count: 1, snapshot_amount_pennies: 3500 }, select: { id: true } });
     created.runs.push(runY.id);
+    // …AND PAID NOW MEANS BILLED-THEN-PAID. CommissionEntry_invoiced_chk refuses a paid line with no
+    // rep_invoice_id, because the only route to paid is a rep's invoice: released → billed onto one
+    // → paid when we settle it. This fixture used to jump straight to 'paid', which under the model
+    // the constraint describes never happens. Second time this fixture has been extended to walk a
+    // state it was asserting from the outside — the first was release_chk, above.
+    //
+    // The invoice needs a real Rep (RESTRICT) and real bytes (RepInvoice_pdf_chk refuses an empty
+    // buffer with a plausible hash), so it gets both rather than the minimum that would insert.
+    const repY = await prisma.rep.create({ data: { email: `fixed-clock-${randomUUID()}@gd.invalid`,
+      name: 'Fixed Clock Rep', ref_code: `FCG${randomUUID().slice(0, 8)}` }, select: { id: true } });
+    created.reps.push(repY.id);
+    const pdfY = Buffer.from('%PDF-1.7 fixture');
+    const invY = await prisma.repInvoice.create({ data: {
+      rep_id: repY.id, pay_run_id: runY.id, rep_invoice_number: '0001', status: 'paid',
+      invoice_date: D('2025-04-26'), currency: 'ZP', subtotal_pennies: 3500, vat_applied: false,
+      total_pennies: 3500, rep_trading_name_snapshot: 'Fixed Clock Rep', rep_address_snapshot: 'nowhere',
+      company_name_snapshot: 'GreaseDesk Ltd', company_address_snapshot: 'Tipton', company_number_snapshot: '17312623',
+      pdf: pdfY, pdf_sha256: createHash('sha256').update(pdfY).digest('hex'), pdf_bytes: pdfY.length,
+      reviewed_at: D('2025-04-27'), reviewed_by: 'fixed-clock', paid_at: D('2025-04-28'),
+    }, select: { id: true } });
+    created.invoices.push(invY.id);
     await prisma.commissionEntry.update({ where: { id: accY.id }, data: { status: 'paid', pay_run_id: runY.id,
-      released_at: D('2025-04-26'), released_by: 'fixed-clock' } });
+      released_at: D('2025-04-26'), released_by: 'fixed-clock', rep_invoice_id: invY.id } });
     await E.clawbackRefund(prisma, g, { ref: 'rY', payment_ref: 'pY', amount_pennies: 10000, refunded_at: D('2025-05-05') }, pay('pY', '2025-04-01'));
     const accY2 = await prisma.commissionEntry.findUnique({ where: { id: accY.id } }); const clawY = (await entriesFor(g, { source_ref: 'rY', kind: 'clawback' }))[0];
     chk('C4b refund post-payout: accrual stays paid (untouched), clawback pending debt -3500', accY2.status === 'paid' && clawY.status === 'pending' && clawY.amount_pennies === -3500);
@@ -155,6 +176,10 @@ try {
   for (const g of created.groups) { try { await prisma.group.delete({ where: { id: g } }); } catch {} }
   // AFTER the entries: the pay-run FK is RESTRICT, deliberately — deleting a run that holds released
   // lines would delete the record of money somebody approved.
+  // ORDER MATTERS: the entry referencing the invoice is deleted above with its group; the invoice
+  // RESTRICTs the run and the rep, so it goes before both. Each by its OWN id, never by a name.
+  for (const id of created.invoices) { try { await prisma.repInvoice.delete({ where: { id } }); } catch (e) { console.log('teardown invoice:', String(e).slice(0, 90)); } }
   for (const id of created.runs) { try { await prisma.repPayRun.delete({ where: { id } }); } catch (e) { console.log('teardown run:', String(e).slice(0, 90)); } }
+  for (const id of created.reps) { try { await prisma.rep.delete({ where: { id } }); } catch (e) { console.log('teardown rep:', String(e).slice(0, 90)); } }
   await prisma.$disconnect(); try { rmSync(TMP, { recursive: true, force: true }); } catch {}
 }

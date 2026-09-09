@@ -102,13 +102,20 @@ try {
   const rep = /^model Rep \{([\s\S]*?)^\}/m.exec(schema)?.[1] ?? '';
   check('Rep carries both columns, nullable', /phone\s+String\?/.test(rep) && /phone_e164\s+String\?/.test(rep),
     'a rep who has not published a number is an ordinary state, not a missing field');
-  // THE INVITE COLUMNS Operator has and Rep lacked. THREE, not four — INVITE_PENDING is a sentinel
-  // in passwordHash, which Rep already has. Free to add while zero reps exist; the alternative once
-  // one does is somebody typing a colleague's password into a form.
-  const inviteCols = ['invite_token_hash', 'invite_token_expires', 'invite_token_used_at']
-    .filter((c) => new RegExp(`${c}\\s+\\w+\\?`).test(rep));
-  check('Rep can be invited rather than issued a password', inviteCols.length === 3,
-    `${inviteCols.join(', ') || 'none'} — columns only; the flow is not built`);
+  // ── THE INVITE COLUMNS ARE GONE, AND THIS CLAUSE IS INVERTED RATHER THAN DELETED ─────────────
+  // It used to assert Rep HAD three set-password invite columns, on the reasoning that the
+  // alternative once a real rep existed was somebody typing a colleague's password into a form.
+  // On 2026-09-09 the answer became better than either: a rep has no password at all. They sign in
+  // with a single-use magic link to the address that IS the credential, so there is nothing for an
+  // invite to set. passwordHash went with them — a permanent INVITE_PENDING sentinel would have
+  // been a check outliving the flow it guarded.
+  //
+  // Inverted, not removed: a deleted clause leaves nothing to stop the columns coming back, and the
+  // next person to notice Operator has them and Rep does not needs the reason written down.
+  const retracted = ['passwordHash', 'invite_token_hash', 'invite_token_expires', 'invite_token_used_at']
+    .filter((c) => new RegExp(`^\\s*${c}\\s+\\w+`, 'm').test(rep));
+  check('Rep carries no password and nothing to set one', retracted.length === 0,
+    retracted.join(', ') || 'no password, no invite — the magic link is the whole credential');
 
   // ── 5. THE THREE STATES ──────────────────────────────────────────────────────────────────────
   console.log('\n— who a garage is told to call —');
@@ -116,7 +123,7 @@ try {
   check('no attribution reads as no rep', before === null, JSON.stringify(before));
 
   const repRow = await prisma.rep.create({
-    data: { email: REP_EMAIL, passwordHash: 'x', name: 'Gate Rep',
+    data: { email: REP_EMAIL, name: 'Gate Rep',
       ref_code: 'ZZSUPPORTGATE', country_code: 'GB', phone: RAW_PHONE, phone_e164: '447700900123' },
     select: { id: true },
   });

@@ -97,7 +97,7 @@ try {
   // ── 4. WHAT A PAYMENT RESOLVES, AT AN EXPLICIT INSTANT ───────────────────────────────────────
   console.log('\n— and the same amount whether they joined last month or two years ago —');
   const rep = await prisma.rep.create({
-    data: { email: 'zz-flat-gate@greasedesk.test', passwordHash: 'x', name: 'Flat Gate',
+    data: { email: 'zz-flat-gate@greasedesk.test', name: 'Flat Gate',
       ref_code: 'ZZFLATGATE', country_code: 'GB' }, select: { id: true },
   });
   const attr = await prisma.tenantAttribution.create({

@@ -133,8 +133,24 @@ try {
   check('the run’s own period is not', R.isArrears('2026-06', '2026-06') === false);
   check('a later one is not either', R.isArrears('2026-07', '2026-06') === false,
     'nothing from the future can be in arrears');
-  check('no column stores it', !/is_arrears|arrears\s+Boolean/.test(readFileSync('prisma/schema.prisma', 'utf8')),
+  // ── SCOPED TO THE LIVE PATH, WHICH IS WHAT THE RULE IS ABOUT ─────────────────────────────────
+  // This scanned the WHOLE schema for the identifier and went red on 2026-09-09 when RepInvoiceLine
+  // arrived carrying is_arrears — correctly, by its own terms, and wrongly about the design. The
+  // rule is that arrears must not go STALE against the run it is shown in, which is a statement
+  // about live rows: CommissionEntry moves, RepPayRun moves, so deriving is the only way the two
+  // can never disagree. A SUBMITTED invoice line is the opposite case — it is frozen by
+  // construction, and re-deriving anything on it would be rebuilding somebody else's filed
+  // document. So the ban is scoped to the two models it is about, and the exception is asserted
+  // rather than left as a hole the scan happens not to look in.
+  const schemaSrc = readFileSync('prisma/schema.prisma', 'utf8');
+  const modelBody = (n) => (new RegExp(`^model ${n} \\{([\\s\\S]*?)^\\}`, 'm').exec(schemaSrc) ?? [])[1] ?? '';
+  check('no column on the LIVE path stores it',
+    !/is_arrears|arrears\s+Boolean/.test(modelBody('CommissionEntry') + modelBody('RepPayRun')),
     'derived on every read, so it cannot go stale against the run it is shown in');
+  // THE EXCEPTION, ASSERTED. A frozen line MUST carry it: derive it at render time and a submitted
+  // document changes its own words when the run it belonged to is no longer the current one.
+  check('  …while the frozen invoice line MUST', /is_arrears\s+Boolean/.test(modelBody('RepInvoiceLine')),
+    'a submitted invoice is the rep\'s accounting record — nothing on it is re-derived, ever');
 
   // ── 6. AGAINST THE DATABASE ──────────────────────────────────────────────────────────────────
   console.log('\n— and now for real —');

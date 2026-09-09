@@ -26,6 +26,31 @@ datasource db {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// NAMED FACT — A CAUGHT CONSTRAINT VIOLATION STILL POISONS ITS TRANSACTION
+// ───────────────────────────────────────────────────────────────────────────────
+// Postgres aborts the WHOLE transaction on any constraint violation. Catching the error in
+// application code does not undo that: every subsequent statement on the same connection fails
+// with 25P02, "current transaction is aborted, commands ignored until end of transaction block".
+// The catch that looks like it handled the failure is itself the failure.
+//
+// This has now cost time in three separate slices, which is why it is written down here rather
+// than in the third file to meet it:
+//   1. lib/commission.ts:32 — a caught P2002 on the idempotency key, inside the accrual writer.
+//   2. lib/rep-pay-run — the release concurrency work, which is why releaseEntry uses a conditional
+//      updateMany on the pre-state and an affected-row count, and NOT a unique index plus a catch.
+//   3. 2026-09-09 — the harness verifying the rep-portal migration, which caught its first refusal
+//      and then reported every later probe as a failure of something else entirely.
+//
+// THE REMEDY, in the two shapes it takes:
+//   • WRITING: do not rely on catching. Make the constraint unreachable with a conditional update
+//     on the pre-state and check the affected-row count — see lib/rep-pay-run::releaseEntry and
+//     the RepMagicLink spend in this schema. No read, no window, nothing to catch.
+//   • DELIBERATELY PROVOKING one (a gate proving a CHECK bites): wrap each attempt in its own
+//     SAVEPOINT and ROLLBACK TO SAVEPOINT on failure. The transaction survives and the next probe
+//     starts clean. Without it, ONE refusal makes every later assertion in the run meaningless —
+//     and they fail, so they look like real findings.
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Enums
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -838,8 +863,10 @@ model Operator {
 
 model Rep {
   id             String   @id @default(uuid())
+  /// THE CREDENTIAL ITSELF. There is no password: a rep signs in with a single-use magic link sent
+  /// to this address, so whoever controls the mailbox controls the account. That is why a rep can
+  /// NEVER change it — the change is operator-only, in the Engine Room, and audited.
   email          String   @unique
-  passwordHash   String
   name           String
   ref_code       String   @unique // the `?ref=<code>` marketing token that attributes a signup
   country_code   String   @default("GB")
@@ -854,21 +881,115 @@ model Rep {
   /// be resolved to E.164 — honest-null, in step with Customer.phone_e164: an unresolvable number
   /// is still shown to a human, it just cannot be made into a link.
   phone_e164     String?
-  payout_details Json?
-  /// Set-password invite, mirroring Operator and the tenant User: the raw token is emailed and only
-  /// its HASH is stored, single-use, with an expiry. THREE columns, not four — a rep awaiting one is
-  /// marked by the INVITE_PENDING sentinel in passwordHash, which this model already has.
-  ///
-  /// NULL on all three = no invite is outstanding: either the rep set their password, or none was
-  /// ever issued. Added while zero reps exist, because the alternative once one does is somebody
-  /// typing a colleague's password into a form. THE FLOW IS NOT BUILT — these are the columns it
-  /// will need, and nothing writes them yet.
-  invite_token_hash    String? // NULL = no invite outstanding: set, or never issued
-  invite_token_expires DateTime? // NULL whenever the hash is — written and cleared as one fact
-  invite_token_used_at DateTime? // NULL until accepted; set once, which is what makes it single-use
+  // ── THE PROFILE. Captured once, and it GATES THE FIRST INVOICE — except the UTR. ─────────────
+  // Every column here is nullable and NULL MEANS "NOT YET GIVEN". That is the honest state for a
+  // rep an operator created five minutes ago, and it is what makes "profile incomplete" DERIVABLE
+  // rather than tracked by a second boolean somebody forgets to clear.
+  /// The rep's full legal trading name, which heads their invoice. NULL = not yet given.
+  trading_name     String?
+  /// NULL = not yet given. The address country is country_code above, not repeated here.
+  address_line1    String?
+  address_line2    String? // NULL = not given, and for most addresses that is simply true
+  address_locality String? // NULL = not yet given
+  address_region   String? // NULL = not yet given
+  address_postcode String? // NULL = not yet given
+  /// THE ADDRESS THE REP PUBLISHES ON THEIR INVOICE, and deliberately not the login 'email' above.
+  /// That address is the whole credential now that passwords are gone, and printing it on a document is
+  /// publishing the credential — the exact mistake support-route-gate already catches one surface
+  /// over, where a mailto: to Rep.email shipped on a garage's support card.
+  /// NULL = none published; the invoice omits the line rather than printing a placeholder.
+  contact_email    String?
+
+  // ── VAT: THREE STATES, BECAUSE "NOT ASKED" IS NOT "NO" ────────────────────────────────────────
+  /// NULL = the rep has not answered, and the first invoice is REFUSED until they do.
+  /// false = answered, not registered — and then the generator must REFUSE to add VAT, not merely
+  /// leave it off. true = registered, and the number and effective date below are both mandatory.
+  /// A two-state boolean would make an unanswered profile indistinguishable from a genuine "no",
+  /// which is the difference between refusing to invoice and issuing a wrong one.
+  /// Rep_vat_chk holds the three together and refuses every other combination: null with two nulls,
+  /// false with two nulls, or true with both a number and a date. Nothing else is a valid row.
+  vat_registered     Boolean?
+  /// NULL = not registered, or not yet answered. Never blank.
+  vat_number         String?
+  /// WHEN REGISTRATION TOOK EFFECT. NULL = not registered, or not yet answered.
+  /// This is what makes a rep who crossed the threshold mid-year render differently either side of
+  /// the date: an invoice dated BEFORE it carries no VAT even though the rep is registered today.
+  /// Without it, registering would retrospectively add VAT to periods that were never VATable.
+  vat_effective_from DateTime?
+
+  /// OPTIONAL, AND IT NEVER GATES ANYTHING. NULL = not given, permanently acceptable: a UTR is not
+  /// an invoice requirement, and blocking a submission on one would invent a rule HMRC does not
+  /// have. Collected because it is useful to hold, and for no other reason.
+  utr String?
+
+  // ── BANK DETAILS: named columns, OPERATOR-ONLY, and a rep may never change them. ─────────────
+  // Replaces payout_details Json?, which had no writer and one reader (a comment). A field with a
+  // refusal rule and an audit trail cannot live in an untyped blob: "who changed the sort code" is
+  // unanswerable against Json, and every read would need a shape check the type does not give.
+  /// NULL on all three = we hold no bank details for this rep, and every surface renders that as
+  /// MISSING — never as a blank field that reads as filled in, and never as a zeroed account.
+  /// Rep_bank_chk makes it all three or none: a sort code with no account number cannot be sent
+  /// money, so a partial set is not a lesser state of "has bank details", it is a row that looks
+  /// complete to a screen and fails at the bank.
+  /// NULL here means NULL on all three — the constraint above is what makes that true.
+  bank_account_name   String?
+  bank_sort_code      String? // NULL with the other two — see Rep_bank_chk above
+  bank_account_number String? // NULL with the other two — see Rep_bank_chk above
+
   status         String   @default("active") // 'active' | 'suspended'
   created_at     DateTime @default(now())
   updated_at     DateTime @updatedAt
+
+  magic_links RepMagicLink[]
+  invoices    RepInvoice[]
+}
+
+/**
+ * THE REP'S CREDENTIAL, MINTED ONE SIGN-IN AT A TIME.
+ *
+ * Its own model, not a widening of CustomerMagicLink: that one's header commits IN WRITING to being
+ * multi-use ("a customer re-opening the same email must still work"), and its group_id and
+ * job_card_id are NOT NULL. A rep belongs to no garage and no job card, and this link must burn.
+ *
+ * SINGLE USE IS THE CONDITIONAL UPDATE, not an index:
+ *
+ *     UPDATE "RepMagicLink" SET consumed_at = now()
+ *      WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+ *
+ * accepted only on affected-row count 1. Two concurrent replays both reach the UPDATE; the second
+ * blocks on the row lock and, re-evaluating its WHERE after the first commits, matches nothing.
+ * There is no window between a read and a write because there is no read. The code_step unique
+ * index was the other candidate and is the wrong shape here — that index constrains a STEP NUMBER
+ * that repeats across rows, while this row IS the credential and is already unique by primary key.
+ */
+model RepMagicLink {
+  id       String @id @default(uuid())
+  rep_id   String
+  /// ONE PURPOSE, NAMED — the narrow-grant discipline from lib/magic-link. A link minted to sign in
+  /// can never be spent on anything else, because every lookup is scoped to it.
+  /// RepMagicLink_purpose_chk holds the set: 'sign_in', and nothing else yet.
+  purpose  String
+  /// sha256(raw). The RAW token exists only in the emailed URL, so a database reader gets nothing.
+  /// RepMagicLink_token_shape_chk refuses anything that is not 64 hex characters.
+  token_hash String @unique
+  /// WHERE IT WENT, verbatim, at the moment of sending — not derived from Rep.email on read. An
+  /// operator can change that address, and the audit answer "who could have signed in as this rep?"
+  /// must not silently rewrite itself when they do.
+  sent_to    String
+  expires_at DateTime
+  /// NULL = UNSPENT. This column is the entire single-use mechanism — see the header.
+  consumed_at DateTime?
+  /// NULL = live. The explicit kill switch, for a link sent to an address that turned out wrong.
+  revoked_at  DateTime?
+  /// WHY it was killed, as a code from lib/rep-magic-link. NULL = not revoked; RepMagicLink_revoked_chk
+  /// pairs it with revoked_at exactly, so a reason can never outlive the revocation it explains.
+  revoked_reason String?
+  created_at DateTime @default(now())
+
+  rep Rep @relation(fields: [rep_id], references: [id], onDelete: Cascade)
+
+  @@index([rep_id])
+  @@index([expires_at])
 }
 
 // ── COMMISSION ENGINE (layer 2). The money spine: ONE calculation (lib/commission) every surface
@@ -1034,6 +1155,24 @@ model CommissionEntry {
   /// never returns to the one it missed.
   pay_run_id     String?
   pay_run        RepPayRun? @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
+  /// THE REP INVOICE THIS LINE WAS BILLED ON.
+  ///
+  /// NULL = released but not yet billed — the ordinary state of every line waiting for a rep to
+  /// invoice for it. Non-null = spoken for, and a released line reaches EXACTLY ONE invoice, ever.
+  ///
+  /// The write that sets it is a CONDITIONAL UPDATE on the pre-state, count-checked:
+  ///     WHERE id = ANY($1) AND status = 'released' AND rep_invoice_id IS NULL
+  /// accepted only when the affected-row count equals the number of lines claimed. NOT a unique
+  /// index with a caught P2002 — see the named fact at the top of this file for why the catch is
+  /// itself the failure.
+  ///
+  /// CommissionEntry_invoiced_chk pairs it with status: billed and paid carry one, nothing else
+  /// does, and 'void' is exempt exactly as it is in the release check — a line voided after being
+  /// billed keeps its invoice, because removing it would alter a submitted document. So null here
+  /// is never "we lost track of it": it is exactly "no invoice has claimed this line".
+  rep_invoice_id String?
+  rep_invoice    RepInvoice? @relation(fields: [rep_invoice_id], references: [id], onDelete: Restrict)
+  invoice_lines  RepInvoiceLine[]
   notes          CommissionEntryNote[]
   created_at     DateTime @default(now())
 
@@ -1042,6 +1181,7 @@ model CommissionEntry {
   @@index([party_id, status])
   @@index([payment_ref])
   @@index([pay_run_id])
+  @@index([rep_invoice_id])
 }
 
 /**
@@ -1081,9 +1221,155 @@ model RepPayRun {
   snapshot_line_count     Int?
   snapshot_amount_pennies Int?
 
-  entries CommissionEntry[]
+  entries      CommissionEntry[]
+  rep_invoices RepInvoice[]
 
   @@index([status, scheduled_on])
+}
+
+/**
+ * THE REP'S INVOICE TO US — their document, their number, FROZEN ON SUBMISSION.
+ *
+ * IT DOES NOT INHERIT THE GARAGE-INVOICE BEHAVIOUR, and that difference is the reason the bytes are
+ * stored. A garage invoice is GreaseDesk's own: it re-renders from frozen InvoiceLine rows every
+ * time it is opened, which is safe because we own it and the freeze is in the data. This one is
+ * somebody else's accounting record, and rebuilding it from data would be forging another
+ * business's books. So the PDF ITSELF is the artefact, stored and hashed, and the renderer is never
+ * called for it again — refuseIfSubmitted, one predicate, the canEditInvoice shape.
+ *
+ * A wrong invoice is REJECTED and resubmitted under a NEW number, or credit-noted. Never edited.
+ */
+model RepInvoice {
+  id         String @id @default(uuid())
+  rep_id     String
+  pay_run_id String
+  /// THE REP'S OWN NUMBER, FROM THE REP'S OWN SERIES — not ours, and NOT globally unique.
+  /// Uniqueness is (rep_id, rep_invoice_number): two reps may both issue their 001, because they
+  /// are two businesses with two sales ledgers and neither has heard of the other. A global unique
+  /// would be us imposing our numbering on somebody else's books, and would break on the second rep
+  /// to sign up. They type it; we prefill their last plus one and they may overwrite it.
+  rep_invoice_number String
+  /// RepInvoice_status_chk: 'pending_review' | 'approved' | 'paid' | 'rejected' | 'cancelled'.
+  /// RepInvoice_lifecycle_chk names every column each status may and may not carry.
+  status String
+
+  /// Defaults to the moment of submission and is FLOORED at the run's close date: a rep cannot date
+  /// an invoice before the money it bills for was signed off.
+  invoice_date DateTime
+  /// THE VAT TAX POINT. NULL = no VAT on this document, so there is no tax point to state — true of
+  /// an unregistered rep, and equally of a registered rep invoicing for a period before their
+  /// registration took effect. Paired with vat_applied by RepInvoice_vat_chk.
+  tax_point DateTime?
+
+  currency         String
+  subtotal_pennies Int
+  /// WHETHER VAT IS ON THIS DOCUMENT — deliberately NOT named vat_registered_at_issue like the
+  /// garage invoice's column, because it does not mean the same thing. A registered rep invoicing
+  /// for a pre-registration period is registered AND carries no VAT, so a column named for their
+  /// registration status would read false while the rep is plainly registered. This names what the
+  /// document does.
+  vat_applied Boolean
+  /// NULL = no VAT applied. Basis points, so 20% is 2000 and a future 17.5% needs no migration.
+  vat_rate_bp Int?
+  /// NULL = no VAT applied. Never 0: zero-rated VAT and no VAT are different documents.
+  vat_pennies Int?
+  total_pennies Int
+
+  // ── THE ISSUER, FROZEN — the rep's details AS THEY WERE at submission. Read from these, never
+  // from Rep: an operator correcting an address next month must not change what a filed document
+  // says it said.
+  rep_trading_name_snapshot String
+  rep_address_snapshot      String
+  /// NULL = the rep published no contact address at submission, and the document omits the line.
+  rep_contact_snapshot      String?
+  /// NULL = no VAT applied, so no number is stated. Paired with vat_applied by RepInvoice_vat_chk,
+  /// which is what makes "the generator REFUSES VAT" structural rather than a rule in a renderer:
+  /// an unregistered rep's row cannot hold a VAT amount, rate, number or tax point at all.
+  rep_vat_number_snapshot   String?
+
+  // ── THE CUSTOMER, FROZEN. That is us. Snapshot rather than read from lib/company-info at render
+  // time, for the same reason: our registered office moving must not rewrite a filed document.
+  company_name_snapshot    String
+  company_address_snapshot String
+  company_number_snapshot  String
+
+  /// THE DOCUMENT ITSELF, as bytes, in this database — committed in the SAME TRANSACTION as the
+  /// lines and the status. R2 is best-effort by design (no credentials → null, feature dormant) and
+  /// its keys are tenant-partitioned; a rep has no tenant, and a submission that half-succeeded
+  /// because a bucket was unreachable is not a state this document may have.
+  pdf        Bytes
+  pdf_sha256 String
+  /// Not a second source of truth for the length — RepInvoice_pdf_chk asserts it EQUALS
+  /// octet_length(pdf), so a fixture that stores an empty buffer with a plausible hash is refused.
+  pdf_bytes  Int
+
+  /// Submission IS creation: there is no draft, so there is no submitted-by column separate from
+  /// rep_id. Two columns that must always be equal are a lie waiting to be written to.
+  submitted_at DateTime @default(now())
+  /// NULL = not reviewed yet. Set with reviewed_by, held together by RepInvoice_lifecycle_chk.
+  reviewed_at  DateTime?
+  /// The operator who reviewed it. NULL = not reviewed yet.
+  reviewed_by  String?
+  /// NULL unless rejected. A rejection with no words is a rep who cannot act on it.
+  rejected_reason String?
+  /// NULL = not paid. When WE paid the rep's invoice, not when anything cleared.
+  paid_at        DateTime?
+  /// Our own payment reference. NULL = not paid, or paid without one.
+  paid_reference String?
+  /// NULL = not cancelled.
+  cancelled_at     DateTime?
+  /// NULL unless cancelled. Same rule as rejection: a withdrawal with no reason is unreadable.
+  cancelled_reason String?
+  created_at DateTime @default(now())
+
+  rep     Rep       @relation(fields: [rep_id], references: [id], onDelete: Restrict)
+  pay_run RepPayRun @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
+  lines   RepInvoiceLine[]
+  entries CommissionEntry[]
+
+  // MAPPED, because the index already exists under this name: the migration is applied and its
+  // checksum recorded, so the schema bends to the database rather than the file being edited under
+  // it. RepInvoice_one_live_per_run_key — the partial unique beside it — cannot be expressed here
+  // at all, the same as RepPayRun_one_open_key one model up.
+  @@unique([rep_id, rep_invoice_number], map: "RepInvoice_rep_number_key")
+  @@index([rep_id, status])
+  @@index([pay_run_id])
+}
+
+/**
+ * THE LINES, SNAPSHOT ONTO THE DOCUMENT — the InvoiceLine shape, for the same reason.
+ *
+ * Every rendered value lives HERE, not behind entry_id: the amount, the period, the description and
+ * the garage's name are all frozen columns on this row. A clawback upstream next month, a renamed
+ * tenant, or a purged one does not alter a document already submitted. entry_id is kept so the two
+ * can be reconciled and is never read to render.
+ */
+model RepInvoiceLine {
+  id             String @id @default(uuid())
+  rep_invoice_id String
+  /// WHERE THIS LINE CAME FROM. Reconciliation only — never read to render.
+  entry_id       String
+  /// The entry's OWN period, which is what makes arrears legible: a line from an earlier month
+  /// appearing in this run's invoice is marked with the period it is actually for.
+  period         String
+  is_arrears     Boolean
+  /// The garage, as it was named at submission. A tenant can rename, and a purged tenant leaves no
+  /// row to read — and this document must still say what it said.
+  group_name_snapshot String
+  description    String
+  amount_pennies Int
+  position       Int      @default(0)
+  created_at     DateTime @default(now())
+
+  invoice RepInvoice      @relation(fields: [rep_invoice_id], references: [id], onDelete: Cascade)
+  entry   CommissionEntry @relation(fields: [entry_id], references: [id], onDelete: Restrict)
+
+  /// ONE LINE PER ENTRY PER DOCUMENT. The cross-document rule is CommissionEntry.rep_invoice_id;
+  /// this is the within-document one, and both are needed — an entry listed twice on ONE invoice is
+  /// double-billed just as surely as one listed on two.
+  @@unique([rep_invoice_id, entry_id], map: "RepInvoiceLine_invoice_entry_key")
+  @@index([rep_invoice_id])
+  @@index([entry_id])
 }
 
 /**
@@ -1310,7 +1596,17 @@ model SuperAdminAudit {
   // (tenant actions) or target_operator_id (operator-management actions) is set; the other is null.
   target_group_id      String? // now NULLABLE
   target_operator_id   String? // the operator acted upon
+  /// THE REP ACTED UPON — an operator changing the email that is now the whole credential, or the
+  /// bank details we pay into. Those two are why this column exists, and neither may be recorded as
+  /// target_operator_id, which means an OPERATOR was the subject.
+  ///
+  /// NULL = no rep was the subject. SuperAdminAudit_one_target_chk holds the three target columns
+  /// to AT MOST ONE between them — at most, not exactly, because sixteen of the 740 existing rows
+  /// carry no target at all and a stricter check would have failed on them at migration time.
+  target_rep_id        String?
   target_name_snapshot String // tenant name OR operator email — survives even if the row is later changed
+  /// The tenant's ref (GB-GD1967) at the time, beside the name. NULL = the target had no ref to
+  /// snapshot — an operator-target row, or a tenant recorded before refs existed. Never a lookup key.
   target_ref_snapshot  String?
   reason               String? // required on suspend; free-text where an action takes one
   detail               Json? // before/after (role/regions), purge counts, etc.
@@ -1319,6 +1615,7 @@ model SuperAdminAudit {
   @@index([created_at])
   @@index([target_group_id])
   @@index([target_operator_id])
+  @@index([target_rep_id])
 }
 
 // ── TWO-FACTOR (TOTP). Generic store keyed by (subject_type, subject_id) — deliberately NOT FK'd to

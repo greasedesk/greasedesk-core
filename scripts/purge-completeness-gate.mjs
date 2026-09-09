@@ -45,6 +45,7 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 const ALLOWED = {
   CommissionEntry: 'our accounts payable — what we owe a rep for the introduction. Holds the id of a group that no longer exists, exactly as SuperAdminAudit.target_group_id does.',
   TenantAttribution: 'the same books, one table over: which rep introduced whom, and on what share.',
+  RepInvoiceLine: 'a line on an invoice a REP issued to US, snapshotted onto it — the purchase record behind a payment we made. It is not ours to delete: deleting a line would alter a third party\u2019s filed document, and we owe HMRC the record of what we bought. The two-part test is met with one honest caveat: group_name_snapshot holds a garage\u2019s TRADING NAME, which for a sole trader can be a person\u2019s name. That is the business we transacted with, printed on an invoice we hold, and it stays for the same reason the invoice does — but it is the closest thing on this list to tenant data and worth re-reading if the test is ever tightened.',
   RepVisit: 'the SUPPORTING DOCUMENT for those books. Once the visit gate is wired it decides £30 against £12.50 and CommissionEntry.visited freezes which branch was taken — delete the visits and every surviving entry becomes a figure nobody can defend. Its columns are our own commercial process: the rep’s party_id, the scan time, the consumed code step, and ids of rows that no longer exist.',
 };
 
