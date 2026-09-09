@@ -503,6 +503,21 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">This link expires in ${esc(d.expiryMinutes ?? 60)} minutes.</p>`),
     }),
   },
+  rep_sign_in: {
+    label: 'Rep sign-in link',
+    // A SECURITY MESSAGE. A contact preference is a commercial-messaging right and was never a
+    // request not to receive one's own credential — and for a rep this IS the only way in, so
+    // honouring an opt-out here would lock them out of their own commission permanently.
+    security: true,
+    email: (d) => ({
+      subject: 'Your GreaseDesk sign-in link',
+      html: shell(`
+        <h2 style="margin:0 0 8px">Sign in to the rep portal</h2>
+        <p>Press the button below to sign in. There is no password — this link is how you get in.</p>
+        ${button(String(d.link ?? ''), 'Sign in')}
+        <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
+    }),
+  },
 } satisfies Record<string, NotificationTemplate>;
 
 export type TemplateKey = keyof typeof NOTIFICATION_TEMPLATES;

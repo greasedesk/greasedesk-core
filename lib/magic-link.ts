@@ -20,6 +20,23 @@
  * A magic link must NEVER authorise a movement that REMOVES VALUE from the customer or the garage,
  * and never a destructive action. A payment TOWARD a frozen, named invoice is permitted.
  *
+ * ── AMENDED AGAIN (2026-09-09): A LINK MAY CREATE A LIABILITY, ON ONE CONDITION ────────────────
+ * The rep sign-in link (lib/rep-magic-link) is the first link that neither removes value nor moves
+ * money toward anybody: it mints a SESSION, and behind that session a rep can raise an invoice to
+ * us. Something new becomes owed. The rule as written did not contemplate that in either direction.
+ *
+ * WHAT MAKES IT SAFE IS NOT THE DIRECTION OF TRAVEL THIS TIME — it is who the holder is. Everything
+ * on this page rests on the premise that the holder of a CUSTOMER link may not be the customer: it
+ * goes to somebody with no account, forwarded, on a shared phone, through a mail server that logs
+ * URLs. A rep link goes to an address an OPERATOR set, on a person we have contracted with, and
+ * which the rep can never change themselves. The mailbox IS the account by design rather than by
+ * accident, so "whoever holds the link" and "the rep" are one claim, not two.
+ *
+ * THE CONDITION, and it is what the amendment turns on: a link that creates a liability must be
+ * SINGLE USE, short-lived, mint a SHORT session, and be revocable in bulk the moment the address
+ * changes. A customer link is none of those things and must never be given this power. The two
+ * modules are separate for that reason, and rep-auth-gate holds the four guards.
+ *
  * The rule used to read "never a money movement", full stop. That was written when the only money
  * on a link was hypothetical, and taken literally it forbids the one thing a customer most wants to
  * do with an invoice. It is amended rather than quietly worked around, because the reasoning is

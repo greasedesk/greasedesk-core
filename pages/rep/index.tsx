@@ -19,7 +19,7 @@ export default function RepHome({ repId }: { repId: string }) {
     <>
       <Head><title>Rep portal</title><meta name="robots" content="noindex" /></Head>
       <div className="min-h-screen bg-emerald-950 text-white p-6">
-        <h1 className="text-lg font-semibold">Rep portal</h1>
+        <h1 className="text-lg font-semibold" data-testid="rep-home">Rep portal</h1>
         <p className="text-sm text-emerald-200 mt-1">Signed in. Earnings dashboard arrives with the rep-portal layer.</p>
         <p className="text-xs text-emerald-400 mt-4">rep:{repId.slice(0, 8)}</p>
       </div>

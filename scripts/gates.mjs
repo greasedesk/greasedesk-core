@@ -106,7 +106,7 @@ const TIERS = {
     'flat-commission-gate',
     'account-terms-gate', 'application-fee-gate', 'card-fulfilment-gate', 'commission-fixed-clock-gate',
     'commission-refusal-gate', 'counter-payment-gate', 'credit-note-gate', 'invoice-pay-link-gate',
-    'rep-visit-gate', 'rep-answers-gate', 'rep-pay-run-gate',
+    'rep-visit-gate', 'rep-answers-gate', 'rep-pay-run-gate', 'rep-auth-gate',
     'never-subscribes-gate', 'payment-intent-gate', 'payment-invariant-gate', 'pay-refusal-gate',
     'pay-surfaces-gate', 'payments-section-gate', 'refund-button-gate', 'refund-reconcile-gate',
     'refund-surfaces-gate', 'refund-tab-gate', 'refunded-state-gate', 'revenue-period-gate',

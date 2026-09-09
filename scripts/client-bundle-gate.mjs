@@ -191,6 +191,22 @@ export function clientHalf(src) {
     if (next === noTypes || next.length >= noTypes.length) break;
     noTypes = next;
   }
+  // ── A PAGE WITH NO SERVER DATA FUNCTION SHIPS WHOLE ────────────────────────────────────────
+  // The module-scope calibration above exists to MODEL TREE-SHAKING: Next removes
+  // getServerSideProps and then drops whatever nothing else retained, so on a page that has one the
+  // honest question is "what survives the shake", and counting component-body references produced
+  // 709 false leaks against a ground truth of three.
+  //
+  // A page with NO gSSP, getStaticProps or getInitialProps has nothing to shake. Every line of it
+  // ships, function bodies included, and an import used only inside a click handler is as real an
+  // edge as one in a copy table.
+  //
+  // Missed on 2026-09-09 because of exactly this: pages/rep/enter/[token].tsx is a pure client page
+  // that called repSpendMessage from a button handler, and that one helper carried lib/rep-magic-link
+  // — and lib/db — into the browser. PrismaClient threw on load, the dev overlay took the click, and
+  // this gate was GREEN throughout. The blind spot the header describes was real and the compensating
+  // "components rule" did not cover it, because the file is a page, not a component.
+  if (!/\b(getServerSideProps|getStaticProps|getInitialProps)\b/.test(noComments(src))) return noTypes;
   return stripFunctionBodies(noTypes);
 }
 
@@ -220,9 +236,15 @@ try {
   check('  …and a gSSP-only reference is not, wherever gSSP sits',
     !/other/.test(clientHalf(TOP_GSSP)),
     'the first version sliced at the declaration, so a page with gSSP above its component was exonerated by position');
-  check('  …while a reference inside the COMPONENT is the stated blind spot',
-    !/K\b/.test(clientHalf("import { K } from '@/lib/x';\nexport default function P() { return K; }\n")),
-    'module scope only — the component side is covered by the components rule, which bans lib/db outright');
+  // THE BLIND SPOT IS NOW BOUNDED BY WHETHER THERE IS ANYTHING TO SHAKE. Both halves are asserted,
+  // because the rule is the DIFFERENCE between them and an assertion on one alone would pass on a
+  // gate that had lost the distinction.
+  check('  …while a component-body reference on a gSSP page is the stated blind spot',
+    !/K\b/.test(clientHalf("import { K } from '@/lib/x';\nexport const getServerSideProps = async () => {};\nexport default function P() { return K; }\n")),
+    'module scope only there — modelling the shake, and the components rule covers that side');
+  check('  …but on a page with NO gSSP the whole file ships, handlers included',
+    /K\b/.test(clientHalf("import { K } from '@/lib/x';\nexport default function P() { const go = () => K(); return 1; }\n")),
+    'nothing to tree-shake: this is the shape that carried Prisma into pages/rep/enter/[token]');
   check('an import does not count as a use of itself',
     !/K\b/.test(clientHalf("import { K } from '@/lib/x';\nexport default function P() { return 1; }\n")),
     'otherwise every binding is "used" and the sweep flags the whole tree');

@@ -18,6 +18,14 @@ export const LIMITS = {
   perIp: { max: 10, windowMinutes: 60 },
 };
 
+/**
+ * ASKING FOR A REP SIGN-IN LINK. Its OWN key, deliberately not the customer link's magic:ip: —
+ * on 2026-09-09 the gate suite alone put sixty hits on magic:ip:::1 in forty minutes and exhausted
+ * it, which is what a shared key looks like from the inside: one caller's traffic silently spending
+ * another's budget. Low, because each request EMAILS somebody.
+ */
+export const REP_REQUEST_LIMITS = { perIp: { max: 10, windowMinutes: 60 } };
+
 export const emailKey = (email: string) => `email:${hashToken(email.trim().toLowerCase())}`;
 export const ipKey = (ip: string) => `ip:${ip}`;
 

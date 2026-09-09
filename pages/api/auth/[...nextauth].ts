@@ -9,6 +9,8 @@ import { prisma } from '../../../lib/db';
 import * as bcrypt from 'bcryptjs';
 import { UserRole } from '@prisma/client'; // Import the Role enum
 import { isEnabled, verifySecondFactor } from '@/lib/two-factor'; // 2FA gate — operator AND tenant, one chokepoint
+import { spendRepLink, repSessionExpired, REP_SESSION_HOURS } from '@/lib/rep-magic-link';
+import { clientIp } from '@/lib/auth-rate-limit';
 
 export const authOptions: NextAuthOptions = {
   // Use the Prisma Adapter
@@ -124,18 +126,34 @@ export const authOptions: NextAuthOptions = {
       },
     }),
 
-    // ── REP provider (field sales PWA). A SEPARATE identity table — a rep belongs to no garage.
-    // id 'rep'; /rep/login calls signIn('rep', …). Carries actorClass='rep' + repId. ──
+    // ── REP provider. A SEPARATE identity table — a rep belongs to no garage. ─────────────────
+    //
+    // NO PASSWORD, AND NEVER ONE AGAIN (retracted 2026-09-09). This provider used to take an email
+    // and a password against Rep.passwordHash; that column and the three set-password invite
+    // columns beside it are DROPPED. A rep signs in with a single-use link sent to the address that
+    // IS their credential — an address only an operator can change.
+    //
+    // The token is the whole credential, so there is no second field to ask for. Everything that
+    // decides whether it is good lives in lib/rep-magic-link::spendRepLink, which claims the row
+    // with a conditional update and accepts only affected-row count 1.
+    //
+    // SPENT HERE, IN authorize, AND NOT ON A PAGE LOAD. This runs behind a POST to NextAuth's
+    // callback endpoint, which is what /rep/enter/[token] fires from a button. Corporate mail
+    // scanners follow links; a GET-spent token would be burned in transit every time.
     CredentialsProvider({
       id: 'rep',
       name: 'Rep',
-      credentials: { email: { label: 'Email', type: 'text' }, password: { label: 'Password', type: 'password' } },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials.password) throw new Error('Please enter an email and password.');
-        const FAIL = new Error('Invalid email or password.');
-        const rep = await prisma.rep.findUnique({ where: { email: credentials.email } });
-        if (!rep || rep.status !== 'active') throw FAIL;
-        if (!rep.passwordHash || !(await bcrypt.compare(credentials.password, rep.passwordHash))) throw FAIL;
+      credentials: { token: { label: 'Sign-in token', type: 'text' } },
+      async authorize(credentials, req) {
+        const token = String((credentials as any)?.token ?? '').trim();
+        if (!token) throw new Error('REP_LINK_not_found');
+        const ip = clientIp((req?.headers ?? {}) as any);
+        const spend = await spendRepLink(token, { ip });
+        // THE REASON TRAVELS, prefixed so the page can tell it apart from NextAuth's own errors and
+        // render the right sentence — four refusals need four different things done about them.
+        if (!spend.ok) throw new Error(`REP_LINK_${spend.reason}`);
+        const rep = await prisma.rep.findUnique({ where: { id: spend.repId }, select: { id: true, email: true, name: true } });
+        if (!rep) throw new Error('REP_LINK_not_found');
         return { id: rep.id, email: rep.email, name: rep.name, actorClass: 'rep', repId: rep.id } as any;
       },
     }),
@@ -218,6 +236,25 @@ export const authOptions: NextAuthOptions = {
       // Operators and reps have neither a User row nor a group_id, so these must not run for them —
       // absent actorClass = tenant (existing live tenant tokens carry no actorClass).
       const tokenClass = (token.actorClass ?? 'tenant') as 'tenant' | 'operator' | 'rep';
+
+      // ── THE REP SESSION IS TWENTY-FOUR HOURS, AND ONLY THE REP'S ─────────────────────────────
+      // session.maxAge above is 90 days for everybody, by a ruling made for the mechanic PWA where a
+      // workshop phone opens the app once a month. That is the wrong number for a rep: they sign in
+      // on a forecourt, often on a borrowed handset, and what is on the screen is other people's
+      // commission and their own bank details.
+      //
+      // Enforced here rather than by a second cookie or a parallel auth surface, both of which the
+      // one-chokepoint rule forbids. authAt is OUR OWN stamp, set once at sign-in and carried
+      // through every rolling re-issue — deliberately not NextAuth's iat, which v4 does not
+      // reliably expose to this callback.
+      //
+      // FAILS CLOSED. A rep token with no authAt is killed, not trusted: returning {} strips id, and
+      // the session callback then yields a user-less session that every guard refuses. The 90-day
+      // ruling is untouched for tenants and operators.
+      if (tokenClass === 'rep') {
+        if (repSessionExpired(token.authAt)) return {} as any;
+        return token;
+      }
       if (tokenClass !== 'tenant') return token;
 
       // ── SESSION REVOCATION (the ONLY server-side kill switch) ──────────────────────────────
