@@ -138,6 +138,28 @@ export function pastRetention(lastVisit: Date, now: Date): boolean {
   return lastVisit.getTime() < cutoff.getTime();
 }
 
+// ── DOES THE SWITCH LET THIS SEND GO? (2026-09-10) ────────────────────────────────────────────────
+/**
+ * THE ONE READER of the sending decision. The owner's switch (ProspectSending; no row = OFF) is for
+ * everyone. A gate's LEASE (ProspectSendingLease) overrides it for ONE prospect until it expires — and
+ * only when the question names that prospect. A cron run names none, so no lease ever reaches it.
+ *
+ * WHY A LEASE: the gate used to switch the OWNER'S switch on and restore it in a `finally`. Killed
+ * mid-run it left sending ON for every real consented prospect — proven by SIGKILLing it, 10 Sep 2026.
+ * A lease never touches the owner's switch, reaches no prospect but its own, and stops counting when
+ * it expires — so a lease left behind by a killed process needs nobody to clean up after it.
+ */
+export const SENDING_LEASE_MAX_SECONDS = 300; // = ProspectSendingLease_short_chk
+export type SendingSwitchRow = { enabled: boolean } | null;
+export type SendingLeaseRow = { prospect_id: string; enabled: boolean; expires_at: Date } | null;
+
+export function sendingAllows(owner: SendingSwitchRow, lease: SendingLeaseRow, at: { now: Date; prospectId?: string }): boolean {
+  const leaseApplies = lease != null && at.prospectId != null && lease.prospect_id === at.prospectId
+    && at.now.getTime() < lease.expires_at.getTime();
+  if (leaseApplies) return lease!.enabled;
+  return owner?.enabled === true;
+}
+
 // ── WHAT A SEQUENCE IS, AS A PERSON SHOULD READ IT (2026-09-10) ───────────────────────────────────
 /**
  * THE ONE DERIVATION of what a follow-up is doing — read by the rep's confirmation, the rep's list,

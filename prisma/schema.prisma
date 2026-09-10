@@ -4808,6 +4808,7 @@ model Prospect {
 
   visits   ProspectVisit[]
   sequence ProspectSequence?
+  sendingLease ProspectSendingLease?
 
   @@index([name_key, postcode_key], map: "Prospect_match_idx")
   @@index([email], map: "Prospect_email_idx")
@@ -4876,4 +4877,18 @@ model ProspectSending {
   changed_at DateTime
   /// The operator who made the current decision. History is in SuperAdminAudit.
   changed_by String
+}
+
+/// A GATE'S OVERRIDE, NEVER THE OWNER'S SWITCH: sending ON or OFF for ONE prospect until expires_at.
+/// Consulted only by a run that names that prospect — no cron run and no other prospect ever sees it —
+/// and ignored once expired, so a lease left by a killed gate is harmless from the moment it is written.
+/// Read only through sendingAllows(). At most 5 minutes: ProspectSendingLease_short_chk.
+model ProspectSendingLease {
+  prospect_id String   @id
+  enabled     Boolean
+  created_at  DateTime @default(now())
+  expires_at  DateTime
+  created_by  String
+
+  prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
 }

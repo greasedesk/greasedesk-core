@@ -24,7 +24,7 @@ import { prospectingRefusal } from '@/lib/prospect-suppression';
 import { emailHash, newUnsubscribeToken } from '@/lib/prospect-keys';
 import {
   SEQUENCE, afterSend, isProspectStatus, looksLikeEmail, nameKey,
-  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment, sequenceView,
+  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment, sequenceView, sendingAllows,
   type ProspectStatus, type SequenceView, type StopReason, type StripReason,
 } from '@/lib/prospects';
 
@@ -39,15 +39,19 @@ const SWITCH_ID = 'prospect_sending';
  * the owner writes it. Read on every run and every render that shows a follow-up, never cached: a
  * switch that took an hour to take effect would be a switch that did not work when it mattered.
  */
-export async function prospectSendingEnabled(db: Db = prisma): Promise<boolean> {
-  const row = await db.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } });
-  return row?.enabled === true;
+export async function prospectSendingEnabled(db: Db = prisma, at: { now?: Date; prospectId?: string } = {}): Promise<boolean> {
+  const [owner, lease] = await Promise.all([
+    db.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } }),
+    // Asked without a prospect (a cron run, a list of many), no lease can apply — see sendingAllows.
+    at.prospectId ? db.prospectSendingLease.findUnique({ where: { prospect_id: at.prospectId } }) : null,
+  ]);
+  return sendingAllows(owner, lease, { now: at.now ?? new Date(), prospectId: at.prospectId });
 }
 
-/** The switch AND its author, for the Engine Room to show. `changedAt` NULL = never switched. */
+/** The OWNER'S switch and its author, for the Engine Room. `changedAt` NULL = never switched. A gate never writes it. */
 export async function prospectSendingState(db: Db = prisma) {
   const row = await db.prospectSending.findUnique({ where: { id: SWITCH_ID } });
-  return { enabled: row?.enabled === true, changedAt: row?.changed_at ?? null, changedBy: row?.changed_by ?? null };
+  return { enabled: sendingAllows(row, null, { now: new Date() }), changedAt: row?.changed_at ?? null, changedBy: row?.changed_by ?? null };
 }
 
 /**
@@ -241,7 +245,7 @@ export async function recordVisit(input: RecordVisitInput, db: Db = prisma): Pro
   await runSequence({ now, onlyProspectId: prospectId, db }).catch(() => {});
 
   const seq = await db.prospectSequence.findUnique({ where: { prospect_id: prospectId }, select: { state: true, stopped_reason: true, last_sent_at: true } });
-  const sendingOn = await prospectSendingEnabled(db);
+  const sendingOn = await prospectSendingEnabled(db, { prospectId });
   return { ok: true, prospectId, sequence: seq ? { state: seq.state, stoppedReason: seq.stopped_reason } : null,
     view: sequenceView(seq, sendingOn), sendingOn };
 }
@@ -315,7 +319,9 @@ export async function runSequence(opts: { now?: Date; onlyProspectId?: string; d
   // is — queued — and starts at the step it is on (step 1 for anyone enrolled while off) the first run
   // after the switch goes on. The run REPORTS that it held them, so an empty run is never mistaken for
   // a run with nothing to do.
-  if (!(await prospectSendingEnabled(db))) {
+  // The lease is measured on the WALL clock, not the run's `now`: `now` is the sequence's clock (a
+  // caller may pass a later one to make a step due), and a lease's five minutes are real minutes.
+  if (!(await prospectSendingEnabled(db, { prospectId: opts.onlyProspectId }))) {
     out.sending = 'off';
     out.queued = await db.prospectSequence.count({
       where: { state: 'active', next_due_at: { lte: now }, ...(opts.onlyProspectId ? { prospect_id: opts.onlyProspectId } : {}) },

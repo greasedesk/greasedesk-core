@@ -44,30 +44,70 @@ if (N.channelConfigured('email')) declineToRun('the email provider is configured
 
 const code = (s) => s.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-// ── THE SENDING SWITCH IS GLOBAL, AND THIS DATABASE IS PRODUCTION ─────────────────────────────────
-// Some clauses need sending ON. Switching it on while REAL consented prospects are queued would let
-// the scheduled run email them placeholder copy for as long as it stays on. So: checked here, before a
-// single fixture exists — refused outright if anything real is waiting while the switch is off — and
-// every ON is scoped to the one run that needs it, then put back EXACTLY as found (no row included).
+// ── THE GATE NEVER TURNS THE OWNER'S SWITCH ON. IT TAKES A LEASE. ────────────────────────────────
+// This database is production, and the owner's switch is global. The first version turned it ON and
+// restored it in a `finally` — and a killed process runs no `finally`. SIGKILLed mid-run on 10 Sep
+// 2026 (what gates.mjs does to a gate that overruns its timeout), it left sending ON for every real
+// consented prospect, changed_by 'prospect-gate', with placeholder copy in the templates.
+//
+// So a clause that needs a real send takes a LEASE on its own fixture (ProspectSendingLease): ON for
+// that one prospect, for at most five minutes, consulted only by a run that names it. A lease a killed
+// run leaves behind reaches nobody else from the moment it is written, stops counting when it expires,
+// and goes when its fixture is deleted. Nothing has to clean up after it for the product to be safe —
+// and "KILLED MID-LEASE" below proves that by killing a process, not by reading this comment.
+//
+// THE ONE REMAINING WRITE TO THE OWNER'S ROW: the record-while-OFF clauses drive recordVisit, which
+// creates its prospect as it goes, so no lease can exist for it beforehand. While the owner's switch is
+// OFF — the default, and today's state — they need nothing written. If the owner has it ON, they
+// switch it OFF for that call and put it back. Killed there, sending stays OFF: it fails CLOSED,
+// visibly (the Engine Room shows "Last changed … by prospect"), and it never sends anything.
 const SWITCH = 'prospect_sending';
 const initialSwitch = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
-if (!initialSwitch?.enabled) {
-  const realWaiting = await prisma.prospectSequence.count({ where: { state: 'active' } });
-  if (realWaiting > 0) declineToRun(`${realWaiting} real prospect sequence(s) are queued and sending is OFF — switching it on here, even briefly, could let the scheduled run email them`);
-}
-const putSwitch = async (enabled) => prisma.prospectSending.upsert({ where: { id: SWITCH },
-  update: { enabled, changed_at: new Date(), changed_by: 'prospect-gate' },
-  create: { id: SWITCH, enabled, changed_at: new Date(), changed_by: 'prospect-gate' } });
-const restoreSwitch = async () => {
-  if (!initialSwitch) await prisma.prospectSending.deleteMany({ where: { id: SWITCH } });
-  else await prisma.prospectSending.update({ where: { id: SWITCH },
-    data: { enabled: initialSwitch.enabled, changed_at: initialSwitch.changed_at, changed_by: initialSwitch.changed_by } });
+const ownerOn = () => PR.sendingAllows(initialSwitch, null, { now: new Date() });
+const LEASE_SECONDS = 60; // well inside SENDING_LEASE_MAX_SECONDS; a lease only has to outlive one run
+const writeLease = (db, prospectId, enabled, seconds) => db.prospectSendingLease.upsert({ where: { prospect_id: prospectId },
+  update: { enabled, created_at: new Date(), expires_at: new Date(Date.now() + seconds * 1000), created_by: 'prospect-gate' },
+  create: { prospect_id: prospectId, enabled, created_at: new Date(), expires_at: new Date(Date.now() + seconds * 1000), created_by: 'prospect-gate' } });
+const withLease = async (prospectId, enabled, fn) => {
+  await writeLease(prisma, prospectId, enabled, LEASE_SECONDS);
+  try { return await fn(); } finally { await prisma.prospectSendingLease.deleteMany({ where: { prospect_id: prospectId } }); }
 };
-const withSending = async (enabled, fn) => { await putSwitch(enabled); try { return await fn(); } finally { await restoreSwitch(); } };
+const withOwnerOff = async (fn) => {
+  if (!ownerOn()) return fn(); // already off for everyone: nothing is written
+  await prisma.prospectSending.update({ where: { id: SWITCH }, data: { enabled: false, changed_at: new Date(), changed_by: 'prospect-gate' } });
+  try { return await fn(); } finally {
+    await prisma.prospectSending.update({ where: { id: SWITCH },
+      data: { enabled: initialSwitch.enabled, changed_at: initialSwitch.changed_at, changed_by: initialSwitch.changed_by } });
+  }
+};
 const REP = 'prospect-gate-rep';
 const addr = (label) => `${label}-${randomUUID().slice(0, 8)}@prospect-gate.invalid`;
 const made = { prospects: [], hashes: [] };
 const days = (n) => n * 86_400_000;
+
+// ── A KILLED EARLIER RUN'S FIXTURES GO BEFORE THIS RUN MAKES ITS OWN ─────────────────────────────
+// A killed run's teardown never ran either, so its fixtures are still here — sequences active on
+// @prospect-gate.invalid addresses, which the scheduled run would try to email the day the owner's
+// switch goes on. Every fixture visit is recorded by a rep id that starts with REP, and no real rep has
+// one (real ids are UUIDs); a candidate that ALSO carries a real rep's visit is not ours, and the gate
+// refuses rather than delete it. (A killed run's suppression rows are hashes of random .invalid
+// addresses — unfindable, and harmless: they suppress addresses nobody will ever use.)
+const gateMade = { visits: { some: { rep_id: { startsWith: REP } } } };
+{
+  const earlier = await prisma.prospect.count({ where: gateMade });
+  // THE POSITIVE CASE, PLANTED: one fixture this run does not record in `made` — exactly what a killed
+  // run leaves — so the sweep is proved on a real leftover every run, not only on the runs after a kill.
+  const planted = await ST.recordVisit({ repId: `${REP}-killed`, garage: { name: `Gate Garage ${randomUUID().slice(0, 6)}`, postcode: 'DY4 7LH' },
+    visit: { visitedOn: new Date(), status: 'spoke_to' } });
+  const leftover = await prisma.prospect.findMany({ where: gateMade,
+    select: { id: true, visits: { select: { rep_id: true } }, sequence: { select: { state: true } } } });
+  const notOurs = leftover.filter((p) => p.visits.some((v) => !v.rep_id.startsWith(REP)));
+  if (notOurs.length) declineToRun(`${notOurs.length} prospect(s) carry a gate rep's visit AND a real rep's — not this gate's to delete`);
+  await prisma.prospect.deleteMany({ where: { id: { in: leftover.map((p) => p.id) } } });
+  if (earlier) console.log(`  a killed earlier run left ${earlier} fixture prospect(s) — removed before this run makes its own`);
+  check('a killed run\'s fixtures are swept before this run makes its own', planted.ok && (await prisma.prospect.count({ where: gateMade })) === 0,
+    `${earlier} from an earlier run, plus one planted exactly as a killed run leaves it — none left`);
+}
 
 try {
   // ── 1. THE WORST OUTCOME, FIRST AND ON ITS OWN ───────────────────────────────────────────────
@@ -207,7 +247,7 @@ try {
   // path would have stopped it at enrolment. This proves the SENDER on its own.
   await prisma.prospectSequence.update({ where: { prospect_id: custProspect.prospectId },
     data: { state: 'active', stopped_at: null, stopped_reason: null, next_due_at: new Date(Date.now() - 1000) } });
-  const run = await withSending(true, () => ST.runSequence({ onlyProspectId: custProspect.prospectId }));
+  const run = await withLease(custProspect.prospectId, true, () => ST.runSequence({ onlyProspectId: custProspect.prospectId }));
   const afterRun = await seqOf(custProspect.prospectId);
   check('the SENDER stops an active sequence on a customer address', run.sent === 0 && afterRun.state === 'stopped' && afterRun.stopped_reason === 'already_customer',
     `sent ${run.sent}, ${afterRun.state} / ${afterRun.stopped_reason}`);
@@ -252,7 +292,7 @@ try {
   check('  …and a different business on the same street is NOT', (await ST.findMatches(`Acme ${uniq} Garage`, 'DY4 7LH')).length === 0,
     'Motors and Garage are kept distinct — merging them would present a false match a tired rep may accept');
   check('  …and the match carries no person or email', found.every((f) => !('email' in f) && !('spokeTo' in f)));
-  await ST.recordVisit({ repId: 'another-rep', prospectId: first.prospectId, visit: { visitedOn: new Date(), status: 'not_interested', note: 'Went with someone else' } });
+  await ST.recordVisit({ repId: `${REP}-2`, prospectId: first.prospectId, visit: { visitedOn: new Date(), status: 'not_interested', note: 'Went with someone else' } });
   const merged = await pOf(first.prospectId);
   check('CONFIRMING the match adds a visit to the same garage', merged.visits.length === 2 && merged.status === 'not_interested');
   check('  …and the earlier status survives in the history', merged.visits.some((v) => v.status_at_visit === 'interested'),
@@ -306,13 +346,13 @@ try {
   console.log('\n— with sending OFF, a prospect is enrolled and queued, and nothing is sent —');
   const logFor = (email) => prisma.notificationLog.findFirst({ where: { recipient: email, template: 'prospect_step_1' }, select: { status: true, error: true } });
   const qEmail = addr('queued');
-  const queuedRec = await withSending(false, () => rec({ email: qEmail, consent: true }));
+  const queuedRec = await withOwnerOff(() => rec({ email: qEmail, consent: true }));
   const qSeq = await seqOf(queuedRec.prospectId);
   check('switch OFF: the prospect is still ENROLLED', qSeq?.state === 'active' && qSeq?.next_step === 1,
     `${qSeq?.state} at step ${qSeq?.next_step} — queued, not skipped`);
   check('  …and NOTHING was sent — not even attempted', (await logFor(qEmail)) === null,
     'no send-log row at all: the run held it, it did not try and fail');
-  const offRun = await withSending(false, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
+  const offRun = await withLease(queuedRec.prospectId, false, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
   check('  …and the run SAYS sending is off, and how many it held', offRun.sending === 'off' && offRun.queued === 1 && offRun.sent === 0,
     JSON.stringify({ sending: offRun.sending, queued: offRun.queued, sent: offRun.sent }));
   check('the rep is told the follow-up is QUEUED, not on its way', queuedRec.view?.kind === 'queued' && queuedRec.view?.why === 'switched_off'
@@ -328,7 +368,7 @@ try {
     'active is not the same as sending — only a step that actually went reads as running');
 
   console.log('\n— switching sending ON starts a queued prospect from step 1 —');
-  const onRun = await withSending(true, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
+  const onRun = await withLease(queuedRec.prospectId, true, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
   const attempted = await logFor(qEmail);
   check('switch ON: the prospect enrolled while it was OFF is sent STEP 1', onRun.sending === 'on' && attempted !== null,
     attempted ? `step 1 reached the provider stage — ${attempted.status}: ${attempted.error}` : 'no send attempted');
@@ -337,7 +377,7 @@ try {
     'no provider in this process, so step 1 stays due — and no later step was attempted instead');
 
   console.log('\n— unsubscribe and signup still stop a QUEUED sequence —');
-  const qUnsub = await withSending(false, () => rec({ email: addr('queued-unsub'), consent: true }));
+  const qUnsub = await withOwnerOff(() => rec({ email: addr('queued-unsub'), consent: true }));
   const qTok = (await prisma.prospect.findUnique({ where: { id: qUnsub.prospectId }, select: { unsubscribe_token: true, email: true } }));
   made.hashes.push(PK.emailHash(qTok.email));
   await ST.unsubscribeByToken(qTok.unsubscribe_token);
@@ -345,16 +385,100 @@ try {
   check('unsubscribe stops a QUEUED sequence, reason "unsubscribed"', qUnsubSeq.state === 'stopped' && qUnsubSeq.stopped_reason === 'unsubscribed',
     `${qUnsubSeq.state} / ${qUnsubSeq.stopped_reason} — it never needed sending on to be stoppable`);
   const qSignEmail = addr('queued-signer');
-  const qSign = await withSending(false, () => rec({ email: qSignEmail, consent: true }));
+  const qSign = await withOwnerOff(() => rec({ email: qSignEmail, consent: true }));
   await ST.markSignedUpByEmail(qSignEmail, 'gate-group-id');
   const qSignSeq = await seqOf(qSign.prospectId);
   check('signup stops a QUEUED sequence, reason "signed_up"', qSignSeq.state === 'stopped' && qSignSeq.stopped_reason === 'signed_up',
     `${qSignSeq.state} / ${qSignSeq.stopped_reason}`);
 
+  // ── 15. A LEASE REACHES ONE PROSPECT, AND SURVIVES ITS WRITER BEING KILLED ───────────────────
+  console.log('\n— a gate\'s lease reaches its own prospect and nobody else —');
+  const leaseNow = new Date();
+  const LEASE_A = { prospect_id: 'fixture-a', enabled: true, expires_at: new Date(leaseNow.getTime() + 60_000) };
+  check('an ON lease reaches ITS prospect', PR.sendingAllows(null, LEASE_A, { now: leaseNow, prospectId: 'fixture-a' }) === true,
+    'the positive case, in the same run — every clause below would pass on a lease that never applied');
+  check('  …and no OTHER prospect', PR.sendingAllows(null, LEASE_A, { now: leaseNow, prospectId: 'fixture-b' }) === false);
+  check('  …and no run that names none — which is every scheduled run', PR.sendingAllows(null, LEASE_A, { now: leaseNow }) === false);
+  check('  …and nobody once it expires', PR.sendingAllows(null, LEASE_A, { now: LEASE_A.expires_at, prospectId: 'fixture-a' }) === false);
+  check('an OFF lease holds its prospect while the owner\'s switch is ON — and only that one',
+    PR.sendingAllows({ enabled: true }, { ...LEASE_A, enabled: false }, { now: leaseNow, prospectId: 'fixture-a' }) === false
+    && PR.sendingAllows({ enabled: true }, { ...LEASE_A, enabled: false }, { now: leaseNow, prospectId: 'fixture-b' }) === true);
+  check('NO ROW is OFF, for everyone and for any one prospect',
+    PR.sendingAllows(null, null, { now: leaseNow }) === false && PR.sendingAllows(null, null, { now: leaseNow, prospectId: 'fixture-a' }) === false,
+    'absence is the default — "never switched on" is a state, not a value somebody wrote');
+  check('every run asks about the prospect it is running', /prospectSendingEnabled\(db, \{ prospectId: opts\.onlyProspectId \}\)/.test(storeSrc)
+    && /prospectSendingEnabled\(db, \{ prospectId \}\)/.test(storeSrc),
+    'runSequence and recordVisit name their prospect; the scheduled run names none, so no lease reaches it');
+
+  // ONE PROBE PER TRANSACTION, each rolled back — a caught violation poisons the transaction it is in.
+  const probeLease = (seconds) => prisma.$transaction(async (tx) => {
+    try {
+      await tx.$executeRawUnsafe(`INSERT INTO "ProspectSendingLease" (prospect_id, enabled, created_at, expires_at, created_by)
+        VALUES ($1, true, now(), now() + make_interval(secs => $2), 'probe')`, custProspect.prospectId, seconds);
+    } catch (e) { throw new Error(`ROLLBACK refused ${e.meta?.message ?? e.message}`); }
+    throw new Error('ROLLBACK accepted');
+  }).catch((e) => String(e.message));
+  const long = await probeLease(PR.SENDING_LEASE_MAX_SECONDS + 60);
+  const fine = await probeLease(PR.SENDING_LEASE_MAX_SECONDS - 60);
+  const zero = await probeLease(0);
+  check('the DATABASE refuses a lease longer than five minutes', /refused/.test(long) && /ProspectSendingLease_short_chk/.test(long),
+    `${PR.SENDING_LEASE_MAX_SECONDS + 60}s refused by ${(long.match(/ProspectSendingLease_\w+/) ?? ['nothing'])[0]} — a year-long "lease" would be an open switch in disguise`);
+  check('  …and takes one inside it', fine === 'ROLLBACK accepted', `${PR.SENDING_LEASE_MAX_SECONDS - 60}s: ${fine.slice(0, 60)}`);
+  check('  …and refuses one that has already ended', /refused/.test(zero) && /ProspectSendingLease_short_chk/.test(zero), `0s refused by ${(zero.match(/ProspectSendingLease_\w+/) ?? ['nothing'])[0]}`);
+
+  console.log('\n— KILLED MID-LEASE: a process that dies holding a lease leaves nothing that reaches anyone else —');
+  // A REAL PROCESS, REALLY KILLED. It writes its lease with the gate's own writeLease — the same code,
+  // passed as source — reports that it holds it, and waits. It is then SIGKILLed, exactly as gates.mjs
+  // kills a gate that overruns: no `finally`, no handler, nothing of it runs again. Every clause below
+  // is about what that leaves behind.
+  const victim = queuedRec.prospectId; // a fixture: active, due, consented
+  const bystander = (await withOwnerOff(() => rec({ email: addr('bystander'), consent: true }))).prospectId;
+  const { spawn } = await import('node:child_process');
+  const childSrc = `import { PrismaClient } from '@prisma/client';
+const db = new PrismaClient();
+const writeLease = ${writeLease.toString()};
+await writeLease(db, ${JSON.stringify(victim)}, true, ${LEASE_SECONDS});
+console.log('LEASED');
+setInterval(() => {}, 1 << 30);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', childSrc], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let childErr = ''; child.stderr.on('data', (d) => { childErr += d; });
+  const childExit = new Promise((r) => child.on('exit', (code, sig) => r(sig ?? `code ${code}`)));
+  const held = await new Promise((r) => { let buf = ''; child.stdout.on('data', (d) => { buf += d; if (buf.includes('LEASED')) r(true); }); childExit.then(() => r(false)); });
+  child.kill('SIGKILL');
+  const how = await childExit;
+  const leftLease = await prisma.prospectSendingLease.findUnique({ where: { prospect_id: victim } });
+  check('the writer was SIGKILLed while holding its lease', held && how === 'SIGKILL' && leftLease !== null,
+    !held ? `it never took a lease: ${childErr.trim().split('\n').pop()}`
+      : !leftLease ? `${how}, but there is no lease on the victim — the writer leased something else`
+      : `${how}; the lease is still there — nothing of the writer ran after the kill`);
+  const ownerNow = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
+  check('  …the OWNER\'S switch is exactly as found', initialSwitch ? ownerNow?.changed_at?.getTime() === initialSwitch.changed_at.getTime() : ownerNow === null,
+    initialSwitch ? `enabled=${ownerNow?.enabled}, by ${ownerNow?.changed_by}` : 'no row — never switched on, and still not');
+  check('  …the killed lease still reaches its own prospect', (await ST.prospectSendingEnabled(undefined, { prospectId: victim })) === true,
+    'the positive case: it is a live lease, so the clauses below are about a lease that works');
+  check('  …a run that names no prospect — the scheduled run — does not see it', (await ST.prospectSendingEnabled()) === ownerOn(),
+    `reads ${ownerOn() ? 'ON' : 'OFF'}, the owner's answer, not the lease's`);
+  check('  …nor does any other prospect', (await ST.prospectSendingEnabled(undefined, { prospectId: bystander })) === ownerOn(),
+    'a real consented prospect queued beside it stays exactly as the owner left it');
+  // THE ACTUAL SCHEDULED RUN — only while nothing REAL is due. It is the real function against the
+  // production table: under a regression that let the lease through, it would claim every due sequence.
+  // No mail can go (the gate refuses to run with a provider configured), but it would log and re-time
+  // real prospects' rows. With real ones due, the reader clause above carries it, and this says so.
+  const realDue = await prisma.prospectSequence.count({ where: { state: 'active', next_due_at: { lte: new Date() }, NOT: { prospect: gateMade } } });
+  if (realDue) console.log(`  (the actual scheduled run is not driven: ${realDue} real sequence(s) are due — the reader clause above covers it)`);
+  if (!ownerOn() && realDue === 0) {
+    const cronRun = await ST.runSequence();
+    const byRun = await ST.runSequence({ onlyProspectId: bystander });
+    check('  …and the scheduled run, and a run for the prospect beside it, send NOTHING', cronRun.sending === 'off' && cronRun.sent === 0 && byRun.sending === 'off' && byRun.sent === 0,
+      `scheduled: ${cronRun.sending}, ${cronRun.queued} held; bystander: ${byRun.sending}`);
+  }
+  check('  …and once it expires it reaches nobody at all', !!leftLease && PR.sendingAllows(initialSwitch, leftLease, { now: leftLease.expires_at, prospectId: victim }) === ownerOn()
+    && leftLease.expires_at.getTime() - leftLease.created_at.getTime() <= PR.SENDING_LEASE_MAX_SECONDS * 1000,
+    leftLease ? `expires ${Math.round((leftLease.expires_at - leftLease.created_at) / 1000)}s after it was written — no cleanup needed for that` : 'no lease was left to expire');
+  made.victimLease = victim; // left in place: teardown proves it goes WITH its fixture
+
   console.log('\n— the switch is visible where it matters, and defaults OFF —');
   const storeSrc2 = code(readFileSync('lib/prospect-store.ts', 'utf8'));
-  check('NO ROW means OFF', /return row\?\.enabled === true;/.test(storeSrc2),
-    'absence is the default — "never switched on" is a state, not a value somebody wrote');
   if (!initialSwitch) check('  …and on this database it has never been switched on', (await ST.prospectSendingEnabled()) === false);
   check('switching it is AUDITED', /action: opts\.enabled \? 'prospect_sending\.on' : 'prospect_sending\.off'/.test(storeSrc2),
     'turning it on emails real people; who and when goes to SuperAdminAudit');
@@ -380,11 +504,13 @@ try {
     if (made.hashes.length) await prisma.prospectSuppression.deleteMany({ where: { email_hash: { in: made.hashes } } });
     const left = await prisma.prospect.count({ where: { id: { in: made.prospects } } });
     check('teardown removed every fixture', left === 0, `${made.prospects.length} prospects made, ${left} left`);
-    await restoreSwitch();
+    const leases = await prisma.prospectSendingLease.count({ where: { prospect_id: { in: made.prospects } } });
+    check('every lease went with its fixture — the killed one included', leases === 0 && !!made.victimLease,
+      made.victimLease ? `${leases} left; the killed writer's lease was never deleted by hand` : 'the kill clause never reached its lease');
     const nowSwitch = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
-    check('the sending switch is back EXACTLY as the gate found it',
-      initialSwitch ? (nowSwitch?.enabled === initialSwitch.enabled && nowSwitch?.changed_by === initialSwitch.changed_by) : nowSwitch === null,
-      initialSwitch ? `enabled=${nowSwitch?.enabled}, by ${nowSwitch?.changed_by}` : 'no row, as before — never switched on');
+    check('the OWNER\'S switch is exactly as the gate found it',
+      initialSwitch ? (nowSwitch?.enabled === initialSwitch.enabled && nowSwitch?.changed_at.getTime() === initialSwitch.changed_at.getTime()) : nowSwitch === null,
+      initialSwitch ? `enabled=${nowSwitch?.enabled}, by ${nowSwitch?.changed_by}` : 'no row, as before — never switched on, and nothing was written to it');
   } catch (e) { check('teardown completed', false, describeError(e)); }
   await prisma.$disconnect();
 }
