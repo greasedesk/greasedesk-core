@@ -37,6 +37,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { urlUnder } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('playwright-core');
 const T = await import('../lib/tyres.ts');
 const BAT = await import('../lib/battery.ts');
@@ -159,7 +160,7 @@ try {
    */
   const gotoCar = async (id, reg, extra = '') => {
     await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/marketing-car'), { timeout: 30000 }),
+      page.waitForResponse((r) => urlUnder(r.url(), '/api/marketing-car'), { timeout: 30000 }),
       page.goto(`${BASE}/admin/marketing?vehicle=${id}${extra}`, { waitUntil: 'domcontentloaded' }),
     ]);
     // ARRIVAL IS NOT RENDER. A fixed settle after the response passed on a quiet machine and failed

@@ -9,6 +9,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const PS = await import('../lib/photo-slots.ts');
 const { readFileSync } = await import('node:fs');
 const out = [];
@@ -33,7 +34,7 @@ check('  …and unknown kinds still fail terminally', /unknown-kind/.test(sw), '
 
 // ── 2. REPLAY SAFETY, THE TWO DIFFERENT WAYS ────────────────────────────────────────────────────
 console.log('\n— a queue replays, so both kinds must survive it —');
-check('the finding sender sends the envelope id AS the row id', /id: item\.id, jobCardId: item\.jobCardId/.test(sw),
+check('the finding sender sends the envelope id AS the row id', keyRegex('id', 'item.id, jobCardId: item.jobCardId').test(sw),
   'a due item has no natural key — without this a dead-signal bay records one finding and the garage gets two');
 check('the tyre sender sends NO id', /'\/api\/tyre-readings'[\s\S]{0,220}?jobCardId: item\.jobCardId, corners/.test(sw)
   && !/tyre-readings[\s\S]{0,220}?id: item\.id/.test(sw),
@@ -44,7 +45,7 @@ check('and the difference is explained where the next reader will be',
 // ── 3. THE CHECKLIST IS ON THE PHONE ────────────────────────────────────────────────────────────
 console.log('\n— an escalation must not name items nobody was asked for —');
 check('the phone renders the checklist', /<PhoneIntakeChecklist/.test(page));
-check('  …fed by the phone payload', /intakeItems: p\.intakeItems/.test(api));
+check('  …fed by the phone payload', keyRegex('intakeItems', 'p.intakeItems').test(api));
 const cl = readFileSync('components/pwa/PhoneIntakeChecklist.tsx', 'utf8');
 check('the clean-car affirmative is one tap here too', /ph-nothing-found/.test(cl) && /Nothing found/.test(cl));
 check('  …and the reason it matters is recorded', /false positives are how the whole escalation design dies/i.test(prose(cl)));
@@ -88,7 +89,7 @@ for (const [f, src] of [['PhoneFindings', pf], ['PhoneTyres', pt], ['PhoneIntake
 // ── 8. THE BATTERY, ON THE PHONE ────────────────────────────────────────────────────────────────
 console.log('\n— the third measurement kind —');
 const pb = readFileSync('components/pwa/PhoneBattery.tsx', 'utf8');
-check("the envelope carries 'battery'", /kind:[^;]*'battery'/.test(outbox));
+check("the envelope carries 'battery'", keyRegex('kind', /[^;]*'battery'/).test(outbox));
 check('the service worker has a sender for it', /item\.kind === 'battery'/.test(sw));
 check('  …which sends NO id, because job_card_id IS the natural key',
   !/battery-readings'[\s\S]{0,400}?id: item\.id/.test(sw)
@@ -102,7 +103,7 @@ check('the phone renders it', /<PhoneBattery/.test(page));
 // scripts/phone-capture-timing; this is the pairwise half that belongs with the battery slice.
 check('  …before the tyres, which are the longest panel and the least urgent',
   page.indexOf('<PhoneBattery') < page.indexOf('<PhoneTyres'));
-check('  …fed by the prefilled rating', /lastBattery: p\.lastBattery/.test(api));
+check('  …fed by the prefilled rating', keyRegex('lastBattery', 'p.lastBattery').test(api));
 check('the save parks durably before any network', /enqueueBattery/.test(pb) && !/fetch\(/.test(pb));
 check('all three numbers are required together', /ok\(v, 0\.1, 30\) && ok\(sc, 0, 100\) && ok\(sh, 0, 100\)/.test(pb),
   'a test missing one number silently changes which state it lands in');
@@ -139,7 +140,7 @@ const po = readFileSync('components/pwa/PhoneObservations.tsx', 'utf8');
 // MEMBERSHIP, not position in the union: the battery assertion above was anchored on the trailing
 // semicolon and broke the moment a fifth kind was added after it. An assertion should not depend on
 // being last.
-check("the envelope carries 'observation'", /kind:[^;]*'observation'/.test(outbox));
+check("the envelope carries 'observation'", keyRegex('kind', /[^;]*'observation'/).test(outbox));
 check('the service worker has a sender for it', /item\.kind === 'observation'/.test(sw));
 check('  …sending NO id, because the open row IS the natural key',
   !/observations'[\s\S]{0,300}?id: item\.id/.test(sw)
@@ -147,7 +148,7 @@ check('  …sending NO id, because the open row IS the natural key',
 check('the phone renders it', /<PhoneObservations/.test(page));
 check('  …BEFORE the typing, because most findings are not novel',
   page.indexOf('<PhoneObservations') < page.indexOf('<PhoneFindings'));
-check('  …fed by this garage’s own usage', /observationCounts: p\.observationCounts/.test(api));
+check('  …fed by this garage’s own usage', keyRegex('observationCounts', 'p.observationCounts').test(api));
 check('the save parks durably before any network', /enqueueObservation/.test(po) && !/fetch\(/.test(po));
 check('the answer is still a required tap on this surface too',
   /phone-observation-answer-/.test(po) && !/not_raised'\s*\)/.test(po.replace(/ANSWERS[\s\S]{0,200}/, '')),

@@ -13,6 +13,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const T = await import('../lib/notification-templates.ts');
@@ -212,8 +213,8 @@ try {
 
   console.log('\n— the channel qualifies the state, it is not a new one —');
   const src = readFileSync('pages/admin/marketing.tsx', 'utf8');
-  check('there are still four states', /contacted: 'Contacted', booked: 'Booked', declined: 'Declined', snoozed: 'Snoozed'/.test(src)
-    && !/texted:/i.test(src), 'a texted car is a contacted car');
+  check('there are still four states', keyRegex('contacted', "'Contacted', booked: 'Booked', declined: 'Declined', snoozed: 'Snoozed'").test(src)
+    && !keyRegex('texted', undefined, 'i').test(src), 'a texted car is a contacted car');
   check('  …and the channel reads as a suffix', /by text and email/.test(src));
   check('the page no longer claims nothing sends', !/Nothing here sends/.test(src),
     'it does now, one row at a time');

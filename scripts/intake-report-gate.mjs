@@ -10,6 +10,7 @@
 import './_gate-preflight.mjs';
 const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { buildIntakeReport } = await import('../lib/intake-report.ts');
 const { reportStatus } = await import('../lib/due-items.ts');
@@ -52,15 +53,15 @@ check('  …and the re-presign keeps the 15-minute window rather than widening i
 // ── 3. A TOKEN REACHES ONE CAR ──────────────────────────────────────────────────────────────────
 console.log('\n— scoping —');
 const respond = readFileSync('pages/api/intake-respond.ts', 'utf8');
-check('the answer endpoint checks the PURPOSE', /purpose: 'intake_report'/.test(respond),
+check('the answer endpoint checks the PURPOSE', keyRegex('purpose', "'intake_report'").test(respond),
   'a quote or invoice link must not be able to answer findings');
-check('  …and that the finding belongs to the LINK\'s car', /vehicle_id: card\.vehicle_id/.test(respond),
+check('  …and that the finding belongs to the LINK\'s car', keyRegex('vehicle_id', 'card.vehicle_id').test(respond),
   'a token names a card; without this a valid token could answer any finding in the tenant');
-check('  …and that it is still open', /closed_at: null/.test(respond));
+check('  …and that it is still open', keyRegex('closed_at', 'null').test(respond));
 check('the media route is scoped to the link\'s card and the intake stage',
-  /job_card_id: resolved\.link\.jobCardId/.test(media) && /stage: 'intake'/.test(media));
+  keyRegex('job_card_id', 'resolved.link.jobCardId').test(media) && keyRegex('stage', "'intake'").test(media));
 check('the customer answer is audited with NO userId — a customer is not a user',
-  /userId: null,/.test(respond) && /due_item\.customer_answered/.test(respond));
+  keyRegex('userId', 'null,').test(respond) && /due_item\.customer_answered/.test(respond));
 
 // ── 3b. CONSENT: A SERVICE MESSAGE, NOT A SECURITY ONE ──────────────────────────────────────────
 console.log('\n— the report respects the opt-out —');
@@ -81,7 +82,7 @@ const send = readFileSync('pages/api/intake-report-send.ts', 'utf8');
 check('the send path uses the shared mapping', /describeSendFailure\(/.test(send));
 check('  …and NO ADDRESS is handled separately from a failed send', /no_recipient/.test(send)
   && /nothing was attempted/i.test(send), 'nothing was attempted, so it must not read as a failure');
-check('the link is returned whatever happened', /url: link\.url/.test(send),
+check('the link is returned whatever happened', keyRegex('url', 'link.url').test(send),
   'a refusal is not a dead end — the garage can hand the link over');
 const sendCode = send.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 check('re-sending does NOT revoke the old link', !/revokeMagicLinks/.test(sendCode),

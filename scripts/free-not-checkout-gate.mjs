@@ -42,6 +42,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const D = await import('../lib/demo-tenant.ts').catch(() => ({}));
 const O = await import('../lib/onboarding.ts').catch(() => ({}));
@@ -139,13 +140,13 @@ try {
   // reaching the dashboard afterwards cannot be explained by the gate never redirecting at all.
   console.log('\n— a tenant with no exemption and no subscription is redirected —');
   const paying = await openDashboard();
-  check('the dashboard redirects to Checkout', /\/onboarding\/billing/.test(paying.url), paying.url);
+  check('the dashboard redirects to Checkout', pathRegex('/onboarding/billing').test(paying.url), paying.url);
 
   console.log('\n— and a free tenant reaches its own dashboard —');
   await prisma.group.update({ where: { id: ZZ }, data: asFree });
   const free = await openDashboard();
-  check('it is NOT redirected to Checkout', !/\/onboarding\//.test(free.url), free.url);
-  check('  …it is on the dashboard', /\/admin\/dashboard/.test(free.url), free.url);
+  check('it is NOT redirected to Checkout', !pathRegex('/onboarding/').test(free.url), free.url);
+  check('  …it is on the dashboard', pathRegex('/admin/dashboard').test(free.url), free.url);
   // POSITIVE. "Not redirected" is true of a crashed page and of a 500.
   check('  …and the dashboard actually rendered', free.settled && /Dashboard/i.test(free.text),
     `settled=${free.settled}, ${free.text.length} chars`);

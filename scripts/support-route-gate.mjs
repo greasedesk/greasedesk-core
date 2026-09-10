@@ -39,6 +39,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex, pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, existsSync } = await import('node:fs');
 const R = await import('../lib/tenant-rep.ts').catch(() => ({}));
@@ -60,13 +61,13 @@ try {
   // ── 1. THE RAIL ──────────────────────────────────────────────────────────────────────────────
   console.log('\n— support is reachable without hunting for it —');
   const layout = code('components/layout/AdminLayout.tsx');
-  const supportAt = layout.indexOf('/admin/support');
-  const settingsAt = layout.indexOf('/admin/settings"');
+  const supportAt = layout.search(pathRegex('/admin/support'));
+  const settingsAt = layout.search(pathRegex('/admin/settings'));
   check('the rail links to Support', supportAt > -1);
   check('  …above Settings, in the pinned group', supportAt > -1 && settingsAt > -1 && supportAt < settingsAt,
     `support@${supportAt} settings@${settingsAt} — reached when something is wrong, not in the flow of work`);
   // NOT one of the thirteen: those are filtered by `ready`, and a support route is never conditional.
-  check('  …and is not in the work list', !/key: 'support'/.test(layout),
+  check('  …and is not in the work list', !keyRegex('key', "'support'").test(layout),
     'navItems is work; this belongs beside Settings');
 
   // ── 2. THE PAGE ──────────────────────────────────────────────────────────────────────────────
@@ -74,8 +75,8 @@ try {
   check('the support page exists', page.length > 0);
   check('  …with no role gate', page.length > 0 && !/requireAdminPage|isAdmin\s*\?|adminOnly/.test(page),
     'the person who picks up the phone in a workshop is rarely the account holder');
-  check('  …leading with the number, click-to-call', /COMPANY\.phoneE164/.test(page) && /tel:/.test(page));
-  check('  …hosting its own form', /\/api\/contact/.test(page));
+  check('  …leading with the number, click-to-call', /COMPANY\.phoneE164/.test(page) && /tel:/.test(page)); // @anchored-ok: a URL scheme in the page's href, not a property key
+  check('  …hosting its own form', pathRegex('/api/contact').test(page));
   check('  …and NOT sending a signed-in garage to the marketing site',
     page.length > 0 && !/href="\/contact"/.test(page), 'that is public chrome and a cookie banner');
 
@@ -149,7 +150,7 @@ try {
     `keys: ${Object.keys(assigned ?? {}).join(', ')}`);
   const src = code('lib/tenant-rep.ts');
   check('  …and the resolver never selects it',
-    !/email:\s*true/.test(src) && !/rep\.email/.test(src),
+    !keyRegex('email', 'true').test(src) && !/rep\.email/.test(src),
     'kept out of the object the page receives, like share_bp and payout_details');
 
   await prisma.rep.update({ where: { id: repRow.id }, data: { phone: null, phone_e164: null } });
@@ -174,12 +175,12 @@ try {
   await p.fill('input[type="email"]', 'manager@zzgategarage.test');
   await p.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([p.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), p.click('button[type="submit"]')]);
-  check('the site manager is signed in', !/\/admin\/login/.test(p.url()), p.url());
+  check('the site manager is signed in', !pathRegex('/admin/login').test(p.url()), p.url());
 
   await p.goto(`${BASE}/admin/support`, { waitUntil: 'domcontentloaded' });
   await p.waitForSelector('[data-testid="support-phone"]', { timeout: 30000 }).catch(() => {});
   const url = p.url();
-  check('a non-admin reaches Support', /\/admin\/support/.test(url), url);
+  check('a non-admin reaches Support', pathRegex('/admin/support').test(url), url);
   const body = await p.evaluate(() => document.body.innerText);
   const telHref = await p.evaluate(() => document.querySelector('[data-testid="support-phone"]')?.getAttribute('href') ?? null);
   check('  …and the number is the first thing on it', telHref === `tel:${C.COMPANY?.phoneE164}`, String(telHref));
@@ -191,17 +192,17 @@ try {
   const html = await p.content();
   check('  …with the login address nowhere on it', !body.includes(REP_EMAIL) && !html.includes(REP_EMAIL),
     'the credential a rep signs in with is not a published contact route');
-  check('  …and no mailto for the rep', !/mailto:zz-support-gate/.test(html));
+  check('  …and no mailto for the rep', !/mailto:zz-support-gate/.test(html)); // @anchored-ok: a URL scheme in served HTML, not a property key
 
   // ── 7. THE OLD ROUTE STILL WORKS ─────────────────────────────────────────────────────────────
   await p.goto(`${BASE}/admin/settings/rep`, { waitUntil: 'domcontentloaded' });
-  check('the old My Rep URL lands on Support', /\/admin\/support/.test(p.url()), p.url());
+  check('the old My Rep URL lands on Support', pathRegex('/admin/support').test(p.url()), p.url());
   const settings = code('components/layout/SettingsLayout.tsx');
-  check('  …and the subtab became a pointer', !/name: 'My Rep'/.test(settings) && /\/admin\/support/.test(settings));
+  check('  …and the subtab became a pointer', !keyRegex('name', "'My Rep'").test(settings) && pathRegex('/admin/support').test(settings));
 
   // ── 8. A DEAD LINK OFFERS A WAY TO REPORT IT ─────────────────────────────────────────────────
   const notFound = code('pages/404.tsx');
-  check('404 offers Support', /\/admin\/support/.test(notFound),
+  check('404 offers Support', pathRegex('/admin/support').test(notFound),
     'a garage that hits a dead link has a problem and nowhere to say so');
   check('  …and stopped hardcoding a hex', !/#[0-9a-fA-F]{6}/.test(notFound) && /bg-accent/.test(notFound));
 } catch (e) {

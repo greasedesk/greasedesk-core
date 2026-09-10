@@ -48,6 +48,8 @@ import { spawn } from 'node:child_process';
 // suite. Load it here, where the URL is now actually needed.
 import 'dotenv/config';
 import { firstFailureLine } from './_gate-summary.mjs';
+// The one key matcher — imported directly: this runner cannot load _gate-preflight (see gate-origin-gate).
+const { keyRegex } = await import('../lib/anchored-match.ts');
 
 /**
  * ── THE POOL A GATE GETS, STATED RATHER THAN INHERITED ──────────────────────────────────────────
@@ -114,7 +116,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
-    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate',
+    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate',
     'schema-drift-gate',
     'rep-host-gate',
     'engine-room-palette-gate',
@@ -290,7 +292,7 @@ const identify = (origin) => new Promise((resolve) => {
 const staleClient = async (origin) => {
   try {
     const r = await fetch(`${origin}/api/dev/client-freshness`, { signal: AbortSignal.timeout(6000) });
-    return /"stale"\s*:\s*true/.test(await r.text());
+    return keyRegex('stale', 'true').test(await r.text());
   } catch { return false; } // unreachable is a different problem, and the identity probe reports it
 };
 

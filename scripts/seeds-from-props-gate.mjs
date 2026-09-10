@@ -41,6 +41,8 @@
  * reason — the same bargain as lib/invoice-snapshots. An undeclared one fails the gate.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 import { readFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
@@ -86,7 +88,7 @@ function bal(src, i, open, close) {
   return o;
 }
 const TRIVIAL = /^\s*(''|""|``|false|true|null|undefined|0|\[\]|\{\}|new Set\(\)|new Map\(\))\s*$/;
-const WRITES_BACK = /method:\s*['"](POST|PATCH|PUT|DELETE)['"]/;
+const WRITES_BACK = keyRegex('method', /['"](POST|PATCH|PUT|DELETE)['"]/);
 
 /** Components that some parent mounts inside a conditional JSX region — these can remount mid-page. */
 function conditionallyMounted(files, read) {
@@ -195,7 +197,7 @@ check('  …and clears dirty once what was typed is what is stored', /setDirty\(
 const ws = read('components/jobcard/JobCardWorkspace.tsx');
 const overlay = bal(ws, ws.indexOf('setOv({', ws.indexOf('async function refreshCard')), '(', ')');
 check('refreshCard reconciles BOTH service-computer reads',
-  /scheduleOnArrival:/.test(overlay) && /serviceSchedule:/.test(overlay),
+  keyRegex('scheduleOnArrival').test(overlay) && keyRegex('serviceSchedule').test(overlay),
   'the pane endpoint always returned them; the overlay simply did not copy them');
 for (const [label, pat] of [['arrival', /recorded=\{eff\.scheduleOnArrival/], ['departure', /recorded=\{eff\.serviceSchedule/]])
   check(`  …and the ${label} panel reads the reconciled value, not the page-load one`, pat.test(ws));

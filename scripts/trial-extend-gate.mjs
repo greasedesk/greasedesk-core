@@ -29,6 +29,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync, existsSync } = await import('node:fs');
 // Tolerant: absent before this slice lands, so the run reaches every check instead of dying at 1.
 const X = await import('../lib/trial-extension.ts').catch(() => ({}));
@@ -100,7 +101,7 @@ try {
   check('  …and answers 404 out of scope, never 403', /tenantInScope[\s\S]{0,160}?status\(404\)/.test(api),
     'the Engine Room is undiscoverable; a 403 confirms the tenant exists');
   check('it sends proration_behavior none and an idempotency key',
-    /proration_behavior:\s*'none'/.test(api) && /idempotencyKey/.test(api),
+    keyRegex('proration_behavior', "'none'").test(api) && /idempotencyKey/.test(api),
     'a proration invoice on a tenant promised a free period is the surprise worth ruling out');
   check('  …then RE-READS the subscription', /subscriptions\.retrieve\(/.test(api),
     'the requested date is what we asked for; the re-read is what happened');
@@ -113,8 +114,8 @@ try {
   console.log('\n— and it is recorded on both sides of the boundary —');
   check('the local branch is labelled, not silently different',
     /No subscription yet/.test(api), 'the operator must know which of the two acts they performed');
-  check('the tenant’s own ledger gets a row', /entity:\s*'group'/.test(api)
-    && /billing\.trial_extended/.test(api) && /userId:\s*null/.test(api),
+  check('the tenant’s own ledger gets a row', keyRegex('entity', "'group'").test(api)
+    && /billing\.trial_extended/.test(api) && keyRegex('userId', 'null').test(api),
     'nobody inside the business did this, and until now nothing on their side said it happened');
   check('  …and the operator ledger records the DIRECTION in the action',
     /tenant\.trial_extended/.test(api), 'a payload field for the direction is a payload nobody filters on');
@@ -124,7 +125,7 @@ try {
   // stripeTrialEndAfter is the RE-READ value. If it diverges from what we asked for, the audit is
   // the only place that difference survives.
   check('  …and the recorded Stripe date is the re-read one',
-    /stripeTrialEndAfter:[^,\n]*(after|reread|fresh)/i.test(api),
+    keyRegex('stripeTrialEndAfter', /[^,\n]*(after|reread|fresh)/, 'i').test(api),
     'recording the requested date would make a divergence invisible');
 
   // ── 5. THE TENANT IS TOLD, ON THE SCREEN THAT CHANGED ────────────────────────────────────────
@@ -144,7 +145,7 @@ try {
   const opWrites = readdirSync('pages/api/superadmin').filter((f) => f.endsWith('.ts'))
     .map((f) => `pages/api/superadmin/${f}`)
     .filter((f) => /superAdminAudit\.create|writeSuperAdminAudit|audit\(/.test(prose(readFileSync(f, 'utf8'))));
-  const withTenantLedger = opWrites.filter((f) => /entity:\s*'group'/.test(prose(readFileSync(f, 'utf8'))));
+  const withTenantLedger = opWrites.filter((f) => keyRegex('entity', "'group'").test(prose(readFileSync(f, 'utf8'))));
   check('exactly one operator write reaches the tenant’s ledger', withTenantLedger.length === 1,
     `${withTenantLedger.length} of ${opWrites.length}: ${withTenantLedger.join(', ') || 'none'}`);
   check('  …and the file that has claimed BOTH LEDGERS longest says it does not yet',

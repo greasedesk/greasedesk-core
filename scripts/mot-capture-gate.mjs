@@ -25,6 +25,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const O = await import('../lib/odometer.ts');
 const { readFileSync } = await import('node:fs');
@@ -158,7 +159,7 @@ try {
   const diary = readFileSync('pages/admin/diary.tsx', 'utf8');
   const newPg = readFileSync('pages/admin/jobcards/new.tsx', 'utf8');
   check('the diary sends all three MOT fields',
-    /motExpiry: mot\.motExpiry/.test(diary) && /lastMotMileage: mot\.lastMotMileage/.test(diary) && /lastMotDate: mot\.lastMotDate/.test(diary));
+    keyRegex('motExpiry', 'mot.motExpiry').test(diary) && keyRegex('lastMotMileage', 'mot.lastMotMileage').test(diary) && keyRegex('lastMotDate', 'mot.lastMotDate').test(diary));
   check('  …and keeps them from the lookup that already ran', /if \(r\.mot\) setMot\(r\.mot\)/.test(diary));
   check('the old decision is REWRITTEN, not deleted',
     /REVERSED 2026-08-19/.test(prose(diary)) && /a booking stays off the\s*MOT hot path/.test(prose(diary)),

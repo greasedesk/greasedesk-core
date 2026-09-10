@@ -43,6 +43,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 // Tolerant: absent before this slice lands, so the run reaches all its checks instead of dying at 1.
@@ -138,7 +139,7 @@ try {
     'a missing plate is not a matching plate');
   const dvsaSrc = prose(readFileSync('pages/api/dvsa-lookup.ts', 'utf8'));
   check('the endpoint reads the vehicle’s own plate before writing to it',
-    /registration:\s*true/.test(dvsaSrc),
+    keyRegex('registration', 'true').test(dvsaSrc),
     'it selected only { id: true }, so it could not compare');
   check('  …and the odometer write is behind the match', /sameRegistration\(/.test(dvsaSrc));
 

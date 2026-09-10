@@ -26,6 +26,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { urlUnder } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('playwright-core');
 const prisma = await gatePrisma();
 
@@ -91,7 +92,7 @@ try {
   browser = await chromium.launch({ channel: 'chrome' });
   const page = await (await browser.newContext()).newPage();
   const posted = [];
-  page.on('request', (r) => { if (r.url().includes('/api/service-schedule') && r.method() === 'POST') posted.push(r.postData() ?? ''); });
+  page.on('request', (r) => { if (urlUnder(r.url(), '/api/service-schedule') && r.method() === 'POST') posted.push(r.postData() ?? ''); });
   await page.goto(`${BASE}/admin/login`, { waitUntil: 'domcontentloaded' });
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');

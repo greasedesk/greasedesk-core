@@ -29,6 +29,11 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, declineToRun, erOrigin, ER_RESOLVER_ARGS, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { underPath } = await import('../lib/anchored-match.ts');
+// EVERY PAGE A FAILED SIGN-IN CAN LAND ON, named. The old test was /\/login/, which found all three by
+// being unanchored — and would have found /login-help as well.
+const LOGIN_PAGES = ['/superadmin/login', '/admin/login', '/login'];
+const onLogin = (path) => LOGIN_PAGES.some((p) => underPath(path, p));
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const bcrypt = (await import('/Users/hugh/Developer/greasedesk-core/node_modules/bcryptjs/index.js')).default;
@@ -126,9 +131,9 @@ try {
   await page.click('button[type="submit"]');
   // SETTLE FIRST. next-auth redirects on its own after the credential POST, and racing it with a
   // goto aborts the navigation — ERR_ABORTED, which reads like the page is broken when it is not.
-  await page.waitForURL((u) => !/\/login/.test(u.pathname), { timeout: 60000 }).catch(() => {});
+  await page.waitForURL((u) => !onLogin(u.pathname), { timeout: 60000 }).catch(() => {});
   await page.waitForTimeout(800);
-  check('the operator is signed in', !/\/login/.test(new URL(page.url()).pathname), page.url());
+  check('the operator is signed in', !onLogin(new URL(page.url()).pathname), page.url());
   await page.goto(`${ER}/superadmin/tenants/${ZZ}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="er-trial-extend"]', { timeout: 30000 }).catch(() => {});
   check('a support operator sees the tenant and the control',

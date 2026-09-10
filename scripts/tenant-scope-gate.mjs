@@ -22,6 +22,8 @@
  * count up and goes red; migrating one lets the ceiling be lowered in the same commit.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -44,7 +46,7 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
  * Widened here rather than in the guard predicates on purpose: this decides WHO IS IN SCOPE. The
  * guards decide who passes. Getting the first one wrong makes the second one irrelevant.
  */
-const touchesTenantData = (src) => /group_id\s*:/.test(src) || /\bgroupId\b/.test(src)
+const touchesTenantData = (src) => keyRegex('group_id').test(src) || /\bgroupId\b/.test(src)
   || /(?:\?\.|\.)group_id\b/.test(src);
 /** Route A — the chokepoint. Scope can only be OBTAINED from the thing that validated it. */
 const usesChokepoint = (src) => /\brequireTenantApi\s*\(/.test(src);
@@ -152,7 +154,7 @@ check('the inline-guard count has not RISEN', inline.length <= INLINE_GUARD_CEIL
 
 // ── THE CHOKEPOINT'S DEFINING PROPERTY ────────────────────────────────────────────────────────
 const guard = read('lib/admin-guard.ts');
-check('TenantScope.groupId is NON-NULLABLE', /groupId:\s*string;/.test(guard.split('export type TenantScope')[1]?.slice(0, 400) ?? ''),
+check('TenantScope.groupId is NON-NULLABLE', keyRegex('groupId', 'string;').test(guard.split('export type TenantScope')[1]?.slice(0, 400) ?? ''),
   'the point is not one place to check — it is that scope can only be OBTAINED from the validator');
 check('it refuses a session with no tenant', /if \(!vis\.groupId\) \{ res\.status\(401\)/.test(guard),
   'operators and reps are not tenant actors; they get 401 by construction');
@@ -172,7 +174,7 @@ check('a route touching no tenant data is not relevant', !touchesTenantData("res
 const VALUE_FORM = "const u = session?.user as any;\nconst g = await prisma.group.findUnique({ where: { id: u.group_id } });\n";
 check('the tenant used as a VALUE is in the population', touchesTenantData(VALUE_FORM));
 check('  …and it carries NEITHER of the two shapes that used to define it',
-  !/group_id\s*:/.test(VALUE_FORM) && !/\bgroupId\b/.test(VALUE_FORM),
+  !keyRegex('group_id').test(VALUE_FORM) && !/\bgroupId\b/.test(VALUE_FORM),
   'so the check above is the widening doing the work, not one of the old clauses');
 check('  …in both spellings', touchesTenantData("u?.group_id") && touchesTenantData("user.group_id"));
 check('  …and a bare word is still not enough', !touchesTenantData("// scoped per group_id somewhere"),

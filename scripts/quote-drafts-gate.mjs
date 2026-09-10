@@ -25,6 +25,7 @@
 import './_gate-preflight.mjs';
 const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 const Q = await import('../lib/quotes-list.ts');
 
@@ -90,7 +91,7 @@ try {
   // ── 5. ONE QUERY, WIDENED ────────────────────────────────────────────────────────────────────
   const src = prose('lib/quotes-list.ts');
   check('the versionless read covers drafts as well as quoted',
-    /status: \{ in: \['quoted', 'draft'\] \}/.test(src), 'widened and branched, not a second query');
+    keyRegex('status', "{ in: ['quoted', 'draft'] }").test(src), 'widened and branched, not a second query');
   const cardQueries = [...src.matchAll(/prisma\.jobCard\.findMany/g)].length;
   check('  …and it is still ONE card query', cardQueries === 1, `${cardQueries} found`);
 

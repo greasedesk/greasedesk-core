@@ -21,6 +21,7 @@
 import './_gate-preflight.mjs';
 const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { resolveCompanyIdentity } = await import('../lib/invoice.ts');
 const { readFileSync } = await import('node:fs');
@@ -70,8 +71,8 @@ try {
     check(`${label} uses trading || legal`, /trading_name\s*\|\|\s*(g|v\.group|card\.group|group)\??\.?group_name/.test(readFileSync(f, 'utf8')));
   }
   const mail = readFileSync('lib/invoice-email-send.ts', 'utf8');
-  check('the invoice email SUBJECT uses the display name', /garage: displayName/.test(mail));
-  check('and the body does too', /garageName: displayName/.test(mail));
+  check('the invoice email SUBJECT uses the display name', keyRegex('garage', 'displayName').test(mail));
+  check('and the body does too', keyRegex('garageName', 'displayName').test(mail));
   check('invoice_sender_name NARROWS it rather than competing',
     /const senderName = \(group\.invoice_sender_name \|\| ''\)\.trim\(\) \|\| displayName;/.test(mail),
     'sender || trading || legal — one chain, so a garage that sets only a trading name gets it here too');
@@ -80,9 +81,9 @@ try {
   console.log('\n— what must NOT change —');
   const issue = readFileSync('lib/invoice-issue.ts', 'utf8');
   check('the invoice mint freezes the REGISTERED name as company_name_snapshot',
-    /company_name_snapshot: identity\.name,/.test(issue));
+    keyRegex('company_name_snapshot', 'identity.name,').test(issue));
   const invLib = readFileSync('lib/invoice.ts', 'utf8');
-  check('resolveCompanyIdentity still returns the registered name as `name`', /name: group\.group_name,/.test(invLib),
+  check('resolveCompanyIdentity still returns the registered name as `name`', keyRegex('name', 'group.group_name,').test(invLib),
     'the discriminator for the whole slice — if this ever became the trading name, VAT documents would misidentify the supplier');
   for (const f of ['pages/api/reports/vat-summary.ts', 'pages/admin/reports/vat.tsx']) {
     check(`${f.split('/').pop()} does not switch to the trading name`, !/trading_name/.test(readFileSync(f, 'utf8')));
@@ -91,10 +92,10 @@ try {
   // ── 5. FROZEN ON BOTH DOCUMENTS ────────────────────────────────────────────────────────────
   console.log('\n— frozen at issue, on both document types —');
   check('the invoice mint writes company_trading_name_snapshot',
-    /company_trading_name_snapshot: identity\.tradingName \?\? null,/.test(issue));
+    keyRegex('company_trading_name_snapshot', 'identity.tradingName ?? null,').test(issue));
   const cn = readFileSync('lib/credit-note.ts', 'utf8');
   check('the credit note COPIES it from the invoice, not from the tenant today',
-    /company_trading_name_snapshot: inv\.company_trading_name_snapshot,/.test(cn),
+    keyRegex('company_trading_name_snapshot', 'inv.company_trading_name_snapshot,').test(cn),
     'a credit note showing a newer name than the invoice it corrects would not read as a pair');
   const cols = await prisma.$queryRawUnsafe(
     `SELECT table_name FROM information_schema.columns

@@ -6,6 +6,7 @@
  * working URL at /<slug> with NO deploy. Country is GB today; a `/ie` prefix resolves to IE.
  */
 import type { GetServerSideProps, GetServerSidePropsContext } from 'next';
+import { urlUnder } from '@/lib/anchored-match';
 
 export type PublicDocProps = { slug: string; title: string; body: string; version: string; effectiveFrom: string | null };
 
@@ -13,7 +14,8 @@ async function resolve(ctx: GetServerSidePropsContext, slug: string) {
   if (!slug) return { notFound: true as const };
   const { prisma } = await import('@/lib/db');
   const { resolvePublished } = await import('@/lib/content');
-  const country = /^\/ie(\/|$)/.test(ctx.resolvedUrl || '') ? 'IE' : 'GB';
+  // resolvedUrl CARRIES THE QUERY. The hand-written /^\/ie(\/|$)/ failed on /ie?ref=… and served GB.
+  const country = urlUnder(ctx.resolvedUrl || '', '/ie') ? 'IE' : 'GB';
   const doc = await resolvePublished(prisma, slug, country);
   if (!doc) return { notFound: true as const };
   return { props: { slug, title: doc.title, body: doc.body, version: doc.version, effectiveFrom: doc.effective_from ? doc.effective_from.toISOString().slice(0, 10) : null } };

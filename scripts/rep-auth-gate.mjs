@@ -32,6 +32,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, serverReady, describeError, gateOrigin, repOrigin, REP_RESOLVER_ARGS } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { hasKey, keyRegex, pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, readdirSync, existsSync } = await import('node:fs');
 const { randomUUID } = await import('node:crypto');
@@ -54,7 +55,7 @@ try {
   // ── 1. NO PASSWORD PATH REMAINS ───────────────────────────────────────────────────────────────
   console.log('\n— a rep has no password, anywhere —');
   const authSrc = src('pages/api/auth/[...nextauth].ts');
-  const repProvider = (authSrc.match(/id:\s*'rep'[\s\S]*?\n    \}\),/) ?? [])[0] ?? '';
+  const repProvider = (authSrc.match(keyRegex('id', /'rep'[\s\S]*?\n    \}\),/)) ?? [])[0] ?? '';
   check('the rep provider exists', repProvider.length > 0);
   check('  …and asks for no password', repProvider.length > 0 && !/password/i.test(repProvider),
     'a credentials provider with a password field is a password login whatever the column says');
@@ -124,6 +125,7 @@ try {
   const spendBody = (libSrc.split('export async function spendRepLink')[1] ?? '').split('\nexport ')[0];
   check('  …with no read before the claim', !/findFirst|findUnique/.test(spendBody.split('updateMany(')[0]),
     'a read before the update is the window two replays both fall through');
+  // @anchored-ok: limiter KEY PREFIXES inside template strings (`repauth:ip:${ip}`), not property keys
   check('  …and it does not spend the CUSTOMER limiter', /repauth:ip:/.test(code(libSrc)) && !/magic:ip:/.test(code(libSrc)),
     'a shared key means a busy rep locks a customer out of their own invoice, and the reverse');
 
@@ -189,7 +191,7 @@ try {
   check('the bare root serves the PORTAL to a signed-in rep',
     await page.locator('[data-testid="rep-home"]').count() === 1,
     `${page.url()} — the session decides which page the root serves, not whether it serves one`);
-  check('  …without bouncing them to sign in again', !/\/rep\/login/.test(page.url()), page.url());
+  check('  …without bouncing them to sign in again', !pathRegex('/rep/login').test(page.url()), page.url());
 
   // ── AND ITS 404 OFFERS A DOOR A REP CAN USE ──────────────────────────────────────────────────
   // The destination is chosen in a useEffect from window.location, so only a browser runs it — the
@@ -213,7 +215,7 @@ try {
   await ctx.addCookies([{ ...session, domain: 'localhost', path: '/' }]);
   const apexPage = await ctx.newPage();
   const admin = await apexPage.goto(`${APEX}/admin/dashboard`, { waitUntil: 'domcontentloaded' });
-  check('a REAL rep session is refused by the tenant app', admin.status() !== 200 || /\/admin\/login/.test(apexPage.url()),
+  check('a REAL rep session is refused by the tenant app', admin.status() !== 200 || pathRegex('/admin/login').test(apexPage.url()),
     `${admin.status()} ${apexPage.url()} — no group_id, no User row: the tenant guards fail closed`);
   const er = await apexPage.goto(`${APEX}/superadmin/tenants`, { waitUntil: 'domcontentloaded' });
   check('  …and by the Engine Room, at the middleware', er.status() === 404, String(er.status()));
@@ -228,13 +230,15 @@ try {
   // of this flagged the profile route for doing exactly what it is for. The credential is the
   // column literally named 'email', and the discriminator is the underscore in front of the other.
   // Same trap as /RepVisit/ matching RepVisitAnswer; that is now nine instances in this suite.
-  const FORBIDDEN_KEYS = /(^|[^_\w])(email|bank_account_name|bank_sort_code|bank_account_number)\s*:/;
-  const writes = repApis.filter((f) => /rep\.update|repUpdate/.test(code(src(f))) && FORBIDDEN_KEYS.test(code(src(f))));
+  // The anchoring is now lib/anchored-match's, not this gate's: anchored-match-gate bans writing it here.
+  const FORBIDDEN_KEYS = ['email', 'bank_account_name', 'bank_sort_code', 'bank_account_number'];
+  const writesCredential = (s) => FORBIDDEN_KEYS.some((k) => hasKey(s, k));
+  const writes = repApis.filter((f) => /rep\.update|repUpdate/.test(code(src(f))) && writesCredential(code(src(f))));
   check('no rep-facing route writes either', writes.length === 0, writes.join(', ') || `${repApis.length} rep routes, none writing the credential`);
   check('  …and the sweep really looked at something', repApis.length >= 1, `${repApis.length} routes under pages/api/rep`);
   // THE SCAN BITES. A negative assertion passes on a blank page, and this one now excludes a
   // legitimate near-miss — so both halves are proved on constructed sources rather than trusted.
-  const bites = (s) => /(^|[^_\w])(email|bank_account_name|bank_sort_code|bank_account_number)\s*:/.test(s);
+  const bites = writesCredential;
   check('  …and it FLAGS a route that would write the credential', bites('prisma.rep.update({ data: { email: x } })'));
   check('  …while contact_email is not the credential', !bites('prisma.rep.update({ data: { contact_email: x } })'),
     'the address on their invoice is theirs to change; the one they sign in with is not');

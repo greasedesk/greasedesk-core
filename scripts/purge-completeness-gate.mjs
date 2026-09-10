@@ -30,6 +30,8 @@
  * swept; only the named list is.
  */
 import './_gate-preflight.mjs';
+import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { describeError } = await import('./_gate-preflight.mjs');
 const { readFileSync } = await import('node:fs');
 
@@ -60,7 +62,7 @@ export function purgeSurvivors(schema, purgeSrc) {
     const rels = [];
     for (const r of body.matchAll(/^\s*(\w+)\s+(\w+)(\?|\[\])?\s+@relation\(([^)]*)\)/gm)) {
       if (r[3] === '[]') continue;                       // the list side holds no foreign key
-      rels.push({ target: r[2], onDelete: (r[4].match(/onDelete:\s*(\w+)/) ?? [])[1] ?? 'NoAction' });
+      rels.push({ target: r[2], onDelete: (r[4].match(keyRegex('onDelete', /(\w+)/)) ?? [])[1] ?? 'NoAction' });
     }
     models[name] = { rels, hasGroupId: /^\s*group_id\s+String/m.test(body) };
   }

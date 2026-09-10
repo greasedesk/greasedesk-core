@@ -13,6 +13,7 @@
 import './_gate-preflight.mjs';
 const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { INTAKE_ITEMS, INTAKE_SWITCH, intakeItemDone, intakeItemStates, intakeOutstanding, SKIP_REASON_CHIPS, DIAG_SCAN_SLOT } = await import('../lib/intake-items.ts');
 const { readFileSync } = await import('node:fs');
@@ -108,7 +109,7 @@ check('  …and the reason box carries NO required attribute', !/\brequired\b/.t
 check('  …with the reasoning kept for the next reader', /REQUIRED category on a phone in a workshop is ceremony/.test(ui));
 // And the skip itself must be reachable with NO reason at all — silence is allowed, and the email
 // then says "no reason given", which is itself information.
-check('a skip with an empty reason is still a skip', /reason: \(reason \?\? ''\)\.trim\(\)\.slice\(0, 300\) \|\| null/.test(readFileSync('pages/api/intake-items.ts', 'utf8')));
+check('a skip with an empty reason is still a skip', keyRegex('reason', "(reason ?? '').trim().slice(0, 300) || null").test(readFileSync('pages/api/intake-items.ts', 'utf8')));
 
 // ── 6. LIVE ON ZZ ──────────────────────────────────────────────────────────────────────────────
 console.log('\n— on ZZ: the affirmative, and a finding that contradicts it —');
@@ -134,7 +135,7 @@ try {
   check('recording a finding clears it — a card never asserts both', c.intake_nothing_found_at === null,
     '"nothing found" alongside real findings says two things at once');
   check('  …and the writer does that itself, not by hand here',
-    /intake_nothing_found_at: null/.test(readFileSync('pages/api/due-items.ts', 'utf8')));
+    keyRegex('intake_nothing_found_at', 'null').test(readFileSync('pages/api/due-items.ts', 'utf8')));
   const facts = { dueItemCount: 1, nothingFoundAt: null, odometerIn: null, vin: null, hasIntakeVideo: false, diagScanAt: null };
   check('and the item is STILL done — via the finding, not the affirmative', intakeItemDone('findings', facts) === true);
   await prisma.vehicleDueItem.delete({ where: { id: item.id } });

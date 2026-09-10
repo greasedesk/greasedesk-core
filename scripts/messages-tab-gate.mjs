@@ -16,6 +16,7 @@
 import './_gate-preflight.mjs';
 const { serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { TAB_KEYS, NON_STAGE_TABS, TAB_STAGE, computeTabs } = await import('../lib/jobcard-tabs.ts');
 const { readFileSync } = await import('node:fs');
@@ -73,7 +74,7 @@ try {
   // ── 3. THE COUNT IS THIS THREAD'S, NOT THE TENANT'S ────────────────────────────────────────
   console.log('\n— the badge —');
   const conv = readFileSync('lib/message-threads.ts', 'utf8');
-  check('conversationForJobCard carries the thread’s own unread', /unread: \(t as any\)\.unread_count \?\? 0/.test(conv));
+  check('conversationForJobCard carries the thread’s own unread', keyRegex('unread', '(t as any).unread_count ?? 0').test(conv));
   check('the sidebar total is a DIFFERENT number', /export async function unreadThreadCount/.test(conv),
     'the tab says what is waiting here; the sidebar says what is waiting anywhere');
 

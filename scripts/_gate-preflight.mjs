@@ -35,6 +35,8 @@
  * by copying an existing one, which is the mechanism that actually carries a convention forward.
  */
 import { fstatSync } from 'node:fs';
+// The one key matcher (anchored-match-gate bans hand-written ones). A leaf: it loads before _ts.mjs registers anything.
+const { keyRegex } = await import('../lib/anchored-match.ts');
 
 // Idempotent: three entry points chain here and a gate may import it directly.
 if (!globalThis.__gatePreflightRan) {
@@ -245,7 +247,7 @@ export async function explainIfClientStale(_base = gateOrigin()) {
   try {
     const r = await fetch(`${gateOrigin()}/api/dev/client-freshness`);
     const t = await r.text();
-    if (/"stale"\s*:\s*true/.test(t)) {
+    if (keyRegex('stale', 'true').test(t)) {
       console.log('\n  ⚠  THE DEV SERVER IS RUNNING AN OLD PRISMA CLIENT — restart it and re-run.');
       console.log('     (This failure is almost certainly that, not the thing being tested.)\n');
       return true;

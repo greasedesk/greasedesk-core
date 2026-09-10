@@ -21,6 +21,7 @@ import { NavProvider, type ResolvedNav } from '@/components/marketing/NavProvide
 // client bundle (_app ships to the client).
 // @ts-ignore — JS config (no type declarations); shape is the next-i18next UserConfig.
 import nextI18NextConfig from '../next-i18next.config';
+import { underPath, urlUnder } from '@/lib/anchored-match';
 
 declare global {
   interface Window { __gd_json_patched?: boolean }
@@ -73,11 +74,13 @@ function resolveFullHeight(Component: unknown, query: Record<string, unknown>): 
 }
 
 function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
-  const useAdminShell = router.pathname.startsWith('/admin') && router.pathname !== '/admin/login';
+  const useAdminShell = underPath(router.pathname, '/admin') && router.pathname !== '/admin/login';
   // The consent banner shows ONLY on the public marketing site — never a wall in front of the tenant app
   // or the Engine Room login (those run strictly-necessary session cookies only). Excludes /admin, /m,
   // and /superadmin (the last covers er.greasedesk.com, whose routes are all /superadmin/*).
-  const isAppRoute = router.pathname.startsWith('/admin') || router.pathname.startsWith('/m') || router.pathname.startsWith('/superadmin');
+  // underPath, not startsWith: '/m' is the PWA, and startsWith('/m') would also take any public page
+  // whose name begins with m (/mot-check, /magic…) out from under the consent banner.
+  const isAppRoute = underPath(router.pathname, '/admin') || underPath(router.pathname, '/m') || underPath(router.pathname, '/superadmin');
   const initialConsent = ((pageProps as any).__consent ?? null) as ConsentRecord | null;
   const region = ((pageProps as any).__consentRegion ?? 'GB') as string;
   const nav = ((pageProps as any).__nav ?? null) as ResolvedNav | null;
@@ -118,7 +121,7 @@ const GreaseDeskAppWithI18n = appWithTranslation(GreaseDeskApp, nextI18NextConfi
     if (!/^\/(admin|m|superadmin|api|_next)(\/|$)/.test(asPath)) {
       const { prisma } = await import('@/lib/db');
       const { resolvePublicNav } = await import('@/lib/nav');
-      __nav = await resolvePublicNav(prisma, /^\/ie(\/|$)/.test(asPath) ? 'IE' : 'GB').catch(() => null);
+      __nav = await resolvePublicNav(prisma, urlUnder(asPath, '/ie') ? 'IE' : 'GB').catch(() => null);
     }
     return { ...appProps, pageProps: { ...appProps.pageProps, ...i18nProps, __consent, __consentRegion, __nav } };
   }

@@ -33,6 +33,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 const { randomUUID } = await import('node:crypto');
 
@@ -220,7 +221,7 @@ try {
   const sig = (listSrc.match(/export function deriveQuoteStatus\(([\s\S]*?)\)\s*:/) ?? [])[1] ?? '';
   // Inline or the named QuoteCard — either way REQUIRED. The first version matched only an inline `{` and
   // went red the moment the type was named, which was a test of spelling rather than of the rule.
-  check('deriveQuoteStatus REQUIRES the card', /card:\s*(\{|QuoteCard\b)/.test(sig) && !/card\?:/.test(sig),
+  check('deriveQuoteStatus REQUIRES the card', keyRegex('card', /(\{|QuoteCard\b)/).test(sig) && !keyRegex('card?').test(sig),
     'booked used to be optional, and marketing-board omitted it — getting `accepted` where it meant `accepted_booked`');
   const boardSrc = code(readFileSync('lib/marketing-board.ts', 'utf8'));
   check('  …and marketing-board passes one', /deriveQuoteStatus\([^)]*card/.test(boardSrc.replace(/\s+/g, ' ')) || /deriveQuoteStatus\([\s\S]{0,200}cardWasAccepted|hasAcceptedVersion/.test(boardSrc),

@@ -31,6 +31,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 const prisma = await gatePrisma();
 
@@ -103,7 +104,7 @@ try {
     'pages/api/observations.ts', 'pages/api/intake-items.ts', 'pages/api/service-schedule.ts',
     'pages/api/due-items.ts', 'pages/api/marketing-contact.ts', 'pages/api/vehicle-lookup.ts'];
   const casts = files.reduce((n, f) => n + [...readFileSync(f, 'utf8').matchAll(/\bas never\b/g)].length, 0);
-  check('the battery writer no longer casts its enum away', !/cca_standard: [^,]*as never/.test(readFileSync('lib/battery.ts', 'utf8')),
+  check('the battery writer no longer casts its enum away', !keyRegex('cca_standard', /[^,]*as never/).test(readFileSync('lib/battery.ts', 'utf8')),
     'the compiler is back on at the point that failed');
   console.log(`\n  ${casts} \`as never\` casts remain in these ten files — this gate reaches the ${REGISTER.length} LIST-shaped ones.`);
   console.log('  The rest are single literals or read-direction asserts and need a different check.');

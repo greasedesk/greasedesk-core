@@ -23,6 +23,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, serverReady, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync, existsSync } = await import('node:fs');
 const { randomUUID, createHash } = await import('node:crypto');
 
@@ -142,10 +143,10 @@ try {
   // PRODUCTION PASSES NO RENDERER, so it gets the real one. If an API route ever injected its own,
   // every clause below would be testing a document nobody ships.
   const apiSrc = code(src('pages/api/rep/invoice.ts'));
-  check('the production caller injects NO renderer', apiSrc.length > 0 && !/render:/.test(apiSrc),
+  check('the production caller injects NO renderer', apiSrc.length > 0 && !keyRegex('render').test(apiSrc),
     apiSrc.length ? 'submitRepInvoice is called without one, so the default .tsx renderer runs' : 'pages/api/rep/invoice.ts does not exist');
   check('  …and the claim is conditional on the pre-state, counted',
-    /status: 'released', rep_invoice_id: null/.test(submitSrc) && /claimed\.count !== locked\.length/.test(submitSrc),
+    keyRegex('status', "'released', rep_invoice_id: null").test(submitSrc) && /claimed\.count !== locked\.length/.test(submitSrc),
     'not a unique index with a caught P2002 — see the named fact in schema.prisma');
 
   // ── 6. THE REAL THING, AGAINST THE REAL DATABASE ─────────────────────────────────────────────

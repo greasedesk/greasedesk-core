@@ -122,6 +122,7 @@ check('  …on a route that exists for the diagnostic', existsSync('pages' + DEV
 check('  …which 404s in production', /NODE_ENV === 'production'/.test(readFileSync('pages' + DEV_PROBE + '.ts', 'utf8')),
   'it reports a state that cannot occur in production, so it has no reason to be reachable there');
 check('  …and neither probe touches a customer magic link any more',
+  // @anchored-ok: a TOKEN PREFIX — the retired probe was /c/aaaaaaaaaaaaaaaa, so a whole-segment match would go blind
   !codeOf(runnerSrc).includes('/c/aaaa') && !codeOf(preflightSrc).includes('/c/aaaa'),
   'the comments still say what changed; the code no longer does it');
 // THE TERMS ARE SPLIT SO THE SCAN CANNOT MATCH ITSELF. Written whole, each name appears in this

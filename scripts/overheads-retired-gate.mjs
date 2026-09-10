@@ -32,6 +32,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, existsSync } = await import('node:fs');
 const S = await import('../lib/setup-signals.ts').catch(() => ({}));
@@ -53,13 +54,13 @@ try {
   // ── 1. NOTHING WRITES THE REGISTER ANY MORE ──────────────────────────────────────────────────
   console.log('\n— the three writers that were left behind —');
   check('the Settings panel no longer edits overheads',
-    !/\/api\/overheads/.test(src('pages/admin/settings/overheads.tsx')),
+    !pathRegex('/api/overheads').test(src('pages/admin/settings/overheads.tsx')),
     'it is a redirect now, following the headcount.tsx pattern');
-  check('  …and redirects to Costs', /\/admin\/costs/.test(src('pages/admin/settings/overheads.tsx')));
+  check('  …and redirects to Costs', pathRegex('/admin/costs').test(src('pages/admin/settings/overheads.tsx')));
   check('the write API is gone', !existsSync('pages/api/overheads.ts'));
   check('the setup wizard posts to /api/costs, not /api/overheads',
-    /\/api\/costs/.test(src('pages/admin/setup-wizard.tsx'))
-    && !/\/api\/overheads/.test(src('pages/admin/setup-wizard.tsx')));
+    pathRegex('/api/costs').test(src('pages/admin/setup-wizard.tsx'))
+    && !pathRegex('/api/overheads').test(src('pages/admin/setup-wizard.tsx')));
   check('the wizard API reads Cost rows', /prisma\.cost\.findMany/.test(src('pages/api/setup-wizard.ts'))
     && !/prisma\.overhead\./.test(src('pages/api/setup-wizard.ts')));
   check('the demo generator creates Cost, not Overhead',
@@ -137,10 +138,10 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  check('the browser is actually signed in', !/\/admin\/login/.test(page.url()), page.url());
+  check('the browser is actually signed in', !pathRegex('/admin/login').test(page.url()), page.url());
 
   await page.goto(`${BASE}/admin/settings/overheads`, { waitUntil: 'domcontentloaded' });
-  check('the old panel URL lands on Costs', /\/admin\/costs/.test(page.url()), page.url());
+  check('the old panel URL lands on Costs', pathRegex('/admin/costs').test(page.url()), page.url());
 
   const posted = await page.evaluate(async () => {
     const r = await fetch('/api/overheads', { method: 'POST', headers: { 'Content-Type': 'application/json' },

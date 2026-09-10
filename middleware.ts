@@ -27,24 +27,25 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { underPath } from '@/lib/anchored-match';
 
 const ER_HOST = 'er.greasedesk.com';
 const REP_HOST = 'reps.greasedesk.com';
 
-const isEngineRoom = (p: string) => p === '/superadmin' || p.startsWith('/superadmin/') || p.startsWith('/api/superadmin/');
+const isEngineRoom = (p: string) => underPath(p, '/superadmin') || underPath(p, '/api/superadmin');
 /**
- * EXACT SEGMENT OR NOTHING, and the two halves are written differently for the same reason.
+ * EXACT SEGMENT OR NOTHING — underPath (lib/anchored-match) is the one place that rule lives now.
  *
  * `startsWith('/api/rep')` would also match /api/reports/vat-summary — a tenant's VAT return, which
- * exists — so the api half takes the exact path or a trailing slash and never a bare prefix.
- * `startsWith('/rep')` matches nothing today, but /admin/settings/rep sits one directory up and the
- * next path of that shape is one rename away, so the page half is written the same way rather than
- * relying on today's filenames. rep-host-gate DRIVES both paths; a matcher that reads as correct
- * can still be wrong about the one path nobody listed.
+ * exists. That line was written here once, by hand; it is the case the helper was built from, and
+ * anchored-match-gate bans writing a path prefix by hand anywhere in the app or the suite.
+ * /admin/settings/rep sits one directory up from /rep, and the next path of that shape is one rename
+ * away. rep-host-gate DRIVES both paths; a matcher that reads as correct can still be wrong about the
+ * one path nobody listed.
  */
-const isRepPortal = (p: string) => p === '/rep' || p.startsWith('/rep/') || p === '/api/rep' || p.startsWith('/api/rep/');
-const isAuth = (p: string) => p.startsWith('/api/auth/'); // shared: operator login on er., tenant login on apex
-const isNextInternal = (p: string) => p.startsWith('/_next/'); // matcher already drops /_next/static + image
+const isRepPortal = (p: string) => underPath(p, '/rep') || underPath(p, '/api/rep');
+const isAuth = (p: string) => underPath(p, '/api/auth'); // shared: operator login on er., tenant login on apex
+const isNextInternal = (p: string) => underPath(p, '/_next'); // matcher already drops /_next/static + image
 /**
  * The brand image, and nothing else from /public.
  *

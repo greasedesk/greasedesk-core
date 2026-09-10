@@ -7,6 +7,7 @@
  * exists so a region *could* differ, but current UK+EU policy is opt-in everywhere.
  */
 import { ALL_OFF, type ConsentChoice } from '@/lib/consent';
+import { urlUnder } from '@/lib/anchored-match';
 
 export type RegionConsentConfig = {
   region: string;
@@ -64,7 +65,8 @@ const REGIONS: Record<string, RegionConsentConfig> = { GB, IE };
 
 /** Resolve the region for a request/route. Today GB; `/ie` (or a future geo signal) → IE. One knob. */
 export function resolveConsentRegion(pathname?: string | null): string {
-  if (pathname && /^\/ie(\/|$)/.test(pathname)) return 'IE';
+  // urlUnder: callers pass asPath, which carries the query — /ie?ref=… resolved GB under the old /^\/ie(\/|$)/.
+  if (pathname && urlUnder(pathname, '/ie')) return 'IE';
   return 'GB';
 }
 export function getRegionConsentConfig(region: string): RegionConsentConfig {

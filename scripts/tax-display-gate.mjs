@@ -35,6 +35,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 // Tolerant: absent before this slice lands, so the run reaches every check instead of dying at 1.
 const T = await import('../lib/tax.ts').catch(() => ({}));
@@ -102,7 +103,7 @@ try {
     'it was that literal for every tenant, including the ones with no VAT');
   check('  …nor prints the raw model column', !/\{b\.taxModel\}/.test(page),
     'the enum is a storage detail; `sales_tax` is not a sentence');
-  check('  …and it selects the label it now renders', /tax_label:\s*true/.test(page),
+  check('  …and it selects the label it now renders', keyRegex('tax_label', 'true').test(page),
     'the page read tax_model and never tax_label, which is why it had nothing better to print');
 
   // ── 3. THE HEADER SAYS WHAT THE CODE DOES ────────────────────────────────────────────────────

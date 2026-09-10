@@ -17,6 +17,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const C = await import('../lib/due-item-closure.ts');
@@ -74,7 +75,7 @@ try {
   // ── 2. THE UI CANNOT CLOSE WITHOUT SAYING WHY ────────────────────────────────────────────────
   const ui = readFileSync('components/jobcard/DueItems.tsx', 'utf8');
   check('the list no longer closes with an id alone',
-    !/body: JSON\.stringify\(\{ id \}\)/.test(ui) && /closedKind: kind/.test(ui),
+    !keyRegex('body', 'JSON.stringify({ id })').test(ui) && keyRegex('closedKind', 'kind').test(ui),
     'the API accepted a reason from the day it was written and no caller ever passed one');
   check('  …and the invoiced-lines prompt closes as `fixed`, by construction',
     /close\(it\.id, 'fixed'\)/.test(ui),
@@ -212,7 +213,7 @@ try {
   }
   const api = readFileSync('pages/api/intake-items.ts', 'utf8');
   check('  …and re-recording a healthy level still closes the finding, attributed',
-    /closed_job_card_id: jobCardId, closed_reason: 'Re-checked and within range'/.test(api),
+    keyRegex('closed_job_card_id', "jobCardId, closed_reason: 'Re-checked and within range'").test(api),
     'the mechanism was never missing — it was unreachable');
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));

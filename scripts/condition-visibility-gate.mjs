@@ -25,6 +25,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const T = await import('../lib/tyres.ts');
 const B = await import('../lib/battery.ts');
@@ -171,10 +172,10 @@ try {
     !judges(rep) && !judges(cardData),
     'two derivations of one truth agree until somebody edits one of them');
   check('  …while a prefill query is still allowed to exist',
-    /rated_cca: true/.test(cardData) && !judges(cardData),
+    keyRegex('rated_cca', 'true').test(cardData) && !judges(cardData),
     'fetching the rating to prefill a field is a different job from judging the battery');
   check('  …including the tyre form’s seed, which is the same kind of prefill',
-    /depth_outer_tenths: true/.test(cardData) && !judges(cardData),
+    keyRegex('depth_outer_tenths', 'true').test(cardData) && !judges(cardData),
     'a depth put back into the box it was typed into is not a verdict about the tyre');
   // AND THE REPORT STILL HOLDS NO RAW DEPTHS AT ALL. It renders a condition and never builds one,
   // so for that file the stricter column ban is still the right test.

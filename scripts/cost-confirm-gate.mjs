@@ -31,6 +31,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const C = await import('../lib/costs.ts').catch(() => ({}));
 const prisma = await gatePrisma();
@@ -76,7 +77,7 @@ try {
   await page.fill('input[type="email"]', 'owner@zzgategarage.test');
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
-  check('the browser is actually signed in', !/\/admin\/login/.test(page.url()), page.url());
+  check('the browser is actually signed in', !pathRegex('/admin/login').test(page.url()), page.url());
   const api = (body, method = 'PATCH') => page.evaluate(async ([b, m]) => {
     const r = await fetch('/api/costs', { method: m, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
     return { status: r.status, body: await r.json().catch(() => ({})) };

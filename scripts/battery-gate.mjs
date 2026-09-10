@@ -10,6 +10,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const B = await import('../lib/battery.ts');
 const { readFileSync } = await import('node:fs');
 const D = await import('../lib/due-items.ts');
@@ -100,7 +101,7 @@ try {
   check('January does NOT — the cold is already here', !/before winter/.test(B.seasonalUrgency(JAN)));
   check('May is honest that there is no deadline', /at your convenience/.test(B.seasonalUrgency(MAY)));
   check('the month is passed in, never read from the clock',
-    /measuredAt: Date/.test(src) && !/seasonalUrgency\(\)/.test(src),
+    keyRegex('measuredAt', 'Date').test(src) && !/seasonalUrgency\(\)/.test(src),
     'so this is testable at a fixed date');
 
   // ── 6. THE DECLINE RATE REFUSES BEFORE IT GUESSES ───────────────────────────────────────────

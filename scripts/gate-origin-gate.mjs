@@ -181,7 +181,7 @@ check('  …as is anything unparseable', !REAP.isLoopbackOrigin('') && !REAP.isL
 // AND THE DELETE ITSELF IS BY EXACT KEY. A pattern would make every clause above decoration.
 const reapSrc = readFileSync('scripts/_reap-loopback-limits.mjs', 'utf8');
 check('the delete is by exact equality, never a pattern',
-  /DELETE FROM "AuthRateLimit" WHERE "key" = \$1/.test(reapSrc) && !/LIKE|startsWith|startsWith:/.test(code(reapSrc)),
+  /DELETE FROM "AuthRateLimit" WHERE "key" = \$1/.test(reapSrc) && !/LIKE|startsWith/.test(code(reapSrc)),
   'the fixture-teardown rule, applied to somebody else’s rows: by the OWN identifier, never a shape');
 check('  …and the runner clears once, before the first gate',
   /_reap-loopback-limits\.mjs/.test(runnerSrc)

@@ -29,6 +29,7 @@
 import './_gate-preflight.mjs';
 const { describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { sendNotification, PLATFORM_SEND, NotifyScopeError } = await import('../lib/notify.ts');
 const { readFileSync } = await import('node:fs');
@@ -48,7 +49,7 @@ try {
   console.log('\n— the declaration —');
   const src = readFileSync('lib/notify.ts', 'utf8');
   check('groupId is REQUIRED and admits the platform sentinel',
-    /groupId:\s*string\s*\|\s*typeof PLATFORM_SEND;/.test(src),
+    keyRegex('groupId', /string\s*\|\s*typeof PLATFORM_SEND;/).test(src),
     'no `?` — an omitted key is a TS2345, proven by deleting it from pages/api/invoice-sms.ts');
   check('PLATFORM_SEND is a REGISTERED symbol', Symbol.keyFor(PLATFORM_SEND) === 'greasedesk.notify.platform-send',
     'Symbol.for, because Next can evaluate a module twice and two private symbols would not compare equal');
@@ -184,7 +185,7 @@ try {
   check("sendNotification's resolved scope EXCLUDES 'unresolved'",
     /const scope: 'tenant' \| 'platform' =/.test(readFileSync('lib/notify.ts', 'utf8')),
     "it means 'meant for a tenant, could not tell which' — an outbound send always knows whose it is");
-  check('and lib/inbound is the one place that can', /scope: res\.groupId \? 'tenant' : 'unresolved'/.test(readFileSync('lib/inbound.ts', 'utf8')));
+  check('and lib/inbound is the one place that can', keyRegex('scope', "res.groupId ? 'tenant' : 'unresolved'").test(readFileSync('lib/inbound.ts', 'utf8')));
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

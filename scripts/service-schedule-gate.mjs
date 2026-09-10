@@ -11,6 +11,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const S = await import('../lib/service-schedule.ts');
 const D = await import('../lib/due-items.ts');
@@ -557,13 +558,13 @@ try {
     !/stage/.test(phoneSrc.split('export default function')[1] ?? ''),
     'the reading that freezes onto an invoice is not taken on the surface with no guard');
   check('  …and the drain fixes stage:arrival too, not just the caller',
-    /stage: 'arrival'/.test(readFileSync('public/sw.js', 'utf8')),
+    keyRegex('stage', "'arrival'").test(readFileSync('public/sw.js', 'utf8')),
     'a queued envelope is replayed by the worker; the caller is not the last word');
   // MATCHED AS AN EMITTED KEY, not as a word. The first version banned the string outright and
   // failed on the comment in that file explaining why the field is withheld — a scan whose search
   // term appears in its own subject, for the third time today.
   check('  …and the PWA payload does not even carry the departure reading',
-    !/^\s*serviceSchedule:/m.test(readFileSync('pages/api/pwa/job/[id].ts', 'utf8')),
+    !keyRegex('serviceSchedule').test(readFileSync('pages/api/pwa/job/[id].ts', 'utf8')),
     'shipping it would be an invitation');
 
   // ── AND IT REACHES THE DATABASE THROUGH THE QUEUE ────────────────────────────────────────────

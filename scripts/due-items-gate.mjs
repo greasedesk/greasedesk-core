@@ -7,6 +7,7 @@
 import './_gate-preflight.mjs';
 const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { refuseDueItem, responseAtFor, openDueItemsForVehicle, dueLabel, effectiveDueDate, printedDueItemsBlock, closureOffer, closureOffersForCard } = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
@@ -262,13 +263,13 @@ check('nothing to say → NULL, not an empty block',
 
 console.log('\n— frozen at mint: BOTH halves move afterwards —');
 const mintSrc = readFileSync('lib/invoice-issue.ts', 'utf8');
-check('the mint writes the block into the row', /due_items_snapshot: dueItemsBlock,/.test(mintSrc));
+check('the mint writes the block into the row', keyRegex('due_items_snapshot', 'dueItemsBlock,').test(mintSrc));
 check('  …built in the SAME tx, from openDueItemsForVehicle(tx, …)', /openDueItemsForVehicle\(tx, groupId/.test(mintSrc));
-check('  …and the MOT expiry is selected for it', /mot_expiry: true/.test(mintSrc),
+check('  …and the MOT expiry is selected for it', keyRegex('mot_expiry', 'true').test(mintSrc),
   'DVSA-sourced and it MOVES on retest — a live read prints next year\'s date on last year\'s invoice');
 const docSrc = readFileSync('lib/invoice-doc.ts', 'utf8');
 check('the document reads the SNAPSHOT unconditionally — no live branch',
-  /dueItemsBlock: inv\.due_items_snapshot \?\? null,/.test(docSrc));
+  keyRegex('dueItemsBlock', 'inv.due_items_snapshot ?? null,').test(docSrc));
 // DISCRIMINATING: reg/VIN/mileage DO have a live branch while issued, so "no live branch" is a real
 // property of this field and not something every field here happens to have.
 check('  …the check is discriminating — reg/VIN DO stay live while issued',
@@ -312,7 +313,7 @@ check('the MINT never closes a finding',
   !/vehicleDueItem\.(update|updateMany|create|createMany|upsert)/.test(issue),
   'invoicing is not a statement that the car is fine');
 check('  …though it may READ them, which is how the work-done block exists',
-  /vehicleDueItem\.findMany/.test(issue) && /closed_kind: 'fixed'/.test(issue),
+  /vehicleDueItem\.findMany/.test(issue) && keyRegex('closed_kind', "'fixed'").test(issue),
   'the block prints what this visit sorted; printing is not closing');
 const statusApi = readFileSync('pages/api/jobcard-status.ts', 'utf8');
 check('  …and neither does the invoiced transition', !/closed_at|DueItem/.test(statusApi));
@@ -349,9 +350,9 @@ const pdfTableHead = pdf.indexOf('S.tableHead');
 check('the PDF has no advisory above the line items', pdfBlock > pdfTableHead);
 
 console.log('\n— and the CONTENT is still frozen —');
-check('the snapshot column is untouched by the move', /due_items_snapshot: dueItemsBlock,/.test(readFileSync('lib/invoice-issue.ts', 'utf8')));
+check('the snapshot column is untouched by the move', keyRegex('due_items_snapshot', 'dueItemsBlock,').test(readFileSync('lib/invoice-issue.ts', 'utf8')));
 check('the document still reads the SNAPSHOT, not a live list',
-  /dueItemsBlock: inv\.due_items_snapshot \?\? null,/.test(readFileSync('lib/invoice-doc.ts', 'utf8')));
+  keyRegex('dueItemsBlock', 'inv.due_items_snapshot ?? null,').test(readFileSync('lib/invoice-doc.ts', 'utf8')));
 check('the principle is stated where the next reader will be',
   /FREEZE-AT-ISSUE GOVERNS CONTENT, NOT LAYOUT/.test(pdf),
   'so nobody reads the move as a breach, and nobody freezes a layout version to "fix" it');
@@ -363,7 +364,7 @@ console.log('\n— a replayed envelope must not become a second finding —');
 const api2 = readFileSync('pages/api/due-items.ts', 'utf8');
 check('the POST accepts a capture-time id', /id must be a UUID/.test(api2));
 check('  …validated as a UUID, never trusted into a key', /\[0-9a-f\]\{8\}-/.test(api2));
-check('an existing id is treated as a REPLAY, not an error', /replayed: true/.test(api2)
+check('an existing id is treated as a REPLAY, not an error', keyRegex('replayed', 'true').test(api2)
   && !/status\(409\)[\s\S]{0,120}already exists/i.test(api2),
   'a 409 would make the outbox retry forever');
 check('  …and tenant-checked before it is treated as ours', /existing\.group_id !== groupId/.test(api2));

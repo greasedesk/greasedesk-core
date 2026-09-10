@@ -15,6 +15,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const B = await import('../lib/battery.ts');
 const O = await import('../lib/observations.ts');
 const D = await import('../lib/due-items.ts');
@@ -150,7 +151,7 @@ try {
   // ── 7. OBSERVATIONS DECIDE TOO ───────────────────────────────────────────────────────────────
   console.log('\n— every catalogue entry had to answer —');
   check('the field is required on the type, so a new entry must decide',
-    /carriesOwnTiming: boolean;/.test(read('lib/observations.ts', 'utf8')));
+    keyRegex('carriesOwnTiming', 'boolean;').test(read('lib/observations.ts', 'utf8')));
   check('all twenty-five say false today', O.OBSERVATIONS.every((o) => o.carriesOwnTiming === false),
     'plain noun phrases — "Wiper blades smearing" — where the basis is what says when');
 } catch (e) {

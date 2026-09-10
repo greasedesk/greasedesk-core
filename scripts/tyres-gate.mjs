@@ -11,6 +11,7 @@
 import './_gate-preflight.mjs';
 const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const T = await import('../lib/tyres.ts');
 const { printedDueItemsBlock } = await import('../lib/due-items.ts');
@@ -79,7 +80,7 @@ const block = printedDueItemsBlock({ motExpiry: null, items: [], tyreLines: line
 check('tyres join the frozen block as TEXT lines', /\(1\) Front left — 6\.0/.test(block),
   'a structured table would print prettier and freeze worse');
 const issue = readFileSync('lib/invoice-issue.ts', 'utf8');
-check('the mint freezes the tyre lines with everything else', /tyreLines: printedTyreLines/.test(issue));
+check('the mint freezes the tyre lines with everything else', keyRegex('tyreLines', 'printedTyreLines').test(issue));
 
 // ── 4. LIVE: THE WRITER, AND WHAT IT RAISES ─────────────────────────────────────────────────────
 console.log('\n— on ZZ —');

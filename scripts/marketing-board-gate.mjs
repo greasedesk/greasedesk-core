@@ -12,6 +12,7 @@
 import './_gate-preflight.mjs';
 const { explainIfClientStale, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { PrismaClient } = await import('@prisma/client');
 const { readFileSync } = await import('node:fs');
 const { chromium } = await import('playwright-core');
@@ -135,8 +136,8 @@ try {
   check('the same car is warm at 31 days and hot once expired',
     warmAt31.stack === 'warm' && hotWhenExpired.stack === 'hot');
   const src = readFileSync('lib/marketing-board.ts', 'utf8') + readFileSync('lib/marketing-pipeline.ts', 'utf8');
-  check('  …and no stack is ever stored', !/stack:\s*(?:'hot'|'warm'|'later')\s*,?\s*\n?\s*\}\s*\)/.test(src)
-    && !/data:\s*\{[^}]*stack/.test(src),
+  check('  …and no stack is ever stored', !keyRegex('stack', /(?:'hot'|'warm'|'later')\s*,?\s*\n?\s*\}\s*\)/).test(src)
+    && !keyRegex('data', /\{[^}]*stack/).test(src),
     'a stored stack is wrong between writes and needs something to sweep it');
 
   // ── 4. NO MONEY IN THE SHAPE ─────────────────────────────────────────────────────────────────

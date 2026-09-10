@@ -26,6 +26,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 const P = await import('../lib/marketing-pipeline.ts');
 const Q = await import('../lib/quotes-list.ts');
@@ -66,7 +67,7 @@ try {
   // Declined / still-live / verbal are all "quoteExpired is null" at the pipeline boundary — the
   // BOARD decides that, so the wiring is proven by source below and by the board's own numbers.
   check('the signal is the FACT, not a derivation',
-    /quote\?:\s*\{ kind:/.test(prose('lib/marketing-pipeline.ts')) && /quoteDays\?: number \| null/.test(prose('lib/marketing-pipeline.ts')),
+    keyRegex('quote?', '{ kind:').test(prose('lib/marketing-pipeline.ts')) && keyRegex('quoteDays?', 'number | null').test(prose('lib/marketing-pipeline.ts')),
     'no sent_at, no status, no MAGIC_LINK_DAYS in the pipeline — it is handed what lapsed');
 
   // ── 3. THE ROW SAYS THE THING WORTH SAYING ───────────────────────────────────────────────────

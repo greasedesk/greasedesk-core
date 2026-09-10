@@ -18,6 +18,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, existsSync, readdirSync, statSync } = await import('node:fs');
 /** Comment lines stripped, so a column named in prose is never mistaken for a write. */
@@ -104,7 +105,7 @@ try {
   // WRITES, NOT MENTIONS. The first version matched `column:` anywhere and hit the endpoint's own
   // `select` — a frozen column is READ on that path all the time, and reading is not rewriting.
   // Only the payloads of `data: { … }` are searched, which is where a write actually is.
-  const dataPayloads = [...reissue.matchAll(/data:\s*\{([\s\S]*?)\}/g)].map((m) => m[1]).join('\n');
+  const dataPayloads = [...reissue.matchAll(keyRegex('data', /\{([\s\S]*?)\}/, 'g'))].map((m) => m[1]).join('\n');
   // ── SELECTED ON `!== 'rebuild'`, NOT ON `=== 'frozen'` ───────────────────────────────────────
   // Written this way in September when a third policy arrived, because spelling it "no frozen
   // column" would have let that policy's columns drop silently out of scope. The spelling has since
@@ -122,7 +123,7 @@ try {
     S.INVOICE_SNAPSHOTS.every((x) => x.policy === 'rebuild' || x.policy === 'frozen'),
     'two answers: rebuilt from what is true now, or a matter of record');
   check('  …and that check looks at writes, not at the select',
-    /\bvat_registered_at_issue: true\b/.test(reissue) && !/\bvat_registered_at_issue\s*:/.test(dataPayloads),
+    keyRegex('vat_registered_at_issue', 'true').test(reissue) && !keyRegex('vat_registered_at_issue').test(dataPayloads),
     'the endpoint reads a frozen column on every call; the assertion above must not trip on that');
   // The discriminator above only discriminates while that column is READ and never WRITTEN here.
   // If it ever became correctable it would acquire a writer and the counter-check would rot silently.

@@ -37,6 +37,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const F = await import('../lib/free-tenant.ts').catch(() => ({}));
 const D = await import('../lib/demo-tenant.ts').catch(() => ({}));
@@ -183,7 +184,7 @@ try {
   // which is neither the 403 we want nor the 503 we are ruling out — the check would fail with a
   // status that says nothing about the guard. It happened: regenerating the Prisma client mid-run
   // left the dev server holding a stale one and every login came back InvalidCredentials.
-  check('the browser is actually signed in', !/\/admin\/login/.test(page.url()), page.url());
+  check('the browser is actually signed in', !pathRegex('/admin/login').test(page.url()), page.url());
   const posted = await page.evaluate(async () => {
     const res = await fetch('/api/stripe/checkout', { method: 'POST' });
     return { status: res.status, body: await res.json().catch(() => ({})) };

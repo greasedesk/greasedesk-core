@@ -17,6 +17,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { JOB_STATUSES, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState } = await import('../lib/jobcard-status.ts');
 const { readFileSync } = await import('node:fs');
@@ -61,7 +62,7 @@ for (const [file, name] of [
 }
 // And no NEW bare inline status lists in query positions — the drift that bit at tiles:374.
 const tiles = readFileSync('lib/dashboard-tiles.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-check('dashboard-tiles has no inline status notIn list', !/notIn: \['[a-z_']+,?\s*'/.test(tiles), 'reads FREES_THE_SLOT');
+check('dashboard-tiles has no inline status notIn list', !keyRegex('notIn', /\['[a-z_']+,?\s*'/).test(tiles), 'reads FREES_THE_SLOT');
 
 // ── 5. THE SPLIT: two questions, and the invariant between them ─────────────────────────────────
 console.log('\n— display and occupancy are separate questions with a subset invariant —');

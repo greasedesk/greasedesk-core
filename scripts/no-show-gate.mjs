@@ -8,6 +8,7 @@
 import './_gate-preflight.mjs';
 const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
 const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
 const { applyCardTransition } = await import('../lib/jobcard-transition.ts');
@@ -45,10 +46,10 @@ check('money label is unpaid, never unknown', paymentState('no_show') === 'unpai
   'unknown would render the raw status where a money chip belongs');
 const tiles = readFileSync('lib/dashboard-tiles.ts', 'utf8');
 check('the forward-booked read uses FREES_THE_SLOT — the occupancy question',
-  /status: \{ notIn: FREES_THE_SLOT as any \}/.test(tiles),
+  keyRegex('status', '{ notIn: FREES_THE_SLOT as any }').test(tiles),
   'the one reader that would have kept counting a no-show as booked hours');
 const tilesCode = tiles.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-check("  …and the inline ['cancelled', 'declined'] is gone from the code", !/notIn: \['cancelled', 'declined'\]/.test(tilesCode));
+check("  …and the inline ['cancelled', 'declined'] is gone from the code", !keyRegex('notIn', "['cancelled', 'declined']").test(tilesCode));
 const api = readFileSync('pages/api/jobcard-status.ts', 'utf8');
 check('a no-show revokes the customer link, in the same tx as the cancel path',
   /if \(to === 'no_show'\) await revokeMagicLinksForCard\(jobCardId, 'no_show', tx\);/.test(api));

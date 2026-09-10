@@ -25,6 +25,7 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import { underPath } from '@/lib/anchored-match';
 
 type Audience = 'tenant' | 'rep' | 'operator' | 'public';
 
@@ -39,7 +40,7 @@ export default function NotFound() {
       const path = window.location.pathname;
       if (host.startsWith('reps.')) setWho('rep');
       else if (host.startsWith('er.')) setWho('operator');
-      else setWho(path.startsWith('/admin') ? 'tenant' : 'public');
+      else setWho(underPath(path, '/admin') ? 'tenant' : 'public');
     } catch { /* keep the default */ }
   }, []);
 

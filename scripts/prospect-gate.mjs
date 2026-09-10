@@ -24,6 +24,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 // BEFORE ANY NOTIFY CODE LOADS. The adapter reads this at call time, so blanking it here is enough.
 process.env.RESEND_API_KEY = '';
 const { gatePrisma, describeError, declineToRun, gateOrigin, ZZ_GROUP } = await import('./_gate-preflight.mjs');
@@ -327,7 +328,7 @@ try {
   const storeSrc = code(readFileSync('lib/prospect-store.ts', 'utf8'));
   const mailSrc = code(readFileSync('lib/email-service.ts', 'utf8'));
   check('every sequence email carries the one-click unsubscribe headers',
-    /'List-Unsubscribe':/.test(storeSrc) && /'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'/.test(storeSrc) && /headers: opts\.headers/.test(mailSrc),
+    /'List-Unsubscribe':/.test(storeSrc) && /'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'/.test(storeSrc) && keyRegex('headers', 'opts.headers').test(mailSrc),
     'set by the sender, and passed to the provider by lib/email-service');
 
   console.log('\n— the later reader has a screen, owner only and unscoped —');
@@ -434,13 +435,16 @@ try {
   const victim = queuedRec.prospectId; // a fixture: active, due, consented
   const bystander = (await withOwnerOff(() => rec({ email: addr('bystander'), consent: true }))).prospectId;
   const { spawn } = await import('node:child_process');
-  const childSrc = `import { PrismaClient } from '@prisma/client';
-const db = new PrismaClient();
+  // The child takes its client from gatePrisma like every gate (Rule G: pool limits, transient retry).
+  // Its stdout is a pipe back to this gate, so it says so: GATE_ALLOW_PIPE is the preflight's own opt-in.
+  const childSrc = `await import('./scripts/_ts.mjs');
+const { gatePrisma } = await import('./scripts/_gate-preflight.mjs');
+const db = await gatePrisma();
 const writeLease = ${writeLease.toString()};
 await writeLease(db, ${JSON.stringify(victim)}, true, ${LEASE_SECONDS});
 console.log('LEASED');
 setInterval(() => {}, 1 << 30);`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', childSrc], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--input-type=module', '-e', childSrc], { cwd: process.cwd(), env: { ...process.env, GATE_ALLOW_PIPE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let childErr = ''; child.stderr.on('data', (d) => { childErr += d; });
   const childExit = new Promise((r) => child.on('exit', (code, sig) => r(sig ?? `code ${code}`)));
   const held = await new Promise((r) => { let buf = ''; child.stdout.on('data', (d) => { buf += d; if (buf.includes('LEASED')) r(true); }); childExit.then(() => r(false)); });
@@ -448,7 +452,7 @@ setInterval(() => {}, 1 << 30);`;
   const how = await childExit;
   const leftLease = await prisma.prospectSendingLease.findUnique({ where: { prospect_id: victim } });
   check('the writer was SIGKILLed while holding its lease', held && how === 'SIGKILL' && leftLease !== null,
-    !held ? `it never took a lease: ${childErr.trim().split('\n').pop()}`
+    !held ? `it never took a lease: ${(childErr.split('\n').find((l) => /Error/.test(l)) ?? childErr.trim().split('\n').pop() ?? '').trim()}`
       : !leftLease ? `${how}, but there is no lease on the victim — the writer leased something else`
       : `${how}; the lease is still there — nothing of the writer ran after the kill`);
   const ownerNow = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
@@ -480,7 +484,7 @@ setInterval(() => {}, 1 << 30);`;
   console.log('\n— the switch is visible where it matters, and defaults OFF —');
   const storeSrc2 = code(readFileSync('lib/prospect-store.ts', 'utf8'));
   if (!initialSwitch) check('  …and on this database it has never been switched on', (await ST.prospectSendingEnabled()) === false);
-  check('switching it is AUDITED', /action: opts\.enabled \? 'prospect_sending\.on' : 'prospect_sending\.off'/.test(storeSrc2),
+  check('switching it is AUDITED', keyRegex('action', "opts.enabled ? 'prospect_sending.on' : 'prospect_sending.off'").test(storeSrc2),
     'turning it on emails real people; who and when goes to SuperAdminAudit');
   const erSrc2 = code(readFileSync('pages/superadmin/prospects.tsx', 'utf8'));
   check('the Engine Room shows the switch and what it is holding', /data-testid="er-sending-state"/.test(erSrc2) && /queued/.test(erSrc2),

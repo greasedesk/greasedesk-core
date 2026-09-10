@@ -18,6 +18,7 @@ import { useTranslation } from 'next-i18next';
 import BrandLogo from '@/components/BrandLogo';
 import BillingBanner from '@/components/layout/BillingBanner';
 import DemoBanner from '@/components/layout/DemoBanner';
+import { underPath } from '@/lib/anchored-match';
 
 type Loc = { id: string; site_name: string };
 type NavItemDef = { key: string; href: string; icon: string; ready: boolean; locScope?: 'diary' | 'jobcards'; needsInvoicePerm?: boolean; adminOnly?: boolean;
@@ -226,11 +227,11 @@ export default function AdminLayout({ children, fullHeight = false }: AdminLayou
             is in more trouble than one changing a preference. No role gate: the person who picks up
             the phone in a workshop is rarely the account holder. */}
         <div className="shrink-0 pt-3 mt-2 border-t border-sidebar-line space-y-1">
-          <Link href="/admin/support" className={navLink(router.pathname.startsWith('/admin/support'))}>
+          <Link href="/admin/support" className={navLink(underPath(router.pathname, '/admin/support'))}>
             <span className="mr-3 text-lg">🛟</span>
             {t('nav.support')}
           </Link>
-          <Link href="/admin/settings" className={navLink(router.pathname.startsWith('/admin/settings'))}>
+          <Link href="/admin/settings" className={navLink(underPath(router.pathname, '/admin/settings'))}>
             <span className="mr-3 text-lg">⚙️</span>
             {t('nav.settings')}
           </Link>
@@ -288,11 +289,11 @@ export default function AdminLayout({ children, fullHeight = false }: AdminLayou
                 marketingCount={marketingCount}
               />
             </nav>
-            <Link href="/admin/support" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(router.pathname.startsWith('/admin/support'))}`}>
+            <Link href="/admin/support" onClick={() => setIsSidebarOpen(false)} className={`mt-4 ${navLink(underPath(router.pathname, '/admin/support'))}`}>
               <span className="mr-3 text-lg">🛟</span>
               {t('nav.support')}
             </Link>
-            <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={navLink(router.pathname.startsWith('/admin/settings'))}>
+            <Link href="/admin/settings" onClick={() => setIsSidebarOpen(false)} className={navLink(underPath(router.pathname, '/admin/settings'))}>
               <span className="mr-3 text-lg">⚙️</span>
               {t('nav.settings')}
             </Link>
@@ -326,7 +327,7 @@ function WorkshopNudge({ t }: { t: (k: string) => string }) {
   }, []);
   if (!show) return null;
   if (role === 'ADMIN' || role === 'SITE_MANAGER') return null; // they chose the admin app — no nag
-  if (router.pathname.startsWith('/admin/diary')) return null;   // never on the diary
+  if (underPath(router.pathname, '/admin/diary')) return null;   // never on the diary
   return (
     <div className="md:hidden flex items-center gap-2 px-4 py-2 text-sm bg-accent-soft text-accent border-b border-line">
       <a href="/m" className="flex-1 font-medium underline min-h-[44px] flex items-center">{t('workshopNudge')}</a>

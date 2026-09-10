@@ -20,6 +20,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync } = await import('node:fs');
 const { motVerifiedWrite } = await import('../lib/dvsa.ts');
 
@@ -61,7 +62,7 @@ try {
     'imported from the chokepoint, not reimplemented');
   const updates = [...sweep.matchAll(/\b(?:tx|prisma)\.vehicle\.update\(/g)].length;
   check('the sweep has exactly ONE vehicle update', updates === 1, `${updates} found — a second one is a path that can bypass the stamp`);
-  check('and it writes the rule\'s result, not motFieldsToWrite\'s', /data: verified/.test(sweep.replace(/\s+/g, ' ')),
+  check('and it writes the rule\'s result, not motFieldsToWrite\'s', keyRegex('data', 'verified').test(sweep.replace(/\s+/g, ' ')),
     'the stamp cannot be reached by spreading motFieldsToWrite at the call site');
 
   // ── 6. THE STAMP AND THE ROW THAT EXPLAINS IT LAND TOGETHER ──────────────────────────────────
@@ -72,9 +73,9 @@ try {
   check('inside the SAME transaction as the update',
     /prisma\.\$transaction\(async \(tx\) => \{ await tx\.vehicle\.update\([^;]*; await writeAudit\(tx, \{/.test(flat),
     'update then audit, one transaction — not two independent writes');
-  check('under its own action, not the button\'s', /action: 'vehicle\.mot_swept'/.test(flat)
-    && !/action: 'vehicle\.mot_refresh'/.test(flat), 'vehicle.mot_refresh means a human pressed something');
-  check('and it states BOTH moved and verified', /moved: movedFields\.length > 0/.test(flat) && /verified: true/.test(flat),
+  check('under its own action, not the button\'s', keyRegex('action', "'vehicle.mot_swept'").test(flat)
+    && !keyRegex('action', "'vehicle.mot_refresh'").test(flat), 'vehicle.mot_refresh means a human pressed something');
+  check('and it states BOTH moved and verified', keyRegex('moved', 'movedFields.length > 0').test(flat) && keyRegex('verified', 'true').test(flat),
     'an empty `fields` with no `verified` reads as a failed write, not a confirmation');
 } catch (e) {
   console.log(`\n✗ THREW: ${String(e?.stack ?? e).slice(0, 600)}`);

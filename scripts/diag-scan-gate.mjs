@@ -21,6 +21,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { urlUnder } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('playwright-core');
 const { readFileSync } = await import('node:fs');
 const prisma = await gatePrisma();
@@ -108,7 +109,7 @@ try {
   // itself, where waitForTimeout could only ever report the absence that came after it.
   const tick = async (act) => {
     const settled = page.waitForResponse(
-      (r) => r.url().includes('/api/intake-items') && r.request().method() === 'POST',
+      (r) => urlUnder(r.url(), '/api/intake-items') && r.request().method() === 'POST',
       { timeout: 20000 },
     ).catch(() => null);
     const [resp] = await Promise.all([settled, act()]);

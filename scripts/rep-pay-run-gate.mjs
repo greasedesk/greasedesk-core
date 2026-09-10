@@ -24,6 +24,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError, serverReady, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { keyRegex } = await import('../lib/anchored-match.ts');
 const { readFileSync, readdirSync, statSync, existsSync } = await import('node:fs');
 const { join } = await import('node:path');
 const { randomUUID } = await import('node:crypto');
@@ -252,8 +253,8 @@ try {
   check('the attribution is shown as evidence', /ref=|signed up under/.test(page));
 
   console.log('\n— and who may do what —');
-  check('release requires country_manager', /release:\s*'country_manager'/.test(apiSrc) && /hold:\s*'country_manager'/.test(apiSrc));
-  check('closing requires owner', /close:\s*'owner'/.test(apiSrc));
+  check('release requires country_manager', keyRegex('release', "'country_manager'").test(apiSrc) && keyRegex('hold', "'country_manager'").test(apiSrc));
+  check('closing requires owner', keyRegex('close', "'owner'").test(apiSrc));
   check('  …and the guard reads that map, not a literal', /requireOperatorApi\([^)]*MIN_ROLE\[/.test(apiSrc),
     'a role written in one place and enforced from another is two rules');
   check('both respect the region scope', /operatorTenantScope/.test(apiSrc),
