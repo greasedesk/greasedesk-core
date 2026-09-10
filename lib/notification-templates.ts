@@ -8,6 +8,7 @@
  * sendNotification records that as `skipped` rather than inventing a body.
  */
 import { smsText, isOneSegment } from '@/lib/sms-text';
+import { COMPANY, officeOneLine } from '@/lib/company-info';
 
 export type TemplateData = Record<string, string | number | null | undefined>;
 
@@ -30,6 +31,12 @@ export type NotificationTemplate = {
    * ones that matter. Absent/false = an ordinary message that honours the preference.
    */
   security?: boolean;
+  /**
+   * PROSPECTING MAIL — GreaseDesk writing to a garage that is not a customer. On the TEMPLATE for the
+   * same reason as `security`: sendNotification consults lib/prospect-suppression before every such
+   * send and no caller can opt out of it. Never both this and `security`; prospect-gate checks.
+   */
+  prospecting?: boolean;
   email?: (d: TemplateData) => RenderedEmail;
   sms?: (d: TemplateData) => RenderedSms;
 };
@@ -518,7 +525,60 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
     }),
   },
+  // ── PROSPECTING SEQUENCE — PLACEHOLDER COPY (2026-09-10) ───────────────────────────────────────
+  // NOT FINAL: the wording and the video link are the owner's to write. What is final is the frame
+  // every step shares — prospectFooter — because that is the compliance: who is writing, from where,
+  // and a working way to stop it.
+  prospect_step_1: {
+    label: 'Prospect follow-up — step 1 (placeholder)',
+    prospecting: true,
+    email: (d) => ({
+      subject: 'Following up from our visit — GreaseDesk',
+      html: shell(`
+        <h2 style="margin:0 0 8px">Thanks for your time</h2>
+        <p>[PLACEHOLDER — step 1 copy: what GreaseDesk does for a garage like ${esc(d.garageName ?? 'yours')}.]</p>
+        ${prospectFooter(d)}`),
+    }),
+  },
+  prospect_step_2: {
+    label: 'Prospect follow-up — step 2 (placeholder)',
+    prospecting: true,
+    email: (d) => ({
+      subject: 'See GreaseDesk in two minutes',
+      html: shell(`
+        <h2 style="margin:0 0 8px">A short look</h2>
+        <p>[PLACEHOLDER — step 2 copy and the video link.]</p>
+        ${prospectFooter(d)}`),
+    }),
+  },
+  prospect_step_3: {
+    label: 'Prospect follow-up — step 3 (placeholder)',
+    prospecting: true,
+    email: (d) => ({
+      subject: 'Still thinking it over?',
+      html: shell(`
+        <h2 style="margin:0 0 8px">One last note</h2>
+        <p>[PLACEHOLDER — step 3 copy.]</p>
+        ${prospectFooter(d)}`),
+    }),
+  },
 } satisfies Record<string, NotificationTemplate>;
+
+/**
+ * THE FOOTER EVERY PROSPECTING EMAIL CARRIES — who is writing, from where, and how to stop it.
+ * The identity comes from lib/company-info so it cannot drift from the site's own; the unsubscribe
+ * link is required, and a send with no link renders a visible fault rather than a quiet omission.
+ */
+function prospectFooter(d: TemplateData): string {
+  const link = String(d.unsubscribeUrl ?? '');
+  return `
+    <p style="font-size:12px;color:#64748b;margin-top:24px">
+      You're receiving this because you agreed, when ${esc(COMPANY.tradingName)} visited, to hear from us.
+      ${link ? `<a href="${esc(link)}" style="color:#64748b">Unsubscribe</a> — one click, and no more emails.`
+               : '<strong>[UNSUBSCRIBE LINK MISSING — this email must not be sent]</strong>'}
+    </p>
+    <p style="font-size:12px;color:#94a3b8">${esc(COMPANY.legalName)} · Company no. ${esc(COMPANY.companyNumber)} · ${esc(officeOneLine())}</p>`;
+}
 
 export type TemplateKey = keyof typeof NOTIFICATION_TEMPLATES;
 

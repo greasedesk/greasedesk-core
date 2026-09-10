@@ -34,7 +34,8 @@ export type FailedSend = {
   suppressed?: boolean;
   skipCode?:
     | 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient'
-    | 'no_renderer' | 'unknown_template' | 'allowance_spent';
+    | 'no_renderer' | 'unknown_template' | 'allowance_spent'
+    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed';
 };
 
 export type SendFailureCopy = {
@@ -57,6 +58,13 @@ export function describeSendFailure(
   const who = ctx.customerName?.trim() || 'This customer';
 
   switch (sent.skipCode) {
+    // PROSPECTING REFUSALS. None is retryable: each is a fact about the address, not a bad moment.
+    case 'already_customer':
+      return { code: 'already_customer', retryable: false, message: 'Not sent — that address belongs to someone who is already a GreaseDesk customer.' };
+    case 'prospect_unsubscribed':
+      return { code: 'prospect_unsubscribed', retryable: false, message: 'Not sent — that address has unsubscribed from GreaseDesk.' };
+    case 'prospect_check_failed':
+      return { code: 'prospect_check_failed', retryable: true, message: 'Not sent — we could not confirm the address may be written to, so it was not.' };
     case 'no_recipient':
       return { code: 'no_recipient', retryable: false,
         message: `No ${address(ctx.channel)} on file for ${who}.` };

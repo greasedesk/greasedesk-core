@@ -56,6 +56,11 @@ export const ER_NAV: ErNavItem[] = [
   { href: '/superadmin/reps', label: 'Reps', minRole: 'country_manager' },
   { href: '/superadmin/pay-runs', label: 'Sales Commission', minRole: 'country_manager' },
   { href: '/superadmin/rates', label: 'Rates', minRole: 'owner' },
+  // PROSPECTS — the trail reps left. OWNER ONLY and deliberately not region-scoped: a prospect has no
+  // Group, so no region, and inventing a rule now would be inventing a wrong one. Moves to
+  // reps.greasedesk.com with rep management. REGISTERED HERE on purpose: erMinRole falls back to
+  // 'support' for an unregistered href, so a missing line would have opened this to the lowest role.
+  { href: '/superadmin/prospects', label: 'Prospects', minRole: 'owner' },
   // Content (legal + marketing pages). The SCREEN is owner + CM (Support 404s); within it, `legal`
   // actions are Owner-only, enforced server-side in the API — a CM can edit `page`, not `legal`.
   { href: '/superadmin/content', label: 'Content', minRole: 'country_manager' },

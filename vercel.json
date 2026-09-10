@@ -18,6 +18,10 @@
     {
       "path": "/api/cron/demo-lifecycle",
       "schedule": "45 3 * * *"
+    },
+    {
+      "path": "/api/cron/prospect-sequence",
+      "schedule": "20 * * * *"
     }
   ]
 }

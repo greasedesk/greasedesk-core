@@ -4748,3 +4748,120 @@ model CreditNoteLine {
 
   @@index([credit_note_id])
 }
+
+// ── PROSPECTS (2026-09-10) ─────────────────────────────────────────────────────────────────────
+// The ground a rep covered, kept as GreaseDesk's asset after the rep has gone. NOT the RepVisit
+// family: those record visits to garages already on GreaseDesk (group_id NOT NULL, QR-proved), and
+// a prospect has no Group. See migration 20260910130000_prospects for the reasoning on each column.
+//
+// TWO CLOCKS. The GARAGE (name, address, visits, notes about the business) is the asset and stays.
+// The PERSON (spoke_to, email) is stripped 24 months after the last visit, on unsubscribe, and on
+// signup — lib/prospect-store::stripPersonal, one writer.
+
+/// A garage a rep has visited that is not (yet) a GreaseDesk customer.
+model Prospect {
+  id          String @id @default(uuid())
+  garage_name String
+  /// Normalised garage name for PRESENTING a likely duplicate — never for merging. See lib/prospects.
+  name_key    String
+  /// NULL = not recorded. A rep on a forecourt may have only the name.
+  address_line1    String?
+  /// NULL = not recorded.
+  address_locality String?
+  /// NULL = not recorded; postcode_key is NULL with it (Prospect_postcode_chk).
+  postcode         String?
+  /// Normalised postcode. NULL exactly when postcode is — the pair is held by a CHECK.
+  postcode_key     String?
+  /// lib/prospects PROSPECT_STATUSES — 'spoke_to' | 'interested' | 'not_interested' | 'signed_up'.
+  status           String
+
+  /// PERSONAL DATA. Normalised lower-case (Prospect_email_normalised_chk). NULL = never given, OR
+  /// stripped — personal_stripped_at says which, so an absence is never ambiguous.
+  email             String?
+  /// 'not_asked' | 'agreed' | 'declined' — the rep ASKED and the owner ANSWERED. Never implied by
+  /// an address. No email ⇒ not_asked, held by Prospect_no_email_no_consent_chk.
+  consent           String   @default("not_asked")
+  /// NULL exactly when consent is not_asked — an answer has a time (Prospect_consent_pair_chk).
+  consent_at        DateTime?
+  /// The rep who recorded the answer. NULL exactly when consent is not_asked.
+  consent_by_rep_id String?
+  /// NULL = the person's data is still held. Set when stripped; email and every visit's spoke_to are
+  /// NULL from then on (Prospect_strip_chk). The consent history is kept: it is the evidence.
+  personal_stripped_at     DateTime?
+  /// 'retention' | 'unsubscribed' | 'signed_up'. NULL exactly when personal_stripped_at is.
+  personal_stripped_reason String?
+
+  /// Stored as-is, not hashed: not a credential, it can only stop email to this prospect, and the
+  /// sender must put it in every future email. NULL = never enrolled, so no link was ever sent.
+  unsubscribe_token String? @unique
+
+  /// NULL = not signed up. Set exactly when status is signed_up (Prospect_signed_up_chk).
+  signed_up_at       DateTime?
+  /// An ID, not a relation: the tenant can be purged and this stays as history. NULL = the signup was
+  /// marked by hand and matched no tenant, or it has not happened.
+  signed_up_group_id String?
+
+  /// Who first recorded it — a plain id, so the record survives the rep leaving.
+  created_by_rep_id String
+  created_at        DateTime @default(now())
+  updated_at        DateTime @default(now()) @updatedAt
+
+  visits   ProspectVisit[]
+  sequence ProspectSequence?
+
+  @@index([name_key, postcode_key], map: "Prospect_match_idx")
+  @@index([email], map: "Prospect_email_idx")
+}
+
+/// One dated visit — the trail a later reader follows.
+model ProspectVisit {
+  id              String   @id @default(uuid())
+  prospect_id     String
+  rep_id          String
+  visited_on      DateTime
+  /// WHO THEY SPOKE TO at this visit — personal data. NULL = not recorded, or stripped with the email.
+  spoke_to        String?
+  /// About the BUSINESS; it stays. NULL = no note left at this visit.
+  note            String?
+  /// The status AS OF this visit, so the history survives the current status changing.
+  status_at_visit String
+  created_at      DateTime @default(now())
+
+  prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+
+  @@index([prospect_id, visited_on], map: "ProspectVisit_prospect_visited_idx")
+  @@index([rep_id], map: "ProspectVisit_rep_idx")
+}
+
+/// The follow-up sequence. A stopped one STAYS, saying when and why (ProspectSequence_stop_chk).
+model ProspectSequence {
+  id          String    @id @default(uuid())
+  prospect_id String    @unique
+  /// 'active' | 'stopped'.
+  state       String
+  /// The step to send next, 1-based.
+  next_step   Int
+  /// NULL exactly when stopped — an active sequence is always due at some time.
+  next_due_at DateTime?
+  started_at  DateTime
+  /// NULL = nothing has been sent yet.
+  last_sent_at DateTime?
+  /// NULL exactly while active.
+  stopped_at   DateTime?
+  /// WHY it stopped — never merely that it did. NULL exactly while active.
+  stopped_reason String?
+  created_at   DateTime @default(now())
+
+  prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+
+  @@index([state, next_due_at], map: "ProspectSequence_due_idx")
+}
+
+/// The minimum kept to honour an unsubscribe once the address itself has been stripped.
+model ProspectSuppression {
+  id         String   @id @default(uuid())
+  /// sha256 of the normalised address — enough to refuse, not enough to mail.
+  email_hash String   @unique
+  reason     String
+  created_at DateTime @default(now())
+}

@@ -103,6 +103,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('resolveAttribution at signup failed (non-fatal):', attrErr);
     }
 
+    // PROSPECT → CUSTOMER: any prospect holding this address leaves the follow-up sequence, is marked
+    // signed up, and has the prospecting copy of the person removed (lib/prospect-store). Best-effort
+    // and non-fatal, exactly like attribution above: a prospect-side error must never fail a signup.
+    // And it is SAFE to fail, because it is not the only guard — the send path refuses any address
+    // that already belongs to a customer (lib/prospect-suppression), whether or not this ran.
+    try {
+      const { markSignedUpByEmail } = await import('@/lib/prospect-store');
+      await markSignedUpByEmail(user.email, group.id);
+    } catch (prospectErr) {
+      console.error('markSignedUpByEmail at signup failed (non-fatal):', prospectErr);
+    }
+
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 

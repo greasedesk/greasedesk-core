@@ -123,7 +123,7 @@ const TIERS = {
     'demo-fuel-gate', 'document-credit-gate', 'marketing-board-gate', 'demo-lifecycle-gate', 'demo-profile-gate',
     'demo-subject-gate', 'due-items-gate', 'due-timing-gate', 'gate-hygiene-gate',
     'seeds-from-props-gate',
-    'intake-prompts-gate', 'intake-report-gate', 'quote-worklist-gate', 'no-show-gate', 'notify-scope-gate',
+    'intake-prompts-gate', 'intake-report-gate', 'quote-worklist-gate', 'prospect-gate', 'no-show-gate', 'notify-scope-gate',
     'nullable-annotation-gate', 'observation-key-gate', 'odometer-gate', 'photo-partition-gate',
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',

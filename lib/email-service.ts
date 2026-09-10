@@ -11,8 +11,15 @@ if (!RESEND_API_KEY) {
   console.error('FATAL: P.7 Notification System (Email) failed authentication. RESEND_API_KEY is missing in the environment config.');
 }
 
-// Initialise Resend Client
-const resend = new Resend(RESEND_API_KEY);
+// -- CONSTRUCTED ONLY WHEN THERE IS A KEY (2026-09-10) --------------------------------------------
+// This was `new Resend(RESEND_API_KEY)` unconditionally. The current SDK THROWS in its constructor when
+// the key is missing, so importing this module crashed -- and lib/notify imports it, so every route that
+// can send anything would have failed at LOAD rather than degrading. The rest of this file already
+// intends the graceful path (the FATAL log above is a log, not a throw; sendEmail returns false on a
+// missing key), and lib/notify's adapter treats "no key" as an ordinary `not_configured` skip. The
+// unconditional construction made all of that unreachable. Found when prospect-gate blanked the key to
+// guarantee it could never send real prospecting mail, and the import itself fell over.
+const resend: Resend | null = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
 
 export type SendEmailOpts = {
@@ -24,6 +31,8 @@ export type SendEmailOpts = {
   /** Silent copies (e.g. the garage's own record of an invoice send). */
   bcc?: string[];
   attachments?: Array<{ filename: string; content: Buffer }>;
+  /** Extra message headers — List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) for prospecting mail. */
+  headers?: Record<string, string>;
 };
 
 /**
@@ -31,8 +40,8 @@ export type SendEmailOpts = {
  * @returns {boolean} True if the email was successfully accepted by Resend.
  */
 export const sendEmail = async (to: string, subject: string, html: string, opts: SendEmailOpts = {}) => {
-  if (!RESEND_API_KEY) {
-    // Fail gracefully if config is missing
+  if (!resend) {
+    // Fail gracefully if config is missing -- the CLIENT is the precondition, so the guard names it.
     return false;
   }
 
@@ -48,6 +57,7 @@ export const sendEmail = async (to: string, subject: string, html: string, opts:
       ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
       ...(opts.bcc?.length ? { bcc: opts.bcc } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments.map((a) => ({ filename: a.filename, content: a.content })) } : {}),
+      ...(opts.headers && Object.keys(opts.headers).length ? { headers: opts.headers } : {}),
     });
 
     if (error) {

@@ -48,6 +48,13 @@ export default function RepHome({ name, runs, profileMissing }: Props) {
           </div>
         )}
 
+        {/* THE LOGBOOK — the garages visited. First, because it is what a rep does every day; the
+            commission below is what they check once a month. */}
+        <Link href="/rep/prospects" data-testid="rep-prospects-link"
+          className="mt-6 flex items-center justify-center min-h-[56px] rounded-xl bg-emerald-500 text-emerald-950 font-semibold">
+          Garages visited · record a visit
+        </Link>
+
         <h2 className="text-sm uppercase tracking-wide text-emerald-400 mt-8 mb-2">Closed runs</h2>
         {runs.length === 0 ? (
           // NOT AN EMPTY TABLE. "No closed runs yet" is a different fact from "£0.00", and only one

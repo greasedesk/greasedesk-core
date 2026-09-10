@@ -17,6 +17,7 @@
 import { prisma } from '@/lib/db';
 import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
+import { prospectingRefusal } from '@/lib/prospect-suppression';
 import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
 import { smsAllowance } from '@/lib/sms-allowance';
@@ -107,7 +108,8 @@ export type SendNotificationResult = {
    * real lie: a demo tenant's blocked code surfaced as "text messaging isn't switched on for
    * GreaseDesk yet", which is false — it is switched on, they are in a demo.
    */
-  skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent';
+  skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent'
+    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -303,7 +305,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
-  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; email?: Function; sms?: Function } | undefined;
+  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; prospecting?: boolean; email?: Function; sms?: Function } | undefined;
   const common = { groupId, scope, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
@@ -331,6 +333,26 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (demo.block) {
     const id = await record({ ...common, status: 'skipped', error: demo.reason });
     return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason, skipCode: 'demo_tenant' };
+  }
+
+  // ── PROSPECTING MAIL: GREASEDESK WRITING TO A GARAGE THAT IS NOT A CUSTOMER (2026-09-10) ──────
+  // Keyed on the TEMPLATE, the same way `security` is, so no caller can forget it: there is no
+  // argument to omit. Before the opt-out check below and never bypassed by it — a prospecting
+  // template cannot also be a security one (prospect-gate asserts none is both).
+  //
+  // This is NOT isSuppressed. That check returns false for every platform send, because opt-out is
+  // kept on a tenant's customers and we have none; routed through it, an unsubscribe would have been
+  // ignored. lib/prospect-suppression consults its own list, refuses any address that already
+  // belongs to a customer — the worst outcome this feature can produce — and FAILS CLOSED.
+  if (tpl.prospecting) {
+    const refusal = await prospectingRefusal(args.recipient);
+    if (refusal) {
+      const reason = refusal === 'already_customer' ? 'address belongs to an existing GreaseDesk customer'
+        : refusal === 'prospect_unsubscribed' ? 'address has unsubscribed from GreaseDesk prospecting mail'
+        : 'could not confirm the address may be written to — refused rather than risked';
+      const id = await record({ ...common, status: 'skipped', error: reason });
+      return { ok: false, notificationId: id, status: 'skipped', reason, suppressed: true, skipCode: refusal };
+    }
   }
 
   // CONTACT PREFERENCE — checked before rendering and before any provider call. The row is written
