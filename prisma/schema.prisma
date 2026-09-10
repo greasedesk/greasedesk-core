@@ -4865,3 +4865,15 @@ model ProspectSuppression {
   reason     String
   created_at DateTime @default(now())
 }
+
+/// WHETHER GreaseDesk's prospect follow-up emails are sent. ONE ROW (ProspectSending_singleton_chk);
+/// NO ROW = OFF, the default, because the sequence copy is placeholder until the owner writes it.
+/// It stops the SEND, never the enrolment: a prospect recorded while off is QUEUED and starts at step 1
+/// when it is turned on. "Queued" is derived from this plus the sequence (lib/prospects::sequenceView).
+model ProspectSending {
+  id         String   @id
+  enabled    Boolean
+  changed_at DateTime
+  /// The operator who made the current decision. History is in SuperAdminAudit.
+  changed_by String
+}

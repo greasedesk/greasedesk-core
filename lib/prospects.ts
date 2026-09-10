@@ -137,3 +137,57 @@ export function pastRetention(lastVisit: Date, now: Date): boolean {
   cutoff.setUTCMonth(cutoff.getUTCMonth() - RETENTION_MONTHS);
   return lastVisit.getTime() < cutoff.getTime();
 }
+
+// ── WHAT A SEQUENCE IS, AS A PERSON SHOULD READ IT (2026-09-10) ───────────────────────────────────
+/**
+ * THE ONE DERIVATION of what a follow-up is doing — read by the rep's confirmation, the rep's list,
+ * and the Engine Room. One function so the three cannot disagree: three copies of one derivation is
+ * what the quote worklist turned out to hold, a day earlier.
+ *
+ * ── QUEUED IS NEVER SHOWN AS RUNNING ────────────────────────────────────────────────────────────
+ * An `active` sequence is not necessarily sending. With the switch OFF nothing goes; with it ON, a
+ * step that has not been sent yet (provider down, or the first run not reached) has still not gone.
+ * Both read as QUEUED. Only a sequence that has actually sent something reads as running — because a
+ * rep standing in front of a garage owner must never be told an email is on its way when it is not.
+ */
+export type SequenceView =
+  | { kind: 'none' }
+  | { kind: 'queued'; why: 'switched_off' | 'not_yet_sent' }
+  | { kind: 'running' }
+  | { kind: 'stopped'; reason: StopReason };
+
+export function sequenceView(
+  seq: { state: string; stopped_reason: string | null; last_sent_at: Date | string | null } | null,
+  sendingOn: boolean,
+): SequenceView {
+  if (!seq) return { kind: 'none' };
+  if (seq.state === 'stopped') return { kind: 'stopped', reason: (seq.stopped_reason ?? 'completed') as StopReason };
+  if (!sendingOn) return { kind: 'queued', why: 'switched_off' };
+  if (!seq.last_sent_at) return { kind: 'queued', why: 'not_yet_sent' };
+  return { kind: 'running' };
+}
+
+/** Short, for a list row. */
+export function sequenceLabel(v: SequenceView): string {
+  switch (v.kind) {
+    case 'none': return 'No follow-up';
+    case 'queued': return v.why === 'switched_off' ? 'Follow-up queued — GreaseDesk has not switched sending on yet' : 'Follow-up queued — goes within the hour';
+    case 'running': return 'Follow-up emails running';
+    case 'stopped': return STOP_LABEL[v.reason];
+  }
+}
+
+/**
+ * The sentence the REP reads straight after saving a visit. She has just promised a garage owner
+ * something; this must say whether it has actually happened.
+ */
+export function sequenceSavedSentence(v: SequenceView): string {
+  switch (v.kind) {
+    case 'none': return 'Visit saved. No follow-up emails — no address was given, or they were not asked.';
+    case 'queued': return v.why === 'switched_off'
+      ? 'Visit saved. Their follow-up is QUEUED — GreaseDesk has not switched sending on yet, so nothing has been emailed to them so far. It will start from the first email when sending is switched on.'
+      : 'Visit saved. Their follow-up is queued and the first email will go within the hour.';
+    case 'running': return 'Visit saved. The first follow-up email from GreaseDesk has been sent.';
+    case 'stopped': return `Visit saved. ${STOP_LABEL[v.reason]}.`;
+  }
+}

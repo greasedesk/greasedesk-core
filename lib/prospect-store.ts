@@ -24,12 +24,55 @@ import { prospectingRefusal } from '@/lib/prospect-suppression';
 import { emailHash, newUnsubscribeToken } from '@/lib/prospect-keys';
 import {
   SEQUENCE, afterSend, isProspectStatus, looksLikeEmail, nameKey,
-  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment,
-  type ProspectStatus, type StopReason, type StripReason,
+  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment, sequenceView,
+  type ProspectStatus, type SequenceView, type StopReason, type StripReason,
 } from '@/lib/prospects';
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient;
+
+// ── THE SENDING SWITCH ───────────────────────────────────────────────────────────────────────────
+const SWITCH_ID = 'prospect_sending';
+
+/**
+ * IS PROSPECT SENDING ON? No row = OFF — the default, because the sequence copy is placeholder until
+ * the owner writes it. Read on every run and every render that shows a follow-up, never cached: a
+ * switch that took an hour to take effect would be a switch that did not work when it mattered.
+ */
+export async function prospectSendingEnabled(db: Db = prisma): Promise<boolean> {
+  const row = await db.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } });
+  return row?.enabled === true;
+}
+
+/** The switch AND its author, for the Engine Room to show. `changedAt` NULL = never switched. */
+export async function prospectSendingState(db: Db = prisma) {
+  const row = await db.prospectSending.findUnique({ where: { id: SWITCH_ID } });
+  return { enabled: row?.enabled === true, changedAt: row?.changed_at ?? null, changedBy: row?.changed_by ?? null };
+}
+
+/**
+ * TURN IT ON OR OFF — owner only (enforced by the caller's guard), and AUDITED. Turning it on emails
+ * real people, so who did it and when goes to SuperAdminAudit as well as onto the row.
+ */
+export async function setProspectSending(opts: { enabled: boolean; operatorId: string; db?: Db }): Promise<void> {
+  const db = opts.db ?? prisma;
+  const now = new Date();
+  await db.$transaction(async (tx) => {
+    const before = await tx.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } });
+    await tx.prospectSending.upsert({
+      where: { id: SWITCH_ID },
+      update: { enabled: opts.enabled, changed_at: now, changed_by: opts.operatorId },
+      create: { id: SWITCH_ID, enabled: opts.enabled, changed_at: now, changed_by: opts.operatorId },
+    });
+    const queued = await tx.prospectSequence.count({ where: { state: 'active' } });
+    await tx.superAdminAudit.create({ data: {
+      operator_user_id: opts.operatorId,
+      action: opts.enabled ? 'prospect_sending.on' : 'prospect_sending.off',
+      target_name_snapshot: 'Prospect follow-up sending',
+      detail: { from: before?.enabled === true, to: opts.enabled, activeSequencesAtChange: queued },
+    } });
+  });
+}
 
 /** Where the unsubscribe page and endpoint live — the apex, which middleware serves to anyone. */
 export function prospectLinks(token: string, base?: string) {
@@ -127,7 +170,9 @@ export type RecordVisitInput = {
   now?: Date;
 };
 export type RecordVisitResult =
-  | { ok: true; prospectId: string; sequence: { state: string; stoppedReason: string | null } | null }
+  | { ok: true; prospectId: string; sequence: { state: string; stoppedReason: string | null } | null;
+      /** What the follow-up is ACTUALLY doing — queued is never reported as running. */
+      view: SequenceView; sendingOn: boolean }
   | { ok: false; code: string; message: string };
 
 const clean = (v: unknown): string | null => { const s = String(v ?? '').trim(); return s === '' ? null : s; };
@@ -195,8 +240,10 @@ export async function recordVisit(input: RecordVisitInput, db: Db = prisma): Pro
   // and an unsent step stays due for the scheduled run to retry.
   await runSequence({ now, onlyProspectId: prospectId, db }).catch(() => {});
 
-  const seq = await db.prospectSequence.findUnique({ where: { prospect_id: prospectId }, select: { state: true, stopped_reason: true } });
-  return { ok: true, prospectId, sequence: seq ? { state: seq.state, stoppedReason: seq.stopped_reason } : null };
+  const seq = await db.prospectSequence.findUnique({ where: { prospect_id: prospectId }, select: { state: true, stopped_reason: true, last_sent_at: true } });
+  const sendingOn = await prospectSendingEnabled(db);
+  return { ok: true, prospectId, sequence: seq ? { state: seq.state, stoppedReason: seq.stopped_reason } : null,
+    view: sequenceView(seq, sendingOn), sendingOn };
 }
 
 // ── UNSUBSCRIBE ──────────────────────────────────────────────────────────────────────────────────
@@ -244,7 +291,13 @@ export async function markSignedUpByEmail(email: string, groupId: string, now: D
 }
 
 // ── THE SENDER ───────────────────────────────────────────────────────────────────────────────────
-export type SequenceRun = { considered: number; sent: number; stopped: Array<{ prospectId: string; reason: StopReason }>; retrying: number };
+export type SequenceRun = {
+  /** THE SWITCH, IN THE RUN'S OWN OUTPUT — so a run that sent nothing says why, rather than looking idle. */
+  sending: 'on' | 'off';
+  /** Sequences due now that were NOT sent because sending is off. Zero whenever sending is on. */
+  queued: number;
+  considered: number; sent: number; stopped: Array<{ prospectId: string; reason: StopReason }>; retrying: number;
+};
 
 /**
  * SEND EVERY DUE STEP. Called by the scheduled job, and once straight after a visit is recorded.
@@ -255,7 +308,20 @@ export type SequenceRun = { considered: number; sent: number; stopped: Array<{ p
 export async function runSequence(opts: { now?: Date; onlyProspectId?: string; db?: Db; base?: string } = {}): Promise<SequenceRun> {
   const now = opts.now ?? new Date();
   const db = opts.db ?? prisma;
-  const out: SequenceRun = { considered: 0, sent: 0, stopped: [], retrying: 0 };
+  const out: SequenceRun = { sending: 'on', queued: 0, considered: 0, sent: 0, stopped: [], retrying: 0 };
+
+  // ── THE SWITCH STOPS THE SEND, NEVER THE ENROLMENT ──────────────────────────────────────────
+  // Off: nothing is claimed, nothing advanced, nothing stopped. Every due sequence stays exactly as it
+  // is — queued — and starts at the step it is on (step 1 for anyone enrolled while off) the first run
+  // after the switch goes on. The run REPORTS that it held them, so an empty run is never mistaken for
+  // a run with nothing to do.
+  if (!(await prospectSendingEnabled(db))) {
+    out.sending = 'off';
+    out.queued = await db.prospectSequence.count({
+      where: { state: 'active', next_due_at: { lte: now }, ...(opts.onlyProspectId ? { prospect_id: opts.onlyProspectId } : {}) },
+    });
+    return out;
+  }
   const due = await db.prospectSequence.findMany({
     where: { state: 'active', next_due_at: { lte: now }, ...(opts.onlyProspectId ? { prospect_id: opts.onlyProspectId } : {}) },
     select: { id: true, prospect_id: true, next_step: true, next_due_at: true,

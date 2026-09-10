@@ -43,6 +43,27 @@ const T = await import('../lib/notification-templates.ts');
 if (N.channelConfigured('email')) declineToRun('the email provider is configured in this process — refusing to run a gate that could send real prospecting mail');
 
 const code = (s) => s.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+// ── THE SENDING SWITCH IS GLOBAL, AND THIS DATABASE IS PRODUCTION ─────────────────────────────────
+// Some clauses need sending ON. Switching it on while REAL consented prospects are queued would let
+// the scheduled run email them placeholder copy for as long as it stays on. So: checked here, before a
+// single fixture exists — refused outright if anything real is waiting while the switch is off — and
+// every ON is scoped to the one run that needs it, then put back EXACTLY as found (no row included).
+const SWITCH = 'prospect_sending';
+const initialSwitch = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
+if (!initialSwitch?.enabled) {
+  const realWaiting = await prisma.prospectSequence.count({ where: { state: 'active' } });
+  if (realWaiting > 0) declineToRun(`${realWaiting} real prospect sequence(s) are queued and sending is OFF — switching it on here, even briefly, could let the scheduled run email them`);
+}
+const putSwitch = async (enabled) => prisma.prospectSending.upsert({ where: { id: SWITCH },
+  update: { enabled, changed_at: new Date(), changed_by: 'prospect-gate' },
+  create: { id: SWITCH, enabled, changed_at: new Date(), changed_by: 'prospect-gate' } });
+const restoreSwitch = async () => {
+  if (!initialSwitch) await prisma.prospectSending.deleteMany({ where: { id: SWITCH } });
+  else await prisma.prospectSending.update({ where: { id: SWITCH },
+    data: { enabled: initialSwitch.enabled, changed_at: initialSwitch.changed_at, changed_by: initialSwitch.changed_by } });
+};
+const withSending = async (enabled, fn) => { await putSwitch(enabled); try { return await fn(); } finally { await restoreSwitch(); } };
 const REP = 'prospect-gate-rep';
 const addr = (label) => `${label}-${randomUUID().slice(0, 8)}@prospect-gate.invalid`;
 const made = { prospects: [], hashes: [] };
@@ -186,7 +207,7 @@ try {
   // path would have stopped it at enrolment. This proves the SENDER on its own.
   await prisma.prospectSequence.update({ where: { prospect_id: custProspect.prospectId },
     data: { state: 'active', stopped_at: null, stopped_reason: null, next_due_at: new Date(Date.now() - 1000) } });
-  const run = await ST.runSequence({ onlyProspectId: custProspect.prospectId });
+  const run = await withSending(true, () => ST.runSequence({ onlyProspectId: custProspect.prospectId }));
   const afterRun = await seqOf(custProspect.prospectId);
   check('the SENDER stops an active sequence on a customer address', run.sent === 0 && afterRun.state === 'stopped' && afterRun.stopped_reason === 'already_customer',
     `sent ${run.sent}, ${afterRun.state} / ${afterRun.stopped_reason}`);
@@ -280,6 +301,77 @@ try {
   check('  …and says, in the file, that it moves with rep management', /reps\.greasedesk\.com/.test(readFileSync('pages/superadmin/prospects.tsx', 'utf8')));
   const noRep = await fetch(`${APEX}/api/rep/prospects`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   check('the rep write is not reachable from the tenant host', noRep.status === 404, String(noRep.status));
+
+  // ── 14. THE SENDING SWITCH — it stops the SEND, never the enrolment ─────────────────────────
+  console.log('\n— with sending OFF, a prospect is enrolled and queued, and nothing is sent —');
+  const logFor = (email) => prisma.notificationLog.findFirst({ where: { recipient: email, template: 'prospect_step_1' }, select: { status: true, error: true } });
+  const qEmail = addr('queued');
+  const queuedRec = await withSending(false, () => rec({ email: qEmail, consent: true }));
+  const qSeq = await seqOf(queuedRec.prospectId);
+  check('switch OFF: the prospect is still ENROLLED', qSeq?.state === 'active' && qSeq?.next_step === 1,
+    `${qSeq?.state} at step ${qSeq?.next_step} — queued, not skipped`);
+  check('  …and NOTHING was sent — not even attempted', (await logFor(qEmail)) === null,
+    'no send-log row at all: the run held it, it did not try and fail');
+  const offRun = await withSending(false, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
+  check('  …and the run SAYS sending is off, and how many it held', offRun.sending === 'off' && offRun.queued === 1 && offRun.sent === 0,
+    JSON.stringify({ sending: offRun.sending, queued: offRun.queued, sent: offRun.sent }));
+  check('the rep is told the follow-up is QUEUED, not on its way', queuedRec.view?.kind === 'queued' && queuedRec.view?.why === 'switched_off'
+    && /QUEUED/.test(PR.sequenceSavedSentence(queuedRec.view)) && /nothing has been emailed/.test(PR.sequenceSavedSentence(queuedRec.view)),
+    PR.sequenceSavedSentence(queuedRec.view ?? { kind: 'none' }).slice(0, 90));
+  check('  …and never told it has started', !/has been sent|on its way|started\b/i.test(PR.sequenceSavedSentence(queuedRec.view)),
+    'she has just promised a garage owner something');
+  const liveRow = await prisma.prospectSequence.findUnique({ where: { prospect_id: queuedRec.prospectId } });
+  check('a queued sequence RENDERS as queued, never as running', PR.sequenceView(liveRow, false).kind === 'queued'
+    && PR.sequenceLabel(PR.sequenceView(liveRow, false)).startsWith('Follow-up queued'),
+    PR.sequenceLabel(PR.sequenceView(liveRow, false)));
+  check('  …and ON but not yet sent still reads queued', PR.sequenceView(liveRow, true).kind === 'queued',
+    'active is not the same as sending — only a step that actually went reads as running');
+
+  console.log('\n— switching sending ON starts a queued prospect from step 1 —');
+  const onRun = await withSending(true, () => ST.runSequence({ onlyProspectId: queuedRec.prospectId }));
+  const attempted = await logFor(qEmail);
+  check('switch ON: the prospect enrolled while it was OFF is sent STEP 1', onRun.sending === 'on' && attempted !== null,
+    attempted ? `step 1 reached the provider stage — ${attempted.status}: ${attempted.error}` : 'no send attempted');
+  check('  …it was not skipped past step 1', (await seqOf(queuedRec.prospectId)).next_step === 1
+    && (await prisma.notificationLog.count({ where: { recipient: qEmail, template: { in: ['prospect_step_2', 'prospect_step_3'] } } })) === 0,
+    'no provider in this process, so step 1 stays due — and no later step was attempted instead');
+
+  console.log('\n— unsubscribe and signup still stop a QUEUED sequence —');
+  const qUnsub = await withSending(false, () => rec({ email: addr('queued-unsub'), consent: true }));
+  const qTok = (await prisma.prospect.findUnique({ where: { id: qUnsub.prospectId }, select: { unsubscribe_token: true, email: true } }));
+  made.hashes.push(PK.emailHash(qTok.email));
+  await ST.unsubscribeByToken(qTok.unsubscribe_token);
+  const qUnsubSeq = await seqOf(qUnsub.prospectId);
+  check('unsubscribe stops a QUEUED sequence, reason "unsubscribed"', qUnsubSeq.state === 'stopped' && qUnsubSeq.stopped_reason === 'unsubscribed',
+    `${qUnsubSeq.state} / ${qUnsubSeq.stopped_reason} — it never needed sending on to be stoppable`);
+  const qSignEmail = addr('queued-signer');
+  const qSign = await withSending(false, () => rec({ email: qSignEmail, consent: true }));
+  await ST.markSignedUpByEmail(qSignEmail, 'gate-group-id');
+  const qSignSeq = await seqOf(qSign.prospectId);
+  check('signup stops a QUEUED sequence, reason "signed_up"', qSignSeq.state === 'stopped' && qSignSeq.stopped_reason === 'signed_up',
+    `${qSignSeq.state} / ${qSignSeq.stopped_reason}`);
+
+  console.log('\n— the switch is visible where it matters, and defaults OFF —');
+  const storeSrc2 = code(readFileSync('lib/prospect-store.ts', 'utf8'));
+  check('NO ROW means OFF', /return row\?\.enabled === true;/.test(storeSrc2),
+    'absence is the default — "never switched on" is a state, not a value somebody wrote');
+  if (!initialSwitch) check('  …and on this database it has never been switched on', (await ST.prospectSendingEnabled()) === false);
+  check('switching it is AUDITED', /action: opts\.enabled \? 'prospect_sending\.on' : 'prospect_sending\.off'/.test(storeSrc2),
+    'turning it on emails real people; who and when goes to SuperAdminAudit');
+  const erSrc2 = code(readFileSync('pages/superadmin/prospects.tsx', 'utf8'));
+  check('the Engine Room shows the switch and what it is holding', /data-testid="er-sending-state"/.test(erSrc2) && /queued/.test(erSrc2),
+    'not an env var nobody reads');
+  check('  …and every row reads the shared view', /sequenceLabel\(sequenceView\(/.test(erSrc2) && /sequenceLabel\(sequenceView\(/.test(code(readFileSync('pages/rep/prospects/index.tsx', 'utf8'))),
+    'the Engine Room and the rep\'s list cannot disagree about what "queued" means');
+  check('  …and the API only takes an explicit true or false', /typeof req\.body\?\.enabled !== 'boolean'/.test(code(readFileSync('pages/api/superadmin/prospect-sending.ts', 'utf8'))),
+    '"switch on" must never be the accidental reading of a malformed request');
+  // THE BEHAVIOUR IS PROVED ABOVE (offRun returned sending:'off' with its count). This only confirms the
+  // scheduled job hands that object straight back as its output rather than summarising it away. The
+  // first version looked for \`sending: 'off'\` — the code says \`out.sending = 'off'\` — and failed on
+  // spelling, not behaviour.
+  const cronSrc = code(readFileSync('pages/api/cron/prospect-sequence.ts', 'utf8'));
+  check('the scheduled run reports the switch in its output', /const sequence = await runSequence\(\{ now \}\);/.test(cronSrc)
+    && /json\(\{ ok: true, sequence,/.test(cronSrc), 'the run object — sending and queued included — is the response');
 } catch (e) {
   check('gate run completed', false, describeError(e));
 } finally {
@@ -288,6 +380,11 @@ try {
     if (made.hashes.length) await prisma.prospectSuppression.deleteMany({ where: { email_hash: { in: made.hashes } } });
     const left = await prisma.prospect.count({ where: { id: { in: made.prospects } } });
     check('teardown removed every fixture', left === 0, `${made.prospects.length} prospects made, ${left} left`);
+    await restoreSwitch();
+    const nowSwitch = await prisma.prospectSending.findUnique({ where: { id: SWITCH } });
+    check('the sending switch is back EXACTLY as the gate found it',
+      initialSwitch ? (nowSwitch?.enabled === initialSwitch.enabled && nowSwitch?.changed_by === initialSwitch.changed_by) : nowSwitch === null,
+      initialSwitch ? `enabled=${nowSwitch?.enabled}, by ${nowSwitch?.changed_by}` : 'no row, as before — never switched on');
   } catch (e) { check('teardown completed', false, describeError(e)); }
   await prisma.$disconnect();
 }

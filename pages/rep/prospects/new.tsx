@@ -22,7 +22,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
-import { PROSPECT_STATUSES, STATUS_LABEL, STOP_LABEL, type ProspectStatus, type StopReason } from '@/lib/prospects';
+import { PROSPECT_STATUSES, STATUS_LABEL, sequenceSavedSentence, type ProspectStatus, type SequenceView } from '@/lib/prospects';
 
 type Match = { id: string; garageName: string; postcode: string | null; addressLine1: string | null; status: string; lastVisit: string | null; visitCount: number };
 
@@ -70,12 +70,11 @@ export default function NewVisit() {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j.message ?? 'That could not be saved.'); return; }
-      // SAY WHAT HAPPENED TO THE FOLLOW-UP, in words. "Saved" alone would leave a rep unsure whether
-      // the emails they promised the owner are actually going.
-      const seq = j.sequence as { state: string; stoppedReason: StopReason | null } | null;
-      setDone(!seq ? 'Visit saved. No follow-up emails — no address was given, or they were not asked.'
-        : seq.state === 'active' ? 'Visit saved. Follow-up emails from GreaseDesk have started.'
-        : `Visit saved. ${STOP_LABEL[seq.stoppedReason as StopReason] ?? 'No follow-up emails.'}`);
+      // SAY WHAT ACTUALLY HAPPENED TO THE FOLLOW-UP. She is standing in front of a garage owner she has
+      // just promised something to: "started" when nothing has gone would be a lie she then repeats.
+      // The sentence is lib/prospects::sequenceSavedSentence — the SAME derivation the Engine Room and
+      // her list read — so this screen cannot call a queued follow-up "on its way".
+      setDone(sequenceSavedSentence(j.view as SequenceView));
     } finally {
       setBusy(false);
     }
