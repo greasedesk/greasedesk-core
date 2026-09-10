@@ -26,6 +26,10 @@ import { writeAudit } from '@/lib/audit';
 import { normaliseTermsDays } from '@/lib/account-terms';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
+import { setContactPreference } from '@/lib/contact-preferences';
+
+/** A preference the one writer would not record — the whole save is rolled back and says why. */
+class PreferenceRefused extends Error { constructor(readonly refusal: string) { super(`contact preference refused: ${refusal}`); } }
 
 type OwnerIn = {
   name?: string; phone?: string; email?: string; address?: string;
@@ -132,13 +136,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // box records a refusal, clearing it returns the row to NO RECORD. We never write `false`
         // here, because a cleared checkbox is not the customer saying yes — it is nobody having
         // asked. `opt_out_updated_at` moves only when the value actually changes.
-        const pref = (k: 'sms_opt_out' | 'email_opt_out', v: boolean | null | undefined) => {
+        //
+        // THROUGH THE ONE WRITER (lib/contact-preferences), not into `next`: the column and its
+        // ContactPreferenceEvent move together, so the history a garage may have to produce is
+        // complete from the day it shipped. Still in THIS transaction — a refused preference rolls
+        // back the whole save rather than half of it.
+        const prefs: Array<{ channel: 'sms' | 'email'; optedOut: true | null }> = [];
+        const pref = (k: 'sms_opt_out' | 'email_opt_out', channel: 'sms' | 'email', v: boolean | null | undefined) => {
           if (v === undefined) return;
           const norm = v === true ? true : null;
-          if (norm !== cur[k]) { next[k] = norm; diff[k] = { from: cur[k], to: norm }; next.opt_out_updated_at = new Date(); }
+          if (norm !== cur[k]) { diff[k] = { from: cur[k], to: norm }; prefs.push({ channel, optedOut: norm }); }
         };
-        pref('sms_opt_out', owner.sms_opt_out);
-        pref('email_opt_out', owner.email_opt_out);
+        pref('sms_opt_out', 'sms', owner.sms_opt_out);
+        pref('email_opt_out', 'email', owner.email_opt_out);
         // ── ON ACCOUNT ────────────────────────────────────────────────────────────────────────
         // Normalised through the one rule (lib/account-terms), so "0", "" and nonsense all land as
         // NULL — a retail customer — rather than as an account with impossible terms. Changing
@@ -150,8 +160,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // with no billing address recorded prints no address at all, not the customer's own.
         if (owner.account_name !== undefined) set('account_name', clean(owner.account_name), cur.account_name);
         if (owner.account_address !== undefined) set('account_address', clean(owner.account_address), cur.account_address);
-        if (Object.keys(next).length) {
-          await tx.customer.update({ where: { id: ownerId }, data: next });
+        if (Object.keys(next).length) await tx.customer.update({ where: { id: ownerId }, data: next });
+        for (const p of prefs) {
+          const r = await setContactPreference(tx, {
+            groupId: user.group_id as string, customerId: ownerId, channel: p.channel, scope: 'all',
+            optedOut: p.optedOut, via: 'staff', actorUserId: user.id as string,
+          });
+          if (!r.ok) throw new PreferenceRefused(r.refusal);
+        }
+        // A preference-only edit is still an edit of the owner: the audit row covers it too.
+        if (Object.keys(next).length || prefs.length) {
           await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'owner.edited', diff: { ...diff, via } });
         }
       }
@@ -199,6 +217,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     });
   } catch (e) {
+    if (e instanceof PreferenceRefused) {
+      // Nothing was saved. `conflict` = someone changed this preference between the read and the write.
+      return res.status(409).json({ code: e.refusal, message: e.refusal === 'conflict'
+        ? 'Someone else changed this customer\u2019s contact preferences just now. Reload and try again.'
+        : 'That contact preference could not be recorded, so nothing was saved.' });
+    }
     console.error('jobcard-details edit error:', e);
     return res.status(500).json({ message: 'Could not save the details.' });
   }

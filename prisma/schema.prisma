@@ -534,6 +534,7 @@ model Group {
   leaveRecords        LeaveRecord[]
   publicHolidays      PublicHoliday[]
   employmentEvents    EmploymentEvent[]
+  contactPreferenceEvents ContactPreferenceEvent[]
   siteConfigEvents    SiteConfigEvent[]
   importBatches       ImportBatch[]
   catalogueAliases    CatalogueAlias[]
@@ -2179,7 +2180,17 @@ model Customer {
   // unknown means send. Enforced in lib/notify::sendNotification, which REFUSES rather than filters.
   sms_opt_out        Boolean?
   email_opt_out      Boolean?
-  opt_out_updated_at DateTime? // when the preference was last set (who = AuditLog)
+  // ── MARKETING, SEPARATELY (owner decision B, 2026-09-10) ──────────────────────────────────────
+  // "No reminders or offers" on a channel, beside "nothing at all" above. Same three states: NULL =
+  // no record (nobody asked), true = opted OUT of marketing, false = explicitly opted IN (a staff
+  // opt-in always carries a reason — ContactPreferenceEvent_optin_reason_chk). A customer's
+  // unsubscribe link sets this and never the columns above: it must not stop a quote or an invoice.
+  // Written ONLY by lib/contact-preferences, with a ContactPreferenceEvent in the same transaction.
+  email_marketing_opt_out Boolean? // null = no record — see the block above
+  sms_marketing_opt_out   Boolean? // null = no record — see the block above
+  // When any preference above last CHANGED — null = none ever has on this customer. Who and how:
+  // ContactPreferenceEvent since 2026-09-10 (the one writer moves this with it); AuditLog before.
+  opt_out_updated_at DateTime?
   created_at         DateTime  @default(now())
 
   // +++ CUSTOMER PORTAL LINK ---
@@ -2194,6 +2205,7 @@ model Customer {
   bookings   Booking[]
   job_cards  JobCard[]
   threads    MessageThread[]
+  contactPreferenceEvents ContactPreferenceEvent[]
 
   @@index([group_id, site_id])
   @@index([group_id, phone_e164])
@@ -3910,6 +3922,42 @@ model EmploymentEvent {
   @@index([group_id, created_at])
 }
 
+/// EVERY CHANGE TO A CUSTOMER'S CONTACT PREFERENCES — what a garage may have to produce if
+/// challenged: what this customer's preference is, and who set it. Append-only. Written ONLY by
+/// lib/contact-preferences, in the same transaction as the Customer column it moves (the flat
+/// column is current state for every reader; this is how it got there). Migration
+/// 20260910230000_contact_preference_history holds the CHECKs and the reasoning for each.
+model ContactPreferenceEvent {
+  id          String @id @default(uuid())
+  /// THE ORDER. created_at can tie within a millisecond; seq cannot. "Latest" always means highest seq.
+  seq         BigInt @unique @default(autoincrement())
+  /// Taken from the CUSTOMER row by the writer, never from a caller — it cannot name another tenant.
+  group_id    String
+  customer_id String
+  channel     String // 'email' | 'sms'
+  scope       String // 'all' (nothing on this channel) | 'marketing' (no reminders or offers)
+  /// The value before and after. NULL = no record, true = opted out, false = opted in. Never equal
+  /// (an event is a change); `opted_out` is never null for marketing.
+  previous    Boolean?
+  opted_out   Boolean? // null = returned to no record (the staff untick of an `all` box)
+  via         String // 'staff' | 'customer_link' | 'carrier_stop'
+  /// null = none given. Required (non-blank) on every staff opt-in to marketing.
+  reason      String?
+  /// The staff member — null exactly when the change did not come from staff (via ≠ 'staff').
+  /// A plain id, no FK, as EmploymentEvent.changed_by: the record outlives the user.
+  actor_user_id String?
+  /// The message a link or a carrier STOP came from — null exactly when via = 'staff'.
+  notification_log_id String?
+  created_at  DateTime @default(now())
+
+  group            Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  customer         Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  notification_log NotificationLog? @relation(fields: [notification_log_id], references: [id], onDelete: NoAction)
+
+  @@index([customer_id, channel, scope, created_at])
+  @@index([group_id, created_at])
+}
+
 enum SiteConfigEventKind {
   open_days // { open_days: Int[] } — trading days; changing them changes HISTORICAL capacity
   hours // { open_hour, close_hour } — reserved; no event needed while times are unchanged
@@ -4405,6 +4453,7 @@ model NotificationLog {
 
   group  Group?         @relation(fields: [group_id], references: [id], onDelete: Cascade)
   thread MessageThread? @relation(fields: [thread_id], references: [id], onDelete: SetNull)
+  contactPreferenceEvents ContactPreferenceEvent[]
   // NO (direction, thread_id) INDEX. It existed from 20260731220000_inbound_email until
   // 20260816094000_drop_dead_notification_index removed it on evidence: zero scans, ever.
   // `direction` holds two values, so it is a useless leading column; thread-scoped reads are served

@@ -17,6 +17,24 @@
  * automatically, and their MOT may lapse. That is the price of not adjudicating, and it is worth
  * paying, because the alternative is a rule only we understand.
  *
+ * ── AND THE RECIPIENT'S CHOICE IS FINER THAN THAT (owner decision B, 2026-09-10) ────────────────
+ * The ruling above stands, and it was right about its own question: what the SENDER may classify.
+ * We do not get to decide that a message of ours is "service" and send it past an opt-out. It never
+ * governed how finely the RECIPIENT may choose — and a customer who unsubscribes from an MOT reminder
+ * has not asked to lose their quote or their invoice. So each channel now has a separate answer,
+ * `email_marketing_opt_out` / `sms_marketing_opt_out` — "no reminders or offers" — beside "nothing
+ * at all". The self-serve link sets only the marketing answer; the staff form still records "no
+ * email at all" for someone who wants exactly that.
+ *   Not a third, finer option (C): nobody wants to opt out of their own invoice.
+ *   Done at a moment it could never be cheaper: 0 opt-outs, 0 opt-ins, and 0 marketing sends on real
+ *   tenants in the 90 days to 2026-09-10 — nothing to migrate, no behaviour to preserve.
+ *   Every change is recorded in ContactPreferenceEvent by one writer, lib/contact-preferences.
+ *
+ * ── MOT REMINDERS ARE FILED AS MARKETING (owner, 2026-09-10) ────────────────────────────────────
+ * They are sent from this list and honour the marketing opt-out. Soft opt-in exists for an existing
+ * customer about a vehicle the garage has serviced, and whether it applies here is a SOLICITOR'S
+ * question — not one to settle in code, and not one this file answers.
+ *
  * ── PER CHANNEL, THOUGH ─────────────────────────────────────────────────────────────────────────
  * The ruling above is about the KIND of message, not the route. `sms_opt_out` and `email_opt_out`
  * are separate columns and a customer who refused texts and never mentioned email has not asked to
