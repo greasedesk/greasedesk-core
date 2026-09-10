@@ -35,7 +35,7 @@ import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import { isBookedCard } from '@/lib/jobcard-status';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { refuseQuoteSend } from '@/lib/quote-acceptance';
-import { acceptanceProvenance, PROVENANCE_LABEL, PROVENANCE_SENTENCE } from '@/lib/acceptance-provenance';
+import { acceptanceProvenance, cardAcceptance, PROVENANCE_LABEL, PROVENANCE_SENTENCE } from '@/lib/acceptance-provenance';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -274,9 +274,16 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // is the one whose provenance gets stated. Versionless → 'garage' by construction, and that is the
   // 219-card majority, not an edge.
   const acceptedVersionRow = [...allVersions].sort((a, b) => b.version - a.version).find((v) => v.status === 'accepted') ?? null;
-  const acceptanceProv = (row.status === 'draft' || row.status === 'quoted' || row.status === 'declined')
-    ? null // nothing has been accepted, so there is nothing to attribute
-    : acceptanceProvenance(acceptedVersionRow);
+  // ── WHETHER ANYONE SAID YES, ASKED OF THE ONE PREDICATE (2026-09-10) ─────────────────────────
+  // This used to decide "accepted" inline as "not draft, quoted or declined". That labelled a card
+  // CANCELLED FROM QUOTED "Recorded by the garage" — a yes that never happened; two such cards on the
+  // live tenant. cancelled and no_show are reachable with OR without an acceptance, so the status
+  // cannot answer and the evidence must. cardAcceptance asks cardWasAccepted, which is exactly what
+  // the quote list asks, so the two surfaces now agree by construction rather than by coincidence.
+  const acceptanceProv = cardAcceptance(
+    { status: row.status, accepted_at: (row as { accepted_at: Date | null }).accepted_at },
+    allVersions,
+  );
   const acceptanceNote = acceptanceProv ? PROVENANCE_SENTENCE[acceptanceProv] : null;
   const acceptanceLabel = acceptanceProv ? PROVENANCE_LABEL[acceptanceProv] : null;
 

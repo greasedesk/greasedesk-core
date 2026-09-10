@@ -20,14 +20,14 @@ import { prisma } from '@/lib/db';
 // lib/magic-link would bring lib/db with it. See lib/magic-link-days.
 import { MAGIC_LINK_DAYS } from '@/lib/magic-link-days';
 import { isBookedCard, statusSubset } from '@/lib/jobcard-status';
-import { acceptanceProvenance, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
+import { acceptanceProvenance, cardWasAccepted, type AcceptanceProvenance } from '@/lib/acceptance-provenance';
 
 /**
  * ORDERED BY HOW MUCH DOING A TAB NEEDS. `not_sent` is FIRST — nothing has gone to the customer at
  * all, which is the earliest and most actionable state there is — and `accepted_booked` stays last
  * as the only one needing nothing.
  */
-export const QUOTE_FILTERS = ['not_sent', 'awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'accepted_booked'] as const;
+export const QUOTE_FILTERS = ['not_sent', 'awaiting', 'accepted', 'declined', 'needs_resending', 'expired', 'booked_unaccepted', 'accepted_booked'] as const;
 export type QuoteFilter = typeof QUOTE_FILTERS[number];
 export const isQuoteFilter = (v: string): v is QuoteFilter => (QUOTE_FILTERS as readonly string[]).includes(v);
 
@@ -56,17 +56,82 @@ export type DerivedQuoteStatus = QuoteFilter;
  *    NOTE the "no successor" half is free: listQuotes keeps only each card's HIGHEST version, so a
  *    superseded version that HAS been replaced is already invisible here (its successor is latest).
  *    Reaching this branch therefore means there is no successor.
+ *  booked_unaccepted — IN THE DIARY, AND NOBODY EVER SAID YES. It leaves the worklist, because a job
+ *    with a lift and a date has nothing to chase; but it is NOT accepted_booked, which would be a lie
+ *    one layer down — the same defect this derivation was rewritten to stop. Its own tab says what it
+ *    is. Zero live rows on 2026-09-10; built now so it is decided rather than discovered.
+ *
+ * ── THE CARD IS REQUIRED, AND THAT IS THE FIX (2026-09-10) ──────────────────────────────────────
+ * This read ONLY the latest version, and `booked` was optional. Two failures, one cause:
+ *   • LO25UGN was accepted by accept & book with no version in existence, then the written quote was
+ *     sent an hour later. v1 was born `sent` on an accepted card and filed as "awaiting" — while
+ *     booked on a lift. Nothing will ever answer that version; there is nothing left to answer.
+ *   • marketing-board called this with no `booked` at all, so it could never say accepted_booked.
+ * The card now decides whether anyone said yes — through lib/acceptance-provenance::cardWasAccepted,
+ * the SAME predicate the job card page asks — and the version decides only what an unanswered offer
+ * is. Making the argument REQUIRED is what made every caller fail to compile until it passed one: a
+ * fix in listQuotes' row builder would have left the board filing LO25UGN as a lead.
+ *
+ * THE ORDER, and why: an answer on the CARD beats a silence on the VERSION; an explicit answer on the
+ * version (declined, superseded) beats a booking; a booking beats a clock.
+ *
+ * ── TWO SURFACES DELIBERATELY DO NOT FOLLOW THIS — a NAMED disagreement, chosen 2026-09-10 ────────
+ * lib/dashboard-tiles::quoteConversion counts a card as won only when a VERSION is accepted, and
+ * lib/quotes-metrics counts a still-`sent` version as Expired once its window closes. So LO25UGN reads
+ * "issued, never won" on the Dashboard and will count as an expired offer from 22 September, while
+ * this list correctly calls it accepted and booked.
+ *
+ * Both are HISTORY surfaces, and "issued and never won" is TRUE OF THE VERSION and FALSE OF THE OFFER.
+ * Which a history figure should report is the history-or-model question, and it was left for its own
+ * decision rather than settled as a side effect of a worklist fix. Do not "correct" those two to match
+ * this without that decision; if it is taken, the shared predicate is cardWasAccepted.
  */
+export type QuoteCard = { status: string; accepted_at: Date | null; booked: boolean; hasAcceptedVersion: boolean };
+
+/**
+ * THE CARD'S OWN ANSWER, shared by versioned and versionless rows so neither can drift from the
+ * other. Null = the card has not been accepted, and the caller must ask what the offer is.
+ */
+function acceptedAnswer(card: QuoteCard): 'accepted' | 'accepted_booked' | null {
+  if (!cardWasAccepted(card, card.hasAcceptedVersion)) return null;
+  return card.booked ? 'accepted_booked' : 'accepted';
+}
+
 export function deriveQuoteStatus(
-  v: { status: string; sent_at: Date; booked?: boolean },
+  v: { status: string; sent_at: Date },
+  card: QuoteCard,
   now: Date = new Date(),
 ): DerivedQuoteStatus {
-  // The ONLY place the booking fact matters: it splits `accepted` in two and touches nothing else.
-  // A superseded or expired version stays what it is whether or not a lift was pencilled in.
-  if (v.status === 'accepted') return v.booked ? 'accepted_booked' : 'accepted';
+  const fromCard = acceptedAnswer(card);
+  if (fromCard) return fromCard;
+  if (v.status === 'accepted') return card.booked ? 'accepted_booked' : 'accepted';
   if (v.status === 'declined') return 'declined';
   if (v.status === 'superseded') return 'needs_resending';
+  // Booked with no yes: in the diary, nothing to chase, and not something Marketing should ring
+  // about either — so it is decided BEFORE the clock can file it as expired.
+  if (card.booked) return 'booked_unaccepted';
   return quoteExpiry(v.sent_at).getTime() <= now.getTime() ? 'expired' : 'awaiting';
+}
+
+/**
+ * THE SAME RULE FOR A CARD WITH NO VERSION AT ALL — a verbal quote, or a draft.
+ *
+ * ── WHY THIS EXISTS (2026-09-10) ────────────────────────────────────────────────────────────────
+ * The versionless branch of listQuotes hardcoded `isDraft ? 'not_sent' : 'awaiting'`. It computed
+ * `booked` and never used it, so CF18VNM — a verbal quote, booked on the live tenant, nobody ever
+ * having said yes — sat under "Awaiting response" after deriveQuoteStatus had been fixed. A second
+ * copy of the derivation is exactly how one screen stops agreeing with another, and this was a
+ * second copy inside ONE file. quote-worklist-gate found it by comparing the live list against an
+ * oracle, not by reading the code.
+ *
+ * Same order as deriveQuoteStatus minus the offer: the card's yes, then the diary, then what kind of
+ * silence it is. A verbal quote never expires — nothing was sent, so there is no clock.
+ */
+export function deriveVersionlessStatus(card: QuoteCard): DerivedQuoteStatus {
+  const fromCard = acceptedAnswer(card);
+  if (fromCard) return fromCard;
+  if (card.booked) return 'booked_unaccepted';
+  return card.status === 'draft' ? 'not_sent' : 'awaiting';
 }
 
 /**
@@ -235,7 +300,7 @@ export async function listQuotes(args: {
       responded_by_user: true, responded_ip: true, // the provenance pair — see lib/acceptance-provenance
       job_card: {
         select: {
-          status: true, site_id: true, created_at: true,
+          status: true, site_id: true, created_at: true, accepted_at: true,
           // The booking fact, read from the card itself — see isBookedCard.
           resource_id: true, start_at: true, end_at: true,
           vehicle: { select: { registration: true } },
@@ -283,7 +348,11 @@ export async function listQuotes(args: {
       priced: true,
       createdAt: (v.job_card.created_at as Date).toISOString(),
       expiresAt: quoteExpiry(v.sent_at).toISOString(),
-      status: deriveQuoteStatus({ status: v.status, sent_at: v.sent_at, booked }, now),
+      status: deriveQuoteStatus(
+        { status: v.status, sent_at: v.sent_at },
+        { status: v.job_card?.status ?? '', accepted_at: v.job_card?.accepted_at ?? null, booked, hasAcceptedVersion: acceptedByCard.has(v.job_card_id) },
+        now,
+      ),
       supersededNoLink: v.status === 'superseded',
       cardStatus: v.job_card?.status ?? '',
       siteId: v.job_card?.site_id ?? '',
@@ -303,7 +372,7 @@ export async function listQuotes(args: {
     // added to either.
     where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: { in: ['quoted', 'draft'] }, id: { notIn: [...seen] } },
     select: {
-      id: true, status: true, site_id: true, created_at: true,
+      id: true, status: true, site_id: true, created_at: true, accepted_at: true,
       resource_id: true, start_at: true, end_at: true,
       vehicle: { select: { registration: true } },
       customer: { select: { name: true } },
@@ -342,7 +411,7 @@ export async function listQuotes(args: {
       priced: gross > 0,
       createdAt: c.created_at.toISOString(),
       expiresAt: null, // nothing was sent, so nothing lapses — a verbal quote never "expires"
-      status: isDraft ? 'not_sent' : 'awaiting',
+      status: deriveVersionlessStatus({ status: c.status, accepted_at: c.accepted_at ?? null, booked: isBookedCard(c), hasAcceptedVersion: false }),
       supersededNoLink: false, // never sent → no link to have lost
       cardStatus: c.status,
       siteId: c.site_id,

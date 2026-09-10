@@ -8,7 +8,11 @@
  * Adding a future toggle = add a Group column, a field here, and a predicate (if it needs one).
  */
 import { prisma } from '@/lib/db';
-import { Visibility } from '@/lib/site-visibility';
+// `import type`, not a value import: Visibility is a type, and node --experimental-strip-types
+// erases only MARKED type imports. Unmarked, it made every module reaching this one unloadable by
+// the gate harness — lib/jobcard-page-data among them — while compiling perfectly under Next.
+// lib/invoice-doc records the same rule for the same reason.
+import type { Visibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 
 export type TenantPermissions = {

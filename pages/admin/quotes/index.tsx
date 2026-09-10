@@ -49,6 +49,10 @@ const LABELS: Record<QuoteFilter, string> = {
   // The garage never asked, as distinct from the customer never answering.
   needs_resending: 'Needs re-sending',
   expired: 'Expired',
+  // IN THE DIARY WITH NO YES. Not "Accepted & booked" — nobody accepted it, and saying so would be the
+  // lie this derivation was rewritten to stop. Nothing to chase, so it sits beside the other booked
+  // tab rather than in the worklist; its name says what it actually is.
+  booked_unaccepted: 'Booked, never accepted',
   // Agreed AND in the diary. Last, because it is the only tab needing no action.
   accepted_booked: 'Accepted & booked',
 };
@@ -62,6 +66,9 @@ const TONE: Record<QuoteFilter, string> = {
   // Amber like expired — both are "no live offer" — but its own tab, because the ACTION differs.
   needs_resending: 'bg-warn-soft text-warn',
   expired: 'bg-warn-soft text-warn',
+  // NEUTRAL, NOT OK-GREEN. It is booked, so there is no chase — but it is not agreed either, and the
+  // green that means "the customer said yes" must not be borrowed for a card where nobody did.
+  booked_unaccepted: 'bg-surface-muted text-muted',
   accepted_booked: 'bg-ok-soft text-ok',
 };
 

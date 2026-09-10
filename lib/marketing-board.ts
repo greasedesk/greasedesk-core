@@ -15,7 +15,8 @@
 import { prisma } from '@/lib/db';
 import { motBand, contactRoute, noContactLabel, contactStands, serviceDue, WINDOW_DAYS, type ContactRecord } from '@/lib/marketing-lists';
 import { batteryState, type BatteryState } from '@/lib/battery';
-import { deriveQuoteStatus, quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
+import { deriveQuoteStatus, deriveVersionlessStatus, quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
+import { isBookedCard } from '@/lib/jobcard-status';
 import { leadStack, unansweredPrompt, type Stack, type LeadReason } from '@/lib/marketing-pipeline';
 
 export type BoardRow = {
@@ -140,7 +141,9 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       where: { group_id: groupId, job_card: { vehicle_id: { in: ids } } },
       select: {
         job_card_id: true, version: true, status: true, sent_at: true,
-        job_card: { select: { vehicle_id: true, status: true } },
+        // THE CARD'S OWN ANSWER, not just the version's. accepted_at and the booking are what let
+        // deriveQuoteStatus see that a card was agreed before its quote was ever sent.
+        job_card: { select: { vehicle_id: true, status: true, accepted_at: true, resource_id: true, start_at: true, end_at: true } },
       },
       orderBy: [{ job_card_id: 'asc' }, { version: 'desc' }],
     }),
@@ -148,7 +151,8 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
     // live tenant is verbal, so this is not an edge case; it is most of the book.
     prisma.jobCard.findMany({
       where: { group_id: groupId, vehicle_id: { in: ids }, status: 'quoted', quoteVersions: { none: {} } },
-      select: { vehicle_id: true, created_at: true },
+      // The card's own answer rides along, so a verbal quote is judged by the SAME rule as the list.
+      select: { vehicle_id: true, created_at: true, status: true, accepted_at: true, resource_id: true, start_at: true, end_at: true },
       orderBy: { created_at: 'asc' },
     }),
     // The tenant's marketing settings. Nullable columns stay null here — the pipeline and
@@ -173,6 +177,9 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   // its list bounds this too.
   const latestPerCard = new Map<string, (typeof quoteVersions)[number]>();
   for (const v of quoteVersions) if (!latestPerCard.has(v.job_card_id)) latestPerCard.set(v.job_card_id, v);
+  // ANY accepted version on the card — the whole series, not just the latest. Read from the rows
+  // already fetched, so the board asks the same question the list does without another query.
+  const acceptedCards = new Set(quoteVersions.filter((v) => v.status === 'accepted').map((v) => v.job_card_id));
   type QuoteLead = { kind: 'live' | 'expired' | 'verbal'; ageDays: number; alsoLapsed: number; days: number | null };
   const quoteByVehicle = new Map<string, QuoteLead>();
   const dayp = (from: Date) => Math.max(0, Math.round((now.getTime() - from.getTime()) / 86_400_000));
@@ -187,7 +194,15 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   };
   for (const v of latestPerCard.values()) {
     if ((QUOTE_CLOSED_CARD_STATUSES as readonly string[]).includes(v.job_card.status)) continue;
-    const state = deriveQuoteStatus({ status: v.status, sent_at: v.sent_at }, now);
+    // THE SAME CARD THE LIST PASSES. This call used to omit the card entirely — booked was optional —
+    // so the board could never say accepted_booked, and it filed LO25UGN (accepted and booked, its
+    // quote sent an hour after the yes) as a live lead that would have turned into an expired-quote
+    // call on 22 September. quote-worklist-gate holds the board and the list to one answer per card.
+    const state = deriveQuoteStatus(
+      { status: v.status, sent_at: v.sent_at },
+      { status: v.job_card.status, accepted_at: v.job_card.accepted_at, booked: isBookedCard(v.job_card), hasAcceptedVersion: acceptedCards.has(v.job_card_id) },
+      now,
+    );
     // AWAITING AND EXPIRED ONLY. accepted/accepted_booked are won, declined was answered, and
     // needs_resending is deliberately OUT: its own comment says "the customer was never told", which
     // may well be the strongest lead of all — but there are zero instances on any tenant today, and
@@ -207,6 +222,16 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   // that later minted one is covered above.
   for (const c of verbalCards) {
     if (quoteByVehicle.has(c.vehicle_id)) continue;
+    // ── A VERBAL QUOTE IS A LEAD ONLY WHILE IT IS GENUINELY UNANSWERED (2026-09-10) ──────────────
+    // This made EVERY quoted, versionless card a lead. CF18VNM — verbal, booked on a lift, nobody
+    // ever having said yes — was on this board as a quote to chase: the third copy of a derivation
+    // that the list had already been fixed in, and the one a reader was least likely to check.
+    // deriveVersionlessStatus is the list's own versionless rule; a verbal quote has no clock, so
+    // 'awaiting' is the only state that is a lead.
+    const verbalState = deriveVersionlessStatus({
+      status: c.status, accepted_at: c.accepted_at, booked: isBookedCard(c), hasAcceptedVersion: false,
+    });
+    if (verbalState !== 'awaiting') continue;
     quoteByVehicle.set(c.vehicle_id, { kind: 'verbal', ageDays: dayp(c.created_at), alsoLapsed: 0, days: null });
   }
   const owners = await prisma.customer.findMany({

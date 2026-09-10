@@ -29,6 +29,78 @@
  * one figure mean two things, so provenance gets its own vocabulary and never borrows that one.
  */
 
+import { statusSubset, type JobStatus } from '@/lib/jobcard-status';
+
+// ── WHETHER ANYONE SAID YES — THE SAME FACT FOR EVERY SURFACE (2026-09-10) ───────────────────────
+/**
+ * This module answered WHO said yes. It now also answers WHETHER anyone did, because two surfaces
+ * were answering that for themselves and agreeing only by coincidence:
+ *
+ *   • the job card page decided "accepted" as "not draft, quoted or declined" — which labelled a
+ *     card CANCELLED FROM QUOTED "Recorded by the garage", for a yes that never happened. Two such
+ *     cards on the live tenant on 2026-09-10, neither with an accepted_at nor any acceptance audit.
+ *   • the quote list decided it from the LATEST VERSION alone — which filed LO25UGN under
+ *     "Awaiting response" while it sat accepted and booked, because its quote was sent an hour
+ *     AFTER the acceptance and so was born unanswered.
+ *
+ * Both were right about the cases each had met. Neither was right about the other's. One predicate,
+ * both call it, and quote-worklist-gate proves they agree on every shape.
+ *
+ * ── THREE KINDS OF CARD STATUS, NOT TWO ─────────────────────────────────────────────────────────
+ *   PROVES   — accepted, in_progress, invoiced, paid, done. Every route into these passes through
+ *              `accepted` (lib/jobcard-status), so the spine itself is the evidence.
+ *   AMBIGUOUS — cancelled, no_show. Reachable from `quoted` WITHOUT anyone saying yes, and equally
+ *              from `accepted`. The status cannot tell you which, so the EVIDENCE decides.
+ *   NO       — draft, quoted, declined. Nothing has been accepted yet.
+ *
+ * TOTAL BY CONSTRUCTION: statusSubset fails to compile when a JobStatus is added, until somebody
+ * decides which of the three it belongs to. A plain array (QUOTE_DONE_STATUSES is one) would let a
+ * new status fall silently into "no".
+ */
+export const SPINE_PROVES_ACCEPTANCE = statusSubset({
+  draft: false, quoted: false, declined: false,
+  accepted: true, in_progress: true, invoiced: true, paid: true, done: true,
+  cancelled: false, no_show: false,
+});
+export const SPINE_AMBIGUOUS_ACCEPTANCE = statusSubset({
+  draft: false, quoted: false, declined: false,
+  accepted: false, in_progress: false, invoiced: false, paid: false, done: false,
+  cancelled: true, no_show: true,
+});
+
+/**
+ * WAS THIS CARD ACCEPTED? The one answer.
+ *
+ * For an AMBIGUOUS status the evidence is accepted_at (written by lib/quote-acceptance for every
+ * acceptance since 2026-08-05) or an accepted version. The audit union that dates older acceptances
+ * is deliberately NOT consulted: it would put an AuditLog read on every quote-list row, and on the
+ * live tenant it would change nothing — measured 2026-09-10, no cancelled or no-show card relies on
+ * audit alone. If that ever stops being true this is the line to revisit, not a reason to guess.
+ */
+export function cardWasAccepted(
+  card: { status: string; accepted_at: Date | null },
+  hasAcceptedVersion: boolean,
+): boolean {
+  const s = card.status as JobStatus;
+  if (SPINE_PROVES_ACCEPTANCE.includes(s)) return true;
+  if (SPINE_AMBIGUOUS_ACCEPTANCE.includes(s)) return card.accepted_at !== null || hasAcceptedVersion;
+  return false;
+}
+
+/**
+ * WHAT THE CARD PAGE SAYS about acceptance, as one pure function of the card and its versions.
+ * NULL when nobody said yes — including a card cancelled before anyone did. Otherwise who: the
+ * HIGHEST accepted version's provenance, or 'garage' by construction when there is none.
+ */
+export function cardAcceptance(
+  card: { status: string; accepted_at: Date | null },
+  versions: Array<{ version: number; status: string; responded_by_user: string | null; responded_ip: string | null }>,
+): AcceptanceProvenance | null {
+  const acceptedVersion = [...versions].sort((a, b) => b.version - a.version).find((v) => v.status === 'accepted') ?? null;
+  if (!cardWasAccepted(card, acceptedVersion !== null)) return null;
+  return acceptanceProvenance(acceptedVersion);
+}
+
 export type AcceptanceProvenance = 'customer' | 'garage' | 'unknown';
 
 export type ProvenanceFields = {
