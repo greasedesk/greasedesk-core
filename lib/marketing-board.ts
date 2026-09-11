@@ -236,7 +236,7 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
   }
   const owners = await prisma.customer.findMany({
     where: { id: { in: [...new Set(edges.map((e) => e.customer_id))] } },
-    select: { id: true, name: true, phone: true, phone_e164: true, email: true, sms_opt_out: true, email_opt_out: true },
+    select: { id: true, name: true, phone: true, phone_e164: true, email: true, sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true },
   });
   const ownerById = new Map(owners.map((o) => [o.id, o]));
   const ownerOfVehicle = new Map(edges.map((e) => [e.vehicle_id, ownerById.get(e.customer_id) ?? null]));

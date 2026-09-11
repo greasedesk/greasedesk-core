@@ -43,6 +43,7 @@
  */
 import { effectiveDueDate, type OpenDueItem } from '@/lib/due-items';
 import { mileageRate, projectMileageDate, type OdometerReading } from '@/lib/odometer';
+import { blocksSend, channelBlock, type PrefColumns } from '@/lib/contact-preference-rules';
 
 /** The window both tabs answer. A month is what a garage plans; longer is a report nobody reads. */
 export const WINDOW_DAYS = 30;
@@ -64,29 +65,38 @@ export const MOT_EXEMPT_YEARS = 3;
 export type ContactRoute = { sms: boolean; email: boolean; phone: string | null };
 
 /**
- * What can actually reach this customer. NULL opt-out means UNKNOWN, and unknown is treated as
- * allowed — the honest-null rule the comms spine already uses: we refuse on a recorded `true`, not
- * on the absence of a preference.
+ * What can actually reach this customer WITH A REMINDER OR AN OFFER — every reader of this is a
+ * marketing surface (the board, the MOT and service lists, the send preview), so both answers
+ * count: "nothing on this channel" and "no reminders or offers" (owner decision B). The rule is
+ * lib/contact-preference-rules::channelBlock — the same one the send path refuses with, so the board
+ * cannot offer a text the send would refuse. NULL means UNKNOWN, and unknown is allowed: we refuse on
+ * a recorded `true`, not on the absence of a preference.
+ *
+ * The marketing columns are REQUIRED in the type, deliberately: a reader whose select forgets them
+ * fails the type check instead of quietly offering texts to people who said no.
  */
-export function contactRoute(c: {
-  sms_opt_out: boolean | null; email_opt_out: boolean | null;
-  phone: string | null; phone_e164: string | null; email: string | null;
-}): ContactRoute {
+export type ReachableCustomer = PrefColumns & { phone: string | null; phone_e164: string | null; email: string | null };
+export function contactRoute(c: ReachableCustomer): ContactRoute {
   return {
-    sms: c.sms_opt_out !== true && !!c.phone_e164,
-    email: c.email_opt_out !== true && !!c.email,
+    sms: !blocksSend(channelBlock(c, 'sms'), true) && !!c.phone_e164,
+    email: !blocksSend(channelBlock(c, 'email'), true) && !!c.email,
     // The raw number, as the garage typed it and recognises it. Shown whatever the opt-outs say.
     phone: c.phone ?? null,
   };
 }
 
-/** How a row is labelled when something is refused. NULL when nothing is. */
-export function noContactLabel(c: { sms_opt_out: boolean | null; email_opt_out: boolean | null }): string | null {
-  const noSms = c.sms_opt_out === true, noEmail = c.email_opt_out === true;
-  if (noSms && noEmail) return 'No electronic contact';
-  if (noSms) return 'No texts';
-  if (noEmail) return 'No email';
-  return null;
+/**
+ * How a row is labelled when something is refused — and WHICH refusal, because they are fixed in
+ * different ways: "No texts" is someone who wants no messages at all; "No offers by text" still gets
+ * their quote. NULL when nothing is refused. The strongest answer per channel shows ('all' wins).
+ */
+export function noContactLabel(c: PrefColumns): string | null {
+  const sms = channelBlock(c, 'sms'), email = channelBlock(c, 'email');
+  if (!sms && !email) return null;
+  if (sms === 'all' && email === 'all') return 'No electronic contact';
+  if (sms === 'marketing' && email === 'marketing') return 'No offers';
+  const part = { sms: { all: 'No texts', marketing: 'No offers by text' }, email: { all: 'No email', marketing: 'No offers by email' } };
+  return [sms && part.sms[sms], email && part.email[email]].filter(Boolean).join(' · ');
 }
 
 // ── THE MOT TAB ──────────────────────────────────────────────────────────────────────────────────

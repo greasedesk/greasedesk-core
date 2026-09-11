@@ -108,3 +108,52 @@ export const CARRIER_STOP_CODE = '21610';
 export function isCarrierStop(errorText: string | null | undefined): boolean {
   return /(?<!\d)21610(?!\d)/.test(String(errorText ?? ''));
 }
+
+// ── WHAT A CUSTOMER'S PREFERENCE BLOCKS (step 3, 2026-09-11) ──────────────────────────────────────
+/**
+ * THE ONE READING of a customer's four preference columns, for one channel. Read by the send path
+ * (lib/notify::isSuppressed), the marketing board, the marketing lists and the send preview — so
+ * what a garage is offered and what the send path allows cannot disagree.
+ *   'all'       — "nothing on this channel": refuses every message but a security one
+ *   'marketing' — "no reminders or offers": refuses MARKETING only (owner decision B)
+ *   null        — no refusal on record. NULL means unknown, and unknown is not a refusal.
+ * 'all' wins when both are set: it is the stronger answer, and the one staff must see.
+ */
+export type PrefColumns = {
+  sms_opt_out: boolean | null; email_opt_out: boolean | null;
+  sms_marketing_opt_out: boolean | null; email_marketing_opt_out: boolean | null;
+};
+export type ChannelBlock = 'all' | 'marketing' | null;
+
+export function channelBlock(c: PrefColumns, channel: PrefChannel): ChannelBlock {
+  if ((channel === 'email' ? c.email_opt_out : c.sms_opt_out) === true) return 'all';
+  if ((channel === 'email' ? c.email_marketing_opt_out : c.sms_marketing_opt_out) === true) return 'marketing';
+  return null;
+}
+
+/** DECISION B, as one line: a marketing opt-out stops marketing, and never a quote or an invoice. */
+export function blocksSend(block: ChannelBlock, marketing: boolean): boolean {
+  return block === 'all' || (marketing && block === 'marketing');
+}
+
+/**
+ * THE SEND PATH'S DECISION, pure, from what the address lookup returned.
+ *   any matching row refusing everything → 'opted_out'
+ *   else, for a MARKETING message, any refusing marketing → 'opted_out_marketing'
+ *   else 'send'
+ * WHEN THE LOOKUP FAILED: a MARKETING message is refused ('marketing_check_failed') — nobody is owed
+ * an offer, and sending one to someone who said no is the failure this exists to prevent. A SERVICE
+ * message still SENDS, exactly as before step 3: dropping someone's quote or invoice because a
+ * lookup blinked would be the worse harm, and the NotificationLog row records the send either way.
+ */
+export type SuppressionDecision = 'send' | 'opted_out' | 'opted_out_marketing' | 'marketing_check_failed';
+export function suppressionDecision(
+  lookup: { rows: PrefColumns[] } | { failed: true },
+  send: { channel: PrefChannel; marketing: boolean },
+): SuppressionDecision {
+  if ('failed' in lookup) return send.marketing ? 'marketing_check_failed' : 'send';
+  const blocks = lookup.rows.map((r) => channelBlock(r, send.channel));
+  if (blocks.includes('all')) return 'opted_out';
+  if (send.marketing && blocks.includes('marketing')) return 'opted_out_marketing';
+  return 'send';
+}

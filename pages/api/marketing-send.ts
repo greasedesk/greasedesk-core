@@ -34,6 +34,16 @@ import { writeAudit } from '@/lib/audit';
 import { NOTIFICATION_TEMPLATES } from '@/lib/notification-templates';
 import { smsText, smsCost } from '@/lib/sms-text';
 import { contactRoute, noContactLabel } from '@/lib/marketing-lists';
+import { channelBlock, type PrefColumns } from '@/lib/contact-preference-rules';
+
+/** Why a channel is not offered for a REMINDER, in a sentence staff can act on. */
+function whyNot(c: PrefColumns | null, channel: 'sms' | 'email'): string {
+  const block = c ? channelBlock(c, channel) : null;
+  const what = channel === 'sms' ? 'texts' : 'email';
+  if (block === 'all') return `This customer has opted out of ${what}.`;
+  if (block === 'marketing') return `This customer has asked not to receive reminders or offers by ${channel === 'sms' ? 'text' : 'email'}. Quotes and invoices still reach them.`;
+  return channel === 'sms' ? 'No mobile number on file.' : 'No email address on file.';
+}
 
 const CHANNELS = ['sms', 'email'] as const;
 type Ch = (typeof CHANNELS)[number];
@@ -75,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const customerId = await getCurrentOwnerId(prisma as never, v.id);
   const cust = customerId
     ? await prisma.customer.findUnique({ where: { id: customerId },
-        select: { name: true, email: true, phone: true, phone_e164: true, sms_opt_out: true, email_opt_out: true } })
+        select: { name: true, email: true, phone: true, phone_e164: true, sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true } })
     : null;
   const group = await prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, phone: true } });
 
@@ -109,8 +119,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canSms: route.sms, canEmail: route.email,
       // WHY NOT, said here rather than guessed by the row: no address on file is a different
       // problem from a recorded refusal, and they are fixed in different places.
-      smsWhyNot: route.sms ? null : (cust?.sms_opt_out === true ? 'This customer has opted out of texts.' : 'No mobile number on file.'),
-      emailWhyNot: route.email ? null : (cust?.email_opt_out === true ? 'This customer has opted out of email.' : 'No email address on file.'),
+      // Three answers, fixed in three different places: a refusal of everything, a refusal of
+      // reminders and offers only (they still get quotes and invoices), and nothing on file.
+      smsWhyNot: route.sms ? null : whyNot(cust, 'sms'),
+      emailWhyNot: route.email ? null : whyNot(cust, 'email'),
       noContact: cust ? noContactLabel(cust) : null,
       phone: cust?.phone ?? null,
     });

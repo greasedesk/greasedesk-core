@@ -37,6 +37,16 @@ export type NotificationTemplate = {
    * send and no caller can opt out of it. Never both this and `security`; prospect-gate checks.
    */
   prospecting?: boolean;
+  /**
+   * A REMINDER OR AN OFFER — a garage writing to its own customer to bring them in. Honours the
+   * separate marketing opt-out (owner decision B, 2026-09-10): a customer who said "no reminders or
+   * offers" is refused this, and still receives their quote and their invoice, which are not marked.
+   * On the TEMPLATE for the same reason as `security`: no caller can forget it. And a marketing send
+   * is refused, not sent, if the opt-out cannot be checked — service sends are unchanged.
+   * MOT reminders are filed here (owner); whether soft opt-in covers them is a solicitor's question.
+   * Never also `security` or `prospecting` — marketing-optout-gate checks.
+   */
+  marketing?: boolean;
   email?: (d: TemplateData) => RenderedEmail;
   sms?: (d: TemplateData) => RenderedSms;
 };
@@ -143,6 +153,7 @@ export const NOTIFICATION_TEMPLATES = {
    */
   mot_due: {
     label: 'MOT due soon',
+    marketing: true,
     email: (d) => ({
       subject: `MOT due on ${d.registration ?? 'your car'}`,
       html: shell(`
@@ -160,6 +171,7 @@ export const NOTIFICATION_TEMPLATES = {
 
   mot_expired: {
     label: 'MOT expired — car off the road',
+    marketing: true,
     email: (d) => ({
       subject: `MOT due on ${d.registration ?? 'your car'}`,
       html: shell(`

@@ -36,7 +36,7 @@ export type FailedSend = {
     | 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient'
     | 'no_renderer' | 'unknown_template' | 'allowance_spent'
     | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
-    | 'carrier_stop';
+    | 'carrier_stop' | 'opted_out_marketing' | 'marketing_check_failed';
 };
 
 export type SendFailureCopy = {
@@ -79,6 +79,17 @@ export function describeSendFailure(
     case 'opted_out':
       return { code: 'opted_out', retryable: false,
         message: `${who} has opted out of ${plural(ctx.channel)}.` };
+
+    case 'opted_out_marketing':
+      // WHAT STAFF CAN DO WITH IT: nothing to retry, and nothing lost — the second sentence is the
+      // one that stops a garage wondering whether the customer's invoice will reach them.
+      return { code: 'opted_out_marketing', retryable: false,
+        message: `${who} has asked not to receive reminders or offers by ${noun(ctx.channel)}. Quotes and invoices still reach them.` };
+
+    case 'marketing_check_failed':
+      // RETRYABLE, and says so: this is a moment, not a fact about the customer.
+      return { code: 'marketing_check_failed', retryable: true,
+        message: `Not sent — we could not confirm ${ctx.customerName?.trim() || 'this customer'} may be sent reminders or offers, so it was not. Try again in a moment.` };
 
     case 'carrier_stop':
       // NOT "the provider rejected it", and NOT retryable: that branch invites a retry, and a retry

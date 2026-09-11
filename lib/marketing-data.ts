@@ -98,6 +98,7 @@ export async function motPricePennies(groupId: string): Promise<number | null> {
 type CustomerBits = {
   name: string | null; phone: string | null; phone_e164: string | null; email: string | null;
   sms_opt_out: boolean | null; email_opt_out: boolean | null;
+  sms_marketing_opt_out: boolean | null; email_marketing_opt_out: boolean | null;
 };
 
 async function ownerOf(vehicleId: string): Promise<CustomerBits | null> {
@@ -105,7 +106,7 @@ async function ownerOf(vehicleId: string): Promise<CustomerBits | null> {
   if (!id) return null;
   return prisma.customer.findUnique({
     where: { id },
-    select: { name: true, phone: true, phone_e164: true, email: true, sms_opt_out: true, email_opt_out: true },
+    select: { name: true, phone: true, phone_e164: true, email: true, sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true },
   });
 }
 

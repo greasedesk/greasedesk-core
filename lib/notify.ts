@@ -23,7 +23,7 @@ import { smsText } from '@/lib/sms-text';
 import { smsAllowance } from '@/lib/sms-allowance';
 import { demoSendDecision } from '@/lib/demo-tenant';
 import type { Prisma } from '@prisma/client';
-import { customerAddressWhere, isCarrierStop } from '@/lib/contact-preference-rules';
+import { customerAddressWhere, isCarrierStop, suppressionDecision, type SuppressionDecision } from '@/lib/contact-preference-rules';
 import { recordCarrierStop } from '@/lib/contact-preferences';
 
 export type NotifyChannel = 'email' | 'sms';
@@ -115,7 +115,11 @@ export type SendNotificationResult = {
     | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
     /** The carrier refused it because the handset replied STOP (Twilio 21610). Status stays `failed` —
      *  the provider WAS contacted — but it is not retryable, and the customer is now marked no texts. */
-    | 'carrier_stop';
+    | 'carrier_stop'
+    /** A MARKETING template to someone who said "no reminders or offers" on this channel. */
+    | 'opted_out_marketing'
+    /** A MARKETING template whose opt-out could not be checked — refused, not sent. */
+    | 'marketing_check_failed';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -217,11 +221,16 @@ const toE164Plus = (raw: string): string => {
  * HONEST-NULL: only `true` suppresses. NULL means no record — unknown — and for the service
  * messages this system sends (your quote is ready, here is your invoice) unknown means SEND.
  * A null must never be read, or rendered, as consent.
+ *
+ * TWO ANSWERS SINCE STEP 3 (owner decision B): "nothing on this channel" refuses every message but
+ * a security one; "no reminders or offers" refuses a MARKETING template only — the quote and the
+ * invoice still go. The decision itself is pure, in lib/contact-preference-rules::suppressionDecision,
+ * shared with the marketing board so what a garage is offered and what this allows cannot differ.
  */
-async function isSuppressed(groupId: string | null | undefined, channel: NotifyChannel, recipient: string): Promise<boolean> {
-  if (!groupId) return false; // platform-level send — no tenant customer list to consult
+async function isSuppressed(groupId: string | null | undefined, channel: NotifyChannel, recipient: string, marketing: boolean): Promise<SuppressionDecision> {
+  if (!groupId) return 'send'; // platform-level send — no tenant customer list to consult
   const to = recipient.trim();
-  if (!to) return false;
+  if (!to) return 'send';
   try {
     // THE ONE MATCH from an address to this garage's customers (lib/contact-preference-rules) — the
     // same rule a carrier STOP and the unsubscribe link use to decide who "this customer" is. SMS
@@ -232,13 +241,14 @@ async function isSuppressed(groupId: string | null | undefined, channel: NotifyC
     // household, a company handset — TMBS has such a pair today). If either person has asked not to
     // be contacted, the handset must not buzz: findFirst would have made that a coin toss on row
     // order. Suppression is the conservative side of an ambiguous match, deliberately.
-    const hits = await prisma.customer.findMany({ where, select: { sms_opt_out: true, email_opt_out: true }, take: 20 });
-    return hits.some((h: { sms_opt_out: boolean | null; email_opt_out: boolean | null }) =>
-      (channel === 'email' ? h.email_opt_out : h.sms_opt_out) === true);
+    const rows = await prisma.customer.findMany({ where, take: 20,
+      select: { sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true } });
+    return suppressionDecision({ rows }, { channel, marketing });
   } catch {
-    // A lookup failure must not silently suppress (that would drop service messages) and must not
-    // silently send. Sending is the safer default for a SERVICE message; the row records the send.
-    return false;
+    // A lookup failure: a SERVICE message still sends (dropping a quote or an invoice because a
+    // lookup blinked is the worse harm; the row records the send), exactly as before step 3. A
+    // MARKETING message is refused — nobody is owed an offer. Both inside suppressionDecision.
+    return suppressionDecision({ failed: true }, { channel, marketing });
   }
 }
 
@@ -311,7 +321,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
-  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; prospecting?: boolean; email?: Function; sms?: Function } | undefined;
+  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; prospecting?: boolean; marketing?: boolean; email?: Function; sms?: Function } | undefined;
   const common = { groupId, scope, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
@@ -367,9 +377,18 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   // A SECURITY template bypasses it entirely — see NotificationTemplate.security. The
   // NotificationLog row is still written by the normal path below, so a bypassed send is as
   // recorded as any other; bypassing the preference must never mean bypassing the record.
-  if (!tpl.security && await isSuppressed(groupId, channel, args.recipient)) {
+  const pref = tpl.security ? 'send' : await isSuppressed(groupId, channel, args.recipient, tpl.marketing === true);
+  if (pref === 'opted_out') {
     const id = await record({ ...common, status: 'skipped', error: `recipient has opted out of ${channel}` });
     return { ok: false, notificationId: id, status: 'skipped', reason: `opted out of ${channel}`, suppressed: true, skipCode: 'opted_out' };
+  }
+  if (pref === 'opted_out_marketing') {
+    const id = await record({ ...common, status: 'skipped', error: `recipient has asked for no reminders or offers by ${channel}` });
+    return { ok: false, notificationId: id, status: 'skipped', reason: `no reminders or offers by ${channel}`, suppressed: true, skipCode: 'opted_out_marketing' };
+  }
+  if (pref === 'marketing_check_failed') {
+    const id = await record({ ...common, status: 'skipped', error: 'could not confirm the recipient may be sent reminders or offers — refused rather than risked' });
+    return { ok: false, notificationId: id, status: 'skipped', reason: 'marketing preference could not be checked', suppressed: true, skipCode: 'marketing_check_failed' };
   }
 
   // ── THE SMS ALLOWANCE, AT THE CHOKEPOINT ─────────────────────────────────────────────────────
