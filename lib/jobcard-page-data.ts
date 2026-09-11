@@ -36,6 +36,7 @@ import { isBookedCard } from '@/lib/jobcard-status';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { refuseQuoteSend } from '@/lib/quote-acceptance';
 import { acceptanceProvenance, cardAcceptance, PROVENANCE_LABEL, PROVENANCE_SENTENCE } from '@/lib/acceptance-provenance';
+import { latestPreferenceSources } from '@/lib/contact-preferences';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -139,7 +140,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // CAR-FIRST — resolve the CURRENT owner via the ownership edge (falls back to the card's own
   // customer link only if a card somehow predates its vehicle's edge — the backfill covered all
   // live vehicles).
-  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows }, intakeFacts, skipRows, oilRow, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow, tyresOnThisCard] = await Promise.all([
+  const [site, resources, { edgeOwnerId, ownerRow, ownerNoShows, ownerPrefSources }, intakeFacts, skipRows, oilRow, lastTyreType, lastBattery, observationCounts, tyreCondition, batteryCondition, lastReport, dueItems, labourRateRow, tyresOnThisCard] = await Promise.all([
     prisma.site.findUnique({ where: { id: row.site_id }, select: { currency_code: true, locale: true, open_hour: true, close_hour: true, booking_slot_minutes: true, open_days: true, breaks: true } }) as Promise<{ currency_code: string; locale: string; open_hour: number; close_hour: number; booking_slot_minutes: number; open_days: number[]; breaks: unknown } | null>,
     prisma.resource.findMany({
       where: { site_id: row.site_id, is_active: true },
@@ -149,16 +150,19 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     (async () => {
       const ownerId = row.vehicle?.id ? await getCurrentOwnerId(prisma, row.vehicle.id as string) : null;
       const or = ownerId
-        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })
+        ? await prisma.customer.findUnique({ where: { id: ownerId }, select: { id: true, name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })
         : (row.customer ?? null);
       // The customer's missed-booking history rides with the owner — derived (lib/no-show), so a
       // reopened card corrects it by construction. THIS card counts too when it is itself a
       // no-show: the section shows the customer's full record, and hiding the newest instance
       // would understate exactly the fact the count exists to surface.
-      const hist = ownerId ?? row.customer_id
-        ? await noShowHistory(prisma, ownerId ?? (row.customer_id as string | null))
-        : { count: 0, dates: [] };
-      return { edgeOwnerId: ownerId, ownerRow: or, ownerNoShows: hist };
+      // IN THIS WAVE, beside the no-show history, not after the waves: the card builder's query depth
+      // is its latency (vercel-region-pin), and where each preference came from is one more read.
+      const [hist, prefSources] = await Promise.all([
+        ownerId ?? row.customer_id ? noShowHistory(prisma, ownerId ?? (row.customer_id as string | null)) : Promise.resolve({ count: 0, dates: [] }),
+        ownerId ? latestPreferenceSources(ownerId) : Promise.resolve({}),
+      ]);
+      return { edgeOwnerId: ownerId, ownerRow: or, ownerNoShows: hist, ownerPrefSources: prefSources };
     })(),
     // INTAKE ARTEFACTS — what the four prompts derive their done-states FROM. Counted, not fetched:
     // the states need to know whether a video and a scan photo exist, never their contents.
@@ -329,6 +333,11 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     name: ownerRow?.name ?? '—', phone: ownerRow?.phone ?? null, phoneE164: (ownerRow as any)?.phone_e164 ?? null,
     email: ownerRow?.email ?? null, address: (ownerRow as any)?.address ?? null,
     smsOptOut: (ownerRow as any)?.sms_opt_out ?? null, emailOptOut: (ownerRow as any)?.email_opt_out ?? null,
+    // "No reminders or offers" — the same three states, and WHERE EACH PREFERENCE CAME FROM (step 6):
+    // staff by name, the customer's own link, or their phone network — so undoing someone else's "no"
+    // is a visible decision, made with the reason the writer requires.
+    smsMarketingOptOut: (ownerRow as any)?.sms_marketing_opt_out ?? null, emailMarketingOptOut: (ownerRow as any)?.email_marketing_opt_out ?? null,
+    preferenceSources: ownerPrefSources,
     // NULL all the way to the screen: no terms is "pays on collection", not "we don't know".
     accountTermsDays: (ownerRow as any)?.account_terms_days ?? null,
     accountName: (ownerRow as any)?.account_name ?? null,

@@ -33,7 +33,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import {
-  PREF_COLUMN, blocksSend, channelBlock, customerAddressWhere, normaliseReason, preferenceRefusal,
+  PREF_COLUMN, blocksSend, channelBlock, clearingNeedsReason, customerAddressWhere, normaliseReason, preferenceRefusal,
   type PrefChannel, type PrefRefusal, type PrefScope, type PrefVia,
 } from '@/lib/contact-preference-rules';
 import { UNSUBSCRIBE_TOKEN } from '@/lib/unsubscribe-links';
@@ -62,7 +62,9 @@ export type PreferenceResult =
 /** Record one change inside the caller's transaction. A no-op records nothing and says so. */
 export async function setContactPreference(tx: Tx, c: PreferenceChange): Promise<PreferenceResult> {
   const refusal = preferenceRefusal(c);
-  if (refusal) return { ok: false, refusal };
+  // A missing opt-in reason is held back one step: if it is the CUSTOMER'S OR THEIR NETWORK'S "no"
+  // being undone, staff are told that instead — the more specific refusal of the same save.
+  if (refusal && refusal !== 'optin_needs_a_reason') return { ok: false, refusal };
   const column = PREF_COLUMN[c.scope][c.channel];
   // Twice at most: the second read follows a writer that moved the column between our read and our
   // update. A third loss in a row is not a race worth retrying; it is reported.
@@ -74,6 +76,17 @@ export async function setContactPreference(tx: Tx, c: PreferenceChange): Promise
     if (!cur) return { ok: false, refusal: 'not_found' };
     const previous = cur[column] ?? null;
     if (previous === c.optedOut) return { ok: true, changed: false };
+    // WHOSE "NO" IS THIS? Clearing an opt-out the customer or their network set needs a reason —
+    // read from the history, in this transaction, because a CHECK cannot see the previous row.
+    if (c.via === 'staff' && previous === true && c.optedOut !== true) {
+      const latest = await tx.contactPreferenceEvent.findFirst({
+        where: { customer_id: c.customerId, channel: c.channel, scope: c.scope }, orderBy: { seq: 'desc' }, select: { via: true },
+      });
+      if (clearingNeedsReason({ via: c.via, previous, optedOut: c.optedOut, latestVia: latest?.via ?? null, reason: c.reason })) {
+        return { ok: false, refusal: 'undoing_their_own_opt_out_needs_a_reason' };
+      }
+    }
+    if (refusal) return { ok: false, refusal }; // the opt-in reason — never reaching the CHECK that mirrors it
     const now = new Date();
     const moved = await tx.customer.updateMany({
       where: { id: c.customerId, group_id: c.groupId, [column]: previous } as Prisma.CustomerWhereInput,
@@ -221,4 +234,31 @@ export async function unsubscribeByLink(token: string, db: PrismaClient = prisma
     if (e instanceof LinkRefused) return { ok: false, why: 'refused', detail: e.refusal };
     return { ok: false, why: 'threw', detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
   }
+}
+
+// ── WHERE EACH PREFERENCE CAME FROM (step 6, 2026-09-11) ──────────────────────────────────────────
+/**
+ * The latest event for each of a customer's four preferences — what the owner panel shows under each
+ * control: set by whom (a staff member by name, the customer's own link, their phone network), when,
+ * and the reason given. Absent for a preference with no history. Never the address.
+ */
+export type PreferenceSource = { via: 'staff' | 'customer_link' | 'carrier_stop'; at: string; reason: string | null; by: string | null; optedOut: boolean | null };
+export type PreferenceSources = Partial<Record<'sms/all' | 'email/all' | 'sms/marketing' | 'email/marketing', PreferenceSource>>;
+
+export async function latestPreferenceSources(customerId: string, db: PrismaClient = prisma): Promise<PreferenceSources> {
+  const rows = await db.$queryRaw<Array<{ channel: string; scope: string; via: string; created_at: Date; reason: string | null; actor_user_id: string | null; opted_out: boolean | null }>>`
+    SELECT DISTINCT ON (channel, scope) channel, scope, via, created_at, reason, actor_user_id, opted_out
+    FROM "ContactPreferenceEvent" WHERE customer_id = ${customerId} ORDER BY channel, scope, seq DESC`;
+  const ids = rows.map((r) => r.actor_user_id).filter((x): x is string => !!x);
+  const users = ids.length ? await db.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : [];
+  const nameOf = new Map(users.map((u) => [u.id, u.name]));
+  const out: PreferenceSources = {};
+  for (const r of rows) {
+    out[`${r.channel}/${r.scope}` as keyof PreferenceSources] = {
+      via: r.via as PreferenceSource['via'], at: r.created_at.toISOString(), reason: r.reason, optedOut: r.opted_out,
+      // The record outlives the user (EmploymentEvent's rule): a deleted user reads as "a member of staff".
+      by: r.actor_user_id ? (nameOf.get(r.actor_user_id) ?? null) : null,
+    };
+  }
+  return out;
 }

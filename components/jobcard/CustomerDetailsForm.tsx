@@ -18,7 +18,13 @@ type Owner = {
   name: string; phone: string | null; phoneE164?: string | null; email: string | null; address: string | null;
   accountTermsDays?: number | null; accountName?: string | null; accountAddress?: string | null;
   smsOptOut?: boolean | null; emailOptOut?: boolean | null;
+  /** "No reminders or offers" per channel (step 6) — the same three states. */
+  smsMarketingOptOut?: boolean | null; emailMarketingOptOut?: boolean | null;
+  /** Where each preference came from (lib/contact-preferences::latestPreferenceSources). Written out
+   *  here rather than imported: this component ships to the browser, and that module reaches the db. */
+  preferenceSources?: Partial<Record<PrefKey, { via: 'staff' | 'customer_link' | 'carrier_stop'; at: string; reason: string | null; by: string | null; optedOut: boolean | null }>>;
 };
+type PrefKey = 'sms/all' | 'email/all' | 'sms/marketing' | 'email/marketing';
 type Vehicle = {
   registration: string; vin: string | null; mileageIn: number | null;
   make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
@@ -42,15 +48,17 @@ const labelCls = 'block text-xs uppercase text-muted mb-1';
  * is NEVER shown as "opted in", because nobody has asked this customer anything. Only an explicit
  * refusal is stated as a refusal.
  */
-function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boolean | null }, t: (k: string) => string): string {
+function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boolean | null; smsMarketingOptOut?: boolean | null; emailMarketingOptOut?: boolean | null }, t: (k: string) => string): string {
   const out: string[] = [];
   if (o.smsOptOut === true) out.push(t('field.optOutSmsShort'));
   if (o.emailOptOut === true) out.push(t('field.optOutEmailShort'));
+  if (o.smsOptOut !== true && o.smsMarketingOptOut === true) out.push(t('field.optOutMarketingSmsShort'));
+  if (o.emailOptOut !== true && o.emailMarketingOptOut === true) out.push(t('field.optOutMarketingEmailShort'));
   if (out.length) return out.join(' · ');
-  return o.smsOptOut == null && o.emailOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
+  return o.smsOptOut == null && o.emailOptOut == null && o.smsMarketingOptOut == null && o.emailMarketingOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
 }
 
-export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehicle, canEdit, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
+export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehicle, canEdit, locale, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
@@ -68,6 +76,21 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
   // not be turned into an explicit "opted in" just by opening the form and saving.
   const [smsOptOut, setSmsOptOut] = useState<boolean | null>(owner.smsOptOut ?? null);
   const [emailOptOut, setEmailOptOut] = useState<boolean | null>(owner.emailOptOut ?? null);
+  // "NO REMINDERS OR OFFERS" (step 6). Ticking records a refusal (true). Unticking a recorded answer
+  // records an OPT-IN (false) — which needs a reason — never a return to "no record": once a garage has
+  // an answer for marketing it keeps a definite one. Untouched stays exactly as loaded.
+  const [smsMk, setSmsMk] = useState<boolean | null>(owner.smsMarketingOptOut ?? null);
+  const [emailMk, setEmailMk] = useState<boolean | null>(owner.emailMarketingOptOut ?? null);
+  const [prefReason, setPrefReason] = useState('');
+  const mktToggle = (initial: boolean | null | undefined, checked: boolean) => (checked ? true : initial == null ? null : false);
+  const sources = owner.preferenceSources ?? {};
+  // A REASON IS NEEDED when this save switches reminders and offers back ON, or undoes a "no" the
+  // customer or their phone network set. The writer enforces both; this only asks before it does.
+  const undoesTheirs = (k: PrefKey, from: boolean | null | undefined, to: boolean | null) =>
+    from === true && to !== true && (sources[k]?.via === 'customer_link' || sources[k]?.via === 'carrier_stop');
+  const needsReason = (owner.smsMarketingOptOut === true && smsMk === false) || (owner.emailMarketingOptOut === true && emailMk === false)
+    || undoesTheirs('sms/all', owner.smsOptOut, smsOptOut) || undoesTheirs('email/all', owner.emailOptOut, emailOptOut)
+    || undoesTheirs('sms/marketing', owner.smsMarketingOptOut, smsMk) || undoesTheirs('email/marketing', owner.emailMarketingOptOut, emailMk);
   const [registration, setRegistration] = useState(vehicle.registration === '—' ? '' : vehicle.registration);
   const [vin, setVin] = useState(vehicle.vin ?? '');
   const [mileageIn, setMileageIn] = useState(vehicle.mileageIn != null ? String(vehicle.mileageIn) : '');
@@ -134,6 +157,8 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
   };
 
   async function submit(confirmReg: boolean) {
+    // Asked here, enforced by the writer: the server refuses the same save without it (409).
+    if (needsReason && !prefReason.trim()) { setMsg({ text: t('field.prefReasonRequired'), ok: false }); return; }
     setBusy(true); setMsg(null);
     const body = {
       source: 'details-form', // names the control in the audit trail
@@ -144,6 +169,10 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
       // the raw string AND derives the dialable form beside it (lib/contact-routes).
       owner: {
         name, phone, email, address, sms_opt_out: smsOptOut, email_opt_out: emailOptOut,
+        // Only what changed: an untouched marketing answer is not re-sent (and never re-asserted).
+        ...(smsMk !== (owner.smsMarketingOptOut ?? null) ? { sms_marketing_opt_out: smsMk } : {}),
+        ...(emailMk !== (owner.emailMarketingOptOut ?? null) ? { email_marketing_opt_out: emailMk } : {}),
+        ...(prefReason.trim() ? { preference_reason: prefReason.trim() } : {}),
         // Sent as typed; the server normalises through the one rule. '' becomes NULL — clearing the
         // box takes a customer OFF account, which is the only way back to paying on collection.
         account_terms_days: termsDays, account_name: accountName, account_address: accountAddress,
@@ -310,6 +339,38 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
             </label>
           </div>
           <p className="text-[11px] text-muted mt-1">{t('field.optOutHint')}</p>
+          {/* "NO REMINDERS OR OFFERS" — decision B: stops marketing only; quotes and invoices still go. */}
+          <div className="flex flex-wrap items-center gap-4 text-sm text-ink mt-2">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={smsMk === true} onChange={(e) => setSmsMk(mktToggle(owner.smsMarketingOptOut, e.target.checked))} data-testid="mkt-sms" />
+              {t('field.optOutMarketingSms')}
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={emailMk === true} onChange={(e) => setEmailMk(mktToggle(owner.emailMarketingOptOut, e.target.checked))} data-testid="mkt-email" />
+              {t('field.optOutMarketingEmail')}
+            </label>
+          </div>
+          <p className="text-[11px] text-muted mt-1">{t('field.optOutMarketingHint')}</p>
+          {/* WHERE EACH ANSWER CAME FROM — so undoing a customer's own "no" is a visible decision. */}
+          {(['sms/all', 'email/all', 'sms/marketing', 'email/marketing'] as PrefKey[]).filter((k) => sources[k]).map((k) => {
+            const src = sources[k]!;
+            const pref = t(`field.prefName_${k.replace('/', '_')}`);
+            const date = new Date(src.at).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+            const value = t(src.optedOut === true ? 'field.prefValueStopped' : src.optedOut === false ? 'field.prefValueAllowed' : 'field.prefValueNoRecord');
+            const line = src.via === 'customer_link' ? t('field.prefSourceLink', { pref, date })
+              : src.via === 'carrier_stop' ? t('field.prefSourceCarrier', { pref, date })
+              : src.reason ? t('field.prefSourceStaffReason', { pref, value, by: src.by ?? t('field.prefSomeone'), date, reason: src.reason })
+              : t('field.prefSourceStaff', { pref, value, by: src.by ?? t('field.prefSomeone'), date });
+            return <p key={k} className="text-[11px] text-muted" data-testid={`pref-source-${k.replace('/', '-')}`}>{line}</p>;
+          })}
+          {needsReason && (
+            <div className="mt-2" data-testid="pref-reason-box">
+              <label className="block text-xs text-ink" htmlFor="pref-reason">{t('field.prefReason')}</label>
+              <input id="pref-reason" value={prefReason} onChange={(e) => setPrefReason(e.target.value)} maxLength={500} data-testid="pref-reason"
+                className="w-full mt-1 p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+              <p className="text-[11px] text-muted mt-1">{t('field.prefReasonHint')}</p>
+            </div>
+          )}
         </div>
       </div>
       {msg && <div className={`mt-3 rounded-lg p-2 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}

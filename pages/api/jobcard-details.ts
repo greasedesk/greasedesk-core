@@ -34,6 +34,11 @@ class PreferenceRefused extends Error { refusal: string; constructor(refusal: st
 type OwnerIn = {
   name?: string; phone?: string; email?: string; address?: string;
   sms_opt_out?: boolean | null; email_opt_out?: boolean | null;
+  /** "No reminders or offers" per channel (step 6). true = opted out, false = opted IN (needs a reason). */
+  sms_marketing_opt_out?: boolean | null; email_marketing_opt_out?: boolean | null;
+  /** ONE reason for the preference changes in this save — required for a marketing opt-in, and for
+   *  undoing an opt-out the customer or their phone network set. Stored on each change's event. */
+  preference_reason?: string | null;
   // Arrives as typed (the form sends a string, '' included) — normaliseTermsDays is the only thing
   // that decides what it means, so the wire type stays deliberately loose.
   account_terms_days?: number | string | null; account_name?: string; account_address?: string;
@@ -118,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (owner && ownerId) {
-        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })) as any;
+        const cur = (await tx.customer.findUnique({ where: { id: ownerId }, select: { name: true, phone: true, phone_e164: true, email: true, address: true, sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true, account_terms_days: true, account_name: true, account_address: true } })) as any;
         const next: any = {};
         const diff: any = {};
         const set = (k: string, v: any, curV: any) => { if (v !== undefined && v !== curV) { next[k] = v; diff[k] = { from: curV, to: v }; } };
@@ -141,14 +146,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // ContactPreferenceEvent move together, so the history a garage may have to produce is
         // complete from the day it shipped. Still in THIS transaction — a refused preference rolls
         // back the whole save rather than half of it.
-        const prefs: Array<{ channel: 'sms' | 'email'; optedOut: true | null }> = [];
+        const prefs: Array<{ channel: 'sms' | 'email'; scope: 'all' | 'marketing'; optedOut: boolean | null }> = [];
         const pref = (k: 'sms_opt_out' | 'email_opt_out', channel: 'sms' | 'email', v: boolean | null | undefined) => {
           if (v === undefined) return;
           const norm = v === true ? true : null;
-          if (norm !== cur[k]) { diff[k] = { from: cur[k], to: norm }; prefs.push({ channel, optedOut: norm }); }
+          if (norm !== cur[k]) { diff[k] = { from: cur[k], to: norm }; prefs.push({ channel, scope: 'all', optedOut: norm }); }
         };
         pref('sms_opt_out', 'sms', owner.sms_opt_out);
         pref('email_opt_out', 'email', owner.email_opt_out);
+        // "NO REMINDERS OR OFFERS" (step 6). Unlike the boxes above, `false` IS stored: once a
+        // marketing answer is recorded it is always a definite one, and switching offers back on is an
+        // opt-in the writer will only record WITH a reason. `null`/absent = not touched.
+        const mkt = (k: 'sms_marketing_opt_out' | 'email_marketing_opt_out', channel: 'sms' | 'email', v: boolean | null | undefined) => {
+          if (typeof v !== 'boolean' || v === cur[k]) return;
+          diff[k] = { from: cur[k], to: v }; prefs.push({ channel, scope: 'marketing', optedOut: v });
+        };
+        mkt('sms_marketing_opt_out', 'sms', owner.sms_marketing_opt_out);
+        mkt('email_marketing_opt_out', 'email', owner.email_marketing_opt_out);
+        if (prefs.length && owner.preference_reason) diff.preference_reason = String(owner.preference_reason).trim().slice(0, 500);
         // ── ON ACCOUNT ────────────────────────────────────────────────────────────────────────
         // Normalised through the one rule (lib/account-terms), so "0", "" and nonsense all land as
         // NULL — a retail customer — rather than as an account with impossible terms. Changing
@@ -163,8 +178,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (Object.keys(next).length) await tx.customer.update({ where: { id: ownerId }, data: next });
         for (const p of prefs) {
           const r = await setContactPreference(tx, {
-            groupId: user.group_id as string, customerId: ownerId, channel: p.channel, scope: 'all',
-            optedOut: p.optedOut, via: 'staff', actorUserId: user.id as string,
+            groupId: user.group_id as string, customerId: ownerId, channel: p.channel, scope: p.scope,
+            optedOut: p.optedOut, via: 'staff', actorUserId: user.id as string, reason: owner.preference_reason ?? null,
           });
           if (!r.ok) throw new PreferenceRefused(r.refusal);
         }
@@ -219,9 +234,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (e) {
     if (e instanceof PreferenceRefused) {
       // Nothing was saved. `conflict` = someone changed this preference between the read and the write.
-      return res.status(409).json({ code: e.refusal, message: e.refusal === 'conflict'
-        ? 'Someone else changed this customer\u2019s contact preferences just now. Reload and try again.'
-        : 'That contact preference could not be recorded, so nothing was saved.' });
+      // A SENTENCE STAFF CAN ACT ON for each refusal they can meet from this form. Nothing was saved.
+      const WHY: Record<string, string> = {
+        conflict: 'Someone else changed this customer\u2019s contact preferences just now. Reload and try again.',
+        optin_needs_a_reason: 'Say why this customer can be sent reminders or offers again \u2014 nothing was saved.',
+        undoing_their_own_opt_out_needs_a_reason: 'This customer \u2014 or their phone network \u2014 stopped these messages themselves. Say why that is being undone; nothing was saved.',
+        reason_too_long: 'Keep the reason under 500 characters \u2014 nothing was saved.',
+      };
+      return res.status(409).json({ code: e.refusal, message: WHY[e.refusal] ?? 'That contact preference could not be recorded, so nothing was saved.' });
     }
     console.error('jobcard-details edit error:', e);
     return res.status(500).json({ message: 'Could not save the details.' });

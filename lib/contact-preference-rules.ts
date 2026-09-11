@@ -48,7 +48,9 @@ export type PrefRefusal =
   | 'carrier_only_stops_all_sms'        // _source_chk
   | 'marketing_needs_an_answer'         // _marketing_definite_chk
   | 'optin_needs_a_reason'              // _optin_reason_chk
-  | 'reason_too_long';                  // _reason_chk
+  | 'reason_too_long'                   // _reason_chk
+  /** NOT a CHECK — it depends on earlier history (step 6, 2026-09-11): see clearingNeedsReason. */
+  | 'undoing_their_own_opt_out_needs_a_reason';
 
 /** A reason is a sentence or nothing: trimmed, and blank becomes NULL rather than an empty string. */
 export function normaliseReason(r: string | null | undefined): string | null {
@@ -156,4 +158,24 @@ export function suppressionDecision(
   if (blocks.includes('all')) return 'opted_out';
   if (send.marketing && blocks.includes('marketing')) return 'opted_out_marketing';
   return 'send';
+}
+
+// ── UNDOING SOMEONE ELSE'S "NO" (step 6, 2026-09-11) ──────────────────────────────────────────────
+/**
+ * A STAFF MEMBER CLEARING AN OPT-OUT THAT THE CUSTOMER — OR THEIR PHONE NETWORK — SET gives a
+ * reason. The customer unsubscribed themselves with the link, or their handset replied STOP; staff
+ * undoing that is a claim that the customer has changed their mind, and the claim is the record that
+ * protects the garage (owner). Staff undoing a staff opt-out needs none beyond the existing rule
+ * (every staff opt-in to MARKETING carries a reason — ContactPreferenceEvent_optin_reason_chk).
+ *
+ * The WRITER enforces this, not the database: whose "no" it was is in the previous event, and a CHECK
+ * sees one row. Pure here so the gate can drive every case; lib/contact-preferences supplies
+ * `latestVia` from the history, inside the same transaction as the change.
+ */
+export function clearingNeedsReason(c: {
+  via: string; previous: boolean | null; optedOut: boolean | null; latestVia: string | null; reason?: string | null;
+}): boolean {
+  const clearing = c.previous === true && c.optedOut !== true;
+  const theirs = c.latestVia === 'customer_link' || c.latestVia === 'carrier_stop';
+  return c.via === 'staff' && clearing && theirs && !normaliseReason(c.reason);
 }
