@@ -1,6 +1,7 @@
 /**
  * File: pages/api/messages/send.ts
- * Staff compose on a thread. POST { threadId, body, channel? } sends; GET ?threadId= re-reads the
+ * Staff compose on a thread. POST { threadId, body, channel?, offer } sends — `offer` (true/false) is
+ * REQUIRED: is this a reminder or offer?; GET ?threadId= re-reads the
  * thread so the screen can render WHAT THE LOG SAYS rather than what it hoped happened.
  *
  * NO NEW SEND PATH. This calls sendNotification like everything else — which means the
@@ -22,6 +23,7 @@ import { writeThreadAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
 import { listThreadMessages, threadReachability, reachabilityForJobCard, threadKeyForJobCard, ensureThread, ensureThreadToken, type NotifyChannelName } from '@/lib/message-threads';
 import { hasModule } from '@/lib/modules';
+import { describeSendFailure, type FailedSend } from '@/lib/send-outcome';
 
 const MAX_BODY = 2000;
 
@@ -30,6 +32,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
   const groupId = user.group_id as string;
+
+  // ── A SEND IS VALIDATED BEFORE ANYTHING IS CREATED ─────────────────────────────────────────────
+  // The thread below is created on the FIRST POST to a card. A refused send must create nothing —
+  // not even an empty conversation — so the body and the declaration are checked here, first.
+  // (The empty-body refusal used to run after the thread was made; found by free-text-offer-gate.)
+  const postBody = String((req.body ?? {}).body ?? '').trim();
+  const offer = (req.body ?? {}).offer;
+  if (req.method === 'POST') {
+    if (!postBody) return res.status(400).json({ message: 'Write a message first.' });
+    if (postBody.length > MAX_BODY) return res.status(400).json({ message: `Keep it under ${MAX_BODY} characters.` });
+    // A DECLARATION, EVERY TIME (step 5, 2026-09-11): is this a reminder or offer? Exactly true or
+    // false. The absence is not assumed to mean "no": a client that forgets to ask would otherwise
+    // record an offer as a note.
+    if (typeof offer !== 'boolean') return res.status(400).json({ code: 'offer_undeclared', message: 'Say whether this message is a reminder or offer.' });
+  }
 
   // TWO WAYS IN. A thread id when the conversation exists; a JOB CARD id when it does not yet —
   // otherwise you could only write to customers you had already written to, and the first message
@@ -91,9 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // its own customers is not restricted, it is broken.
 
   const channel = ((req.body ?? {}).channel === 'sms' ? 'sms' : 'email') as NotifyChannelName;
-  const body = String((req.body ?? {}).body ?? '').trim();
-  if (!body) return res.status(400).json({ message: 'Write a message first.' });
-  if (body.length > MAX_BODY) return res.status(400).json({ message: `Keep it under ${MAX_BODY} characters.` });
+  const body = postBody; // validated above, before the thread was touched
 
   // REACHABILITY BEFORE ANYTHING ELSE. The compose box already checked this, but a request can
   // arrive without it, and accepting text we cannot deliver is exactly the failure this refuses.
@@ -109,7 +124,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sent = await sendNotification({
     recipient: reach.address,
-    template: 'free_text',
+    // What staff declared IS the template key on the row — see lib/notification-templates free_text_*.
+    template: offer ? 'free_text_offer' : 'free_text_note',
     channel,
     groupId,
     threadId: thread.id,          // the conversation is already known — don't re-derive it
@@ -147,7 +163,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // shows as refused — there is no local "sending…" state that can disagree with the record.
   const messages = await listThreadMessages(prisma, thread.id);
   if (sent.suppressed) {
-    return res.status(409).json({ code: 'suppressed', message: `${reach.customerName} has opted out of ${channel} — nothing was sent. It is recorded in the conversation.`, messages });
+    // THE SHARED SENTENCE (lib/send-outcome), not a local one: this used to say "has opted out of sms"
+    // for EVERY refusal — false for a ticked offer to someone who only refused reminders and offers,
+    // whose ordinary messages still go.
+    const why = describeSendFailure(sent as FailedSend, { channel, customerName: reach.customerName }).message;
+    return res.status(409).json({ code: 'suppressed', reason: sent.skipCode, message: `${why} Nothing was sent; it is recorded in the conversation.`, messages });
   }
   // The allowance refusal happens inside sendNotification (one chokepoint, fourteen callers), so it
   // arrives here as a skip with its own code. Surfaced as its own 409 because the remedy is

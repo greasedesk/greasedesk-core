@@ -483,18 +483,35 @@ export const NOTIFICATION_TEMPLATES = {
   // email: they cannot inject markup, and every free-text message still looks like the product sent
   // it. The body is escaped and rendered as plain paragraphs; newlines become line breaks and
   // nothing else is interpreted.
+  //
+  // ── THREE KEYS, AND THE ABSENCE OF A DECLARATION IS ONE OF THEM (step 5, 2026-09-11) ──────────
+  // Staff now DECLARE, per message, whether it is a reminder or offer — a tick, unticked by default,
+  // and the API refuses a send that says neither. What they declared is the TEMPLATE KEY on the row,
+  // which is what protects the garage later: we cannot police what staff write, but the record of
+  // what they declared is there.
+  //   free_text_note   declared: not a reminder or offer — a message about their car or their job
+  //   free_text_offer  declared: a reminder or offer — marketing, so it carries the way out and is
+  //                    not sent to someone who asked for no reminders or offers
+  //   free_text        the messages sent BEFORE the question existed. Honest null on a categorical
+  //                    field: not reclassified into either answer. Nothing sends it any more
+  //                    (free-text-offer-gate checks); it stays so those rows keep their meaning.
   free_text: {
+    label: 'Message from the garage (sent before reminders and offers were declared)',
+    email: (d) => freeTextEmail(d, false),
+    // Declared so `channel` is a real field rather than decoration.
+    sms: (d) => ({ text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}`) }),
+  },
+  free_text_note: {
     label: 'Message from the garage',
-    email: (d) => ({
-      subject: String(d.subject || `Message from ${d.garageName ?? 'your garage'}`),
-      html: shell(`
-        <p>${esc(d.greeting ?? 'Hello')},</p>
-        <div style="white-space:pre-wrap">${esc(d.body)}</div>
-        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
-    }),
-    // Declared so `channel` is a real field rather than decoration: an SMS free-text send renders
-    // here and is then recorded as skipped by the unconfigured SMS adapter — refused for the right
-    // reason (no provider), not silently unsupported.
+    email: (d) => freeTextEmail(d, false),
+    sms: (d) => ({ text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}`) }),
+  },
+  free_text_offer: {
+    label: 'Reminder or offer from the garage',
+    marketing: true,
+    email: (d) => freeTextEmail(d, true),
+    // A TEXT OFFER CARRIES NO LINK YET: whether marketing texts carry one (doubling their segment
+    // cost) is the owner's decision, held. It still honours the marketing opt-out.
     sms: (d) => ({ text: withReplyRoute(d, `${d.garageName ?? 'Your garage'}: ${String(d.body ?? '')}`) }),
   },
 
@@ -602,6 +619,18 @@ function prospectFooter(d: TemplateData): string {
  * a marketing email whose rendered body lacks it; a render with no link shows a visible fault here
  * rather than quietly leaving the way out off.
  */
+/** The one free-text email. An OFFER carries the way out; a note does not. */
+function freeTextEmail(d: TemplateData, offer: boolean): RenderedEmail {
+  return {
+    subject: String(d.subject || `Message from ${d.garageName ?? 'your garage'}`),
+    html: shell(`
+        <p>${esc(d.greeting ?? 'Hello')},</p>
+        <div style="white-space:pre-wrap">${esc(d.body)}</div>
+        <p style="margin-top:20px">${esc(d.garageName)}</p>${offer ? `
+        ${marketingFooter(d)}` : ''}`),
+  };
+}
+
 export function marketingFooter(d: TemplateData): string {
   const link = String(d.unsubscribeUrl ?? '');
   const garage = esc(d.garageName ?? 'your garage');

@@ -23,6 +23,7 @@
  * inbound path anywhere in the product (the inbound-email slice added one — hence `received`).
  */
 import React, { useState } from 'react';
+import { useTranslation } from 'next-i18next';
 
 export type ConversationMessage = {
   id: string;
@@ -61,6 +62,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   password_reset: 'Password reset',
   signup_verify: 'Email verification',
   free_text: 'Message',
+  free_text_note: 'Message',
+  free_text_offer: 'Reminder or offer',
   inbound_email: 'Customer reply',
   inbound_forward: 'Copy to the garage',
 };
@@ -125,6 +128,10 @@ export default function ConversationView({
   smsAllowance?: SmsAllowance | null;
 }) {
   const [text, setText] = useState('');
+  // IS THIS A REMINDER OR OFFER? Unticked by default, and back to unticked after every send: each
+  // message is declared on its own, never inherited from the last one (step 5, 2026-09-11).
+  const [offer, setOffer] = useState(false);
+  const { t } = useTranslation('common');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [channel, setChannel] = useState<'email' | 'sms'>('email');
@@ -172,7 +179,7 @@ export default function ConversationView({
       const r = await fetch('/api/messages/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // CHANNEL IS A FIELD. No selector yet — there is nothing to select while SMS is unconfigured.
-        body: JSON.stringify(threadId ? { threadId, body: text, channel } : { jobCardId, body: text, channel }),
+        body: JSON.stringify(threadId ? { threadId, body: text, channel, offer } : { jobCardId, body: text, channel, offer }),
       });
       const d = await r.json().catch(() => ({}));
       // The allowance comes back on success AND on the allowance refusal, so the count on screen is
@@ -181,7 +188,7 @@ export default function ConversationView({
       // The server returns the thread on refusal too, so the refusal is VISIBLE in the list rather
       // than only in a toast that disappears.
       if (Array.isArray(d?.messages)) onSent?.(d.messages);
-      if (r.ok) { setText(''); setNote({ text: 'Sent.', ok: true }); }
+      if (r.ok) { setText(''); setOffer(false); setNote({ text: 'Sent.', ok: true }); }
       else setNote({ text: d?.message || 'The message was not sent.', ok: false });
     } catch {
       setNote({ text: 'Could not reach the server — nothing was sent.', ok: false });
@@ -321,6 +328,10 @@ export default function ConversationView({
                 placeholder={`Write to ${reach!.customerName}…`}
                 className="w-full p-2.5 bg-surface border border-line rounded-lg text-ink text-sm focus:ring-accent focus:border-accent"
               />
+              <label className="flex items-start gap-2 mt-1.5 text-sm text-ink" data-testid="compose-offer-label">
+                <input type="checkbox" checked={offer} disabled={busy} onChange={(e) => setOffer(e.target.checked)} data-testid="compose-offer" className="mt-0.5" />
+                <span>{t('compose.offerTick')}<span className="block text-xs text-muted">{t('compose.offerHint')}</span></span>
+              </label>
               <div className="flex items-center gap-3 mt-1.5">
                 <button
                   type="button" onClick={send} disabled={busy || switching || spent || !text.trim()} data-testid="compose-send"

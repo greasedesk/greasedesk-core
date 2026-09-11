@@ -40,5 +40,9 @@
     "nothingOnFile": "{{garage}} no longer has this address on file, so there is nothing more to stop.",
     "unknownTitle": "We don't recognise this link",
     "unknownBody": "It may have been copied incompletely. If you're still getting emails you don't want, reply to one and ask the garage to stop."
+  },
+  "compose": {
+    "offerTick": "This is a reminder or offer",
+    "offerHint": "Ticked, it carries an unsubscribe link and isn't sent to anyone who has asked for no reminders or offers. Quotes, invoices and messages about their car: leave it unticked."
   }
 }
