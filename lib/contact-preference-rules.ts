@@ -74,3 +74,37 @@ export function preferenceRefusal(c: PrefChangeShape): PrefRefusal | null {
   if (reason && reason.length > REASON_MAX) return 'reason_too_long';
   return null;
 }
+
+// ── WHICH CUSTOMERS AN ADDRESS IS (2026-09-11) ─────────────────────────────────────────────────────
+/**
+ * THE ONE MATCH from an address to a garage's customers — read by the send path's opt-out check
+ * (lib/notify::isSuppressed), by a carrier STOP, and by the unsubscribe link (step 4). Three readers
+ * of one rule, so a number that counts as "this customer" when refusing a send is the same number
+ * that counts when recording that they said stop.
+ *
+ * ANY matching row, not the first: one number can belong to two customers (a couple, a household, a
+ * company handset). A carrier STOP is the HANDSET refusing texts from our sender, so every row that
+ * holds the number is marked — and suppression already refuses on any of them.
+ * Email compares case-insensitively; SMS reads the dialable column first and the raw one as a
+ * fallback for rows written before normalisation existed. Returns a Prisma `where` as a plain
+ * object, because this file imports nothing.
+ */
+export function customerAddressWhere(groupId: string, channel: PrefChannel, address: string): Record<string, unknown> {
+  const to = address.trim();
+  return channel === 'email'
+    ? { group_id: groupId, email: { equals: to, mode: 'insensitive' } }
+    : { group_id: groupId, OR: [{ phone_e164: to }, { phone: to }] };
+}
+
+// ── A CARRIER STOP (2026-09-11) ────────────────────────────────────────────────────────────────────
+/**
+ * Twilio 21610 — "Attempt to send to unsubscribed recipient": the handset replied STOP to our sender,
+ * and the carrier now refuses every text to it until they reply START. It arrives two ways — in the
+ * error body when a send is refused outright (`sms 400: {"code":21610,…}`), and as `ErrorCode` on
+ * the delivery callback (stored as `twilio 21610`). Matched as a whole number, so a phone number or
+ * another code that merely CONTAINS the digits is not one.
+ */
+export const CARRIER_STOP_CODE = '21610';
+export function isCarrierStop(errorText: string | null | undefined): boolean {
+  return /(?<!\d)21610(?!\d)/.test(String(errorText ?? ''));
+}

@@ -12,6 +12,7 @@ const { gatePrisma, explainIfClientStale, zzSite, serverReady, describeError, ga
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const M = await import('../lib/marketing-lists.ts');
+const { recordContactPreference } = await import('../lib/contact-preferences.ts');
 const { readFileSync } = await import('node:fs');
 const prisma = await gatePrisma();
 
@@ -158,8 +159,14 @@ try {
   fix.vehicles.push(expired.id);
   const soon = await prisma.vehicle.create({ data: { group_id: ZZ, registration: 'ZZ76MK2', make: 'Mkt', model: 'Soon', mot_expiry: day(9) }, select: { id: true } });
   fix.vehicles.push(soon.id);
-  const cust = await prisma.customer.create({ data: { group_id: ZZ, site_id: site.id, name: 'Marketing Fixture', phone: '01384 111222', phone_e164: '+441384111222', email: 'mk@example.invalid', sms_opt_out: true }, select: { id: true } });
+  // THE PREFERENCE GOES THROUGH THE ONE WRITER (2026-09-11). This used to create the customer with
+  // `sms_opt_out: true` in the same insert — a second writer, and the first thing the contact-
+  // preference trigger refused when it shipped: a preference with no history cannot be committed.
+  const cust = await prisma.customer.create({ data: { group_id: ZZ, site_id: site.id, name: 'Marketing Fixture', phone: '01384 111222', phone_e164: '+441384111222', email: 'mk@example.invalid' }, select: { id: true } });
   fix.customer = cust.id;
+  const zzOwner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
+  const pref = await recordContactPreference({ groupId: ZZ, customerId: cust.id, channel: 'sms', scope: 'all', optedOut: true, via: 'staff', actorUserId: zzOwner.id }, prisma);
+  if (!pref.ok) throw new Error(`the writer refused the fixture's "no texts": ${pref.refusal}`);
   // VehicleOwnership carries no group_id — the tenant comes through the vehicle.
   for (const v of [expired.id, soon.id]) {
     await prisma.vehicleOwnership.create({ data: { vehicle_id: v, customer_id: cust.id, is_current: true } });

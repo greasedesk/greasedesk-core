@@ -41,7 +41,7 @@ const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
 const madeRows = [];
-let custId = null, custRestore = null;
+let custId = null;
 const rowsNow = async () => (await prisma.$queryRawUnsafe('SELECT count(*)::int AS n FROM "NotificationLog"'))[0].n;
 
 try {
@@ -135,15 +135,29 @@ try {
   // The point of the refactor is that this must be unchanged. If resolving the scope had broken
   // suppression, the fix would have caused the exact failure it was written to prevent.
   console.log('\n— the opt-out check still bites —');
-  const cust = await prisma.customer.findFirst({
-    where: { group_id: ZZ, OR: [{ phone_e164: { not: null } }, { phone: { not: null } }] },
-    select: { id: true, phone_e164: true, phone: true, sms_opt_out: true },
-  });
-  if (!cust) throw new Error('no ZZ customer with a phone to work against');
-  custId = cust.id; custRestore = cust.sms_opt_out;
-  const to = cust.phone_e164 ?? cust.phone;
+  // ITS OWN CUSTOMER, AND THE ONE WRITER (2026-09-11). This used to borrow any ZZ customer with a
+  // phone and flip sms_opt_out on it directly, then put it back in a `finally` — a second writer, and
+  // exactly the column-without-history the contact-preference cross-check exists to find (a killed
+  // run left it). The column now has a database trigger refusing any change without its history, so
+  // the direct write would simply fail. A throwaway customer takes the preference THROUGH the writer
+  // and leaves with its history when it is deleted. Marked by its address domain; a killed run's
+  // leftover is swept first, and one is planted so the sweep is proved.
+  const FIXTURE_DOMAIN = '@notify-scope-gate.invalid';
+  const planted = await prisma.customer.create({ data: { group_id: ZZ, name: 'Planted leftover', email: `planted${FIXTURE_DOMAIN}` }, select: { id: true } });
+  await prisma.customer.deleteMany({ where: { group_id: ZZ, email: { endsWith: FIXTURE_DOMAIN } } });
+  check('a killed run\'s fixture customer is swept first', (await prisma.customer.count({ where: { OR: [{ id: planted.id }, { group_id: ZZ, email: { endsWith: FIXTURE_DOMAIN } }] } })) === 0);
+  const to = `4477009${String(Math.floor(Math.random() * 1e5)).padStart(5, '0')}`;
+  check('the fixture number belongs to no other ZZ customer', (await prisma.customer.count({ where: { group_id: ZZ, OR: [{ phone_e164: to }, { phone: to }] } })) === 0,
+    'suppression matches ANY row with the number — a shared one would make the discriminator below a coin toss');
+  custId = (await prisma.customer.create({ data: { group_id: ZZ, name: 'Notify Scope Gate', email: `fixture${FIXTURE_DOMAIN}`, phone: to, phone_e164: to }, select: { id: true } })).id;
+  const { recordContactPreference } = await import('../lib/contact-preferences.ts');
+  const zzOwner = await prisma.user.findFirst({ where: { group_id: ZZ, email: 'owner@zzgategarage.test' }, select: { id: true } });
+  const setSms = async (optedOut) => {
+    const r = await recordContactPreference({ groupId: ZZ, customerId: custId, channel: 'sms', scope: 'all', optedOut, via: 'staff', actorUserId: zzOwner.id }, prisma);
+    if (!r.ok) throw new Error(`the writer refused the fixture preference: ${r.refusal}`);
+  };
 
-  await prisma.customer.update({ where: { id: custId }, data: { sms_opt_out: true } });
+  await setSms(true);
   const refused = await sendNotification({ groupId: ZZ, channel: 'sms', template: 'invoice_pay_link', recipient: to });
   if (refused.notificationId) madeRows.push(refused.notificationId);
   check('the template resolves at all', refused.skipCode !== 'unknown_template',
@@ -158,7 +172,7 @@ try {
 
   // Discriminating: without the opt-out, the same send is NOT suppressed — so the check above is
   // reading the flag, not simply failing for some other reason further down the path.
-  await prisma.customer.update({ where: { id: custId }, data: { sms_opt_out: false } });
+  await setSms(false);
   const allowed = await sendNotification({ groupId: ZZ, channel: 'sms', template: 'invoice_pay_link', recipient: to });
   if (allowed.notificationId) madeRows.push(allowed.notificationId);
   // VACUITY GUARD. The first run of this gate used a template key that does not exist, so the send
@@ -190,9 +204,9 @@ try {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   if (custId !== null) {
-    await prisma.customer.update({ where: { id: custId }, data: { sms_opt_out: custRestore } });
-    const now = (await prisma.customer.findUnique({ where: { id: custId }, select: { sms_opt_out: true } })).sms_opt_out;
-    check('teardown restored the opt-out flag exactly', now === custRestore, `${JSON.stringify(custRestore)} → ${JSON.stringify(now)}`);
+    await prisma.customer.delete({ where: { id: custId } }); // its ContactPreferenceEvents cascade with it
+    const left = await prisma.customer.count({ where: { id: custId } }) + await prisma.contactPreferenceEvent.count({ where: { customer_id: custId } });
+    check('teardown removed the fixture customer and its preference history', left === 0, `${left} left`);
   }
   const sweptRaw = await prisma.notificationLog.deleteMany({ where: { recipient: `${MARK}chk` } });
   if (sweptRaw.count) check('teardown swept the raw pairing fixtures', sweptRaw.count === 3, `${sweptRaw.count} of 3`);

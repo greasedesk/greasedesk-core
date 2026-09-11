@@ -22,6 +22,9 @@ import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
 import { smsAllowance } from '@/lib/sms-allowance';
 import { demoSendDecision } from '@/lib/demo-tenant';
+import type { Prisma } from '@prisma/client';
+import { customerAddressWhere, isCarrierStop } from '@/lib/contact-preference-rules';
+import { recordCarrierStop } from '@/lib/contact-preferences';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -109,7 +112,10 @@ export type SendNotificationResult = {
    * GreaseDesk yet", which is false — it is switched on, they are in a demo.
    */
   skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent'
-    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed';
+    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
+    /** The carrier refused it because the handset replied STOP (Twilio 21610). Status stays `failed` —
+     *  the provider WAS contacted — but it is not retryable, and the customer is now marked no texts. */
+    | 'carrier_stop';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -217,11 +223,11 @@ async function isSuppressed(groupId: string | null | undefined, channel: NotifyC
   const to = recipient.trim();
   if (!to) return false;
   try {
-    const where = channel === 'email'
-      ? { group_id: groupId, email: { equals: to, mode: 'insensitive' as const } }
-      // SMS addresses the dialable column first; the raw column is a fallback for rows written
-      // before normalisation existed (and never backfilled).
-      : { group_id: groupId, OR: [{ phone_e164: to }, { phone: to }] };
+    // THE ONE MATCH from an address to this garage's customers (lib/contact-preference-rules) — the
+    // same rule a carrier STOP and the unsubscribe link use to decide who "this customer" is. SMS
+    // reads the dialable column first; the raw one is a fallback for rows written before
+    // normalisation existed (and never backfilled).
+    const where = customerAddressWhere(groupId, channel, to) as Prisma.CustomerWhereInput;
     // ANY match refuses, not the first. One number can belong to two customer rows (a couple, a
     // household, a company handset — TMBS has such a pair today). If either person has asked not to
     // be contacted, the handset must not buzz: findFirst would have made that a coin toss on row
@@ -439,6 +445,16 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     sentAt: accepted ? new Date() : null,
     providerMessageId, providerMeta,
   });
+  // ── THE HANDSET SAID STOP (Twilio 21610) ──────────────────────────────────────────────────────
+  // Refused outright, at send time. Recorded on the customer BEFORE this returns, so the marketing
+  // board stops offering texts to someone who has said no — the one place a person refused and we
+  // used to ignore it. The delivery callback carries the same code for a STOP that lands later
+  // (pages/api/webhooks/twilio-status); both call the one recorder.
+  if (!accepted && channel === 'sms' && isCarrierStop(error) && id) {
+    const stop = await recordCarrierStop(id);
+    if (!stop.recorded && stop.why !== 'no_customer_holds_the_number') console.error('[notify] carrier STOP not recorded', id, stop);
+    return { ok: false, notificationId: id, status: 'failed', reason: error ?? 'the handset has replied STOP', skipCode: 'carrier_stop' };
+  }
   return accepted
     ? { ok: true, notificationId: id, status: 'sent' }
     : { ok: false, notificationId: id, status: 'failed', reason: error ?? 'provider rejected' };

@@ -27,6 +27,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { verifyTwilioSignature, formParams } from '@/lib/twilio-verify';
 import { ratchet, type NotifyStatus } from '@/lib/notification-status';
+import { isCarrierStop } from '@/lib/contact-preference-rules';
+import { recordCarrierStop } from '@/lib/contact-preferences';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -59,6 +61,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // A SIGNED CALLBACK FOR A ROW WE DO NOT HAVE IS NOT AN ERROR. Messages sent before this shipped
   // carry no provider id, and Twilio may callback for anything on the account. 204 and move on.
   if (!row) return res.status(204).end();
+
+  // ── THE HANDSET SAID STOP (Twilio 21610), reported after the send ───────────────────────────
+  // Recorded BEFORE the status ratchet, and whatever it decides: the STOP is a fact about the
+  // handset, not about the order callbacks arrive in, and the recorder is idempotent. The same
+  // recorder the send path calls when a STOP refuses a text outright (lib/notify).
+  if (isCarrierStop(params.ErrorCode)) {
+    const stop = await recordCarrierStop(row.id);
+    if (!stop.recorded && stop.why !== 'no_customer_holds_the_number') console.error('[twilio-status] carrier STOP not recorded', sid, stop);
+  }
 
   const decision = ratchet(row.status as NotifyStatus, providerStatus);
   if (!decision.apply) {

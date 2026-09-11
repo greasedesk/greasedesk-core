@@ -29,7 +29,7 @@ import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { setContactPreference } from '@/lib/contact-preferences';
 
 /** A preference the one writer would not record — the whole save is rolled back and says why. */
-class PreferenceRefused extends Error { constructor(readonly refusal: string) { super(`contact preference refused: ${refusal}`); } }
+class PreferenceRefused extends Error { refusal: string; constructor(refusal: string) { super(`contact preference refused: ${refusal}`); this.refusal = refusal; } }
 
 type OwnerIn = {
   name?: string; phone?: string; email?: string; address?: string;

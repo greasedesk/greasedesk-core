@@ -35,7 +35,8 @@ export type FailedSend = {
   skipCode?:
     | 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient'
     | 'no_renderer' | 'unknown_template' | 'allowance_spent'
-    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed';
+    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
+    | 'carrier_stop';
 };
 
 export type SendFailureCopy = {
@@ -78,6 +79,13 @@ export function describeSendFailure(
     case 'opted_out':
       return { code: 'opted_out', retryable: false,
         message: `${who} has opted out of ${plural(ctx.channel)}.` };
+
+    case 'carrier_stop':
+      // NOT "the provider rejected it", and NOT retryable: that branch invites a retry, and a retry
+      // here is a second text to someone who has told their network to stop them. Says what
+      // happened, what we did about it, and the only way back.
+      return { code: 'carrier_stop', retryable: false,
+        message: `${who} has replied STOP to our texts, so their phone network is refusing them. They are now marked as no texts; if they text START, staff can clear it on their record.` };
 
     case 'not_configured':
       return { code: 'not_configured', retryable: false,

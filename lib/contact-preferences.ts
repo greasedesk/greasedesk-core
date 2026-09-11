@@ -33,7 +33,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import {
-  PREF_COLUMN, normaliseReason, preferenceRefusal,
+  PREF_COLUMN, customerAddressWhere, normaliseReason, preferenceRefusal,
   type PrefChannel, type PrefRefusal, type PrefScope, type PrefVia,
 } from '@/lib/contact-preference-rules';
 
@@ -98,4 +98,59 @@ export async function setContactPreference(tx: Tx, c: PreferenceChange): Promise
 /** The same change in a transaction of its own — for a caller that is not already in one. */
 export function recordContactPreference(c: PreferenceChange, db: PrismaClient = prisma): Promise<PreferenceResult> {
   return db.$transaction((tx) => setContactPreference(tx, c));
+}
+
+// ── A CARRIER STOP (step 2, 2026-09-11) ────────────────────────────────────────────────────────────
+/**
+ * THE PHONE NETWORK SAID THIS HANDSET REPLIED STOP. Before this, Twilio blocked the number and we
+ * recorded a failed send — and the marketing board kept offering texts to a person who had said no.
+ * The one place a real person refused and we ignored it (owner, 2026-09-10).
+ *
+ * Marks "no texts at all" (scope `all`, not marketing: the carrier now refuses EVERY text to that
+ * handset from our sender, a quote as much as an offer) on every customer IN THE SENDING GARAGE who
+ * holds the number, through the one writer, citing the message the STOP came back on.
+ *
+ * ONLY THE SENDING GARAGE (owner, 2026-09-10). Every tenant texts through one GreaseDesk sender, so
+ * Twilio now blocks that handset for all of them. Another garage's first text to it gets its own
+ * 21610 and is marked then: one refused attempt per other garage, no message ever delivered, and
+ * each garage's consent record stays its own.
+ *
+ * NOT UNDONE HERE. There is no inbound-SMS route, so a customer replying START unblocks them at the
+ * carrier and nothing tells us. Staff clear it on the customer record — with a reason, enforced in
+ * this writer at step 6, because it depends on earlier history the database cannot see.
+ *
+ * Idempotent: a second STOP for the same number records nothing new. Never throws to its caller —
+ * a send path and a webhook both call it, and neither must fail because the marking did.
+ */
+export type CarrierStopResult =
+  | { recorded: true; customers: number; changed: number }
+  | { recorded: false; why: 'no_such_message' | 'not_a_tenant_send' | 'not_a_text' | 'no_customer_holds_the_number' | 'refused' | 'threw'; detail?: string };
+
+/** Thrown INSIDE the transaction so a refusal on the second holder rolls back the first. */
+// An explicit field, not a constructor parameter property: gates load lib/ through node's type
+// stripping, which refuses that syntax (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX).
+class CarrierStopRefused extends Error { refusal: string; constructor(refusal: string) { super(refusal); this.refusal = refusal; } }
+
+export async function recordCarrierStop(notificationLogId: string, db: PrismaClient = prisma): Promise<CarrierStopResult> {
+  try {
+    const log = await db.notificationLog.findUnique({ where: { id: notificationLogId }, select: { group_id: true, channel: true, recipient: true } });
+    if (!log) return { recorded: false, why: 'no_such_message' };
+    if (!log.group_id) return { recorded: false, why: 'not_a_tenant_send' };
+    if (log.channel !== 'sms') return { recorded: false, why: 'not_a_text' };
+    const groupId = log.group_id;
+    return await db.$transaction(async (tx) => {
+      const holders = await tx.customer.findMany({ where: customerAddressWhere(groupId, 'sms', log.recipient) as Prisma.CustomerWhereInput, select: { id: true } });
+      if (!holders.length) return { recorded: false as const, why: 'no_customer_holds_the_number' as const };
+      let changed = 0;
+      for (const h of holders) {
+        const r = await setContactPreference(tx, { groupId, customerId: h.id, channel: 'sms', scope: 'all', optedOut: true, via: 'carrier_stop', notificationLogId });
+        if (!r.ok) throw new CarrierStopRefused(r.refusal); // all or none: never half a household
+        if (r.changed) changed++;
+      }
+      return { recorded: true as const, customers: holders.length, changed };
+    });
+  } catch (e) {
+    if (e instanceof CarrierStopRefused) return { recorded: false, why: 'refused', detail: e.refusal };
+    return { recorded: false, why: 'threw', detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+  }
 }

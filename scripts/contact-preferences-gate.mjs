@@ -257,28 +257,57 @@ try {
 
   // ── 4. THE CROSS-CHECK: EVERY COLUMN EQUALS ITS HISTORY ───────────────────────────────────────
   console.log('\n— every customer\'s preferences equal their history —');
-  const disagreeing = () => prisma.$queryRawUnsafe(`
+  // THE CROSS-CHECK, over a customer SOURCE. The real run reads "Customer"; the positive case below
+  // reads the same row with one value swapped IN THE QUERY — a disagreement the real history table
+  // must flag, made without a write (the trigger would refuse it) and without the ALTER TABLE a real
+  // bypass would need, whose lock on a live table could queue every query behind it.
+  const crossCheck = (customers = '"Customer"') => prisma.$queryRawUnsafe(`
     WITH latest AS (
       SELECT DISTINCT ON (customer_id, channel, scope) customer_id, channel, scope, opted_out
       FROM "ContactPreferenceEvent" ORDER BY customer_id, channel, scope, seq DESC)
     SELECT c.id, c.group_id, v.channel, v.scope, v.colval, l.opted_out AS history
-    FROM "Customer" c
+    FROM ${customers} c
     CROSS JOIN LATERAL (VALUES ('email', 'all', c.email_opt_out), ('sms', 'all', c.sms_opt_out),
                                ('email', 'marketing', c.email_marketing_opt_out), ('sms', 'marketing', c.sms_marketing_opt_out)) AS v(channel, scope, colval)
     LEFT JOIN latest l ON l.customer_id = c.id AND l.channel = v.channel AND l.scope = v.scope
     WHERE v.colval IS DISTINCT FROM l.opted_out`);
   const everyone = await prisma.customer.count();
-  const bad = await disagreeing();
+  const bad = await crossCheck();
   check('every customer in the database agrees with their history', bad.length === 0,
     bad.length ? bad.slice(0, 5).map((b) => `${b.id.slice(0, 8)} ${b.channel}/${b.scope}: column ${b.colval}, history ${b.history}`).join(' | ') : `${everyone} customers, all tenants, read-only`);
-  // THE POSITIVE CASE: a second writer — here, a direct update, the shape notify-scope-gate uses on
-  // its fixture — must be CAUGHT. Otherwise "no disagreement" is also what a blind check reports.
-  await prisma.customer.update({ where: { id: cust }, data: { email_opt_out: true } });
-  const caught = (await disagreeing()).filter((b) => b.id === cust);
-  check('  …and a column moved WITHOUT the writer is caught', caught.length === 1 && caught[0].channel === 'email' && caught[0].scope === 'all',
-    caught.length ? `email/all: column true, history ${caught[0].history} — found however it was written` : 'NOT caught');
-  await prisma.customer.update({ where: { id: cust }, data: { email_opt_out: null } });
-  check('  …and agrees again once it is put back', (await disagreeing()).filter((b) => b.id === cust).length === 0);
+  // THE POSITIVE CASE: this customer as a bypass would leave it — "no email at all" set, no event.
+  // Otherwise "no disagreement" is also what a blind check reports.
+  if (!/^[0-9a-f-]{36}$/.test(cust)) throw new Error('fixture id is not a uuid — refusing to splice it into SQL');
+  const bypassed = `(SELECT id, group_id, true AS email_opt_out, sms_opt_out, email_marketing_opt_out, sms_marketing_opt_out FROM "Customer" WHERE id = '${cust}')`;
+  const caught = await crossCheck(bypassed);
+  check('  …and a column that moved WITHOUT the writer would be caught', caught.length === 1 && caught[0].channel === 'email' && caught[0].scope === 'all',
+    caught.length ? `email/all: column true, history ${caught[0].history} — however it had been written` : 'NOT caught');
+
+  // ── 4b. AND THE DATABASE REFUSES IT IN THE FIRST PLACE (the first trigger in the schema) ──────
+  console.log('\n— the database refuses a preference without its history —');
+  const triggers = await prisma.$queryRawUnsafe(`SELECT tgname, tgdeferrable, tginitdeferred, tgenabled FROM pg_trigger
+    WHERE NOT tgisinternal AND tgrelid IN ('"Customer"'::regclass, '"ContactPreferenceEvent"'::regclass)`);
+  const WANT = { Customer_contact_preference_history_upd: true, Customer_contact_preference_history_ins: true,
+    ContactPreferenceEvent_matches_customer: true, ContactPreferenceEvent_append_only: false };
+  check('the four triggers are installed, ENABLED, and deferred to commit where they must be',
+    Object.entries(WANT).every(([n, deferred]) => triggers.some((t) => t.tgname === n && t.tgdeferrable === deferred && t.tginitdeferred === deferred && t.tgenabled === 'O')),
+    `${triggers.map((t) => `${t.tgname}${t.tgenabled === 'O' ? '' : ' (DISABLED)'}`).join(', ')} — migrate diff cannot see a trigger, so this is what notices one going`);
+  const msg = (e) => (e?.meta?.message ?? e?.message ?? String(e)).replace(/\s+/g, ' ');
+  const direct = await prisma.customer.update({ where: { id: cust }, data: { email_opt_out: true } }).then(() => 'COMMITTED').catch(msg);
+  check('a column moved WITHOUT the writer is refused at commit', /disagrees with its history/.test(direct) && (await cols(cust)).email_opt_out === null,
+    direct === 'COMMITTED' ? 'COMMITTED — the bypass went through' : 'refused; the column is still no record');
+  const stray = await prisma.$executeRawUnsafe(`INSERT INTO "ContactPreferenceEvent" (id, group_id, customer_id, channel, scope, previous, opted_out, via, actor_user_id)
+    VALUES (gen_random_uuid()::text, $1, $2, 'email', 'all', NULL, true, 'staff', $3)`, ZZ, cust, zzOwner.id).then(() => 'COMMITTED').catch(msg);
+  check('  …as is history that disagrees with the column', /disagrees with its history/.test(stray), stray === 'COMMITTED' ? 'COMMITTED' : 'refused');
+  const eventsBefore = (await events(cust)).map((e) => e.reason);
+  const edit = await prisma.$executeRawUnsafe(`UPDATE "ContactPreferenceEvent" SET reason = 'rewritten afterwards' WHERE customer_id = $1`, cust).then(() => 'COMMITTED').catch(msg);
+  check('  …and a recorded change can never be edited', /append-only/.test(edit) && JSON.stringify((await events(cust)).map((e) => e.reason)) === JSON.stringify(eventsBefore),
+    edit === 'COMMITTED' ? 'COMMITTED — the history was rewritten' : 'refused; every reason as recorded');
+  const born = await prisma.customer.create({ data: { group_id: ZZ, name: 'Pref Gate born-opted-out', email: `born-${uniq()}${MARK}`, email_opt_out: true }, select: { id: true } })
+    .then((c) => { made.customers.push(c.id); return 'COMMITTED'; }).catch(msg);
+  check('  …and a customer cannot be CREATED with a preference and no history', /disagrees with its history/.test(born), born === 'COMMITTED' ? 'COMMITTED' : 'refused');
+  check('while every change through the writer above committed', w1.ok && w5.ok && w6.ok && w7.ok,
+    'the trigger holds the record; it does not get in the way of the one writer');
 
   // ── 5. THE STAFF API NO LONGER WRITES THE COLUMNS ITSELF ──────────────────────────────────────
   const api = code(readFileSync('pages/api/jobcard-details.ts', 'utf8'));
