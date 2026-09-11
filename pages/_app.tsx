@@ -80,7 +80,10 @@ function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   // and /superadmin (the last covers er.greasedesk.com, whose routes are all /superadmin/*).
   // underPath, not startsWith: '/m' is the PWA, and startsWith('/m') would also take any public page
   // whose name begins with m (/mot-check, /magic…) out from under the consent banner.
-  const isAppRoute = underPath(router.pathname, '/admin') || underPath(router.pathname, '/m') || underPath(router.pathname, '/superadmin');
+  const isAppRoute = underPath(router.pathname, '/admin') || underPath(router.pathname, '/m') || underPath(router.pathname, '/superadmin')
+    // A garage's unsubscribe page speaks for the GARAGE and loads nothing optional: no cookie prompt
+    // in front of someone asking to be left alone.
+    || underPath(router.pathname, '/unsubscribe');
   const initialConsent = ((pageProps as any).__consent ?? null) as ConsentRecord | null;
   const region = ((pageProps as any).__consentRegion ?? 'GB') as string;
   const nav = ((pageProps as any).__nav ?? null) as ResolvedNav | null;

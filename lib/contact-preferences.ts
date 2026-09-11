@@ -33,9 +33,10 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import {
-  PREF_COLUMN, customerAddressWhere, normaliseReason, preferenceRefusal,
+  PREF_COLUMN, blocksSend, channelBlock, customerAddressWhere, normaliseReason, preferenceRefusal,
   type PrefChannel, type PrefRefusal, type PrefScope, type PrefVia,
 } from '@/lib/contact-preference-rules';
+import { UNSUBSCRIBE_TOKEN } from '@/lib/unsubscribe-links';
 
 type Tx = Prisma.TransactionClient;
 
@@ -152,5 +153,72 @@ export async function recordCarrierStop(notificationLogId: string, db: PrismaCli
   } catch (e) {
     if (e instanceof CarrierStopRefused) return { recorded: false, why: 'refused', detail: e.refusal };
     return { recorded: false, why: 'threw', detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+  }
+}
+
+// ── THE CUSTOMER'S OWN LINK (step 4, 2026-09-11) ──────────────────────────────────────────────────
+/**
+ * A GARAGE'S UNSUBSCRIBE LINK, followed. The token is on the marketing email's own NotificationLog row
+ * (minted by lib/notify), which says which garage, which channel and which address received it.
+ *
+ * WHAT IT STOPS: "no reminders or offers" on THAT channel — scope `marketing`, never `all` (decision
+ * B): their quote and their invoice still reach them. The link came in an email, so it answers for
+ * email; a text has its own way out (a carrier STOP, and the SMS link the owner is deciding on).
+ * WHO: every customer IN THAT GARAGE holding the address — the same match the send path refuses by
+ * (customerAddressWhere) — through the one writer, citing the message. All or none.
+ * REPEATABLE: a second click, or a mail client's one-click POST after the page button, records
+ * nothing new. The view is read-only: OPENING the link never acts, because mail scanners open links.
+ */
+const LINK_COLUMNS = { sms_opt_out: true, email_opt_out: true, sms_marketing_opt_out: true, email_marketing_opt_out: true } as const;
+
+async function linkedMessage(token: string, db: PrismaClient) {
+  if (!UNSUBSCRIBE_TOKEN.test(token)) return null; // not a shape we mint — no database lookup at all
+  const row = await db.notificationLog.findUnique({
+    where: { unsubscribe_token: token },
+    select: { id: true, group_id: true, channel: true, recipient: true, group: { select: { group_name: true, trading_name: true } } },
+  });
+  if (!row || !row.group_id || !row.group) return null;
+  return { id: row.id, groupId: row.group_id, channel: row.channel as PrefChannel, recipient: row.recipient,
+    garage: row.group.trading_name || row.group.group_name };
+}
+
+export type UnsubscribeView =
+  | { state: 'unknown' }
+  | { state: 'ready' | 'done' | 'nothing_on_file'; garage: string; channel: PrefChannel };
+
+/** What the page shows. READ-ONLY — never the address, never a write. */
+export async function unsubscribeView(token: string, db: PrismaClient = prisma): Promise<UnsubscribeView> {
+  const m = await linkedMessage(token, db);
+  if (!m) return { state: 'unknown' };
+  const holders = await db.customer.findMany({ where: customerAddressWhere(m.groupId, m.channel, m.recipient) as Prisma.CustomerWhereInput, select: LINK_COLUMNS });
+  if (!holders.length) return { state: 'nothing_on_file', garage: m.garage, channel: m.channel };
+  const done = holders.every((h) => blocksSend(channelBlock(h, m.channel), true));
+  return { state: done ? 'done' : 'ready', garage: m.garage, channel: m.channel };
+}
+
+export type UnsubscribeResult =
+  | { ok: true; garage: string; channel: PrefChannel; customers: number; changed: number }
+  | { ok: false; why: 'unknown' | 'refused' | 'threw'; detail?: string };
+
+class LinkRefused extends Error { refusal: string; constructor(refusal: string) { super(refusal); this.refusal = refusal; } }
+
+/** The act — the page's button and the RFC 8058 one-click POST both land here. */
+export async function unsubscribeByLink(token: string, db: PrismaClient = prisma): Promise<UnsubscribeResult> {
+  try {
+    const m = await linkedMessage(token, db);
+    if (!m) return { ok: false, why: 'unknown' };
+    return await db.$transaction(async (tx) => {
+      const holders = await tx.customer.findMany({ where: customerAddressWhere(m.groupId, m.channel, m.recipient) as Prisma.CustomerWhereInput, select: { id: true } });
+      let changed = 0;
+      for (const h of holders) {
+        const r = await setContactPreference(tx, { groupId: m.groupId, customerId: h.id, channel: m.channel, scope: 'marketing', optedOut: true, via: 'customer_link', notificationLogId: m.id });
+        if (!r.ok) throw new LinkRefused(r.refusal);
+        if (r.changed) changed++;
+      }
+      return { ok: true as const, garage: m.garage, channel: m.channel, customers: holders.length, changed };
+    });
+  } catch (e) {
+    if (e instanceof LinkRefused) return { ok: false, why: 'refused', detail: e.refusal };
+    return { ok: false, why: 'threw', detail: e instanceof Error ? e.message.slice(0, 200) : String(e) };
   }
 }

@@ -36,7 +36,7 @@ export type FailedSend = {
     | 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient'
     | 'no_renderer' | 'unknown_template' | 'allowance_spent'
     | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
-    | 'carrier_stop' | 'opted_out_marketing' | 'marketing_check_failed';
+    | 'carrier_stop' | 'opted_out_marketing' | 'marketing_check_failed' | 'no_unsubscribe_link';
 };
 
 export type SendFailureCopy = {
@@ -105,6 +105,11 @@ export function describeSendFailure(
     case 'allowance_spent':
       return { code: 'allowance_spent', retryable: false,
         message: `Your ${ctx.channel === 'sms' ? 'SMS' : 'email'} allowance ran out as this was sending.` };
+
+    case 'no_unsubscribe_link':
+      // A PROGRAMMING FAULT: a marketing template rendered without its way out. Refused, and said so.
+      return { code: 'no_unsubscribe_link', retryable: false,
+        message: 'This reminder was not sent: it was missing its unsubscribe link — please report it.' };
 
     case 'no_renderer':
     case 'unknown_template':

@@ -160,7 +160,8 @@ export const NOTIFICATION_TEMPLATES = {
         <p>Hello ${esc(d.customerName ?? 'there')},</p>
         <p>Your MOT on the ${esc(d.vehicleDesc ?? 'car')} (<strong>${esc(d.registration)}</strong>) runs out on ${esc(d.expiryDate)}.</p>
         <p>We can book you in — call us on ${esc(d.garagePhone)} and we'll find you a slot.</p>
-        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
+        <p style="margin-top:20px">${esc(d.garageName)}</p>
+        ${marketingFooter(d)}`),
     }),
     // MEASURED, not estimated: 135 septets at the longest real tenant name (24 chars) with the
     // reply route appended, and it tips to two segments only at a 50-character garage name.
@@ -178,7 +179,8 @@ export const NOTIFICATION_TEMPLATES = {
         <p>Hello ${esc(d.customerName ?? 'there')},</p>
         <p>Your MOT on the ${esc(d.vehicleDesc ?? 'car')} (<strong>${esc(d.registration)}</strong>) ran out on ${esc(d.expiryDate)}, which means it isn't road legal until it's tested.</p>
         <p>We can book you in — call us on ${esc(d.garagePhone)} and we'll find you a slot.</p>
-        <p style="margin-top:20px">${esc(d.garageName)}</p>`),
+        <p style="margin-top:20px">${esc(d.garageName)}</p>
+        ${marketingFooter(d)}`),
     }),
     /**
      * THE SHORTER FORM IS NOT A DIFFERENT MESSAGE, it is the same one with a clause removed.
@@ -590,6 +592,25 @@ function prospectFooter(d: TemplateData): string {
                : '<strong>[UNSUBSCRIBE LINK MISSING — this email must not be sent]</strong>'}
     </p>
     <p style="font-size:12px;color:#94a3b8">${esc(COMPANY.legalName)} · Company no. ${esc(COMPANY.companyNumber)} · ${esc(officeOneLine())}</p>`;
+}
+
+/**
+ * THE WAY OUT EVERY GARAGE REMINDER OR OFFER CARRIES (step 4, 2026-09-11). It names the GARAGE — the
+ * customer's relationship is with them, and the garage controls their data — and says exactly what
+ * the link stops and what it does not: reminders and offers, never a quote or an invoice (decision B).
+ * The link is required. The sender mints it for every marketing email (lib/notify) and refuses to send
+ * a marketing email whose rendered body lacks it; a render with no link shows a visible fault here
+ * rather than quietly leaving the way out off.
+ */
+export function marketingFooter(d: TemplateData): string {
+  const link = String(d.unsubscribeUrl ?? '');
+  const garage = esc(d.garageName ?? 'your garage');
+  return `
+    <p style="font-size:12px;color:#64748b;margin-top:24px">
+      You're getting this because you're a customer of ${garage}.
+      ${link ? `Don't want reminders or offers from us? <a href="${esc(link)}" style="color:#64748b">Unsubscribe</a> — your quotes and invoices will still reach you.`
+             : '<strong>[UNSUBSCRIBE LINK MISSING — this email must not be sent]</strong>'}
+    </p>`;
 }
 
 export type TemplateKey = keyof typeof NOTIFICATION_TEMPLATES;

@@ -27,5 +27,18 @@
     "revenueToday": "Revenue (Today)"
   },
   "workshopNudge": "Using a phone? Open the workshop view →",
-  "dismiss": "Dismiss"
+  "dismiss": "Dismiss",
+  "unsubscribe": {
+    "title": "Reminders and offers from {{garage}}",
+    "ready_email": "Stop reminders and offers from {{garage}} by email?",
+    "ready_sms": "Stop reminders and offers from {{garage}} by text?",
+    "stillGet": "You'll still get quotes and invoices for work you've asked for.",
+    "button": "Unsubscribe",
+    "done_email": "Done. {{garage}} won't send you reminders or offers by email.",
+    "done_sms": "Done. {{garage}} won't send you reminders or offers by text.",
+    "stillGetDone": "Quotes and invoices for work you've asked for will still reach you. If you change your mind, just tell the garage.",
+    "nothingOnFile": "{{garage}} no longer has this address on file, so there is nothing more to stop.",
+    "unknownTitle": "We don't recognise this link",
+    "unknownBody": "It may have been copied incompletely. If you're still getting emails you don't want, reply to one and ask the garage to stop."
+  }
 }

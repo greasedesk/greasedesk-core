@@ -25,6 +25,8 @@ import { demoSendDecision } from '@/lib/demo-tenant';
 import type { Prisma } from '@prisma/client';
 import { customerAddressWhere, isCarrierStop, suppressionDecision, type SuppressionDecision } from '@/lib/contact-preference-rules';
 import { recordCarrierStop } from '@/lib/contact-preferences';
+import { unsubscribeHeaders, unsubscribeLinks } from '@/lib/unsubscribe-links';
+import { randomBytes } from 'node:crypto';
 
 export type NotifyChannel = 'email' | 'sms';
 
@@ -119,7 +121,9 @@ export type SendNotificationResult = {
     /** A MARKETING template to someone who said "no reminders or offers" on this channel. */
     | 'opted_out_marketing'
     /** A MARKETING template whose opt-out could not be checked — refused, not sent. */
-    | 'marketing_check_failed';
+    | 'marketing_check_failed'
+    /** A marketing email whose rendered body lacked its unsubscribe link — refused, never sent. */
+    | 'no_unsubscribe_link';
 };
 
 // ── Provider registry: channel → adapter. Configuration decides availability, not a code branch. ──
@@ -263,6 +267,8 @@ async function record(args: {
   body?: string | null; sentByUserId?: string | null; threadId?: string | null;
   providerMessageId?: string | null; providerMeta?: Record<string, unknown> | null;
   countsToAllowance?: boolean;
+  /** The unsubscribe link this message carried — marketing emails only (step 4). */
+  unsubscribeToken?: string | null;
 }): Promise<string | null> {
   try {
     const row = await prisma.notificationLog.create({
@@ -277,6 +283,7 @@ async function record(args: {
         subject: args.subject ?? null,
         error: args.error ?? null,
         counts_to_allowance: args.countsToAllowance ?? true,
+        unsubscribe_token: args.unsubscribeToken ?? null,
         subject_type: args.subjectRef?.type ?? null,
         subject_id: args.subjectRef?.id ?? null,
         sent_at: args.sentAt ?? null,
@@ -326,7 +333,10 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
     // the one place the template is resolved, so no caller decides whether its own message is free.
-    countsToAllowance: !tpl?.security };
+    countsToAllowance: !tpl?.security,
+    // Set below, for a marketing email only, the moment its token is minted — so every row written
+    // after that point carries the link that message had.
+    unsubscribeToken: null as string | null };
 
   if (!args.recipient?.trim()) {
     const id = await record({ ...common, status: 'skipped', error: 'no recipient' });
@@ -412,6 +422,23 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     }
   }
 
+  // ── THE WAY OUT, ON EVERY MARKETING EMAIL (step 4, 2026-09-11) ────────────────────────────────
+  // Minted HERE, by the one sender, for every marketing email and nothing else — so no caller can
+  // forget it. The link goes into the body (a page with a button: mail scanners follow links) and
+  // into the RFC 8058 headers (a mail client's own Unsubscribe); the token goes onto this message's
+  // own log row. It names the garage, never GreaseDesk — see lib/notification-templates::marketingFooter.
+  let renderData: TemplateData = args.data ?? {};
+  let emailOpts = args.emailOpts;
+  let unsubscribeUrl: string | null = null;
+  if (tpl.marketing && channel === 'email') {
+    const token = randomBytes(24).toString('base64url');
+    const links = unsubscribeLinks(token);
+    unsubscribeUrl = links.page;
+    common.unsubscribeToken = token;
+    renderData = { ...renderData, unsubscribeUrl: links.page };
+    emailOpts = { ...(emailOpts ?? {}), headers: { ...(emailOpts?.headers ?? {}), ...unsubscribeHeaders(links) } };
+  }
+
   // Render for the channel. A template with no renderer for this channel is a skip, never a guess.
   let subject: string | undefined;
   let body: string;
@@ -421,7 +448,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
         const id = await record({ ...common, status: 'skipped', error: 'template has no email renderer' });
         return { ok: false, notificationId: id, status: 'skipped', reason: 'no email renderer', skipCode: 'no_renderer' };
       }
-      const r = tpl.email(args.data ?? {}) as { subject: string; html: string };
+      const r = tpl.email(renderData) as { subject: string; html: string };
       subject = r.subject; body = r.html;
     } else {
       if (!tpl.sms) {
@@ -432,11 +459,19 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
       // force UCS-2 and can triple the segment count for a message that reads identically — see
       // lib/sms-text. Template authors must not have to remember this, so it is applied here
       // rather than in each renderer, and it never touches stored data or the email path.
-      body = smsText((tpl.sms(args.data ?? {}) as { text: string }).text);
+      body = smsText((tpl.sms(renderData) as { text: string }).text);
     }
   } catch (e: any) {
     const id = await record({ ...common, status: 'failed', error: `render failed: ${e?.message ?? e}` });
     return { ok: false, notificationId: id, status: 'failed', reason: 'render failed' };
+  }
+
+  // A MARKETING EMAIL WITHOUT ITS WAY OUT IS NEVER SENT. The footer shows a visible fault when the link
+  // is missing; this makes "must not be sent" true rather than merely printed — for a new marketing
+  // template whose author forgot the footer, as much as for anything else.
+  if (unsubscribeUrl && !body.includes(unsubscribeUrl)) {
+    const id = await record({ ...common, status: 'skipped', subject, error: 'marketing email rendered without its unsubscribe link — refused' });
+    return { ok: false, notificationId: id, status: 'skipped', reason: 'no unsubscribe link in the rendered email', skipCode: 'no_unsubscribe_link' };
   }
 
   if (!adapter.configured()) {
@@ -449,7 +484,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   let providerMessageId: string | null = null;
   let providerMeta: Record<string, unknown> | null = null;
   try {
-    const out = await adapter.send(args.recipient, { subject, body }, args.emailOpts);
+    const out = await adapter.send(args.recipient, { subject, body }, emailOpts);
     if (typeof out === 'boolean') accepted = out;
     else { accepted = out.accepted; providerMessageId = out.providerMessageId ?? null; providerMeta = out.meta ?? null; }
   } catch (e: any) {

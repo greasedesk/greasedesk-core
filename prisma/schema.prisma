@@ -4455,6 +4455,13 @@ model NotificationLog {
   // sent; the thread is an index over it, never a second copy.
   thread_id String?
 
+  // PLACED LAST OF THE COLUMNS, ON PURPOSE: nullable-annotation-gate credits any "null" within four
+  // lines to the NEXT columns too, and just after `recipient` this note "explained" subject and
+  // provider_message_id, which say nothing about their null (2026-09-11; THE LIST item 1).
+  /// THE UNSUBSCRIBE LINK THIS MESSAGE CARRIED — marketing emails only (step 4, 2026-09-11). null = no
+  /// link was sent: every service message, every text, every row before 20260911120000_unsubscribe_token.
+  unsubscribe_token   String?  @unique
+
   group  Group?         @relation(fields: [group_id], references: [id], onDelete: Cascade)
   thread MessageThread? @relation(fields: [thread_id], references: [id], onDelete: SetNull)
   contactPreferenceEvents ContactPreferenceEvent[]
