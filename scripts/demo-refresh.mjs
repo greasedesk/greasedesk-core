@@ -5,6 +5,13 @@
  *   node scripts/demo-refresh.mjs --create           > /tmp/d.log 2>&1   # first generation
  *   node scripts/demo-refresh.mjs --group=GB-GDxxxx  > /tmp/d.log 2>&1   # dry run: what it WOULD do
  *   node scripts/demo-refresh.mjs --group=GB-GDxxxx --apply > /tmp/d.log 2>&1
+ *   …add --even-if-active ONLY to override the activity guard below, knowing it deletes someone's work
+ *
+ * ── REAL PEOPLE USE THE DEMOS (2026-09-11) ──────────────────────────────────────────────────────
+ * Prospects are given access. This refuses while a person has left traces on the target in the last
+ * hour — checked BEFORE the 27-minute generation and AGAIN at the swap, which is where a live session
+ * breaks. It cannot see someone who signed in over an hour ago and is only reading, and says so
+ * every time: a pass means no traces, not nobody. lib/demo-tenants::refuseRefreshWhileActive.
  *
  * ── WHY REGENERATE AND NOT DATE-SHIFT ───────────────────────────────────────────────────────────
  * A delta-shift has to move every dated column — job cards, invoices, payments, refunds, credit
@@ -27,13 +34,16 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
-const { DEMO_TENANTS, refuseRefresh } = await import('../lib/demo-tenants.ts');
+const { DEMO_TENANTS, refuseRefresh, refuseRefreshWhileActive } = await import('../lib/demo-tenants.ts');
+const { tenantActivity } = await import('../lib/demo-activity.ts');
 const { generateDemoTenant } = await import('../lib/demo/generate.ts');
 const bcrypt = (await import('bcryptjs')).default;
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 const APPLY = process.argv.includes('--apply');
 const CREATE = process.argv.includes('--create');
+// EXPLICIT, AND NEVER IMPLIED BY --apply: deleting a demo someone is using is a separate decision.
+const EVEN_IF_ACTIVE = process.argv.includes('--even-if-active');
 
 /**
  * The DEMO TENANT'S own number, owner-supplied. This is what a prospect reads in every demo text:
@@ -104,6 +114,15 @@ const counts = {
 };
 console.log(`${target.ref} ${target.group_name} — ${APPLY ? 'APPLY' : 'DRY RUN'}`);
 console.log(`  would destroy: ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+
+// ── IS ANYONE USING IT? — before 27 minutes of generation are spent ─────────────────────────────
+const firstLook = refuseRefreshWhileActive(target.ref, await tenantActivity(prisma, target.id), new Date(), EVEN_IF_ACTIVE);
+if (firstLook.refuse && APPLY) {
+  console.log(`\nREFUSING (recent_activity)\n\n  ${firstLook.report}\n\nNothing generated, nothing swapped, nothing destroyed.`);
+  await prisma.$disconnect();
+  process.exit(2);
+}
+console.log(`\n  ${firstLook.refuse ? 'WOULD REFUSE with --apply: ' : ''}${firstLook.report}`);
 // ── GENERATE, VERIFY, SWAP, THEN DESTROY ────────────────────────────────────────────────────────
 // DESTROY IS LAST. The obvious order — purge the old tenant then regenerate — puts a 27-minute
 // non-transactional generation AFTER the only irreversible step, so any failure in it leaves the
@@ -265,6 +284,15 @@ if (problems.length) {
 // are allowed to touch — someone may have cleared is_internal while the generator ran.
 const stillTarget = await prisma.group.findFirst({ where: { ref: target.ref }, select: { id: true, ref: true, group_name: true, is_internal: true, is_demo: true } });
 const stillRefused = refuseRefresh(target.ref, stillTarget);
+// AND IS ANYONE USING IT NOW? Twenty-seven minutes is long enough for a prospect to sign in.
+const atSwap = refuseRefreshWhileActive(target.ref, await tenantActivity(prisma, target.id), new Date(), EVEN_IF_ACTIVE);
+if (atSwap.refuse) {
+  console.log(`\nREFUSING AT THE SWAP (recent_activity)\n\n  ${atSwap.report}`);
+  console.log(`Nothing moved. ${target.ref} is intact; staging tenant ${fresh.groupId} is orphaned and purgeable by id.`);
+  await prisma.$disconnect();
+  process.exit(2);
+}
+console.log(`\n  at the swap: ${atSwap.report}`);
 if (stillRefused || stillTarget.id !== target.id) {
   console.log(`\nREFUSING AT THE SWAP (${stillRefused?.code ?? 'target moved'}) — the target changed while generating.`);
   console.log(`Nothing moved. ${target.ref} is intact; staging tenant ${fresh.groupId} is orphaned and purgeable by id.`);

@@ -145,3 +145,66 @@ export function refuseDemoMaintenance(
   }
   return null;
 }
+
+// ── IS ANYONE USING IT? (2026-09-11) ─────────────────────────────────────────────────────────────
+/**
+ * DEMO TENANTS HAVE REAL PEOPLE IN THEM NOW. The owner gives prospects access to the demo sites, and a
+ * refresh deletes the whole tenant and breaks every session on it. This is the stop between an
+ * operator and deleting someone's demo mid-sentence (owner, 2026-09-11) — NOT a fix for the shared
+ * login, and not a guarantee.
+ *
+ * WHAT IT CAN SEE: sessions are JWTs, so the database holds no session to look at. It reads the
+ * TRACES a person leaves in the last ACTIVITY_WINDOW_MINUTES: a sign-in to the tenant (the shared
+ * owner login included — that is the prospect signal), a change a person made (AuditLog with a user),
+ * a message a person sent, a new customer, job card or booking.
+ *
+ * WHAT IT CANNOT SEE, AND SAYS SO EVERY TIME: someone who signed in more than an hour ago and is only
+ * READING leaves no trace. That is the MOST LIKELY prospect — given access, browsing at leisure — so a
+ * pass must never read as "nobody is there". It reads as "no traces in the last hour".
+ */
+export const ACTIVITY_WINDOW_MINUTES = 60;
+
+export type TenantActivity = {
+  lastSignIn: Date | null;
+  personChanges: number; latestPersonChange: Date | null;
+  messagesByPeople: number; latestMessage: Date | null;
+  newRecords: number; latestNewRecord: Date | null;
+};
+
+export const ACTIVITY_BLIND_SPOT =
+  'This check cannot see someone who signed in more than an hour ago and is only reading — the most likely prospect, '
+  + 'browsing at leisure. Passing means NO TRACES in the last hour, not that nobody is there.';
+
+const ago = (d: Date, now: Date) => `${Math.max(0, Math.round((now.getTime() - d.getTime()) / 60_000))} min ago`;
+
+/** The traces seen, in words — never who. Empty when there are none. */
+export function describeActivity(a: TenantActivity, now: Date): string[] {
+  const since = now.getTime() - ACTIVITY_WINDOW_MINUTES * 60_000;
+  const within = (d: Date | null) => d != null && d.getTime() >= since;
+  const out: string[] = [];
+  if (within(a.lastSignIn)) out.push(`a sign-in ${ago(a.lastSignIn!, now)}`);
+  if (a.personChanges > 0) out.push(`${a.personChanges} change${a.personChanges === 1 ? '' : 's'} by a person${a.latestPersonChange ? ` (latest ${ago(a.latestPersonChange, now)})` : ''}`);
+  if (a.messagesByPeople > 0) out.push(`${a.messagesByPeople} message${a.messagesByPeople === 1 ? '' : 's'} sent by a person${a.latestMessage ? ` (latest ${ago(a.latestMessage, now)})` : ''}`);
+  if (a.newRecords > 0) out.push(`${a.newRecords} new record${a.newRecords === 1 ? '' : 's'}${a.latestNewRecord ? ` (latest ${ago(a.latestNewRecord, now)})` : ''}`);
+  return out;
+}
+
+/**
+ * REFUSE while there are traces — unless the operator has said, explicitly, `--even-if-active`.
+ * PURE. The pass and the override both still carry ACTIVITY_BLIND_SPOT: the caller prints `report`.
+ */
+export function refuseRefreshWhileActive(ref: string, a: TenantActivity, now: Date, evenIfActive: boolean):
+  { refuse: boolean; overridden: boolean; report: string } {
+  const seen = describeActivity(a, now);
+  if (!seen.length) {
+    return { refuse: false, overridden: false,
+      report: `No traces of anyone on ${ref} in the last ${ACTIVITY_WINDOW_MINUTES} minutes. ${ACTIVITY_BLIND_SPOT}` };
+  }
+  const traces = `Someone has been using ${ref} in the last ${ACTIVITY_WINDOW_MINUTES} minutes: ${seen.join('; ')}.`;
+  if (evenIfActive) {
+    return { refuse: false, overridden: true,
+      report: `${traces} OVERRIDDEN with --even-if-active — their work will be deleted and their session broken. ${ACTIVITY_BLIND_SPOT}` };
+  }
+  return { refuse: true, overridden: false,
+    report: `${traces} Regenerating now would delete their work and break their session. Re-run later, or pass --even-if-active if you are sure. ${ACTIVITY_BLIND_SPOT}` };
+}
