@@ -9,9 +9,11 @@
  *     brand image (one exact path, see BRAND_ASSET), plus
  *     the auth endpoints (so an operator can sign in there) and Next internals. EVERYTHING else,
  *     including "/", 404s. The tenant app is NOT reachable at er.
- *   • On reps.greasedesk.com — expose ONLY the rep portal: /rep/* and /api/rep/*, on the same
- *     terms. A rep is self-employed, belongs to no garage, and invoices US; the portal must not sit
- *     on the tenant origin, where it would share the tenant cookie jar. EVERYTHING else 404s.
+ *   • On reps.greasedesk.com — expose the PUBLIC RESELLER SITE and the rep portal: /rep-site/*,
+ *     /api/rep-site/*, /rep/* and /api/rep/*, plus this host's own /robots.txt and /sitemap.xml (by
+ *     rewrite). A rep is self-employed, belongs to no garage, and invoices US; the portal must not
+ *     sit on the tenant origin, where it would share the tenant cookie jar. EVERYTHING else 404s.
+ *     The ROOT serves the public page to a visitor and the portal to a signed-in rep.
  *   • On the apex (greasedesk.com and anything else) — BOTH other doors are CLOSED: /superadmin/*,
  *     /api/superadmin/*, /rep/* and /api/rep/* all 404. The tenant app is otherwise untouched.
  *
@@ -44,6 +46,18 @@ const isEngineRoom = (p: string) => underPath(p, '/superadmin') || underPath(p, 
  * one path nobody listed.
  */
 const isRepPortal = (p: string) => underPath(p, '/rep') || underPath(p, '/api/rep');
+/**
+ * THE PUBLIC RESELLER SITE — one named prefix, and that is the whole boundary (owner, 2026-09-12).
+ *
+ * Pages, api and static assets all live under /rep-site, so the host's allow-list grows by ONE entry
+ * rather than by a file at a time. The rejected alternative was an exact-match list that gains a line
+ * per image: "a boundary nobody notices widening". This one is visible in a single grep, and
+ * rep-site-gate proves that nothing OUTSIDE it is reachable here — /public included.
+ *
+ * underPath, not startsWith: '/rep-site' must not be matched by the portal's own '/rep' check either,
+ * which is why isRepPortal above uses the same helper. '/rep-site' is not a path under '/rep'.
+ */
+const isRepSite = (p: string) => underPath(p, '/rep-site') || underPath(p, '/api/rep-site');
 const isAuth = (p: string) => underPath(p, '/api/auth'); // shared: operator login on er., tenant login on apex
 const isNextInternal = (p: string) => underPath(p, '/_next'); // matcher already drops /_next/static + image
 /**
@@ -77,16 +91,48 @@ export function middleware(req: NextRequest) {
   }
 
   if (host === REP_HOST) {
-    // reps. is the rep portal and NOTHING else. Same shape as er. above, deliberately: one door,
-    // one rewrite at the root, and an allow-list rather than a block-list — a block-list on a host
-    // this isolated is a list somebody forgets to add to.
-    if (pathname === '/') return NextResponse.rewrite(new URL('/rep', req.url));
-    if (isRepPortal(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
+    // reps. is the PUBLIC RESELLER SITE and the rep portal, and nothing else. Still an allow-list
+    // rather than a block-list — a block-list on a host this isolated is a list somebody forgets to
+    // add to.
+    //
+    // THE ROOT IS NOW A PUBLIC PAGE. It used to rewrite to /rep, which redirected a visitor with no
+    // session to /rep/login — so the bare domain was the sign-in page. The rewrite now lands on the
+    // public site, and /rep-site's own getServerSideProps sends a SIGNED-IN REP on to /rep, so their
+    // front door is unchanged. The session is read there and not here on purpose: lib/rep-auth
+    // records why a JWT decrypt per request to choose a rewrite is a cost this layer need not pay.
+    if (pathname === '/') return NextResponse.rewrite(new URL('/rep-site', req.url));
+    // THIS HOST'S OWN robots AND sitemap. public/robots.txt is a static file and cannot vary by Host;
+    // served here it would advertise the APEX sitemap from the reseller domain, pointing crawlers at
+    // URLs that 404 here. The apex file is left completely untouched — these are rewrites, not a
+    // rewiring of a live SEO surface.
+    if (pathname === '/robots.txt') return NextResponse.rewrite(new URL('/rep-site/robots.txt', req.url));
+    if (pathname === '/sitemap.xml') return NextResponse.rewrite(new URL('/rep-site/sitemap.xml', req.url));
+    if (isRepSite(pathname) || isRepPortal(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
     return notFound(); // the tenant app AND the Engine Room both 404 on reps.
   }
 
-  // Apex / any other host: neither the Engine Room nor the rep portal is here.
-  if (isEngineRoom(pathname) || isRepPortal(pathname)) return notFound();
+  /**
+   * /reseller MOVED TO ITS OWN HOST (2026-09-12) — and the redirect lives HERE, not in
+   * next.config.js's redirects(), because it is a decision about a host and this is the file that
+   * routes on host.
+   *
+   * Two earlier attempts, both wrong, both caught by rep-site-gate rather than by reading:
+   *   • `redirects()` with `has: [{ type: 'host', value: 'greasedesk.com' }]` — the host condition
+   *     compares the Host header VERBATIM, so it never matches when a port is present. It worked in
+   *     production and was silently dead on localhost: a rule no gate could prove.
+   *   • `redirects()` unconditional, on the belief that middleware runs first and would 404 the path
+   *     on the other hosts. It does not — redirects run BEFORE middleware — so /reseller redirected
+   *     on reps. and er. too, breaking "er. 404s everything".
+   *
+   * 308 rather than 302: the page was indexed and a temporary redirect passes no ranking to its new
+   * home. 308 is the method-preserving permanent status and is what Next emits for `permanent: true`.
+   */
+  if (pathname === '/reseller') return NextResponse.redirect(new URL('https://reps.greasedesk.com/'), 308);
+
+  // Apex / any other host: neither the Engine Room, the rep portal, nor the reseller site is here.
+  // The reseller site is closed on the apex for the same reason the portal is — ONE door per surface.
+  // Its former apex page, /reseller, is a 308 to this host — see the apex branch below.
+  if (isEngineRoom(pathname) || isRepPortal(pathname) || isRepSite(pathname)) return notFound();
   return NextResponse.next(); // tenant app unchanged
 }
 

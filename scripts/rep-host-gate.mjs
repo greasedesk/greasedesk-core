@@ -85,21 +85,34 @@ try {
     `${repOnRep.status} — the app's own 404 for a signed-out rep is the RIGHT answer here; the middleware's is not`);
   check('  …and the api namespace does too', reached(await ask(REP_HOST, '/api/rep/whoami')),
     'nothing is mounted there yet — this asserts the door, not a route');
-  // THE ROOT, PROVED AGAINST /rep RATHER THAN AGAINST A PHRASE. "Not the marketing site" was the
-  // first version of this clause and it passed before the rewrite existed, because the tenant
-  // homepage is not the marketing site either. A rewrite means the two paths answer IDENTICALLY.
+  /**
+   * ── THE ROOT'S CONTRACT CHANGED ON PURPOSE (2026-09-12) ──────────────────────────────────────
+   * This clause used to read "the root answers exactly as /rep does", because the root rewrote to
+   * /rep and a rewrite means the two paths answer IDENTICALLY. That is no longer true and MUST NOT
+   * BE: the root is now the public reseller site, and /rep is the portal behind a session.
+   *
+   * Re-aimed rather than deleted. The part worth keeping is the part that was hard-won — the bare
+   * domain is what a reseller types, it rewrote to /rep unconditionally, and /rep refused anyone
+   * without a session, so the front door 404'd for exactly the person it exists for. That clause
+   * stays, with a different landing page. The identity-with-/rep clause is replaced by its successor
+   * contract: the root is NOT the portal, and the portal is still reachable at its own path.
+   *
+   * The public site's own clauses — which page, indexable, canonical, the banner, a signed-in
+   * reseller being sent to the portal — live in rep-site-gate. This gate stays about the HOST.
+   */
   const root = await ask(REP_HOST, '/');
-  check('the root answers exactly as /rep does', reached(root) && root.status === repOnRep.status && root.body === repOnRep.body,
-    `/ → ${root.status}, /rep → ${repOnRep.status} — rewritten, the way er. rewrites to /superadmin`);
-  // ── THE BARE DOMAIN IS WHAT A REP WILL TYPE ──────────────────────────────────────────────────
-  // It rewrote to /rep unconditionally, and /rep refused anyone without a session — so the front
-  // door 404'd for exactly the person it exists for. The session decides WHICH page the root
-  // serves, never WHETHER it serves one.
+  check('the root is served, and is NOT the portal any more', reached(root) && root.status === 200 && root.body !== repOnRep.body,
+    `/ → ${root.status}, /rep → ${repOnRep.status} — the rewrite now lands on /rep-site (rep-site-gate proves which page)`);
+  check('  …while the portal is still reachable at its own path', reached(repOnRep),
+    'moving the front door must not move the portal');
+  // ── THE BARE DOMAIN IS WHAT A RESELLER WILL TYPE ─────────────────────────────────────────────
+  // Kept verbatim from the 2026-09-09 finding: the session decides WHICH page the root serves, never
+  // WHETHER it serves one. What it lands on changed; that it lands on something has not.
   const landed = await askFollow(REP_HOST, '/');
   check('the bare root does NOT 404 a visitor with no session', landed.status === 200,
-    `${landed.status} — a rep typing reps.greasedesk.com is the commonest way in, not an edge case`);
-  check('  …and lands them on the sign-in page', /data-testid="rep-request"/.test(landed.body),
-    'the link-request form, positively identified — an absence check would pass on a blank page');
+    `${landed.status} — a reseller typing reps.greasedesk.com is the commonest way in, not an edge case`);
+  check('  …and lands them on a real page', /data-testid="interest-submit"/.test(landed.body),
+    'the public site, positively identified — an absence check would pass on a blank page');
 
   check('an operator or rep can still sign in there', (await ask(REP_HOST, '/api/auth/csrf')).status === 200,
     'the auth endpoints are shared by all three hosts, or nobody reaches any of them');

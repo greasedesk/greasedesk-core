@@ -4952,3 +4952,48 @@ model ProspectSendingLease {
 
   prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
 }
+
+/// A "BECOME A RESELLER" EXPRESSION OF INTEREST, from the public reseller site at
+/// reps.greasedesk.com. NOT a signup: no account, no KYC, no Rep row — those are a later build, and
+/// nothing here grants anything.
+///
+/// WHY IT IS STORED AT ALL (owner, 2026-09-12). The form emailed CONTACT_FORM_TO and kept nothing,
+/// so a Resend failure lost an enquiry with no record anywhere, and "how many people asked" could
+/// not be answered from the database at all. The email still goes; this is the record, and the two
+/// are deliberately independent — neither failure may take the other down with it.
+///
+/// RETENTION — the same discipline as Prospect, and deliberately the same words. The person's data
+/// is stripped after lib/prospects::RETENTION_MONTHS (24) measured from the enquiry, and
+/// personal_stripped_at is what makes an absent email unambiguous: never given, or removed. The
+/// ENQUIRY row itself is kept, exactly as a prospect's garage record is kept.
+model ResellerEnquiry {
+  id         String   @id @default(uuid())
+  created_at DateTime @default(now())
+
+  name String
+  /// PERSONAL DATA. Required at the form, so a NULL here could only arrive by stripping — which
+  /// clears it, and stamps personal_stripped_at to say so. An enquiry with no route back is not one.
+  email String?
+
+  /// Optional fields on the form, so NULL means the person did not fill this in — never that it was
+  /// removed. Stripping touches `email` and `message` only, and stamps personal_stripped_at.
+  /// @nulls: company, area, phone
+  company String?
+  area    String?
+  phone   String?
+
+  /// Free text. NULL = nothing was written, OR it was stripped — personal_stripped_at says which.
+  message String?
+
+  /// Did the notification email actually reach the destination? FALSE means the enquiry is here and
+  /// nobody was told, which is something to look at rather than something to lose.
+  email_delivered Boolean
+
+  /// NULL = the person's data is still held. Set when it is stripped, never unset.
+  personal_stripped_at     DateTime?
+  /// lib/prospects::STRIP_REASONS. NULL exactly when personal_stripped_at is — the pair is held by
+  /// ResellerEnquiry_strip_pair_chk, so neither can be set without the other.
+  personal_stripped_reason String?
+
+  @@index([created_at])
+}

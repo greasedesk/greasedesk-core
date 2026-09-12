@@ -17,7 +17,10 @@
 import type { GetServerSideProps } from 'next';
 import { absoluteUrl } from '@/lib/company-info';
 
-const PUBLIC_PATHS = ['/', '/pricing', '/contact', '/reseller', '/register'];
+// /reseller is GONE from this list as of 2026-09-12: it is a 301 to reps.greasedesk.com, which has
+// its own sitemap (pages/rep-site/sitemap.xml.ts). A sitemap that advertises a redirect invites a
+// crawler to keep asking for the old URL, and this host no longer has a page to offer it.
+const PUBLIC_PATHS = ['/', '/pricing', '/contact', '/register'];
 
 const entry = (loc: string, priority: string, changefreq: string, lastmod?: string | null) =>
   `  <url><loc>${loc}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}<changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;

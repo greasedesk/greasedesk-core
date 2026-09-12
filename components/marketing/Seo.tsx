@@ -14,6 +14,20 @@ type Props = {
   description: string;   // meta description + OG description
   path: string;          // site-relative path for canonical + OG url, e.g. '/pricing'
   softwareApp?: boolean;  // also emit a SoftwareApplication offer (home + pricing)
+  /**
+   * WHICH HOST THIS PAGE BELONGS TO. Defaults to the apex, so every existing page is unchanged.
+   * The reseller site passes REP_SITE_URL: it is a second public origin, and a page there that
+   * canonicalises to greasedesk.com tells a crawler it is a duplicate of a URL that 404s on its own
+   * host — the worst available answer. Only the canonical/OG URL moves; the Organization facts are
+   * the same company either way.
+   */
+  origin?: string;
+  /**
+   * ABSOLUTE OG image URL, when the default apex logo is not the right one. The reseller site passes
+   * its own, on its own host: a crawler fetching an og:image from a different origin than the page is
+   * fine, but the asset has to be one THIS host serves, and only /rep-site/* is served there.
+   */
+  ogImage?: string;
 };
 
 const organizationLd = () => ({
@@ -110,9 +124,9 @@ const softwareAppLd = () => ({
   // fabrication and a structured-data violation, and no amount of SEO benefit buys that back.
 });
 
-export default function Seo({ title, description, path, softwareApp = false }: Props) {
-  const url = absoluteUrl(path);
-  const ogImage = absoluteUrl(COMPANY.logoPath);
+export default function Seo({ title, description, path, softwareApp = false, origin, ogImage: ogImageOverride }: Props) {
+  const url = origin ? `${origin}${path.startsWith('/') ? path : `/${path}`}` : absoluteUrl(path);
+  const ogImage = ogImageOverride ?? absoluteUrl(COMPANY.logoPath);
   return (
     <Head>
       <title>{title}</title>

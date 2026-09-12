@@ -83,7 +83,17 @@ function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
   const isAppRoute = underPath(router.pathname, '/admin') || underPath(router.pathname, '/m') || underPath(router.pathname, '/superadmin')
     // A garage's unsubscribe page speaks for the GARAGE and loads nothing optional: no cookie prompt
     // in front of someone asking to be left alone.
-    || underPath(router.pathname, '/unsubscribe');
+    || underPath(router.pathname, '/unsubscribe')
+    // THE REP PORTAL IS THE /admin CASE (owner, 2026-09-12): a signed-in reseller running strictly
+    // necessary session cookies, not a visitor being offered anything optional. It was getting the
+    // banner — /rep was simply never in this list — including on its sign-in page.
+    //
+    // '/rep-site' is DELIBERATELY NOT HERE. The public reseller site is a public marketing site on
+    // its own host and keeps the banner; underPath is what makes that distinction safe, because
+    // startsWith('/rep') would have taken the public pages with it. Note the consent cookie is
+    // host-only, so a choice made on the apex does not carry here — one person, two banners, which is
+    // the price of two hosts.
+    || underPath(router.pathname, '/rep');
   const initialConsent = ((pageProps as any).__consent ?? null) as ConsentRecord | null;
   const region = ((pageProps as any).__consentRegion ?? 'GB') as string;
   const nav = ((pageProps as any).__nav ?? null) as ResolvedNav | null;

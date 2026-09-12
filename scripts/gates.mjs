@@ -159,7 +159,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
-    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate', 'migration-class-gate',
+    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate', 'migration-class-gate', 'rep-site-gate',
     'schema-drift-gate',
     'rep-host-gate',
     'engine-room-palette-gate',
@@ -194,6 +194,7 @@ const TIERS = {
    */
   manual: ['demo-generation-gate'],
   slow: [
+    'rep-site-mobile-gate',
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',
     'observations-gate', 'oil-level-gate', 'quote-invoice-sms-gate', 'service-schedule-gate',
