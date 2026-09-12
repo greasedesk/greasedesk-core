@@ -6,6 +6,13 @@ const { i18n } = require('./next-i18next.config');
 const nextConfig = {
   reactStrictMode: true,
   /**
+   * THE COMMIT THIS BUILD CAME FROM, for /api/version — the endpoint the migration wrapper asks
+   * before applying anything that constrains an existing write (2026-09-11). Inlined at build as a
+   * fallback: the route prefers Vercel's runtime variable, and this answers if that is ever absent.
+   * Empty off Vercel, where there is no commit to name — the route reports null rather than inventing one.
+   */
+  env: { BUILD_COMMIT: process.env.VERCEL_GIT_COMMIT_SHA || '' },
+  /**
    * ── DEV ONLY, AND IT EXISTS BECAUSE OF FOUR FALSE RED GATES ──────────────────────────────────
    * `next dev` compiles pages on demand and DISPOSES them again once inactive — 15s by default,
    * holding 2 (Next 14). The dispose/recompile window serves 404s, and a long gate run walks
