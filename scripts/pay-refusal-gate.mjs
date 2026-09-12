@@ -1,6 +1,7 @@
 /**
  * File: scripts/pay-refusal-gate.mjs
- * Gate for the three fixes to the card-payment refusal path.
+ * @gate-requires: server
+ * Gate for the key-dependent half of the card-payment refusal path.
  *
  * The defect this exists for: TMBS invoice 100003205 showed a customer a Pay button AND
  * "Card payment isn't available for this invoice" at the same time, and the log could not say why.
@@ -17,6 +18,13 @@
  * the Stripe call is genuinely attempted, and Stripe answers StripeAuthenticationError →
  * key_rejected, retryable:false. Nothing is charged, no PaymentIntent is created, and the refusal
  * is Stripe's own rather than a simulation of one.
+ *
+ * ── THE PREMISE IS NOW CHECKED, NOT JUST STATED ─────────────────────────────────────────────────
+ * That invalid key is a REQUIREMENT, and for a while it was only a sentence in this comment. When the
+ * key left the environment entirely, payPreconditions returned `not_configured` and four clauses went
+ * red naming the symptom rather than the requirement. They have moved to scripts/pay-predicate-gate,
+ * which needs no key and runs every time; what is left here genuinely cannot run without one, so it
+ * DECLINES and says what it needs. UNRUN is the honest answer to a missing environment; red is not.
  *
  * ── FIXTURES ────────────────────────────────────────────────────────────────────────────────────
  * ZZ only. One ProviderConnection row, created here and deleted in the finally; it refuses to start
@@ -49,28 +57,24 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 // defect rather than as our own litter. Released in the finally, scoped to this run.
 const startedAt = new Date();
 
+// THE PREMISE, CHECKED. Not merely "a key": a key Stripe will REJECT. A valid one here would try to
+// move real money on a real account, which is why the deliberately invalid one is the design and not
+// an accident of someone's .env. Absent → UNRUN with the requirement named, never a red about code.
+if (!process.env.STRIPE_SECRET_KEY) {
+  declineToRun('this gate needs a PRESENT but INVALID STRIPE_SECRET_KEY in the SERVED build — it drives '
+    + 'a genuine StripeAuthenticationError through the customer’s page. None is set, so the panel never '
+    + 'renders and every clause below would assert a state this environment cannot reach. The key-free '
+    + 'assertions live in scripts/pay-predicate-gate.mjs and ran; this leg is unproven until a key exists.');
+}
+
 let connId = null;
 let linkId = null;
 let browser = null;
 try {
-  // ── 1. WHOSE FAULT IS IT? ──────────────────────────────────────────────────────────────────
-  console.log('\n— our exceptions vs Stripe’s —');
-  check('a plain Error is not a Stripe error', isStripeError(new Error('boom')) === false);
-  const prismaish = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
-  check('nor is a Prisma error', isStripeError(prismaish) === false,
-    'this is the shape that was being logged as paymentIntents.create');
-  check('a Stripe SDK error is', isStripeError({ type: 'StripeInvalidRequestError' }) === true);
-  check('and the test is on the TYPE, not the presence of a code', isStripeError({ code: 'card_declined' }) === false,
-    'a `code` alone belongs to plenty of things that are not Stripe');
-
-  const asStripe = classifyStripeError(prismaish);
-  check('classifying our own error yields UNKNOWN, non-retryable', asStripe.code === 'unknown' && asStripe.retryable === false,
-    `${asStripe.code}/retryable=${asStripe.retryable} — the old path sent this to the customer as Stripe’s answer`);
-  check('and it invents no Stripe message', asStripe.stripeMessage === null && asStripe.requestId === null,
-    'honest-null: Stripe never answered, so there is nothing of Stripe’s to quote');
-
-  // ── 2. THE FEE IS INSIDE THE SHARED PREDICATE ──────────────────────────────────────────────
-  console.log('\n— what the predicate covers —');
+  // ── 1. THE FIXTURE, AND THE ONE THING THE BROWSER LEG NEEDS TO BE TRUE ─────────────────────
+  // Everything about the CLASSIFIER and the PREDICATE moved to pay-predicate-gate: none of it needs
+  // a key, and keeping it here meant it only ran when the environment happened to be configured.
+  console.log('\n— the fixture, and something to pay —');
   const stale = await prisma.providerConnection.count({ where: { group_id: ZZ } });
   if (stale) declineToRun(`REFUSING: ZZ already has ${stale} ProviderConnection row(s)`);
   const conn = await prisma.providerConnection.create({
@@ -89,20 +93,9 @@ try {
   const balance = balanceOwedPennies(inv, total);
   check('the fixture invoice has something to pay', refusePayment(doc, balance) === null && balance > 0, `£${(balance / 100).toFixed(2)}`);
 
-  const gbp = await payPreconditions({ groupId: ZZ, doc, balancePennies: balance });
-  check('GBP resolves a fee through the predicate', gbp.ok === true && typeof gbp.feePennies === 'number',
-    gbp.ok ? `${gbp.feePennies}p, rate ${gbp.rateId?.slice(0, 8)}` : `refused ${gbp.refusal?.code}`);
-
-  // THE CASE THAT USED TO ESCAPE. No rate exists for GB/EUR, so the fee resolution throws — which
-  // the endpoint met as an exception and the page could not see at all.
-  const eur = await payPreconditions({ groupId: ZZ, doc: { ...doc, currency: 'EUR' }, balancePennies: balance });
-  check('a currency with NO rate is a REFUSAL, not an exception', eur.ok === false && eur.refusal.code === 'no_rate',
-    eur.ok ? 'resolved — the no-rate branch did not fire' : eur.refusal.code);
-  const eurOffer = await canOfferCardPayment({ groupId: ZZ, doc: { ...doc, currency: 'EUR' }, balancePennies: balance });
-  check('and the PAGE sees it — no button would be offered', eurOffer === false,
-    'this is the divergence: the fee used to be outside the predicate entirely');
-  check('the check is discriminating', (await canOfferCardPayment({ groupId: ZZ, doc, balancePennies: balance })) === true
-    && eurOffer === false, 'GBP true, EUR false — from the same predicate');
+  // Everything the PREDICATE does lives in pay-predicate-gate now — the fee resolver, the no-rate
+  // throw, the source of the catch, and the unconfigured refusal. None of it needs a key, and while
+  // it lived here it only ran when the environment happened to have one.
 
   // ── 3. THE SERVED PAGE ─────────────────────────────────────────────────────────────────────
   console.log('\n— a settled refusal on the customer’s page —');
@@ -152,17 +145,6 @@ try {
   check('it is Stripe’s own classification, not a guess', resp.body.code === 'key_rejected',
     'an invalid key is StripeAuthenticationError → key_rejected, and the classifier says so');
 
-  // A DOCUMENT refusal is settled too, and must say so — this is the path 100003205 would take
-  // once its invoice is finally settled.
-  const paid = await prisma.invoice.findFirst({ where: { group_id: ZZ, status: 'paid' }, select: { id: true } });
-  if (paid) {
-    const paidDoc = await buildInvoiceDoc(paid.id, ZZ);
-    const r = refusePayment(paidDoc, 0);
-    check('a settled invoice refuses on the DOCUMENT, before any configuration', r?.code === 'nothing_owing',
-      'order matters: never "card payments aren’t switched on" about an invoice that is already paid');
-  } else {
-    check('a paid ZZ invoice exists to prove document-order', false, 'none — UNPROVEN');
-  }
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

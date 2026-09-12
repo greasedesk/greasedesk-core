@@ -52,6 +52,17 @@ const startedAt = new Date();
 
 let connId = null;
 let linkId = null;
+// THE SAME PREMISE AS pay-refusal-gate, CHECKED FOR THE SAME REASON. This gate measures the consent
+// bar against the PAY BUTTON, and that button only renders when the payment predicate says yes —
+// which needs a Stripe key in the SERVED build. Without one the page shows a refusal instead and this
+// gate dies as a bare `waitForSelector` timeout 20s later, which reads as a consent-bar defect. It is
+// not one. Declines and names the requirement instead; see scripts/pay-refusal-gate.mjs.
+if (!process.env.STRIPE_SECRET_KEY) {
+  declineToRun('this gate needs a PRESENT but INVALID STRIPE_SECRET_KEY in the SERVED build: it measures the '
+    + 'consent bar against the Pay button, and with no key the button is never offered. None is set, so the '
+    + 'bar-reach assertions have nothing to measure against. scripts/consent-reach-gate is unproven until a key exists.');
+}
+
 let browser = null;
 try {
   const stale = await prisma.providerConnection.count({ where: { group_id: ZZ } });

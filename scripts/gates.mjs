@@ -152,7 +152,10 @@ const TIERS = {
     'account-terms-gate', 'application-fee-gate', 'card-fulfilment-gate', 'commission-fixed-clock-gate',
     'commission-refusal-gate', 'counter-payment-gate', 'credit-note-gate', 'invoice-pay-link-gate',
     'rep-visit-gate', 'rep-answers-gate', 'rep-pay-run-gate', 'rep-auth-gate', 'rep-invoice-gate',
-    'never-subscribes-gate', 'payment-intent-gate', 'payment-invariant-gate', 'pay-refusal-gate',
+    'never-subscribes-gate', 'payment-intent-gate', 'payment-invariant-gate',
+    // pay-predicate-gate is the key-free half of pay-refusal-gate: it runs everywhere, and
+    // pay-refusal-gate declines where no invalid Stripe key is served.
+    'pay-predicate-gate', 'pay-refusal-gate',
     'pay-surfaces-gate', 'payments-section-gate', 'refund-button-gate', 'refund-reconcile-gate',
     'refund-surfaces-gate', 'refund-tab-gate', 'refunded-state-gate', 'revenue-period-gate',
     'rolling-12-gate', 'wip-derivation-gate', 'poisoned-transaction-gate', 'trading-name-gate',
