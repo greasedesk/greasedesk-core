@@ -201,7 +201,13 @@ try {
     'the asymmetry the original clause read past');
   const sitemap = await ask(REP_HOST, '/sitemap.xml');
   const locs = [...sitemap.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
-  check('this host serves its OWN sitemap', sitemap.status === 200 && locs.length === 2, `${locs.length} url(s): ${locs.join(' ')}`);
+  // THE SET, NOT THE COUNT. `locs.length === 2` went red the moment /terms was withdrawn from the
+  // sitemap — a legitimate editorial decision failing a clause about plumbing. Naming the paths says
+  // what the sitemap is FOR, and still reds if one silently disappears.
+  const SITEMAP_PATHS = ['/'];   // + '/terms' when its prose is no longer placeholder
+  check('this host serves its OWN sitemap, listing exactly what it means to', sitemap.status === 200
+    && JSON.stringify(locs.map((l) => l.slice(REP_SITE_URL.length) || '/')) === JSON.stringify(SITEMAP_PATHS),
+    `${locs.length} url(s): ${locs.join(' ') || '(none)'}`);
   check('  …every url on its own origin', locs.every((l) => l.startsWith(REP_SITE_URL)), locs.join(' '));
   // THE PATHS, PARSED AND ANCHORED. A regex over the whole URL string matched '/rep-site' too, so this
   // clause could only ever have passed — the sitemap's two entries are the root and a /rep-site path.
@@ -227,8 +233,16 @@ try {
   const chromeHrefs = [...src('components/rep-site/RepSiteChrome.tsx').matchAll(/href="(\/[^"#]*)"/g)].map((m) => m[1]);
   const chromeResolved = [];
   for (const href of [...new Set(chromeHrefs)]) chromeResolved.push(`${href}:${(await ask(REP_HOST, href)).status}`);
-  check('every internal link in the chrome answers on this host', chromeHrefs.length >= 3 && chromeResolved.every((r) => /:(200|30[78])$/.test(r)),
+  check('every internal link in the chrome answers on this host', chromeHrefs.length >= 2 && chromeResolved.every((r) => /:(200|30[78])$/.test(r)),
     chromeResolved.join(' ') || 'no hrefs found — the scan must find the links before it can clear them');
+  /**
+   * A HOLD, NOT A RULE (owner, 2026-09-12). The terms page is live and this gate still proves it
+   * resolves — but the footer must not send a reseller to placeholder prose on the page where we are
+   * asking for their trust, and the agreement is with a solicitor before any of it goes public.
+   * DELETE THIS CLAUSE in the commit that publishes the reviewed text and restores the link.
+   */
+  check('  …and the chrome does NOT link to terms while its prose is placeholder', !chromeHrefs.some((h) => h === '/terms'),
+    chromeHrefs.join(' '));
   // NOT VACUOUS: the probe must be able to see a 404, or "everything resolves" is a blind pass.
   check('  …and that probe can still see a 404', (await ask(REP_HOST, '/terms-that-does-not-exist')).status === 404);
 

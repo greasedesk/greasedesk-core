@@ -49,7 +49,15 @@ export default function RepSiteChrome({ children }: { children: React.ReactNode 
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 text-sm text-muted space-y-3">
           <nav className="flex flex-wrap gap-x-6 gap-y-2" aria-label="Footer">
             <Link href="/" className="hover:text-ink">Become a reseller</Link>
-            <Link href="/terms" className="hover:text-ink">Reseller terms</Link>
+            {/*
+              RESELLER TERMS: LINK DELIBERATELY ABSENT until the solicitor's text lands (owner,
+              2026-09-12). The page and its route stay — /terms is live and returns 200 — but the
+              prose is placeholder under a "not final" note, and this site is about to be promoted.
+              A reseller who clicks through to unfinished terms learns something about how ready
+              this is, on the page where we are asking them to trust us with their round.
+              PUT IT BACK when the reviewed agreement is published, and delete rep-site-gate's
+              "the footer does not link to terms" clause in the same commit.
+            */}
             <Link href="/rep/login" className="hover:text-ink">Reseller sign in</Link>
           </nav>
           <p>

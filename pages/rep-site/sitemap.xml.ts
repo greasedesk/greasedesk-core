@@ -6,15 +6,18 @@
  * absoluteUrl(), which is hardcoded to the apex origin, so running it on this host would list
  * greasedesk.com URLs under a reseller domain. Two hosts, two sitemaps, one origin constant each.
  *
- * The list is SHORT and hand-written because the site is short: the root and the terms page. The
- * portal is absent deliberately — it is signed-in only, noindex, and Disallowed in robots.
+ * The list is SHORT and hand-written because the site is short. The portal is absent deliberately —
+ * signed-in only, noindex, and Disallowed in robots — and so is /terms, while its prose is
+ * placeholder.
  */
 import type { GetServerSideProps } from 'next';
 import { REP_SITE_URL } from '@/lib/company-info';
 
 const PATHS: { path: string; priority: string; changefreq: string }[] = [
   { path: '/', priority: '1.0', changefreq: 'weekly' },
-  { path: '/terms', priority: '0.3', changefreq: 'yearly' },
+  // /terms is DELIBERATELY ABSENT while its prose is placeholder — the route is live and the gate
+  // still proves it resolves, but there is no point asking a crawler to index an unfinished page.
+  // Add it back with the solicitor's text.
 ];
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {
