@@ -52,6 +52,10 @@ const navItems: NavItemDef[] = [
   // adminOnly for the same reason HR is: these figures are the cost base, and a mechanic seeing the
   // rent is a different decision from a mechanic seeing a price.
   { key: 'costs', href: '/admin/costs', icon: '🧮', ready: true, adminOnly: true },
+  // Buying sits beside Costs for the same reason Costs sits beside Products: this is money going
+  // out before anything comes in. NOT adminOnly — deciding what to pay for a car is the job of
+  // whoever is at the auction, and the page contains no figure from the garage's own accounts.
+  { key: 'purchase', href: '/admin/purchase', icon: '🚗', ready: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
   { key: 'hr', href: '/admin/hr', icon: '🗂️', ready: true, adminOnly: true }, // wages live here — page + APIs re-check server-side

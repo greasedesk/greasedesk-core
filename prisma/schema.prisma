@@ -564,6 +564,7 @@ model Group {
   marketing_contacts MarketingContact[]
   schedule_readings  ServiceScheduleReading[]
   clockSessions   JobClockSession[]
+  purchaseModels  PurchaseModel[]
 }
 
 /**
@@ -5109,4 +5110,66 @@ model JobClockSession {
   @@index([job_card_id])
   @@index([group_id, user_id])
   @@index([corrects_id])
+}
+
+/// A MODELLED PURCHASE — what a garage thinks a car will make, before they own it.
+///
+/// ── FREEZE-AT-ISSUE DOES NOT APPLY HERE (owner, 2026-09-12) ─────────────────────────────────────
+/// An Invoice freezes its lines at mint and a JobClockSession's recorded time is never edited, both
+/// because they are RECORDS of something that happened. This is not a record. It is a question
+/// somebody is still asking, and it is MEANT to be changed — dragging it again is the point of the
+/// tool. So there is NO append-only trigger here, no version chain and no snapshot-on-save, and
+/// nobody should add one by analogy with the invoice or the clock session: the analogy fails because
+/// the subject is different.
+///
+/// ── WHAT IT CARRIES FOR A LATER STOCK SLICE ─────────────────────────────────────────────────────
+/// Stock does not exist yet and this does NOT become a stock record here. Three affordances are
+/// carried now because they are cheap now and awkward later, plus a nullable vehicle_id with NO
+/// foreign key — so the only thing a stock slice has to add is the constraint itself.
+model PurchaseModel {
+  id                  String   @id @default(uuid())
+  group_id            String
+  created_by_user_id  String
+  /// What the car is, in the owner's words — "57-plate Focus, red". Free text and required: a list
+  /// of untitled models is a list nobody returns to.
+  label               String
+
+  /// THE CAR, AS TEXT. A registration or VIN typed at an auction, where the garage does not own the
+  /// car and no Vehicle row exists or should. NULL = they did not say which car yet, which is the
+  /// ordinary case when someone is modelling a shape rather than a specific lot.
+  vehicle_ident       String?
+  /// THE FUTURE LINK, deliberately with NO foreign key. When stock exists this points at a Vehicle,
+  /// and adding the constraint is then the ONLY migration that slice needs — a constraining one, by
+  /// itself, rather than tangled into a feature. NULL = not linked, which is every row today.
+  vehicle_id          String?
+
+  /// lib/purchase-model MODEL_STATUSES. 'modelled' today; the field exists to have room.
+  ///
+  /// NO CHECK CONSTRAINT ON THIS COLUMN, and that is a considered exception to the house rule that a
+  /// vocabulary lives in the database. A CHECK here would make adding 'bought' or 'sold' an
+  /// ALTER TABLE DROP/ADD CONSTRAINT — a CONSTRAINING migration and a two-push cycle — which is
+  /// precisely the room the field was added to have. The vocabulary is in the leaf module and
+  /// purchase-model-gate asserts the writer only ever writes from it.
+  status              String   @default("modelled")
+
+  /// THE WHOLE INPUT SET, kept as given rather than only the answer it produced. A model reopened in
+  /// six months has to show what was ASSUMED, not just what was concluded — and a later stock record
+  /// wanting "what did we think at purchase" needs the assumptions, not the total.
+  inputs              Json
+
+  /// Denormalised from `inputs` so the list renders without parsing every row's JSON. They are a
+  /// COPY: `inputs` is the source, and lib/purchase-model-store writes both from one computation.
+  purchase_pence      Int
+  sale_pence          Int
+  vat_status          String
+  /// The profit this model produced WHEN IT WAS SAVED. Recomputed on open — a figure on a list is a
+  /// signpost, never the answer.
+  profit_pence        Int
+
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([group_id, updated_at])
 }
