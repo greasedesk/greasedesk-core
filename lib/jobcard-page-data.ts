@@ -15,7 +15,7 @@ import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferInta
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
-import { jobTotals, sessionState, sessionMinutes } from '@/lib/job-clock';
+import { jobTotals, sessionState, sessionMinutes, type ClockSessionRow } from '@/lib/job-clock';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
@@ -117,7 +117,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // IDS, NOT A RELATION. user_id and corrected_by_user_id carry no foreign key, and adding two
       // would be a constraining migration and a second two-push cycle for a display name. The names
       // are resolved in one batched lookup below instead.
-    }) as Promise<any[]>,
+    }) as Promise<ClockSessionRow[]>,
     prisma.auditLog.findMany({
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
@@ -508,29 +508,29 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // and a reader shown one number assumes the other — the ambiguity is the defect.
   const clockNames = new Map<string, string>();
   {
-    const ids = [...new Set(clockRows.flatMap((r: any) => [r.user_id, r.corrected_by_user_id]).filter(Boolean))] as string[];
+    const ids = [...new Set(clockRows.flatMap((r) => [r.user_id, r.corrected_by_user_id]).filter((x): x is string => !!x))];
     if (ids.length) {
       for (const u of await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } })) {
         clockNames.set(u.id, u.name || u.email || 'Someone');
       }
     }
   }
-  const clockTotals = jobTotals(clockRows as any);
+  const clockTotals = jobTotals(clockRows);
   const clock = {
     labourMinutes: clockTotals.labourMinutes,
     elapsedMinutes: clockTotals.elapsedMinutes,
     running: clockTotals.running,
     disputed: clockTotals.disputed,
-    sessions: clockRows.map((r: any) => ({
+    sessions: clockRows.map((r) => ({
       id: r.id,
-      who: clockNames.get(r.user_id) ?? 'Someone',
-      startedAt: (r.started_at as Date).toISOString(),
-      endedAt: r.ended_at ? (r.ended_at as Date).toISOString() : null,
+      who: (r.user_id ? clockNames.get(r.user_id) : null) ?? 'Someone',
+      startedAt: r.started_at.toISOString(),
+      endedAt: r.ended_at ? r.ended_at.toISOString() : null,
       state: sessionState(r),
       minutes: sessionMinutes(r),
-      cause: r.ended_cause as string | null,
-      correctsId: r.corrects_id as string | null,
-      correctionReason: r.correction_reason as string | null,
+      cause: r.ended_cause,
+      correctsId: r.corrects_id,
+      correctionReason: r.correction_reason,
       correctedBy: r.corrected_by_user_id ? (clockNames.get(r.corrected_by_user_id) ?? 'Someone') : null,
     })),
   };

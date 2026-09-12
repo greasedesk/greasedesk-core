@@ -87,14 +87,14 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
       site: { select: { phone: true } },
       group: { select: { group_name: true, trading_name: true, phone: true } },
     },
-  })) as any;
+  }));
   if (!card) return null;
 
   const media = (await prisma.jobCardPhoto.findMany({
     where: { job_card_id: jobCardId, stage: 'intake' },
     orderBy: { uploaded_at: 'asc' },
     select: { id: true, media_type: true, slot: true, label: true, duration_seconds: true, r2_key: true, poster_r2_key: true, rotation: true },
-  })) as any[];
+  }));
 
   const shape = async (r: any): Promise<ReportMedia> => ({
     id: r.id,
@@ -127,7 +127,7 @@ export async function buildIntakeReport(jobCardId: string, groupId: string): Pro
 
   const bCond = await latestBattery(prisma, groupId, card.vehicle_id);
   const battery: ReportBattery | null = bCond
-    ? { ...bCond, photos: await Promise.all(media.filter((m) => BATTERY_SLOTS.includes(m.slot)).map(shape)) }
+    ? { ...bCond, photos: await Promise.all(media.filter((m) => BATTERY_SLOTS.some((b) => b === m.slot)).map(shape)) }
     : null;
 
   const items = await openDueItemsForVehicle(prisma, groupId, card.vehicle_id);

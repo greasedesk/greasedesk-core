@@ -16,7 +16,7 @@
  * when the caller discards the type on the next character.
  *
  * ── THE RATCHET ─────────────────────────────────────────────────────────────────────────────────
- * There are 134 such casts across 67 files. That is not a sweep: removing one surfaces whatever
+ * There are 133 such casts across 67 files. That is not a sweep: removing one surfaces whatever
  * that file was papering over, so it is 67 small investigations, not a find-and-replace — a week
  * nobody will schedule. So it is pinned instead. The count may fall freely; it may not rise. Drop
  * the ceiling whenever a file is touched for another reason.
@@ -57,11 +57,14 @@ const total = perFile.reduce((a, [, n]) => a + n, 0);
 
 // ── THE RATCHET ───────────────────────────────────────────────────────────────────────────────
 // Lower this in the same commit that removes casts. It must never be raised.
-// 134, not the 164 first quoted. That figure came from a regex with two alternate patterns and no
+// 133 as of 2026-09-12, lowered from 134 by the three the intake-report slice had added: two of them
+// were plain laziness, and the THIRD was load-bearing — removing it made tsc report that a nullable
+// photo `slot` was being passed to a narrow union's `includes`, which could never match. The ratchet
+// earned its keep there. Not 164, the figure first quoted: That figure came from a regex with two alternate patterns and no
 // comment stripping — an inconsistent definition measured once. 134 is `)) as any` over stripped
 // source, which is the shape that actually discards a Prisma row type. (The FILE count, 67, was
 // right both times.)
-const ANY_CAST_CEILING = 134;
+const ANY_CAST_CEILING = 133;
 
 console.log(`\n— \`as any\` casts: ${total} across ${perFile.length} files (ceiling ${ANY_CAST_CEILING}) —`);
 const over = total - ANY_CAST_CEILING;

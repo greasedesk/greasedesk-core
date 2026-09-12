@@ -58,6 +58,22 @@ export type ClockRow = {
   started_received_at: Date; ended_received_at: Date | null;
 };
 
+/**
+ * A WHOLE SESSION ROW as the readers select it. ClockRow above is the minimum the arithmetic needs;
+ * this is the shape a page actually fetches, and it exists because `as Promise<any[]>` on that query
+ * was untyping everything downstream of it — one cast on the fetch cost four more at the reads, and
+ * silenced the type-checker on exactly the columns this slice added. It extends ClockRow, so passing
+ * one of these to jobTotals / sessionState / sessionMinutes is checked rather than asserted.
+ */
+export type ClockSessionRow = ClockRow & {
+  id: string;
+  ended_cause: string | null;
+  corrects_id: string | null;
+  correction_reason: string | null;
+  user_id: string | null;
+  corrected_by_user_id: string | null;
+};
+
 export type SessionState = 'running' | 'closed' | 'disputed';
 
 /**
