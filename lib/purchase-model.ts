@@ -52,12 +52,12 @@ const VAT_FRACTION = 1 / 6;
  *
  *   VAT QUALIFYING — VAT on the FULL sale price: sale × 1/6.
  *
- * ── WHAT THIS DELIBERATELY DOES NOT MODEL ───────────────────────────────────────────────────────
- * Input-VAT RECOVERY on a qualifying purchase. A garage buying a qualifying car can usually reclaim
- * the VAT in the purchase price, which would net the two schemes much closer together. That is a
- * real effect and it is left out of v1 ON PURPOSE: netting it silently would change the number the
- * owner specified, and whether the typed purchase price is VAT-inclusive is a question the form does
- * not yet ask. Stated here rather than approximated — see the owner's note on the toggle.
+ * ── THIS FUNCTION ANSWERS ONLY THE OUTPUT SIDE ──────────────────────────────────────────────────
+ * Input-VAT RECOVERY is NOT here. It was absent from v1 altogether; it is now modelled, one level
+ * up, in vatPosition() — which is why the two read so differently on a qualifying car. Call this one
+ * only when you want the VAT CHARGED ON THE SALE; call vatPosition() for what reaches HMRC, what
+ * leaves the bank, and what the car ends up costing. Returning output VAT from a function named for
+ * what is "due" is the narrow reading, and naming it here is what stops the wrong one being used.
  */
 export function vatDuePence(purchasePence: number, salePence: number, status: VatStatus): number {
   if (status === 'qualifying') return Math.round(salePence * VAT_FRACTION);

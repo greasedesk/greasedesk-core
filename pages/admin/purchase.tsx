@@ -199,15 +199,32 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             This ranks <strong>this model’s inputs under these assumptions</strong> — each one swung across its own
             range with the others held where you have them. It is not a claim about your business.
           </p>
-          <ol className="mt-2 space-y-1" data-testid="sensitivity-list">
+          {/* ── THE NUMBER MUST SAY WHAT IT IS ────────────────────────────────────────────────────
+              These are SWINGS — how far profit moves when an input is dragged across its whole range
+              — and they sat right-aligned in the same column as nine slider VALUES, formatted
+              identically. The owner read £2,000 here against £800 on the Parts slider and called it a
+              mismatch; if the person who specified the feature misreads it, the header was never
+              going to be enough. So the column is titled, and every figure carries ± and the word.  */}
+          <div className="mt-3 flex items-baseline gap-2 text-[11px] uppercase tracking-wide text-muted border-b border-line pb-1"
+            data-testid="sensitivity-heading">
+            <span className="w-4" />
+            <span className="flex-1">Input</span>
+            <span>Moves profit by</span>
+          </div>
+          <ol className="mt-1 space-y-1" data-testid="sensitivity-list">
             {ranked.map((x, i) => (
               <li key={x.key} className="flex items-center gap-2 text-sm">
                 <span className="w-4 text-muted tabular-nums">{i + 1}</span>
                 <span className="flex-1 text-ink">{x.label}</span>
-                <span className="text-muted tabular-nums" data-testid={`swing-${x.key}`}>{money(x.swingPence)}</span>
+                <span className="text-muted tabular-nums whitespace-nowrap" data-testid={`swing-${x.key}`}>
+                  ±{money(x.swingPence)} <span className="text-[11px]">swing</span>
+                </span>
               </li>
             ))}
           </ol>
+          <p className="mt-2 text-xs text-muted" data-testid="sensitivity-not-cost">
+            These are not costs. A swing is the difference in profit between that slider at its lowest and its highest.
+          </p>
         </section>
 
         <section className="mt-8 border-t border-line pt-4">
@@ -268,7 +285,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}
           <p className="mt-2 text-xs text-muted" data-testid="out-uncounted">
             Workshop time and cost of money take {moneyExact(r.workshopCostPence + r.stockingCostPence)} out of this.
-            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong>.</>}
+            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong> — dragging it across its range moves profit by {moneyExact(biggest.swingPence)}.</>}
           </p>
         </div>
       </div>

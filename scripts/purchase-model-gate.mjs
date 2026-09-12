@@ -186,9 +186,60 @@ try {
   check('the RANKING carries the limit, in the words the owner set', /this model’s inputs under these assumptions/i.test(page)
     && /not a claim about your business/i.test(page),
     'a ranking arrives sorted, which is the shape of a finding — it reads as analysis in a way a slider does not');
+  /**
+   * ── AND THE NUMBER SAYS WHAT IT IS, NOT JUST THE HEADER ───────────────────────────────────────
+   * The swings sat right-aligned in the same column as nine slider VALUES, formatted identically —
+   * £2,000 of swing beside £800 of parts. The owner read his own feature as a mismatch. A sorted
+   * list under a heading is not enough: the FIGURE has to carry it, because a reader who takes in
+   * only the label and the number must still know it is not money spent.
+   */
+  check('the swing column is TITLED', /data-testid="sensitivity-heading"/.test(page) && /Moves profit by/.test(page));
+  check('  …every figure is prefixed ± and carries the word "swing"', /±\{money\(x\.swingPence\)\}/.test(page) && /swing<\/span>/.test(page),
+    'a bare right-aligned amount in a column of amounts reads as an amount');
+  check('  …and the page says outright they are not costs', /data-testid="sensitivity-not-cost"/.test(page)
+    && /These are not costs/.test(page) && /lowest and its highest/.test(page));
+  check('  …while the summary teaches it in words for the top one', /dragging it across its range moves profit by/.test(page),
+    'the one figure most likely to be read alone');
   check('  …and the limit is beside the ranking, not in a footer', page.indexOf('sensitivity-limit') < page.indexOf('sensitivity-list'));
   check('no figure from the garage\'s own accounts reaches this page', !/monthlyWageBill|costsInWindow|charged-labour|getAvailableHours/.test(page),
     'every number on it was typed or dragged by the person looking at it');
+
+  /**
+   * ── AND THE PAGE ACTUALLY RENDERS ─────────────────────────────────────────────────────────────
+   * Every clause above reads the page's SOURCE. On 2026-09-12 all of them passed while the file had
+   * an unbalanced </section> and could not compile — a scan of text cannot tell a working page from
+   * a broken one, and `tsc` was the only thing that knew. So the page is FETCHED, and its key parts
+   * are identified by data-testid rather than by rendered words (SSR HTML carries __NEXT_DATA__, so
+   * a text match there is a false positive waiting to happen).
+   */
+  console.log('\n— and the page renders, which no source scan can tell you —');
+  const jar2 = new Map();
+  const keep2 = (r) => { for (const c of r.headers.getSetCookie?.() ?? []) { const kv = c.split(';')[0]; const i = kv.indexOf('='); jar2.set(kv.slice(0, i), kv.slice(i + 1)); } };
+  const cookies2 = () => [...jar2].map(([k, v]) => `${k}=${v}`).join('; ');
+  const csrf2 = await fetch(`${gateOrigin()}/api/auth/csrf`); keep2(csrf2);
+  keep2(await fetch(`${gateOrigin()}/api/auth/callback/credentials`, {
+    method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', cookie: cookies2() },
+    body: new URLSearchParams({ email: 'owner@zzgategarage.test', password: 'GateGarage!2026', csrfToken: (await csrf2.json()).csrfToken, json: 'true' }),
+  }));
+  const pageRes = await fetch(`${gateOrigin()}/admin/purchase`, { headers: { cookie: cookies2() }, cache: 'no-store' });
+  const html = await pageRes.text();
+  check('the page answers 200 for a signed-in admin', pageRes.status === 200, `HTTP ${pageRes.status}`);
+  for (const t of ['sliders', 'sensitivity-list', 'sensitivity-heading', 'sensitivity-not-cost', 'answer', 'out-cash'])
+    check(`  …and renders [${t}]`, html.includes(`data-testid="${t}"`), t);
+  /**
+   * Read the swing cells the way a PERSON reads them, not as a substring of the page. React's SSR
+   * puts a <!-- --> separator between adjacent text nodes, so the served markup is `±<!-- -->£2,000`
+   * and a /±£/ test fails on a page that is perfectly correct — which is exactly what it did when I
+   * first wrote this clause. HTML has its own semantics; assert through something that honours them.
+   */
+  const cellText = (testid) => {
+    const m = new RegExp(`data-testid="${testid}"[^>]*>([\\s\\S]*?)</span></li>`).exec(html);
+    return m ? m[1].replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : null;
+  };
+  const swingIds = [...html.matchAll(/data-testid="(swing-[A-Za-z]+)"/g)].map((m) => m[1]);
+  check('every swing cell in the SERVED page reads "±<amount> swing"', swingIds.length >= 3
+    && swingIds.every((id) => /^±£[\d,]+(\.\d\d)? swing$/.test(cellText(id) ?? '')),
+    `${swingIds.length} cells; first reads ${JSON.stringify(cellText(swingIds[0]))} — a reader who sees only the number and the label cannot take it for money spent`);
 
   // ── 5. IT SAVES, AND IT IS NOT A RECORD ──────────────────────────────────────────────────────
   console.log('\n— it saves, and a model is meant to be changed —');
