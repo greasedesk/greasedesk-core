@@ -107,10 +107,30 @@ const val = (f) => {
   const i = argv.indexOf(f);
   return i >= 0 ? argv[i + 1] ?? null : null;
 };
-const KNOWN_FLAGS = ['--tier', '--resume', '--list'];
-const unknown = argv.filter((a) => a.startsWith('--') && !KNOWN_FLAGS.includes(a.split('=')[0]));
-if (unknown.length) {
-  console.error(`\nREFUSING TO RUN — unrecognised flag(s): ${unknown.join(', ')}\n  Known: ${KNOWN_FLAGS.join(', ')}. A flag that is ignored is a filter that silently did not apply.\n`);
+/**
+ * NOTHING IN argv IS IGNORED — INCLUDING A BARE POSITIONAL.
+ *
+ * `node scripts/gates.mjs core` leaves tier undefined and runs the WHOLE suite, the 45-minute manual
+ * gate included. That was written down on 2026-09-07, after it happened, with the note that killing
+ * demo-generation-gate mid-run is what leaves a leftover Gateholm tenant. It then happened again on
+ * 2026-09-12 — via `--tier=core`, which this same parser also dropped — and the kill did leave the
+ * tenant, exactly as described. Twice is enough: the note goes on being true and stops being the
+ * defence. An unusable argument now refuses.
+ */
+const VALUE_FLAGS = ['--tier'];
+const BOOL_FLAGS = ['--resume', '--list'];
+const KNOWN_FLAGS = [...VALUE_FLAGS, ...BOOL_FLAGS];
+const stray = [];
+for (let i = 0; i < argv.length; i += 1) {
+  const name = argv[i].split('=')[0];
+  if (!KNOWN_FLAGS.includes(name)) { stray.push(argv[i]); continue; }
+  if (VALUE_FLAGS.includes(name) && !argv[i].includes('=')) i += 1;      // its value belongs to it
+}
+if (stray.length) {
+  const positional = stray.filter((s) => !s.startsWith('-'));
+  console.error(`\nREFUSING TO RUN — ${stray.length} argument(s) this runner would have IGNORED: ${stray.join(', ')}`);
+  if (positional.length) console.error(`  A tier is a flag, not a positional: write --tier ${positional[0]} (or --tier=${positional[0]}).`);
+  console.error(`  Known: ${KNOWN_FLAGS.join(', ')}. An argument that is dropped is a filter that silently did not apply,\n  and the run then reports coverage of a set it never executed.\n`);
   process.exit(2);
 }
 

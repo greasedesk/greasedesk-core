@@ -211,6 +211,19 @@ try { execFileSync('node', ['scripts/gates.mjs', '--teir=core', '--list'], { enc
 catch (e) { refused = e.status; }
 check('  …and a mistyped flag REFUSES rather than running everything', refused === 2,
   refused ? `exit ${refused}` : 'it ran — a typo must never widen the plan');
+// THE ORIGINAL DOCUMENTED HAZARD. `gates.mjs core` ran the whole suite on 2026-09-07; the note
+// written afterwards did not stop it happening again on 2026-09-12, and the kill that followed left
+// a whole generated tenant behind. Prose asks; structure enforces.
+let bare = 0;
+try { execFileSync('node', ['scripts/gates.mjs', 'core', '--list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
+catch (e) { bare = e.status; }
+check('  …and a BARE POSITIONAL tier refuses too, naming the flag form', bare === 2,
+  bare ? `exit ${bare}` : 'it ran the whole suite — the form that left a leftover Gateholm tenant twice');
+let valued = 0;
+try { valued = execFileSync('node', ['scripts/gates.mjs', '--tier', 'core', '--list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).length; }
+catch { valued = 0; }
+check('  …while a flag\'s own value is not mistaken for a stray argument', valued > 0,
+  'the space form must still work — a refusal that blocks the correct usage is worse than the bug');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);
