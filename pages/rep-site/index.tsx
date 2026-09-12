@@ -9,11 +9,14 @@
  * records why (a JWT decrypt per request to choose a rewrite is a real cost for a decision the page
  * layer already has the answer to).
  *
- * ── COPY IS PLACEHOLDER, DELIBERATELY ───────────────────────────────────────────────────────────
- * The owner writes the real copy. Nothing here invents an earnings figure, a garage count, a
- * testimonial or a partner name — and the one place a number belongs is marked, not guessed.
- * /reseller's own header recorded that decision when the commission model was unsettled, and the
- * owner confirmed it still holds (2026-09-12): the number stays out.
+ * ── THE COPY IS THE OWNER'S, VERBATIM (2026-09-12) ──────────────────────────────────────────────
+ * It was placeholder until the owner supplied it; see COPY below. Nothing here invents an earnings
+ * figure, a garage count, a testimonial or a partner name, and `earnings` deliberately carries NO
+ * number — /reseller's own header recorded that decision when the commission model was unsettled and
+ * the owner confirmed it still holds. Commercial rates are given on registration.
+ *
+ * The TERMS page is still placeholder, and that is a separate decision: the real agreement exists but
+ * is not solicitor-reviewed, and the owner is not publishing terms ahead of that review.
  *
  * Trade framing is primary — the people this is for already drive a round of garages. The open door
  * ("you don't have to be on a van") is ONE secondary line, not a second page.
@@ -39,25 +42,35 @@ const Check = () => (
   </svg>
 );
 
-/** PLACEHOLDER — the owner's words go here. Marked so nothing reads as a finished claim. */
-const PLACEHOLDER = {
+/**
+ * THE OWNER'S COPY, verbatim (supplied 2026-09-12). Not placeholder any more, and not to be edited
+ * here: the words are his, including the straight apostrophes, which were kept exactly as given
+ * rather than curled to match the rest of the site's typography.
+ *
+ * `earnings` carries NO figure, which is the standing ruling — commercial rates are given on
+ * registration, not published. Do not add one.
+ *
+ * Each `how` step has a TITLE and a BODY because the supplied copy does; the step NUMBER comes from
+ * the renderer, as it always did, so it is not repeated in the text.
+ */
+const COPY = {
   hero: 'Introduce GreaseDesk to the garages you already visit.',
-  sub: 'PLACEHOLDER — the owner writes this paragraph. Trade framing: you already have the round and the relationships; this is a product you can introduce and earn from alongside what you already do.',
-  earnings: 'PLACEHOLDER — what a reseller earns goes here. No figure is published yet.',
-  openDoor: 'PLACEHOLDER — the secondary line: you don’t have to be on a van to do this.',
+  sub: "Whether you run a regular trade round or you're an ambitious self-starter with the time to build a local route, GreaseDesk pays you an ongoing monthly commission to be our person on the ground. Introduce modern workshop software to independent garages, drop in monthly to keep them happy, and earn every month they stay active.",
+  openDoor: "You don't need a van or motor-trade pedigree — just the initiative to visit workshops, build real relationships, and act as their trusted local contact.",
+  earnings: 'A monthly commission on every active garage in your portfolio. You get paid for each month the subscription clears and your monthly check-in is complete. No arbitrary sales targets. Full commercial rates, payment schedules and terms are provided on registration.',
   how: [
-    'PLACEHOLDER — step one.',
-    'PLACEHOLDER — step two.',
-    'PLACEHOLDER — step three.',
+    { title: 'Sign up the garage', body: 'Talk to local workshop owners about ditching messy paperwork and outdated systems. Get them started on GreaseDesk using your rep link.' },
+    { title: 'Be the local contact', body: 'Drop in once a month to check how the system is running and handle basic first-line questions. We back you up with deep technical support and product updates whenever you need us.' },
+    { title: 'Invoice and get paid monthly', body: 'Log your verified visits, invoice against each closed pay run, and get paid by bank transfer. You earn for as long as the garage stays a paying GreaseDesk client and you stay an active rep.' },
   ],
   suits: [
-    'Tool-van reps with an established round',
-    'Motor factor reps and delivery drivers',
-    'Equipment and calibration engineers — MOT kit, ramps, diagnostics',
-    'Oil, consumables and workwear reps',
-    'Retired garage owners and trade consultants',
+    'Tool-van reps and consumables suppliers visiting garages on an established round',
+    'Motor factor reps, delivery drivers, and calibration engineers',
+    'Motivated self-starters with spare time to build and look after a local garage portfolio',
+    'Retired garage owners, ex-mechanics, and trade consultants with trusted local connections',
   ],
 };
+
 
 export default function ResellerSite() {
   const [form, setForm] = useState({ name: '', company: '', area: '', email: '', phone: '', message: '', website: '' });
@@ -95,9 +108,9 @@ export default function ResellerSite() {
       />
       <RepSiteChrome>
         <section className="max-w-4xl mx-auto px-4 sm:px-6 pt-10 sm:pt-16 pb-12">
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-ink tracking-tight">{PLACEHOLDER.hero}</h1>
-          <p className="mt-4 text-base sm:text-lg text-muted">{PLACEHOLDER.sub}</p>
-          <p className="mt-3 text-sm text-muted">{PLACEHOLDER.openDoor}</p>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-ink tracking-tight">{COPY.hero}</h1>
+          <p className="mt-4 text-base sm:text-lg text-muted">{COPY.sub}</p>
+          <p className="mt-3 text-sm text-muted">{COPY.openDoor}</p>
           <a href="#interest" className="mt-6 inline-block w-full sm:w-auto text-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
             Register my interest
           </a>
@@ -107,20 +120,23 @@ export default function ResellerSite() {
           <div className="space-y-8">
             <div>
               <h2 className="text-lg font-semibold text-ink">What you earn</h2>
-              <p className="mt-3 text-sm text-ink">{PLACEHOLDER.earnings}</p>
+              <p className="mt-3 text-sm text-ink">{COPY.earnings}</p>
             </div>
             <div>
               <h2 className="text-lg font-semibold text-ink">How it works</h2>
               <ol className="mt-3 space-y-3 text-sm text-ink">
-                {PLACEHOLDER.how.map((step, i) => (
-                  <li key={step} className="flex items-start gap-3"><span className="font-semibold text-accent">{i + 1}.</span><span>{step}</span></li>
+                {COPY.how.map((step, i) => (
+                  <li key={step.title} className="flex items-start gap-3">
+                    <span className="font-semibold text-accent shrink-0">{i + 1}.</span>
+                    <span><span className="font-medium text-ink">{step.title}</span><br />{step.body}</span>
+                  </li>
                 ))}
               </ol>
             </div>
             <div>
               <h2 className="text-lg font-semibold text-ink">Who it suits</h2>
               <ul className="mt-3 space-y-3 text-sm text-ink">
-                {PLACEHOLDER.suits.map((s) => <li key={s} className="flex items-start gap-3"><Check /><span>{s}</span></li>)}
+                {COPY.suits.map((s) => <li key={s} className="flex items-start gap-3"><Check /><span>{s}</span></li>)}
               </ul>
             </div>
             <p className="text-xs text-muted">
