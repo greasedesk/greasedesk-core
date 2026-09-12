@@ -49,7 +49,7 @@ export default function RepSiteChrome({ children }: { children: React.ReactNode 
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 text-sm text-muted space-y-3">
           <nav className="flex flex-wrap gap-x-6 gap-y-2" aria-label="Footer">
             <Link href="/" className="hover:text-ink">Become a reseller</Link>
-            <Link href="/rep-site/terms" className="hover:text-ink">Reseller terms</Link>
+            <Link href="/terms" className="hover:text-ink">Reseller terms</Link>
             <Link href="/rep/login" className="hover:text-ink">Reseller sign in</Link>
           </nav>
           <p>

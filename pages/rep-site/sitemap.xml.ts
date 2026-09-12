@@ -14,7 +14,7 @@ import { REP_SITE_URL } from '@/lib/company-info';
 
 const PATHS: { path: string; priority: string; changefreq: string }[] = [
   { path: '/', priority: '1.0', changefreq: 'weekly' },
-  { path: '/rep-site/terms', priority: '0.3', changefreq: 'yearly' },
+  { path: '/terms', priority: '0.3', changefreq: 'yearly' },
 ];
 
 export const getServerSideProps: GetServerSideProps = async ({ res }) => {

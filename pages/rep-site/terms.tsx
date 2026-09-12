@@ -11,6 +11,11 @@
  * needs a commit and a deploy. The Content-system route stays open as a later decision; when a
  * document gains an audience or host axis, this file should become a document.
  *
+ * ── IT IS SERVED AT /terms, NOT AT THIS FILE'S PATH ────────────────────────────────────────────
+ * middleware rewrites reps.greasedesk.com/terms here, and 308s /rep-site/terms to /terms. The file
+ * stays under /rep-site so it keeps 404ing on the apex without a second rule; the canonical, the
+ * sitemap and the footer all name /terms, because that is the address.
+ *
  * The prose is PLACEHOLDER. Terms are the owner's and a solicitor's; nothing here invents an
  * obligation, a commission figure, a notice period or a termination right.
  */
@@ -33,7 +38,7 @@ export default function ResellerTerms() {
       <Seo
         title="Reseller terms — GreaseDesk"
         description="The terms between GreaseDesk and its resellers."
-        path="/rep-site/terms"
+        path="/terms"
         origin={REP_SITE_URL}
         ogImage={absoluteRepSiteUrl('/rep-site/og.png')}
       />

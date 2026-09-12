@@ -35,6 +35,7 @@ const RULES = await import('../lib/reseller-interest.ts');
 const { RETENTION_MONTHS } = await import('../lib/prospects.ts');
 const { REP_SITE_URL } = await import('../lib/company-info.ts');
 const { underPath } = await import('../lib/anchored-match.ts');
+const ROBOTS = await import('../lib/robots-rules.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -126,11 +127,17 @@ try {
   console.log('\n— one named prefix is the whole boundary —');
   for (const [what, path, want] of [
     ['the public page', '/rep-site', 200],
-    ['its terms', '/rep-site/terms', 200],
+    ['its terms, at the address a person types', '/terms', 200],
     ['an asset inside the prefix', '/rep-site/og.png', 200],
     ['the interest endpoint', '/api/rep-site/interest', 405],          // reachable; POST-only
     ['the brand asset (exact match, pre-existing)', '/greasedesk-Logo.png', 200],
   ]) check(`${what} is served`, (await ask(REP_HOST, path)).status === want, `${path} → want ${want}`);
+
+  const movedTerms = await ask(REP_HOST, '/rep-site/terms');
+  check('the address terms SHIPPED at redirects, permanently, rather than 404ing', movedTerms.status === 308 && (movedTerms.headers.location ?? '').endsWith('/terms'),
+    `HTTP ${movedTerms.status} → ${movedTerms.headers.location ?? '—'} — it was live and crawlable, however briefly`);
+  check('  …and /terms is not a 404 on this host, which is what production returned', (await ask(REP_HOST, '/terms')).status === 200,
+    'the page existed at /rep-site/terms and the obvious URL returned 404; no clause could review that choice, and the resolves clauses below catch the family');
 
   const outside = ['/android-chrome-512x512.png', '/robots.txt.bak', '/favicon-32x32.png'];
   const outsideCodes = [];
@@ -149,10 +156,10 @@ try {
 
   // ── 3. SEO: A SECOND HOST CANONICALISES TO ITSELF ────────────────────────────────────────────
   console.log('\n— a second public host canonicalises to itself —');
-  const terms = await ask(REP_HOST, '/rep-site/terms');
+  const terms = await ask(REP_HOST, '/terms');   // the address it is served at, not the file's path
   const canon = (b) => (/<link rel="canonical" href="([^"]+)"/.exec(b) ?? [])[1] ?? '(none)';
   check('the root canonicalises to the reseller host', canon(root.body) === `${REP_SITE_URL}/`, canon(root.body));
-  check('  …and so does the terms page', canon(terms.body) === `${REP_SITE_URL}/rep-site/terms`, canon(terms.body));
+  check('  …and so does the terms page, at /terms', canon(terms.body) === `${REP_SITE_URL}/terms`, canon(terms.body));
   check('  …and NEITHER points at the apex', !canon(root.body).startsWith('https://greasedesk.com') && !canon(terms.body).startsWith('https://greasedesk.com'),
     'a canonical to the apex tells a crawler this site duplicates URLs that 404 on it');
   const og = (/property="og:image" content="([^"]+)"/.exec(root.body) ?? [])[1] ?? '(none)';
@@ -162,10 +169,36 @@ try {
   check('this host serves its OWN robots.txt', robots.status === 200 && robots.body.includes(`Sitemap: ${REP_SITE_URL}/sitemap.xml`), robots.body.split('\n').filter(Boolean).pop());
   check('  …naming no apex sitemap', !robots.body.includes('greasedesk.com/sitemap.xml') || robots.body.includes('reps.greasedesk.com/sitemap.xml'),
     'a static file cannot vary by Host; served here the apex one would point crawlers at URLs that 404');
-  // @anchored-ok: a robots.txt DIRECTIVE LINE, already anchored to the whole line by ^…$ — not a path prefix test
-  const DISALLOWS_PORTAL = /^Disallow: \/rep$/m;
-  check('  …and disallowing the portal', DISALLOWS_PORTAL.test(robots.body),
-    'the portal is noindex in its own <head>; this says the same thing in the other place a crawler looks');
+  /**
+   * ── WHAT THE DIRECTIVES DO, NOT WHETHER A LINE IS PRESENT ─────────────────────────────────────
+   * This clause used to be `/^Disallow: \/rep$/m.test(robots.body)` and it passed while the file was
+   * wrong: robots.txt matching is prefix-based, so `Disallow: /rep` forbade /rep-site/terms too — the
+   * page the sitemap was advertising. The regex was anchored; the directive was not. Its waiver even
+   * said so, about the wrong object.
+   *
+   * So the paths are evaluated against the real directives with lib/robots-rules (RFC 9309), whose
+   * own matcher is proved on the prefix case below before it is trusted here.
+   */
+  const crawlable = (p) => ROBOTS.robotsDecision(robots.body, p);
+  check('  …and the PORTAL is disallowed', crawlable('/rep').allowed === false && crawlable('/rep/login').allowed === false,
+    `/rep → ${crawlable('/rep').rule ?? 'no rule'}`);
+  check('  …while the public pages are CRAWLABLE — the bug this clause missed', crawlable('/terms').allowed === true && crawlable('/').allowed === true && crawlable('/rep-site/og.png').allowed === true,
+    `/terms → ${crawlable('/terms').rule ?? 'no rule'} · /rep-site/og.png → ${crawlable('/rep-site/og.png').rule ?? 'no rule'}`);
+  check('  …and the api is disallowed', crawlable('/api/rep-site/interest').allowed === false);
+  // THE MATCHER ITSELF, proved on the case that caused the defect, before it is believed above.
+  // @anchored-ok: this string IS a robots.txt FIXTURE DOCUMENT — the exact file production served — passed to the matcher as data; it matches nothing
+  const PREFIX_BUG = 'User-agent: *\nAllow: /\nDisallow: /rep\n';
+  check('the matcher reproduces the original defect on the ORIGINAL file', ROBOTS.robotsDecision(PREFIX_BUG, '/rep-site/terms').allowed === false,
+    'prefix matching, RFC 9309 §2.2.2 — `Disallow: /rep` really did forbid /rep-site/terms');
+  check('  …and the longer Allow is what fixes it', ROBOTS.robotsDecision(`${PREFIX_BUG}Allow: /rep-site/\n`, '/rep-site/terms').allowed === true
+    && ROBOTS.robotsDecision(`${PREFIX_BUG}Allow: /rep-site/\n`, '/rep/login').allowed === false,
+    'longest match wins, a tie goes to allow');
+  check('  …an unmatched path is allowed', ROBOTS.robotsDecision(PREFIX_BUG, '/anything').allowed === true);
+  check('  …an empty Disallow is not a rule', ROBOTS.robotsDecision('User-agent: *\nDisallow:\n', '/rep').allowed === true,
+    '"Disallow:" with no value means disallow NOTHING');
+  check('  …and $ anchors, while a bare prefix does not', ROBOTS.patternMatches('/rep$', '/rep') && !ROBOTS.patternMatches('/rep$', '/rep-site')
+    && ROBOTS.patternMatches('/rep', '/rep-site'),
+    'the asymmetry the original clause read past');
   const sitemap = await ask(REP_HOST, '/sitemap.xml');
   const locs = [...sitemap.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
   check('this host serves its OWN sitemap', sitemap.status === 200 && locs.length === 2, `${locs.length} url(s): ${locs.join(' ')}`);
@@ -174,6 +207,30 @@ try {
   // clause could only ever have passed — the sitemap's two entries are the root and a /rep-site path.
   const sitemapPaths = locs.map((l) => l.slice(REP_SITE_URL.length) || '/');
   check('  …and the portal is not in it', !sitemapPaths.some((p) => underPath(p, '/rep')), sitemapPaths.join(' '));
+
+  /**
+   * ── EVERY URL THIS SITE PUBLISHES ACTUALLY RESOLVES ───────────────────────────────────────────
+   * The clause that would have caught the /terms 404. No clause can review a URL CHOICE — the page
+   * was reachable at the path I picked, and the gate proved that path — but a site that advertises a
+   * URL in its sitemap, or links one in its own chrome, and then 404s it is a class of defect a
+   * mechanism can close completely. Both directions are checked because they fail differently: a
+   * sitemap entry fails for crawlers and nobody sees it; a chrome link fails for the person holding
+   * the phone.
+   */
+  console.log('\n— every url this site publishes resolves on this host —');
+  const resolved = [];
+  for (const loc of locs) {
+    const p = loc.slice(REP_SITE_URL.length) || '/';
+    resolved.push(`${p}:${(await ask(REP_HOST, p)).status}`);
+  }
+  check('every url in the sitemap answers 200', resolved.every((r) => r.endsWith(':200')), resolved.join(' '));
+  const chromeHrefs = [...src('components/rep-site/RepSiteChrome.tsx').matchAll(/href="(\/[^"#]*)"/g)].map((m) => m[1]);
+  const chromeResolved = [];
+  for (const href of [...new Set(chromeHrefs)]) chromeResolved.push(`${href}:${(await ask(REP_HOST, href)).status}`);
+  check('every internal link in the chrome answers on this host', chromeHrefs.length >= 3 && chromeResolved.every((r) => /:(200|30[78])$/.test(r)),
+    chromeResolved.join(' ') || 'no hrefs found — the scan must find the links before it can clear them');
+  // NOT VACUOUS: the probe must be able to see a 404, or "everything resolves" is a blind pass.
+  check('  …and that probe can still see a 404', (await ask(REP_HOST, '/terms-that-does-not-exist')).status === 404);
 
   console.log('\n— the apex keeps its own, and hands /reseller over permanently —');
   const apexRobots = await ask(APEX, '/robots.txt');

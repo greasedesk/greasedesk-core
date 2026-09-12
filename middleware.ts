@@ -105,6 +105,18 @@ export function middleware(req: NextRequest) {
     // served here it would advertise the APEX sitemap from the reseller domain, pointing crawlers at
     // URLs that 404 here. The apex file is left completely untouched — these are rewrites, not a
     // rewiring of a live SEO surface.
+    /**
+     * TERMS LIVE AT /terms, the URL a person types and the one this codebase already means by terms
+     * (the apex serves /terms from the Content system). They were shipped at /rep-site/terms on
+     * 2026-09-12 — inside the namespace, which made the BOUNDARY tidy and the URL wrong — and
+     * production 404'd the obvious address for as long as that stood. The page file stays inside
+     * /rep-site so it keeps 404ing on the apex for free; only the public address moved.
+     */
+    if (pathname === '/terms') return NextResponse.rewrite(new URL('/rep-site/terms', req.url));
+    // The old address, kept as a 308 rather than a 404: it was live and crawlable, however briefly,
+    // and a redirect costs nothing. A rewrite does not re-enter middleware, so this cannot loop with
+    // the line above — the rewritten request goes straight to the route.
+    if (pathname === '/rep-site/terms') return NextResponse.redirect(new URL('/terms', req.url), 308);
     if (pathname === '/robots.txt') return NextResponse.rewrite(new URL('/rep-site/robots.txt', req.url));
     if (pathname === '/sitemap.xml') return NextResponse.rewrite(new URL('/rep-site/sitemap.xml', req.url));
     if (isRepSite(pathname) || isRepPortal(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
