@@ -225,6 +225,29 @@ try {
   check('and against the real directory it reports nothing pending', /0 migration\(s\) pending/.test(real) && /Nothing to apply/.test(real),
     'read from _prisma_migrations, not from parsed prose');
 
+  // ── 7b. THE REFUSAL'S OWN PATH PARSER ────────────────────────────────────────────────────────
+  /**
+   * Only ever exercised when the wrapper REFUSES, which is why it shipped broken: the git helper
+   * trims, porcelain's status field is two columns, and an unstaged line begins with a SPACE — so
+   * the first line lost a character and `prisma/schema.prisma` arrived as `risma/schema.prisma`,
+   * matching no exclusion. The wrapper refused on the one file it exists to ignore and named a path
+   * that is not on disk. A refusal is a report a human acts on.
+   */
+  console.log('\n— the paths a refusal names are real —');
+  const PORCELAIN = ' M prisma/schema.prisma\nM  lib/db.ts\n?? scripts/new-gate.mjs\nR  old/name.ts -> new/name.ts\n';
+  const parsed = R.uncommittedPaths(PORCELAIN);
+  check('an unstaged first line keeps its whole path', parsed[0] === 'prisma/schema.prisma',
+    `${parsed[0]} — the leading space is part of the format, not whitespace to trim`);
+  check('  …a staged line too', parsed[1] === 'lib/db.ts');
+  check('  …an untracked one too', parsed[2] === 'scripts/new-gate.mjs');
+  check('  …and a rename yields the NEW path', parsed[3] === 'new/name.ts', parsed[3]);
+  check('  …so the exclusions actually match', !R.comparedByDeployCheck(parsed[0]) && R.comparedByDeployCheck(parsed[1]),
+    'schema.prisma excluded, app code compared — which the mangled path defeated');
+  // AGAINST THE REAL THING: every path this repo's own status produces must exist on disk.
+  const live = R.uncommittedPaths(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }));
+  check('  …and every path from THIS repo\'s status exists on disk', live.every((f) => existsSync(f)),
+    live.filter((f) => !existsSync(f)).join(', ') || `${live.length} path(s) checked`);
+
   // ── 8. THE HOOK: THE LAYER THAT WORKS AT 11PM ────────────────────────────────────────────────
   // The wrapper only protects the database if it is the thing that runs, and at eleven at night the
   // command that gets typed is the one in muscle memory.
