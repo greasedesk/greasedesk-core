@@ -4997,3 +4997,74 @@ model ResellerEnquiry {
 
   @@index([created_at])
 }
+
+/// TIME A TECH SPENT ON A JOB, measured rather than estimated. The input a cost model needs; without
+/// it every downstream figure inherits a guess.
+///
+/// THIS IS NOT A TIMESHEET AND NOT ATTENDANCE (owner, 2026-09-12). It is time on a JOB — the rep-visit
+/// framing: a deliverable, not supervision. Nothing here says when someone arrived or went home.
+///
+/// IT MOVES NO MONEY IN THIS SLICE. CatalogueItem.labour_hours stays the CHARGED hours that price a
+/// job, InvoiceLine stays frozen at issue, and the wage bill still costs hourly people at nothing and
+/// says so (lib/dashboard-tiles::hourlyExcludedPeople). job-clock-gate asserts that figure is
+/// unchanged, because clocking is exactly the missing input somebody will otherwise wire in by
+/// accident. Connecting them is a decision, with its own slice.
+///
+/// ── INSERT-ONLY IN SPIRIT ───────────────────────────────────────────────────────────────────────
+/// A recorded time is never edited. Closing an open session WRITES ended_at once — completing a fact,
+/// not revising one — and a trigger holds that difference (JobClockSession_append_only, the
+/// ContactPreferenceEvent shape). A correction after the fact is a NEW ROW pointing at the original,
+/// which stays visible.
+model JobClockSession {
+  id          String   @id @default(uuid())
+  group_id    String
+  job_card_id String
+  /// The tech. A User, not a CostPerson: CostPerson.user_id is nullable, so a tech may have no cost
+  /// record at all, and time on a job must be recordable either way.
+  user_id     String
+
+  /// THE AUTHORITATIVE INSTANTS. Server time when the server was reachable; see *_source for what
+  /// actually happened. ended_at NULL = STILL RUNNING — honest null, rendered as running, never as
+  /// zero hours and never silently accruing.
+  started_at DateTime
+  ended_at   DateTime?
+
+  /// lib/job-clock CLOCK_SOURCES — 'live' (the server stamped it) | 'queued' (the device claimed it
+  /// while offline, and the outbox delivered it later) | 'correction' (an admin wrote it).
+  /// The ONE place a reader learns whether an instant is the server's or a phone's.
+  started_source String
+  /// NULL exactly while the session is running — the pair is held by a CHECK.
+  /// @nulls: ended_source, ended_received_at, ended_cause
+  ended_source   String?
+
+  /// WHAT THE DEVICE CLAIMED, kept beside what the server recorded so the skew stays VISIBLE. Never
+  /// averaged into one reconciled number (owner, 2026-09-12): a session whose two clocks disagree by
+  /// an implausible margin renders as DISPUTED, not as a duration. NULL = the device claimed nothing,
+  /// which is the ordinary online case.
+  /// @nulls: device_started_at, device_ended_at
+  device_started_at DateTime?
+  device_ended_at   DateTime?
+
+  /// WHEN THE SERVER RECEIVED each end, always recorded. For a live clock-on this equals started_at;
+  /// for a queued one it is later, and the gap is the offline period.
+  started_received_at DateTime
+  ended_received_at   DateTime?
+
+  /// lib/job-clock END_CAUSES — 'tech' (they clocked off) | 'superseded' (they clocked onto another
+  /// job, which closes this one — a tech cannot be on two cars at once) | 'correction'.
+  ended_cause String?
+
+  /// A CORRECTION IS A NEW ROW. This points at the session it corrects, which is never altered.
+  /// NULL = an ordinary session, not a correction. The three move together (a CHECK holds the trio):
+  /// a correction always names who made it and why.
+  /// @nulls: corrects_id, correction_reason, corrected_by_user_id
+  corrects_id          String?
+  correction_reason    String?
+  corrected_by_user_id String?
+
+  created_at DateTime @default(now())
+
+  @@index([job_card_id])
+  @@index([group_id, user_id])
+  @@index([corrects_id])
+}

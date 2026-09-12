@@ -242,6 +242,31 @@ export function schemaRisk(schemaDiff: string): string[] {
     .map((l) => l.slice(1).trim());
 }
 
+/**
+ * PATHS OUT OF `git status --porcelain`, and this is a pure function because getting it wrong was
+ * silent and expensive.
+ *
+ * The wrapper's git helper trims its output — reasonable for a commit hash, WRONG here: porcelain
+ * puts a two-column status field before each path, and an unstaged change starts with a SPACE. The
+ * trim ate the first line's leading space, `slice(3)` then ate a character of the path, and
+ * `prisma/schema.prisma` arrived as `risma/schema.prisma` — which matched no exclusion, so the
+ * wrapper refused on the ONE file it is designed to ignore, naming a path that does not exist.
+ *
+ * A refusal is a report a human acts on. A mangled path sends them to the wrong file.
+ */
+export function uncommittedPaths(porcelain: string): string[] {
+  return porcelain
+    .split('\n')
+    .filter((l) => l.length > 3)
+    .map((l) => {
+      const m = /^(..)[ \t](.*)$/.exec(l);            // XY<space>path — the status field is TWO columns
+      const raw = (m ? m[2] : l).trim();
+      const renamed = raw.split(' -> ').pop() as string;  // "R  old -> new" reports the new path
+      return renamed.replace(/^"|"$/g, '');            // git quotes paths containing odd characters
+    })
+    .filter(Boolean);
+}
+
 export type VersionAnswer =
   | { ok: false; why: string }
   | { ok: true; commit: string | null; ref: string | null; env: string | null; source: string | null };

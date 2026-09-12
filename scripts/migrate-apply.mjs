@@ -151,10 +151,11 @@ if (anyConstraining && classified.every((m) => m.klass)) {
 
     if (liveIsAncestor === true) {
       appFilesNotLive = git('diff', '--name-only', `${version.commit}..HEAD`).split('\n').filter(Boolean).filter(R.comparedByDeployCheck);
-      uncommittedAppFiles = git('status', '--porcelain')
-        .split('\n').filter(Boolean)
-        .map((l) => l.slice(3).split(' -> ').pop().replace(/^"|"$/g, ''))
-        .filter(R.comparedByDeployCheck);
+      // RAW, NOT TRIMMED: porcelain's status field is two columns and an unstaged change begins with
+      // a space, which the trimming git() helper would eat — see lib/migration-deploy-rules.
+      uncommittedAppFiles = R.uncommittedPaths(
+        execFileSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+      ).filter(R.comparedByDeployCheck);
       schemaDefaults = R.schemaRisk(git('diff', `${version.commit}..HEAD`, '--', 'prisma/schema.prisma'));
     }
   }

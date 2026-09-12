@@ -141,6 +141,19 @@ async function sendItem(item) {
     if (!res.ok) throw Object.assign(new Error('battery:' + res.status), { status: res.status });
     return;
   }
+  /* CLOCK ON / OFF, captured with no signal. THE PAYLOAD CARRIES THE DEVICE'S INSTANT — this is the
+     one kind where WHEN it was captured IS the fact, not metadata about it. The server records it as
+     `queued`, keeps its own receipt time beside it, and clamps a phone claiming the future; a wild
+     disagreement renders the session disputed rather than as hours. So the offline lane never
+     silently becomes the authority — it is labelled all the way to the row. */
+  if (item.kind === 'clock') {
+    const res = await fetch('/api/pwa/clock', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ ...(item.payload || {}), jobCardId: item.jobCardId, deviceAt: new Date(item.createdAt).toISOString() }),
+    });
+    if (!res.ok) throw Object.assign(new Error('clock:' + res.status), { status: res.status });
+    return;
+  }
   if (item.kind !== 'photo') throw Object.assign(new Error('unknown-kind'), { terminal: true }); // future kinds add a sender here
   const pres = await fetch('/api/photos/presign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',

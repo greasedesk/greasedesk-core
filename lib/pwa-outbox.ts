@@ -12,12 +12,16 @@ const DB_VERSION = 1;
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
 export type OutboxItem = {
-  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery' | 'observation' | 'schedule'; jobCardId: string;
+  id: string; kind: 'photo' | 'vehicle' | 'video' | 'due_item' | 'tyres' | 'battery' | 'observation' | 'schedule' | 'clock'; jobCardId: string;
   label?: string; // human tag (the vehicle reg) so a FAILED item names its car in the banner + links to the card
   stage?: string; slot?: string; blob?: Blob; contentType?: string;   // kind:'photo' | 'video'
   posterFor?: string;                                                  // kind:'photo' slot 'poster': the VIDEO photoId this frame belongs to
   payload?: {
     vin?: string; mileageIn?: number;                                  // kind:'vehicle' — vehicle FACTS from the bay
+    // kind:'clock' — which way the tap went. The INSTANT is not here: it is the envelope's own
+    // createdAt, minted at the tap, which sw.js sends as deviceAt. For this kind the capture time
+    // IS the fact, so it travels in the one field the queue already stamps honestly.
+    action?: 'on' | 'off';
     // kind:'due_item' — a finding, keyed by the envelope's OWN id so a replay upserts (the server
     // accepts it as the row id; see pages/api/due-items). A due item has no natural key, which is
     // exactly why it needs this and the tyre kind below does not.
@@ -248,6 +252,25 @@ export async function enqueueVehicle(args: { jobCardId: string; vin?: string; mi
   if (args.mileageIn !== undefined) payload.mileageIn = args.mileageIn;
   const item: OutboxItem = {
     id: crypto.randomUUID(), kind: 'vehicle', jobCardId: args.jobCardId, payload,
+    createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
+  };
+  await rw((s) => s.put(item)); // durably parked BEFORE any network
+  triggerDrain();
+  return item.id;
+}
+
+/**
+ * CLOCK ON / OFF WITH NO SIGNAL. The envelope's `createdAt` is minted at the TAP, and sw.js sends it
+ * as `deviceAt` — because for this kind the capture instant is the fact itself, not information
+ * about the fact. Everything downstream keeps it labelled: recorded as `queued`, kept beside the
+ * server's receipt time, clamped if the phone claims the future.
+ *
+ * NO BLOB, so it is tiny and drains before any photo. A tech clocking off at the end of a job should
+ * not wait behind eight megabytes of walkaround video for their time to be recorded.
+ */
+export async function enqueueClock(args: { jobCardId: string; action: 'on' | 'off' }): Promise<string> {
+  const item: OutboxItem = {
+    id: crypto.randomUUID(), kind: 'clock', jobCardId: args.jobCardId, payload: { action: args.action },
     createdAt: Date.now(), attempts: 0, lastError: null, state: 'queued', nextAttemptAt: 0, claimedAt: null,
   };
   await rw((s) => s.put(item)); // durably parked BEFORE any network
