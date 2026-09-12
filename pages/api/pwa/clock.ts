@@ -18,8 +18,7 @@
  * disputed rather than as hours (lib/job-clock).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
+import { requireTenantApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import { clockOn, clockOff, openSessionFor } from '@/lib/job-clock-store';
 
@@ -32,9 +31,9 @@ function deviceInstant(raw: unknown): Date | null | 'bad' {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
-  const session = await getServerSession(req, res, authOptions);
-  const user = session?.user as { id?: string; group_id?: string } | undefined;
-  if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return; // it has already answered 401
+  const user = { id: scope.userId, group_id: scope.groupId };
 
   const b = (req.body || {}) as Record<string, unknown>;
   const action = String(b.action ?? '');

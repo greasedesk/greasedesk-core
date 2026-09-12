@@ -23,6 +23,7 @@ import { resizeImage } from '@/lib/image-resize';
 import { enqueuePhoto, enqueuePoster, enqueueVehicle, enqueueVideo, outboxAll, retryItem, discardItem, subscribeOutbox, OutboxItem } from '@/lib/pwa-outbox';
 import { isValidVin, normaliseVinInput } from '@/lib/vin';
 import OutboxStatus from '@/components/pwa/OutboxStatus';
+import ClockControl, { type ClockState } from '@/components/pwa/ClockControl';
 import InstallBar from '@/components/pwa/InstallBar';
 import WalkaroundRecorder, { canRecord } from '@/components/media/WalkaroundRecorder';
 import { posterFromVideoBlob } from '@/lib/video-poster';
@@ -38,6 +39,7 @@ import PhoneSendReport from '@/components/pwa/PhoneSendReport';
 
 type JobLine = { type: string; description: string; qty: string; hours: number | null };
 type JobData = {
+  clock?: ClockState;
   id: string; status: string; isComeback: boolean;
   customer: { name: string; phone: string | null };
   vehicle: { registration: string; make: string | null; model: string | null; colour: string | null; vin: string | null; mileageIn: number | null };
@@ -356,6 +358,11 @@ export default function MobileJobCard() {
             <p className="text-sm text-muted p-2">{net === 'offline' ? t('offlineNoCache') : t('updating')}</p>
           ) : (
             <>
+              {/* TIME ON THIS JOB — the first thing in the card, because it is the one control a
+                  tech opens the app to reach, and hunting for it with a glove on is how the input
+                  stops happening. `load` re-reads the card, so the button state and both totals
+                  come from the server rather than from an optimistic guess about what the tap did. */}
+              {job.clock && <ClockControl jobCardId={id} clock={job.clock} onChanged={load} />}
               {/* Vehicle — VIN is the hero: big, tap-to-copy (parts-factor-on-the-phone grain). */}
               <section className="bg-surface border border-line rounded-xl p-4">
                 <h2 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">{t('vehicle')}</h2>

@@ -15,9 +15,7 @@
  * guarantee does not rest on this file staying the only caller.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/pages/api/auth/[...nextauth]';
-import { requireAdminApi } from '@/lib/admin-guard';
+import { requireAdminApi, requireTenantApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import { correctSession } from '@/lib/job-clock-store';
 
@@ -29,11 +27,14 @@ const when = (raw: unknown): Date | null | 'bad' => {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ message: 'Method Not Allowed' }); }
+  // BOTH, and each for its own reason: requireAdminApi decides WHO MAY (403 for a non-admin), and
+  // requireTenantApi hands back the non-nullable groupId and the actor's id without a second
+  // hand-rolled session read. A local `if (!user?.id)` here would be the 57th guard.
   const vis = await requireAdminApi(req, res);
-  if (!vis) return; // requireAdminApi has already answered 401/403
-  const session = await getServerSession(req, res, authOptions);
-  const actorId = (session?.user as { id?: string } | undefined)?.id;
-  if (!actorId) return res.status(401).json({ message: 'Not authenticated.' });
+  if (!vis) return; // it has already answered 401/403
+  const scope = await requireTenantApi(req, res);
+  if (!scope) return;
+  const actorId = scope.userId;
 
   const b = (req.body || {}) as Record<string, unknown>;
   const correctsId = String(b.correctsId ?? '');
@@ -45,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // TENANT SCOPE, before anything is written. A session id from another garage is a 404, not a 403.
   const target = await prisma.jobClockSession.findFirst({
-    where: { id: correctsId, group_id: vis.groupId as string },
+    where: { id: correctsId, group_id: scope.groupId },
     select: { id: true },
   });
   if (!target) return res.status(404).json({ message: 'Not found.' });

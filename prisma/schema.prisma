@@ -563,6 +563,7 @@ model Group {
   battery_readings   BatteryReading[]
   marketing_contacts MarketingContact[]
   schedule_readings  ServiceScheduleReading[]
+  clockSessions   JobClockSession[]
 }
 
 /**
@@ -3027,6 +3028,7 @@ model JobCard {
   tyre_readings      TyreReading[]
   battery_readings   BatteryReading[]
   schedule_readings  ServiceScheduleReading[]
+  clockSessions   JobClockSession[]
 }
 
 model JobCardPhoto {
@@ -5026,6 +5028,10 @@ model JobClockSession {
   /// THE AUTHORITATIVE INSTANTS. Server time when the server was reachable; see *_source for what
   /// actually happened. ended_at NULL = STILL RUNNING — honest null, rendered as running, never as
   /// zero hours and never silently accruing.
+  ///
+  /// NAMED, because a block attaches to the NEXT declaration and would otherwise explain started_at
+  /// alone — which is not even nullable. nullable-annotation caught exactly that here.
+  /// @nulls: ended_at
   started_at DateTime
   ended_at   DateTime?
 
@@ -5063,6 +5069,23 @@ model JobClockSession {
   corrected_by_user_id String?
 
   created_at DateTime @default(now())
+
+  /// THE RELATIONS THE SQL ALREADY DECLARED. Omitted at first, and the wrapper's post-apply drift
+  /// check caught it: three foreign keys existed in the database and not in the datamodel, so
+  /// `migrate diff` wanted to add them all over again. Exactly what that check is for.
+  /// onUpdate: NoAction is EXPLICIT, and it is what the database has. Prisma's datamodel default for
+  /// a required relation is onUpdate: Cascade, so leaving it off made `migrate diff` propose dropping
+  /// and re-adding both keys forever — permanent drift, which would have left schema-drift-gate red
+  /// and therefore useless for finding the next real drift. These ids are UUIDs that never change, so
+  /// ON UPDATE is a no-op either way; the datamodel simply says what is true. corrects_id below
+  /// already said it, which is why that one key was never in the diff.
+  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  jobCard  JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  /// A correction points at the session it corrects. RESTRICT, not Cascade: deleting a session that
+  /// something corrected would destroy the record of the correction, and the original staying
+  /// visible is the whole point.
+  corrects    JobClockSession?  @relation("JobClockCorrection", fields: [corrects_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  corrections JobClockSession[] @relation("JobClockCorrection")
 
   @@index([job_card_id])
   @@index([group_id, user_id])

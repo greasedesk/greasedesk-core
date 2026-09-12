@@ -80,6 +80,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       qty: l.qty,
       hours: l.labour_hours ?? null,
     })),
+    /**
+     * CLOCK STATE, on the same round trip as the rest of the card. A second request would be a
+     * second chance to fail on a forecourt signal, and this is the one control the tech came for.
+     *
+     * `open` is THEIR open session anywhere — not just on this card — because the button has to be
+     * able to say "you are on VE12 ABC" before it moves them. Both totals travel (labour is the SUM
+     * of sessions, elapsed is the span) and the UI shows both: a reader given one assumes the wrong
+     * one. Still NO money on this surface.
+     */
+    clock: await (async () => {
+      const { sessionsForCard, openSessionFor } = await import('@/lib/job-clock-store');
+      const { jobTotals, sessionState } = await import('@/lib/job-clock');
+      const rows = await sessionsForCard(prisma, id);
+      const open = await openSessionFor(user.id as string);
+      const openReg = open && open.job_card_id !== id
+        ? (await prisma.jobCard.findUnique({ where: { id: open.job_card_id }, select: { vehicle: { select: { registration: true } } } }))?.vehicle?.registration ?? null
+        : null;
+      const totals = jobTotals(rows);
+      return {
+        openHere: !!open && open.job_card_id === id,
+        openElsewhereReg: openReg,
+        openSince: open ? open.started_at.toISOString() : null,
+        labourMinutes: totals.labourMinutes,
+        elapsedMinutes: totals.elapsedMinutes,
+        running: totals.running,
+        disputed: totals.disputed,
+        sessions: rows.map((r) => ({
+          id: r.id, state: sessionState(r), startedAt: r.started_at.toISOString(),
+          endedAt: r.ended_at ? r.ended_at.toISOString() : null, cause: r.ended_cause,
+          isCorrection: !!r.corrects_id,
+        })),
+      };
+    })(),
     notes: p.garageNotes || '',
     invoice: p.invoice ? { number: p.invoice.number, status: p.invoice.status } : null,
     currency: p.currency,

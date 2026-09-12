@@ -149,8 +149,14 @@ try {
   check('no capture panel is wired to the photo-only refresh',
     !/on(Changed|Queued)=\{refreshPhotos\}/.test(pageSrc),
     'a panel that cannot see its own write reads as a panel that did not write');
-  check('  …and all six go to load()', (pageSrc.match(/on(?:Changed|Queued)=\{load\}/g) ?? []).length === 6,
-    `${(pageSrc.match(/on(?:Changed|Queued)=\{load\}/g) ?? []).length} of 6`);
+  // A COUNT PINS TODAY'S CONTENT, NOT THE RULE. This read `=== 6` and went red the moment a seventh
+  // panel arrived that was wired CORRECTLY — the clock control, using load() exactly as this clause
+  // wants. The rule is "every onChanged/onQueued goes to load()", so that is what it now asserts:
+  // every such handler, whatever it is wired to, must be load. The floor keeps it non-vacuous.
+  const handlers = pageSrc.match(/on(?:Changed|Queued)=\{(\w+)\}/g) ?? [];
+  const toLoad = handlers.filter((h) => /\{load\}$/.test(h));
+  check('  …and EVERY panel goes to load()', handlers.length >= 6 && toLoad.length === handlers.length,
+    `${toLoad.length} of ${handlers.length} handlers — the rule, not the number: a correctly-wired seventh panel must not turn this red`);
 
   // ── THE TWO PANELS THAT READ AS ONE ─────────────────────────────────────────────────────────
   // "What this car needs" described the schedule panel equally well. Both are a thing plus a
