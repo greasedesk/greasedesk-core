@@ -2,10 +2,21 @@
  * File: pages/api/pwa/clock.ts
  * CLOCK ON / CLOCK OFF, from the phone. POST { action, jobCardId?, deviceAt?, idempotencyKey? }.
  *
- * ── WHOSE TIME IT IS ────────────────────────────────────────────────────────────────────────────
+ * ── WHOSE TIME IT IS, AND HOW SURE WE ARE ───────────────────────────────────────────────────────
  * The session's user, never a body field. A tech cannot clock somebody else on, and the endpoint
- * offers no way to try. See THE OPEN QUESTION in lib/job-clock-store's caller notes and the owner's
- * open item: a 90-day session on a shared workshop phone attributes work to whoever is holding it.
+ * offers no way to try.
+ *
+ * BUT THE ATTRIBUTION IS BEST-EFFORT, and this is the line where that becomes true. The session is
+ * 90 days and rolling — the ruling that lets a mechanic open the app once a month without signing in
+ * — so on a SHARED workshop phone `scope.userId` is whoever last signed in on that handset, not
+ * provably the person who tapped.
+ *
+ * That is acceptable because of what the data is FOR (owner's decision, 2026-09-12, recorded in full
+ * on the JobClockSession model): costing jobs and cars, never assessing, paying or disciplining a
+ * person. The reason is not only attribution — a tech who believes he is being timed clocks on at
+ * eight and off at five, and the data is then worthless for costing too. Anything downstream that
+ * would pay or assess on this must first solve per-tech identity on a shared device, and that is a
+ * decision to be taken, not an implementation detail to be filled in here.
  *
  * ── THE JOB CARD MUST BE THEIRS ─────────────────────────────────────────────────────────────────
  * Scoped by group_id, like every tenant read. A clock-on naming another garage's card is a 404, not

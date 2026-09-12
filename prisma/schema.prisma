@@ -5012,6 +5012,25 @@ model ResellerEnquiry {
 /// unchanged, because clocking is exactly the missing input somebody will otherwise wire in by
 /// accident. Connecting them is a decision, with its own slice.
 ///
+///
+/// ── WHAT THIS DATA IS FOR, AND WHAT IT IS NOT FOR (owner's decision, 2026-09-12) ───────────────
+/// It is for COSTING JOBS AND CARS. It is NOT for assessing, paying or disciplining a person, and
+/// it does not become so without a separate decision by the owner.
+///
+/// THE REASON IS NOT ONLY ATTRIBUTION. A tech who believes he is being timed clocks on at eight and
+/// off at five, and the data is then worthless for costing too. The honest use PROTECTS the
+/// measurement; the dishonest use destroys it. This is a decision about what the numbers are worth,
+/// not a policy bolted on beside them.
+///
+/// SO ATTRIBUTION IS BEST-EFFORT while the workshop phone is shared. The session is 90 days and
+/// rolling — a deliberate ruling made for this app, so a mechanic never re-authenticates — which
+/// means user_id is whoever last signed in on the handset, not provably who tapped. Stated here
+/// rather than hidden, because a field named user_id invites more confidence than it has earned.
+///
+/// ANYTHING DOWNSTREAM THAT WOULD PAY OR ASSESS ON THIS MUST FIRST SOLVE PER-TECH IDENTITY ON A
+/// SHARED DEVICE — and that is a decision, not an implementation detail. job-clock-gate holds the
+/// line meanwhile: no money reader may touch a clock session, and the wage bill still costs hourly
+/// people at nothing and says so.
 /// ── INSERT-ONLY IN SPIRIT ───────────────────────────────────────────────────────────────────────
 /// A recorded time is never edited. Closing an open session WRITES ended_at once — completing a fact,
 /// not revising one — and a trigger holds that difference (JobClockSession_append_only, the
