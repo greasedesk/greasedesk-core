@@ -26,6 +26,7 @@ import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorks
 import { type DueItemView } from '@/components/jobcard/DueItems';
 import { type IntakeItemView } from '@/components/jobcard/IntakeChecklist';
 import { AuditEvent } from '@/components/jobcard/JobCardAudit';
+import type { JobClockProps } from '@/components/jobcard/JobClock';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { computeTabs, TabKey, TabState } from '@/lib/jobcard-tabs';
 import { buildJobCardPageProps } from '@/lib/jobcard-page-data';
@@ -34,6 +35,8 @@ import { diaryReturnHref } from '@/lib/diary-return';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 
 type PageProps = {
+  /** Time on this job: both numbers and the sessions behind them (lib/jobcard-page-data). */
+  clock: JobClockProps['clock'];
   /** Open findings on this CAR, server-rendered so the panel is right on first paint. */
   dueItems?: DueItemView[];
   /** The four intake prompts, resolved server-side. */
@@ -216,6 +219,7 @@ export default function JobCardDetailPage(props: PageProps) {
         stages={props.stages}
         skipped={props.skipped}
         invoice={props.invoice}
+        clock={props.clock}
         events={props.events}
       />
     </>

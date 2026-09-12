@@ -216,6 +216,52 @@ try {
     data: { ended_at: new Date(), ended_received_at: new Date(), ended_source: 'live', ended_cause: 'tech' },
   })).count === 1, 'completing a fact is not revising one');
 
+  // ── 6b. THE DESKTOP, WHERE A MANAGER READS IT AND ACTS ───────────────────────────────────────
+  /**
+   * The phone shows the tech at the car; this is the other reader. Two things are proved: BOTH
+   * numbers reach the desktop props (a manager shown one assumes the other), and the correction is
+   * REACHABLE — an endpoint a manager can only hit with an API call is one nobody uses, and then the
+   * still-running list only ever grows and nothing clears it.
+   */
+  console.log('\n— the desktop carries both numbers, and a way to correct —');
+  /**
+   * OVER HTTP, THE WAY THE PAGE GETS IT. buildJobCardPageProps cannot be imported here — it
+   * transitively pulls next-auth/providers/credentials, which resolves to a namespace outside Next
+   * (the same wall rep-auth-gate documents). /api/jobcard-pane returns the same builder's output, so
+   * driving the real endpoint with a real session is both possible and the more honest path.
+   */
+  const B = gateOrigin();
+  const jar = new Map();
+  const keep = (r) => { for (const c of r.headers.getSetCookie?.() ?? []) { const kv = c.split(';')[0]; const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); } };
+  const cookies = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+  const csrfRes = await fetch(`${B}/api/auth/csrf`); keep(csrfRes);
+  const csrfToken = (await csrfRes.json()).csrfToken;
+  keep(await fetch(`${B}/api/auth/callback/credentials`, {
+    method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', cookie: cookies() },
+    body: new URLSearchParams({ email: 'owner@zzgategarage.test', password: 'GateGarage!2026', csrfToken, json: 'true' }),
+  }));
+  const paneRes = await fetch(`${B}/api/jobcard-pane?id=${encodeURIComponent(shared)}`, { headers: { cookie: cookies() }, cache: 'no-store' });
+  check('the desktop pane answers for a signed-in manager', paneRes.status === 200, `HTTP ${paneRes.status}`);
+  const props = await paneRes.json();
+  check('the desktop props carry LABOUR as the sum', props.clock.labourMinutes === 120, `${props.clock.labourMinutes} minutes`);
+  check('  …and ON THE RAMP as the elapsed span', props.clock.elapsedMinutes === 60, `${props.clock.elapsedMinutes} minutes`);
+  check('  …and the sessions behind them, named', props.clock.sessions.length === 2
+    && props.clock.sessions.every((x) => typeof x.who === 'string' && x.who !== 'Someone'),
+    props.clock.sessions.map((x) => x.who).join(', '));
+  const panel = code(readFileSync('components/jobcard/JobClock.tsx', 'utf8'));
+  check('the panel labels both, never one alone', /Labour/.test(panel) && /On the ramp/.test(panel)
+    && /job-clock-labour/.test(panel) && /job-clock-elapsed/.test(panel));
+  check('  …and says what it did NOT count', /job-clock-excluded/.test(panel) && /still running/.test(panel) && /disputed/.test(panel),
+    'silently excluding a running session makes a job look cheap');
+  check('  …the correction form is admin-only and posts to the gated endpoint', /isAdmin && !s\.correctsId/.test(panel)
+    && /'\/api\/jobcard-clock'/.test(panel));
+  check('  …a reason is required in the form as well as the server', /required value=\{form\.reason\}/.test(panel),
+    'the prompt, not the rule — the server refuses a blank one too');
+  check('  …and a correction is never offered ON a correction', /!s\.correctsId/.test(panel),
+    'correcting a correction would make "the original" ambiguous');
+  const corrected = props.clock.sessions.find((x) => x.correctsId);
+  check('the ORIGINAL and its correction both appear on the desktop', !corrected || (!!corrected.correctionReason && !!corrected.correctedBy));
+
   // ── 7. IT MOVES NO MONEY ─────────────────────────────────────────────────────────────────────
   console.log('\n— and none of it moves a money figure —');
   const from = new Date('2026-08-01T00:00:00Z'), to = new Date('2026-09-01T00:00:00Z');

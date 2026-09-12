@@ -15,6 +15,7 @@ import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferInta
 import { openDueItemsForVehicle, reportStatus, closureOffersForCard } from '@/lib/due-items';
 import { noShowHistory } from '@/lib/no-show';
 import { prisma } from '@/lib/db';
+import { jobTotals, sessionState, sessionMinutes } from '@/lib/job-clock';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
 import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
@@ -84,7 +85,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   if (!row) return null;
 
   // Card ownership proven → NOW safe to read its invoice + audit trail (keyed on the card).
-  const [invoiceRow, auditRows, latestQuote] = await Promise.all([
+  const [invoiceRow, clockRows, auditRows, latestQuote] = await Promise.all([
     prisma.invoice.findUnique({
       where: { job_card_id: cardId },
       // `lines` USED to be `take: 1` — existence alone answered "are the lines FROZEN?", which is
@@ -102,6 +103,21 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         payments: { select: { status: true, amount_pennies: true, refunds: { select: { amount_pennies: true, collected_at: true } } } },
       },
     }) as Promise<{ id: string; invoice_number: string | null; status: string; series: string; lines: any[]; payments: any[] } | null>,
+    // CLOCK SESSIONS, in the same wave. A manager reads the two numbers HERE, on the desktop —
+    // the phone shows them to the tech who is standing at the car, which is a different question.
+    prisma.jobClockSession.findMany({
+      where: { job_card_id: cardId },
+      orderBy: { started_at: 'desc' },
+      select: {
+        id: true, started_at: true, ended_at: true, ended_cause: true,
+        device_started_at: true, device_ended_at: true, started_received_at: true, ended_received_at: true,
+        corrects_id: true, correction_reason: true,
+        user_id: true, corrected_by_user_id: true,
+      },
+      // IDS, NOT A RELATION. user_id and corrected_by_user_id carry no foreign key, and adding two
+      // would be a constraining migration and a second two-push cycle for a display name. The names
+      // are resolved in one batched lookup below instead.
+    }) as Promise<any[]>,
     prisma.auditLog.findMany({
       where: { entity: 'job_card', entity_id: cardId },
       orderBy: { created_at: 'desc' },
@@ -486,6 +502,39 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     }
     return PROVENANCE_LABEL.unknown;
   };
+  // ── TIME ON THIS JOB, FOR A MANAGER ───────────────────────────────────────────────────────────
+  // Both numbers, both labelled. LABOUR is the sum of everyone's sessions; ON THE RAMP is the
+  // elapsed span. Two techs on a car for an hour is two hours of labour and one hour on the ramp,
+  // and a reader shown one number assumes the other — the ambiguity is the defect.
+  const clockNames = new Map<string, string>();
+  {
+    const ids = [...new Set(clockRows.flatMap((r: any) => [r.user_id, r.corrected_by_user_id]).filter(Boolean))] as string[];
+    if (ids.length) {
+      for (const u of await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } })) {
+        clockNames.set(u.id, u.name || u.email || 'Someone');
+      }
+    }
+  }
+  const clockTotals = jobTotals(clockRows as any);
+  const clock = {
+    labourMinutes: clockTotals.labourMinutes,
+    elapsedMinutes: clockTotals.elapsedMinutes,
+    running: clockTotals.running,
+    disputed: clockTotals.disputed,
+    sessions: clockRows.map((r: any) => ({
+      id: r.id,
+      who: clockNames.get(r.user_id) ?? 'Someone',
+      startedAt: (r.started_at as Date).toISOString(),
+      endedAt: r.ended_at ? (r.ended_at as Date).toISOString() : null,
+      state: sessionState(r),
+      minutes: sessionMinutes(r),
+      cause: r.ended_cause as string | null,
+      correctsId: r.corrects_id as string | null,
+      correctionReason: r.correction_reason as string | null,
+      correctedBy: r.corrected_by_user_id ? (clockNames.get(r.corrected_by_user_id) ?? 'Someone') : null,
+    })),
+  };
+
   const events: AuditEvent[] = auditRows.map((a) => ({
     id: a.id, action: a.action, actor: a.user?.name ?? a.user?.email ?? null, at: (a.created_at as Date).toISOString(),
     note: auditNote(a.action, a.diff_json),
@@ -611,6 +660,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     flags, isComeback: !!row.is_comeback,
     duplicatedFrom, costsInherited,
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
+    clock,
     garageNotes: row.garage_notes ?? '',
     lines, catalogue, fixedServices, tiers, promos,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them

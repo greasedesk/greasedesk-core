@@ -1023,6 +1023,7 @@ export default function DiaryPage(props: PageProps) {
                 {pane.data ? (
                   <JobCardWorkspace
                     jobCardId={pane.data.jobCardId} status={pane.data.status} tabsState={pane.data.tabsState}
+                    clock={pane.data.clock}
                     canManage={pane.data.canEdit} canOperate={pane.data.canOperate} canEditPricing={pane.data.canEditPricing}
                     quoteFrozen={pane.data.quoteFrozen}
                     quoteSupersededNoLink={pane.data.quoteSupersededNoLink}

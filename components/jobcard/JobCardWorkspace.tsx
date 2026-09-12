@@ -33,6 +33,7 @@ import PhotoStage from '@/components/jobcard/PhotoStage';
 import JobCardTabs, { TabView } from '@/components/jobcard/JobCardTabs';
 import { RefundPanel } from '@/components/refund/RefundPanel';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
+import JobClock, { type JobClockProps } from '@/components/jobcard/JobClock';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
 import { TAB_KEYS, TabKey, TabState, computeTabs, tabForStage } from '@/lib/jobcard-tabs';
 import { stagesRemaining } from '@/lib/jobcard-status';
@@ -83,6 +84,7 @@ type Props = {
   quoteHasAcceptedVersion: boolean; // a version was ACCEPTED → the next send is a revision, not a quote
   priceUnconfirmed: PriceUnconfirmed | null; // agreed one price, sent another (lib/quotes-list)
   isAdmin: boolean;       // ADMIN — may author the catalogue (surfaces the ad-hoc "Add to catalogue" link)
+  clock: JobClockProps['clock'];  // time on this job — both numbers, and the sessions behind them
   priceVisible: boolean; costVisible: boolean; // finance-shaped server-side (props already stripped)
   /** Open findings on THIS CAR — from this visit or any earlier one (lib/due-items). */
   dueItems?: DueItemView[];
@@ -169,6 +171,7 @@ export default function JobCardWorkspace(p: Props) {
   // On failure the overlay reverts to its pre-click snapshot + a friendly error. Server-side save
   // logic (validation/guards/audit/money) is byte-identical — this is client data flow only.
   type Overlay = {
+    clock?: JobClockProps['clock'];
     status?: JobStatus;
     intakeItems?: IntakeItemView[];
     nothingFoundAt?: string | null;
@@ -190,6 +193,7 @@ export default function JobCardWorkspace(p: Props) {
   };
   const [ov, setOv] = useState<Overlay>({});
   const eff = {
+    clock: ov.clock ?? p.clock,
     status: ov.status ?? p.status,
     // The four intake prompts follow the same overlay path as the stage flags: they are card state,
     // they change from this screen, and /api/jobcard-pane already returns them resolved.
@@ -224,6 +228,7 @@ export default function JobCardWorkspace(p: Props) {
         status: d.status, stages: d.stages, skipped: d.skipped, isComeback: d.isComeback,
         invoice: d.invoice, events: d.events, booking: d.booking, tabsState: d.tabsState,
         vehicle: d.vehicle, owner: d.owner,
+        clock: d.clock,
         intakeItems: d.intakeItems, nothingFoundAt: d.nothingFoundAt ?? null,
         scheduleOnArrival: d.scheduleOnArrival ?? [], serviceSchedule: d.serviceSchedule ?? [],
       });
@@ -1004,6 +1009,10 @@ export default function JobCardWorkspace(p: Props) {
         </div>
       )}
 
+      {/* TIME, then the trail. Both answer "what happened to this job" for the same reader, and the
+          clock is the one a manager acts on — the correction lives here because an endpoint reachable
+          only by an API call is one nobody uses, and then the still-running list only ever grows. */}
+      <JobClock clock={eff.clock} jobCardId={p.jobCardId} isAdmin={p.isAdmin} onChanged={refreshCard} />
       <JobCardAudit events={eff.events} />
     </>
   );
