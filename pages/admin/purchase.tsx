@@ -39,8 +39,12 @@ const showSlider = (k: SliderKey, v: number) => {
   return `${v} h`;
 };
 
-export default function PurchaseModelPage() {
+export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: boolean }) {
   const [inputs, setInputs] = useState<ModelInputs>(defaultInputs);
+  // NOT VAT REGISTERED → THE QUALIFYING ROUTE IS NOT OFFERED. Under the threshold there is no
+  // recovery and no qualifying sale, so showing the toggle would offer a route they cannot take —
+  // and this page's output is a claim about their tax position, which is heavier than a slider.
+  const qualifyingAvailable = vatRegistered;
   const [label, setLabel] = useState('');
   const [ident, setIdent] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -112,22 +116,59 @@ export default function PurchaseModelPage() {
 
         {/* THE TOGGLE, NOT AN ASSUMPTION. £8,000 in and £10,000 out is £333 on the margin scheme and
             £1,667 if the car is VAT qualifying — four figures apart on one car, so it is asked. */}
-        <fieldset className="mt-4" data-testid="vat-toggle">
-          <legend className="text-sm text-muted">VAT treatment</legend>
-          <div className="mt-1 flex gap-2">
-            {([['margin', 'Margin scheme'], ['qualifying', 'VAT qualifying']] as [VatStatus, string][]).map(([v, l]) => (
-              <button key={v} type="button" onClick={() => setInputs((p) => ({ ...p, vatStatus: v }))}
-                data-testid={`vat-${v}`}
-                className={`flex-1 min-h-[44px] rounded-lg border text-sm font-medium ${
-                  inputs.vatStatus === v ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'}`}>
-                {l}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1 text-xs text-muted">
-            {inputs.vatStatus === 'margin' ? 'VAT on the margin only, and none if it sells at or below cost.' : 'VAT on the full sale price.'}
+        {qualifyingAvailable ? (
+          <fieldset className="mt-4" data-testid="vat-toggle">
+            <legend className="text-sm text-muted">VAT treatment</legend>
+            <div className="mt-1 flex gap-2">
+              {([['margin', 'Margin scheme'], ['qualifying', 'VAT qualifying']] as [VatStatus, string][]).map(([v, l]) => (
+                <button key={v} type="button" onClick={() => setInputs((p) => ({ ...p, vatStatus: v }))}
+                  data-testid={`vat-${v}`}
+                  className={`flex-1 min-h-[44px] rounded-lg border text-sm font-medium ${
+                    inputs.vatStatus === v ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              {inputs.vatStatus === 'margin' ? 'VAT on the margin only, and none if it sells at or below cost.' : 'VAT on the full sale price, less the VAT you reclaim on the purchase.'}
+            </p>
+
+            {/* THE QUESTION THE WHOLE DEFECT CAME FROM. Asked as the invoice in front of them, not as
+                tax, and only where it means anything. Neither reading announced itself before. */}
+            {inputs.vatStatus === 'qualifying' && (
+              <div className="mt-3" data-testid="inc-vat-question">
+                <span className="text-sm text-muted">Is that purchase price…</span>
+                <div className="mt-1 flex gap-2">
+                  {([[false, 'Plus VAT'], [true, 'Includes VAT']] as [boolean, string][]).map(([v, l]) => (
+                    <button key={String(v)} type="button" onClick={() => setInputs((p) => ({ ...p, purchaseIncludesVat: v }))}
+                      data-testid={`incvat-${v ? 'inc' : 'plus'}`}
+                      className={`flex-1 min-h-[44px] rounded-lg border text-sm font-medium ${
+                        inputs.purchaseIncludesVat === v ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                {/* SAY WHICH ANSWER IS IN FORCE. The defect was that neither reading announced itself. */}
+                <p className="mt-1 text-xs text-ink" data-testid="inc-vat-inforce">
+                  {inputs.purchaseIncludesVat
+                    ? `Taking ${money(inputs.purchasePence)} as the total paid, with ${money(r.vat.inputVatPence)} of VAT inside it to reclaim.`
+                    : `Taking ${money(inputs.purchasePence)} as the price before VAT — so ${money(r.vat.cashOutPence)} leaves the bank and ${money(r.vat.inputVatPence)} comes back.`}
+                </p>
+                {/* NAMED, NOT MODELLED. */}
+                <p className="mt-1 text-xs text-muted" data-testid="reclaim-timing">
+                  The reclaim arrives on your next VAT return, so that money can be out for up to about four months.
+                </p>
+                <p className="mt-1 text-xs text-muted" data-testid="stock-assumption">
+                  This assumes the car is stock for resale.
+                </p>
+              </div>
+            )}
+          </fieldset>
+        ) : (
+          <p className="mt-4 text-sm text-muted" data-testid="not-vat-registered">
+            You are not VAT registered, so this uses the margin scheme. There is no VAT to reclaim on a purchase.
           </p>
-        </fieldset>
+        )}
 
         <section className="mt-6 space-y-5" data-testid="sliders">
           {SLIDERS.map((s) => (
@@ -216,6 +257,14 @@ export default function PurchaseModelPage() {
             <div className="flex justify-between"><dt className="text-muted">Cost of money</dt><dd className="text-ink tabular-nums" data-testid="out-stocking">{moneyExact(r.stockingCostPence)}</dd></div>
             <div className="flex justify-between"><dt className="text-muted">Other costs</dt><dd className="text-ink tabular-nums" data-testid="out-other">{moneyExact(r.otherCostsPence)}</dd></div>
           </dl>
+          {/* CASH OUT IS NOT COST. On a plus-VAT purchase the bank loses 20% more than the car costs,
+              and the cost of money is charged on THAT — a tool about tied-up capital that charged
+              interest on the smaller number would be wrong about its own subject. */}
+          <p className="mt-2 text-xs text-muted" data-testid="out-cash">
+            Cash out to buy it: <strong className="text-ink">{moneyExact(r.vat.cashOutPence)}</strong>
+            {r.vat.inputVatPence > 0 && <> — including {moneyExact(r.vat.inputVatPence)} of VAT you reclaim later.</>}
+            {' '}The cost of money is charged on that.
+          </p>
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}
           <p className="mt-2 text-xs text-muted" data-testid="out-uncounted">
             Workshop time and cost of money take {moneyExact(r.workshopCostPence + r.stockingCostPence)} out of this.
@@ -229,6 +278,13 @@ export default function PurchaseModelPage() {
 
 export const getServerSideProps = withI18n([])(async (ctx) => {
   const gate = await requireAdminPage(ctx);
-  if ('redirect' in gate || 'notFound' in gate) return gate as never;
-  return { props: {} };
+  if (!gate.ok) return { redirect: gate.redirect };
+  // THE TENANT'S OWN REGISTRATION, from the tax chokepoint. NOT garageVatRegistered(), which is
+  // GreaseDesk Ltd's own VAT status for its own pricing and says nothing about the garage — a
+  // mistake worth naming, because the two read alike and only one of them is about this tenant.
+  const { getTaxProfile } = await import('@/lib/tenant-vat');
+  const profile = await getTaxProfile(gate.vis.groupId as string).catch(() => null);
+  // FAILS TOWARDS THE SIMPLER TOOL: if the profile cannot be read, offer the margin scheme only.
+  // Offering a reclaim to a garage that cannot make one is the expensive direction.
+  return { props: { vatRegistered: profile?.isRegistered === true } };
 });

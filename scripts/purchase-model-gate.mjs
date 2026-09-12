@@ -46,6 +46,84 @@ try {
   check('the margin is one sixth of the margin, not of the price', margin === Math.round((OUT - IN) / 6));
   check('the qualifying figure is one sixth of the PRICE', qualifying === Math.round(OUT / 6));
 
+  /**
+   * ── THE FOUR ROWS, AS NUMBERS ─────────────────────────────────────────────────────────────────
+   * The shipped version charged full output VAT with no reclaim, which is algebraically the PLUS-VAT
+   * case — correct for the trade convention it silently assumed, and understated by £1,333 when the
+   * garage typed a VAT-inclusive price. Neither reading announced itself. All of it is asserted as
+   * arithmetic, because a clause about shape would have passed on the version that was wrong.
+   *
+   * Tolerances are ±2p and stated: each figure is rounded to its own penny, so "identical" between
+   * two schemes is identical to the rounding, not to the last unit. A factor still gets caught.
+   */
+  console.log('\n— the three answers on £8,000 in, £10,000 out —');
+  const bare = { ...M.defaultInputs(), purchasePence: IN, salePence: OUT,
+    prepHours: 0, partsPence: 0, daysInStock: 0, advertisingPence: 0, warrantyPence: 0, deliveryInPence: 0, deliveryOutPence: 0 };
+  const caseOf = (o) => M.computeModel({ ...bare, ...o });
+  const mgn = caseOf({ vatStatus: 'margin' });
+  const inc = caseOf({ vatStatus: 'qualifying', purchaseIncludesVat: true });
+  const plus = caseOf({ vatStatus: 'qualifying', purchaseIncludesVat: false });
+  const near = (a, b) => Math.abs(a - b) <= 2;
+
+  check('MARGIN: £333.33 to HMRC, £1,666.67 profit, £8,000 out',
+    near(mgn.vat.vatToHmrcPence, 33333) && near(mgn.profitPence, 166667) && mgn.vat.cashOutPence === 800000,
+    `${mgn.vat.vatToHmrcPence}p · ${mgn.profitPence}p · ${mgn.vat.cashOutPence}p`);
+  check('QUALIFYING, price INCLUDES VAT: £333.33 to HMRC, £1,666.67 profit, £8,000 out',
+    near(inc.vat.vatToHmrcPence, 33333) && near(inc.profitPence, 166667) && inc.vat.cashOutPence === 800000,
+    `${inc.vat.vatToHmrcPence}p · ${inc.profitPence}p · ${inc.vat.cashOutPence}p`);
+  check('QUALIFYING, price PLUS VAT: £66.67 to HMRC, £333.33 profit, £9,600 out',
+    near(plus.vat.vatToHmrcPence, 6667) && near(plus.profitPence, 33333) && plus.vat.cashOutPence === 960000,
+    `${plus.vat.vatToHmrcPence}p · ${plus.profitPence}p · ${plus.vat.cashOutPence}p`);
+  check('  …so margin and inclusive-VAT are THE SAME PROFIT — the reclaim cancels the output VAT',
+    near(mgn.profitPence, inc.profitPence),
+    `${mgn.profitPence}p vs ${inc.profitPence}p — the shipped version claimed the toggle was worth £1,333 here`);
+  check('  …and plus-VAT is the one that differs, by £1,333', near(inc.profitPence - plus.profitPence, 133333),
+    `${(inc.profitPence - plus.profitPence) / 100} pounds`);
+
+  console.log('\n— cash out is not cost, and the cost of money is charged on the cash —');
+  check('a plus-VAT purchase takes 20% more out of the bank than the car costs',
+    plus.vat.cashOutPence === 960000 && plus.vat.netCostPence === 800000,
+    `${plus.vat.cashOutPence}p out, ${plus.vat.netCostPence}p of cost`);
+  check('  …and an inclusive one does not', inc.vat.cashOutPence === 800000 && inc.vat.netCostPence === 800000 - inc.vat.inputVatPence);
+  const held = { daysInStock: 90, costOfMoneyAnnualPct: 10 };
+  const stockPlus = caseOf({ vatStatus: 'qualifying', purchaseIncludesVat: false, ...held }).stockingCostPence;
+  const stockInc = caseOf({ vatStatus: 'qualifying', purchaseIncludesVat: true, ...held }).stockingCostPence;
+  const expected = (basePence) => Math.round(basePence * (held.costOfMoneyAnnualPct / 100) * (held.daysInStock / 365));
+  check('the cost of money is charged on CASH OUT, not on cost', Math.abs(stockPlus - expected(960000)) <= 2,
+    `${stockPlus}p — interest on £9,600 is ${expected(960000)}p, on £8,000 it would be ${expected(800000)}p`);
+  check('  …and on the inclusive purchase that base is £8,000', Math.abs(stockInc - expected(800000)) <= 2,
+    `${stockInc}p vs ${expected(800000)}p — a tool about tied-up capital that charged interest on the smaller number would be wrong about its subject`);
+  check('  …so the two differ by exactly the 20% the VAT adds', Math.abs(stockPlus - Math.round(stockInc * 1.2)) <= 2,
+    `${stockPlus}p vs ${Math.round(stockInc * 1.2)}p`);
+  check('the margin scheme reclaims nothing, whatever the answer to the question',
+    caseOf({ vatStatus: 'margin', purchaseIncludesVat: true }).vat.inputVatPence === 0
+    && caseOf({ vatStatus: 'margin', purchaseIncludesVat: true }).vat.cashOutPence === 800000,
+    'the question is meaningless there, and the arithmetic says so rather than the form merely hiding it');
+
+  console.log('\n— the page says which reading is in force, and what it is assuming —');
+  const pg = code(readFileSync('pages/admin/purchase.tsx', 'utf8'));
+  check('it asks the question as the invoice in front of them', /Is that purchase price/.test(pg) && /Plus VAT/.test(pg) && /Includes VAT/.test(pg));
+  check('  …only when the car is VAT qualifying', /inputs\.vatStatus === 'qualifying' && \(/.test(pg),
+    'on the margin scheme nothing is recoverable and the typed figure is simply what was paid');
+  check('  …and SAYS which answer is in force', /data-testid="inc-vat-inforce"/.test(pg) && /leaves the bank/.test(pg),
+    'the whole defect was that neither reading announced itself');
+  check('the default is PLUS VAT — the conservative reading', M.defaultInputs().purchaseIncludesVat === false
+    && S.normaliseInputs({}).purchaseIncludesVat === false,
+    'it preserves what shipped and produces the LOWER profit, so an absent field is never the generous answer');
+  check('cash out is shown SEPARATELY from cost', /data-testid="out-cash"/.test(pg) && /Cash out to buy it/.test(pg));
+  check('the reclaim timing is NAMED, not modelled', /data-testid="reclaim-timing"/.test(pg) && /next VAT return/.test(pg) && /four months/.test(pg));
+  check('  …and so is the stock-for-resale assumption', /data-testid="stock-assumption"/.test(pg) && /stock for resale/.test(pg),
+    'a tool telling a garage they can reclaim £1,600 is making a claim about their tax position');
+  check('the qualifying route is HIDDEN when the tenant is not VAT registered',
+    /const qualifyingAvailable = vatRegistered;/.test(pg) && /qualifyingAvailable \? \(/.test(pg)
+    && /data-testid="not-vat-registered"/.test(pg),
+    'the branch existing says nothing about what DECIDES it — the prop must be what does');
+  check('  …read from the TENANT\'s tax profile, not GreaseDesk\'s own', /getTaxProfile\(gate\.vis\.groupId/.test(pg)
+    && !/garageVatRegistered/.test(pg),
+    'garageVatRegistered() is GreaseDesk Ltd\'s status for its own pricing and says nothing about the garage');
+  check('  …and it fails towards the SIMPLER tool', /profile\?\.isRegistered === true/.test(pg),
+    'an unreadable profile offers the margin scheme only — offering a reclaim that cannot be made is the expensive direction');
+
   console.log('\n— and the edges of the scheme —');
   check('no margin, no VAT', M.vatDuePence(1000000, 1000000, 'margin') === 0, 'a car sold at cost owes nothing on the margin scheme');
   check('  …and a LOSS owes nothing either, never a negative', M.vatDuePence(1000000, 800000, 'margin') === 0,

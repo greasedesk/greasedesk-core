@@ -24,6 +24,9 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     purchasePence: Math.max(0, Math.round(num(b.purchasePence, d.purchasePence))),
     salePence: Math.max(0, Math.round(num(b.salePence, d.salePence))),
     vatStatus: (VAT_STATUSES as readonly string[]).includes(String(b.vatStatus)) ? (b.vatStatus as VatStatus) : d.vatStatus,
+    // DEFAULTS TO PLUS VAT (false): it preserves the behaviour that shipped and is the conservative
+    // reading — it produces the lower profit. An absent field is therefore never the generous answer.
+    purchaseIncludesVat: b.purchaseIncludesVat === true,
     ...Object.fromEntries(SLIDERS.map((s) => [s.key, clampSlider(s.key, num(b[s.key], s.def))])) as Record<SliderKey, number>,
   };
   return out;

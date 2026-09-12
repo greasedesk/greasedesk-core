@@ -65,6 +65,59 @@ export function vatDuePence(purchasePence: number, salePence: number, status: Va
   return margin > 0 ? Math.round(margin * VAT_FRACTION) : 0;   // no margin, no VAT
 }
 
+export type VatPosition = {
+  /** Output VAT on the sale — what the scheme charges. */
+  outputVatPence: number;
+  /** Input VAT reclaimable on the purchase. Always 0 on the margin scheme. */
+  inputVatPence: number;
+  /** What actually goes to HMRC: output less input. */
+  vatToHmrcPence: number;
+  /** THE CASH THAT LEAVES THE BANK to buy the car — not the same as its cost. */
+  cashOutPence: number;
+  /** The purchase as a COST, after any VAT that comes back. */
+  netCostPence: number;
+};
+
+/**
+ * THE WHOLE VAT POSITION, and the reason it is four numbers rather than one.
+ *
+ * ── CASH OUT IS NOT COST, AND THIS TOOL IS ABOUT TIED-UP CAPITAL ────────────────────────────────
+ * On a "plus VAT" purchase the garage pays purchase × 1.2 and gets the VAT back LATER. £9,600 leaves
+ * the bank on an £8,000 car. A model about the cost of money that charges interest on £8,000 is
+ * wrong about its own subject (owner, 2026-09-12), so cashOutPence is separate and the stocking cost
+ * is charged on it.
+ *
+ * ── THE THREE ANSWERS, ON £8,000 IN AND £10,000 OUT ─────────────────────────────────────────────
+ *   margin scheme                      → £333.33 to HMRC, £1,666.67 profit, £8,000 out
+ *   qualifying, price INCLUDES VAT     → £333.33 to HMRC, £1,666.67 profit, £8,000 out
+ *   qualifying, price PLUS VAT         →  £66.67 to HMRC,   £333.33 profit, £9,600 out
+ *
+ * The first two are IDENTICAL — the reclaim cancels the extra output VAT — which is exactly what the
+ * shipped version got wrong when it said the toggle was worth £1,333.
+ *
+ * ── WHAT THIS ASSUMES, AND DOES NOT MODEL ───────────────────────────────────────────────────────
+ * That the car is STOCK FOR RESALE. Input VAT on a car is blocked by default and recoverable by a
+ * dealer under the stock-in-trade exception; using it as a courtesy car or demonstrator can taint
+ * that. Not modelled — named on screen, and on the accountant list. Nor is the TIMING: the reclaim
+ * arrives on the next return, so the VAT is out for up to about four months. Named, not modelled.
+ */
+export function vatPosition(purchasePence: number, salePence: number, status: VatStatus, purchaseIncludesVat: boolean): VatPosition {
+  if (status === 'margin') {
+    const outputVat = vatDuePence(purchasePence, salePence, 'margin');
+    // NOTHING IS RECLAIMABLE on the margin scheme; the typed price is simply what you paid.
+    return { outputVatPence: outputVat, inputVatPence: 0, vatToHmrcPence: outputVat, cashOutPence: purchasePence, netCostPence: purchasePence };
+  }
+  const outputVat = Math.round(salePence * VAT_FRACTION);
+  const inputVat = purchaseIncludesVat ? Math.round(purchasePence * VAT_FRACTION) : Math.round(purchasePence * 0.2);
+  const cashOut = purchaseIncludesVat ? purchasePence : purchasePence + inputVat;
+  return {
+    outputVatPence: outputVat, inputVatPence: inputVat,
+    vatToHmrcPence: outputVat - inputVat,
+    cashOutPence: cashOut,
+    netCostPence: cashOut - inputVat,
+  };
+}
+
 /** A slider: what it is, where it starts, and what counts as a plausible span for it. */
 export type SliderDef = {
   key: SliderKey; label: string; unit: 'money' | 'hours' | 'days' | 'percent';
@@ -107,15 +160,30 @@ export const SLIDERS: SliderDef[] = [
 
 export type ModelInputs = {
   purchasePence: number; salePence: number; vatStatus: VatStatus;
+  /**
+   * DOES THE TYPED PURCHASE PRICE INCLUDE VAT? Only meaningful when the car is VAT qualifying — on
+   * the margin scheme nothing is recoverable and the typed figure is simply what you paid.
+   *
+   * It exists because the first version silently assumed one answer. `sale − purchase − sale/6`
+   * rearranges to `sale_net − purchase`, which is profit when the typed figure is the NET price —
+   * the trade convention of quoting qualifying cars "plus VAT". Correct for that reading, and
+   * understated by £1,333 on an £8,000 car when the garage typed a VAT-INCLUSIVE price. Neither
+   * reading announced itself, which was the whole defect.
+   *
+   * FALSE (plus VAT) is the default: it preserves the behaviour that shipped, and it is the
+   * conservative direction — it produces the lower profit.
+   */
+  purchaseIncludesVat: boolean;
 } & Record<SliderKey, number>;
 
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', ...sliders };
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, ...sliders };
 }
 
 export type ModelResult = {
+  vat: VatPosition;
   vatDuePence: number;
   workshopCostPence: number;
   stockingCostPence: number;
@@ -135,14 +203,18 @@ export type ModelResult = {
  * question, about real dated costs landing in real months, and this model owns no such thing.
  */
 export function computeModel(i: ModelInputs): ModelResult {
-  const vat = vatDuePence(i.purchasePence, i.salePence, i.vatStatus);
+  const vat = vatPosition(i.purchasePence, i.salePence, i.vatStatus, i.purchaseIncludesVat);
   const workshop = Math.round(i.prepHours * i.workshopCostPerHourPence);
-  const stocking = Math.round(i.purchasePence * (i.costOfMoneyAnnualPct / 100) * (i.daysInStock / 365));
+  // ON THE CASH, NOT THE COST. The VAT on a plus-VAT purchase is out of the bank until the next
+  // return; interest is paid on money that has gone, not on money that will come back.
+  const stocking = Math.round(vat.cashOutPence * (i.costOfMoneyAnnualPct / 100) * (i.daysInStock / 365));
   const other = i.partsPence + i.advertisingPence + i.warrantyPence + i.deliveryInPence + i.deliveryOutPence;
   const total = workshop + stocking + other;
-  const gross = i.salePence - i.purchasePence - vat;
+  // Revenue net of the VAT charged on the sale, less what the car actually cost after any reclaim.
+  const gross = i.salePence - vat.outputVatPence - vat.netCostPence;
   return {
-    vatDuePence: vat, workshopCostPence: workshop, stockingCostPence: stocking,
+    vat, vatDuePence: vat.vatToHmrcPence,
+    workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
     profitPence: gross - total,
     profitBeforeWorkshopAndMoneyPence: gross - other,
