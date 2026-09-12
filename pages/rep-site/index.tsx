@@ -44,8 +44,9 @@ const Check = () => (
 
 /**
  * THE OWNER'S COPY, verbatim (supplied 2026-09-12). Not placeholder any more, and not to be edited
- * here: the words are his, including the straight apostrophes, which were kept exactly as given
- * rather than curled to match the rest of the site's typography.
+ * here: the words are his. The apostrophes are typographic (’) to match the rest of the site —
+ * supplied straight, which the owner confirmed was an artefact of typing into a chat window rather
+ * than a choice. That is the ONLY character changed from what he sent.
  *
  * `earnings` carries NO figure, which is the standing ruling — commercial rates are given on
  * registration, not published. Do not add one.
@@ -55,8 +56,8 @@ const Check = () => (
  */
 const COPY = {
   hero: 'Introduce GreaseDesk to the garages you already visit.',
-  sub: "Whether you run a regular trade round or you're an ambitious self-starter with the time to build a local route, GreaseDesk pays you an ongoing monthly commission to be our person on the ground. Introduce modern workshop software to independent garages, drop in monthly to keep them happy, and earn every month they stay active.",
-  openDoor: "You don't need a van or motor-trade pedigree — just the initiative to visit workshops, build real relationships, and act as their trusted local contact.",
+  sub: 'Whether you run a regular trade round or you’re an ambitious self-starter with the time to build a local route, GreaseDesk pays you an ongoing monthly commission to be our person on the ground. Introduce modern workshop software to independent garages, drop in monthly to keep them happy, and earn every month they stay active.',
+  openDoor: 'You don’t need a van or motor-trade pedigree — just the initiative to visit workshops, build real relationships, and act as their trusted local contact.',
   earnings: 'A monthly commission on every active garage in your portfolio. You get paid for each month the subscription clears and your monthly check-in is complete. No arbitrary sales targets. Full commercial rates, payment schedules and terms are provided on registration.',
   how: [
     { title: 'Sign up the garage', body: 'Talk to local workshop owners about ditching messy paperwork and outdated systems. Get them started on GreaseDesk using your rep link.' },

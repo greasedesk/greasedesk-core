@@ -28,7 +28,13 @@ const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_mo
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const REP = repOrigin();
-const PHONE = { width: 375, height: 812 };   // iPhone-class, the narrow end of what is realistic
+const PHONE = { width: 375, height: 812 };   // iPhone-class, the common case
+/**
+ * THE LOW END. 375×812 is one device, and passing on it says nothing about a smaller screen: the
+ * narrower the column, the more the copy wraps and the further down everything below it starts.
+ * 360×640 is the floor still in real use (older Android, and the height is what actually bites).
+ */
+const SMALL = { width: 360, height: 640 };
 
 let browser;
 try {
@@ -38,15 +44,20 @@ try {
   browser = await chromium.launch({ channel: 'chrome', args: REP_RESOLVER_ARGS });
   const ctx = await browser.newContext({ viewport: PHONE, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
 
-  for (const [label, path] of [['the public page', '/'], ['the terms page', '/rep-site/terms']]) {
+  // BOTH VIEWPORTS, not just the comfortable one. A one-off probe at 360 is not coverage; the low end
+  // is where wrapping bites, so it is measured every run. /terms is the served address (it was
+  // /rep-site/terms here, which now 308s — the browser would have followed it and the clause would
+  // have read as covering an address the gate never names).
+  for (const vp of [PHONE, SMALL]) for (const [label, path] of [['the public page', '/'], ['the terms page', '/terms']]) {
     const page = await ctx.newPage();
+    await page.setViewportSize(vp);
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e.message ?? e)));
     await page.goto(`${REP}${path}`, { waitUntil: 'networkidle' });
     // WAIT ON THE CONDITION, NOT THE CLOCK: the heading existing is what says the page rendered.
     await page.waitForSelector('h1', { timeout: 20000 });
 
-    console.log(`\n— ${label} at ${PHONE.width}×${PHONE.height} —`);
+    console.log(`\n— ${label} at ${vp.width}×${vp.height} —`);
     const overflow = await page.evaluate((vw) => {
       const bad = [];
       for (const el of document.querySelectorAll('body *')) {
@@ -58,7 +69,7 @@ try {
         if (bad.length >= 6) break;
       }
       return bad;
-    }, PHONE.width);
+    }, vp.width);
     check('nothing reaches past the viewport', overflow.length === 0,
       overflow.length ? overflow.join(', ') : 'overflow-x: clip would have HIDDEN this, not scrolled it — so it is measured per element');
 
@@ -101,10 +112,36 @@ try {
   const submitFullWidth = await page.$eval('[data-testid="interest-submit"]', (el) => el.getBoundingClientRect().width);
   check('  …and the submit button spans the column', submitFullWidth > 250, `${Math.round(submitFullWidth)}px of ${PHONE.width}`);
   // THE HERO CTA must be reachable without hunting: on a phone it is above the fold or nearly.
-  const ctaTop = await page.$eval('a[href="#interest"]', (el) => el.getBoundingClientRect().top);
-  check('the hero call to action is near the top, not below three screens', ctaTop < PHONE.height,
-    `${Math.round(ctaTop)}px down, viewport ${PHONE.height}px`);
   await page.close();
+
+  /**
+   * ── THE FOLD, AS A NUMBER AT BOTH SIZES ───────────────────────────────────────────────────────
+   * The owner's instruction (2026-09-12): report the MARGIN, not a pass. A clause that says "it fits"
+   * hides the direction of travel — this measurement moved 413px → 521px the moment real copy landed,
+   * and the useful fact is how much room is left, not that some room is left. So both viewports are
+   * measured, both numbers are printed whatever the verdict, and the assertion is only the floor.
+   */
+  console.log('\n— how far down the call to action sits, measured —');
+  const folds = [];
+  for (const vp of [PHONE, SMALL]) {
+    const q = await ctx.newPage();
+    await q.setViewportSize(vp);
+    await q.goto(`${REP}/`, { waitUntil: 'networkidle' });
+    await q.waitForSelector('a[href="#interest"]', { timeout: 20000 });
+    const top = Math.round(await q.$eval('a[href="#interest"]', (el) => el.getBoundingClientRect().top));
+    const bottom = Math.round(await q.$eval('a[href="#interest"]', (el) => el.getBoundingClientRect().bottom));
+    folds.push({ vp, top, bottom, margin: vp.height - bottom });
+    await q.close();
+  }
+  for (const f of folds) {
+    check(`${f.vp.width}×${f.vp.height}: the call to action ends ${f.bottom}px down — ${f.margin >= 0 ? `${f.margin}px of fold left` : `${-f.margin}px BELOW the fold`}`,
+      true, `top ${f.top}px · button ends ${f.bottom}px · viewport ${f.vp.height}px`);
+  }
+  // THE FLOOR, and only the floor: it must be reachable without hunting. The numbers above are the
+  // reporting; this is the line that turns red.
+  const worst = folds.reduce((a, b) => (a.margin < b.margin ? a : b));
+  check('  …and on the smallest screen it is still within one and a half screens', worst.bottom < worst.vp.height * 1.5,
+    `worst case ${worst.vp.width}×${worst.vp.height}: ends ${worst.bottom}px of ${worst.vp.height}px`);
 } catch (e) {
   check('gate run completed', false, describeError(e));
 } finally {
