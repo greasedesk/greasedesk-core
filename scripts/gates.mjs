@@ -89,7 +89,30 @@ const ROOT = process.cwd();
 const RESULTS = path.join(ROOT, '.gate-results.json');
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
-const val = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
+/**
+ * BOTH FORMS, AND NOTHING SILENTLY IGNORED.
+ *
+ * This read `argv[argv.indexOf(f) + 1]` and nothing else, so it understood `--tier core` and not
+ * `--tier=core`. The equals form returned null, which means the tier filter vanished and the runner
+ * ran EVERY gate — including the 45-minute manual one — while reporting itself as a core run. It was
+ * found on 2026-09-12 by noticing demo-generation-gate in the process list during `--tier=core`.
+ *
+ * The silent part is the defect, not the syntax: a filter that disappears when mistyped reports
+ * coverage of a set it did not run, and the same class already cost a day of money-tier blindness.
+ * So unknown flags now REFUSE rather than being dropped.
+ */
+const val = (f) => {
+  const eq = argv.find((a) => a.startsWith(`${f}=`));
+  if (eq) return eq.slice(f.length + 1);
+  const i = argv.indexOf(f);
+  return i >= 0 ? argv[i + 1] ?? null : null;
+};
+const KNOWN_FLAGS = ['--tier', '--resume', '--list'];
+const unknown = argv.filter((a) => a.startsWith('--') && !KNOWN_FLAGS.includes(a.split('=')[0]));
+if (unknown.length) {
+  console.error(`\nREFUSING TO RUN — unrecognised flag(s): ${unknown.join(', ')}\n  Known: ${KNOWN_FLAGS.join(', ')}. A flag that is ignored is a filter that silently did not apply.\n`);
+  process.exit(2);
+}
 
 /**
  * ── TIERS ARE CURATED, AND EVERY GATE MUST BE IN ONE ────────────────────────────────────────────
@@ -116,7 +139,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
-    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate',
+    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate', 'migration-class-gate',
     'schema-drift-gate',
     'rep-host-gate',
     'engine-room-palette-gate',

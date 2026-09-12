@@ -77,8 +77,10 @@ try {
   const ALLOWED = ['BUILD_COMMIT', 'VERCEL_GIT_COMMIT_SHA', 'VERCEL_GIT_COMMIT_REF', 'VERCEL_ENV', 'NODE_ENV'];
   check('the route reads only the build\'s own variables', reads.every((r) => ALLOWED.includes(r)) && reads.length >= 4,
     `${[...new Set(reads)].join(', ')} — nothing about the database, the providers or the tenants`);
+  // @anchored-ok: one literal expression in next.config.js, not a property looked up by name — there is no key to anchor
+  const BUILD_PASSES_COMMIT = /env: \{ BUILD_COMMIT: process\.env\.VERCEL_GIT_COMMIT_SHA \|\| '' \}/;
   check('  …and the build passes the commit in, for when the runtime variable is not there',
-    /env: \{ BUILD_COMMIT: process\.env\.VERCEL_GIT_COMMIT_SHA \|\| '' \}/.test(code(readFileSync('next.config.js', 'utf8'))));
+    BUILD_PASSES_COMMIT.test(code(readFileSync('next.config.js', 'utf8'))));
   const post = await fetch(`${B}/api/version`, { method: 'POST' });
   check('POST is refused — it answers a question, it does not take one', post.status === 405 && /GET/.test(post.headers.get('allow') ?? ''), `HTTP ${post.status}`);
   check('the Engine Room and rep hosts do not serve it', (await ask(new URL(erOrigin()).hostname, '/api/version')).status === 404 && (await ask(new URL(repOrigin()).hostname, '/api/version')).status === 404,

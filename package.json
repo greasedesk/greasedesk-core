@@ -15,7 +15,7 @@
     "type-check": "tsc --noEmit",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
-    "prisma:deploy": "prisma migrate deploy",
+    "prisma:deploy": "node scripts/migrate-apply.mjs",
     "db:seed": "prisma db seed",
     "prebuild": "node scripts/copy-pdf-worker.mjs",
     "test:pdf-parity": "node scripts/pdf-layout-parity.mjs",

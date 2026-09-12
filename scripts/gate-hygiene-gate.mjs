@@ -30,6 +30,7 @@
  */
 import './_gate-preflight.mjs';
 import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -185,6 +186,31 @@ check('F. no gate asserts a bare identifier against file source', unanchored.len
   unanchored.length
     ? `\n    ${unanchored.join('\n    ')}\n    Anchor it: <Component, {CONSTANT}, an import line, a call — or waive with // @scan-ok: <why>`
     : 'anchored to a render, a write, or waived with a reason');
+
+// ── G. THE RUNNER'S OWN TIER FILTER ─────────────────────────────────────────────────────────────
+// `--tier=core` was read by `argv[indexOf('--tier') + 1]`, which only understands `--tier core`. The
+// equals form returned null, the filter vanished, and the runner ran EVERY gate — the 45-minute
+// manual one included — while the summary still said what a core run says. A filter that disappears
+// when mistyped reports coverage of a set it never ran, which is the same failure that once left the
+// money tier unrun for a day. Both forms must agree, and an unrecognised flag must refuse.
+console.log('\n— G. the runner\'s tier filter cannot silently vanish —');
+const plan = (args) => {
+  try {
+    return execFileSync('node', ['scripts/gates.mjs', ...args, '--list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      .split('\n').filter((l) => /^\S+-gate(-\S+)?\s+\S+/.test(l)).length;
+  } catch { return -1; }
+};
+const eqForm = plan(['--tier=core']);
+const spaceForm = plan(['--tier', 'core']);
+const everything = plan([]);
+check('G. --tier=core and --tier core plan the same gates', eqForm > 0 && eqForm === spaceForm, `${eqForm} vs ${spaceForm}`);
+check('  …and both are FEWER than an unfiltered run, so the filter is doing something', eqForm < everything,
+  `${eqForm} in core, ${everything} in total — equal numbers would mean the filter silently did nothing`);
+let refused = 0;
+try { execFileSync('node', ['scripts/gates.mjs', '--teir=core', '--list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
+catch (e) { refused = e.status; }
+check('  …and a mistyped flag REFUSES rather than running everything', refused === 2,
+  refused ? `exit ${refused}` : 'it ran — a typo must never widen the plan');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);
