@@ -96,7 +96,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
   }
 
   const biggest = ranked[0];
-  // NULL when there is no contract to cover, and null when the contribution is zero or less: no
+  // NULL when there is no contract to cover, and null when the gross profit is zero or less: no
   // quantity of a car that loses money covers anything. The page renders a refusal rather than ∞.
   /**
    * THE SAME CAR ON ALL THREE PLANS. Computed through the one fundingCost the answer uses, so the
@@ -126,10 +126,18 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
    * Two renderings of one number is a divergence waiting to happen, so the figure and the word come from
    * HERE and both places read them — purchase-model-gate asserts the two agree on the served page.
    */
-  const answer = { label: 'Contribution', text: moneyExact(r.contributionPence), negative: r.contributionPence < 0 };
+  const answer = {
+    label: 'Gross profit on this car',
+    // BOTH EXCLUSIONS NAMED. Fixed monthly costs and tax are the two this model does not count, and
+    // saying both is what makes the qualified label honest — "gross" alone tells a reader nothing about
+    // which costs are missing. Neither is claimed to be the only one.
+    subtitle: 'Before your fixed monthly costs and tax.',
+    text: moneyExact(r.grossProfitPence),
+    negative: r.grossProfitPence < 0,
+  };
 
-  const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.autotraderMonthlyPence),
-    [r.contributionPence, inputs.autotraderMonthlyPence]);
+  const needed = useMemo(() => salesToCoverMonthly(r.grossProfitPence, inputs.autotraderMonthlyPence),
+    [r.grossProfitPence, inputs.autotraderMonthlyPence]);
   return (
     <>
       <Head><title>Buying a car — GreaseDesk</title></Head>
@@ -141,7 +149,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
           data-testid="answer-top">
           <span className="text-xs uppercase tracking-wide text-muted">{answer.label}</span>
           <span className={`text-lg font-bold tabular-nums ${answer.negative ? 'text-danger' : 'text-ink'}`}
-            data-testid="contribution-top">{answer.text}</span>
+            data-testid="gross-profit-top">{answer.text}</span>
         </div>
         <h1 className="mt-3 text-2xl font-bold text-ink">Buying a car</h1>
         {/* SAID ONCE, PLAINLY, AT THE TOP. */}
@@ -422,7 +430,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             range with the others held where you have them. It is not a claim about your business.
           </p>
           {/* ── THE NUMBER MUST SAY WHAT IT IS ────────────────────────────────────────────────────
-              These are SWINGS — how far contribution moves when an input is dragged across its whole range
+              These are SWINGS — how far gross profit moves when an input is dragged across its whole range
               — and they sat right-aligned in the same column as nine slider VALUES, formatted
               identically. The owner read £2,000 here against £800 on the Parts slider and called it a
               mismatch; if the person who specified the feature misreads it, the header was never
@@ -431,7 +439,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             data-testid="sensitivity-heading">
             <span className="w-4" />
             <span className="flex-1">Input</span>
-            <span>Moves contribution by</span>
+            <span>Moves gross profit by</span>
           </div>
           <ol className="mt-1 space-y-1" data-testid="sensitivity-list">
             {ranked.map((x, i) => (
@@ -478,7 +486,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             )}
           </div>
           <p className="mt-2 text-xs text-muted" data-testid="sensitivity-not-cost">
-            These are not costs. A swing is the difference in contribution between that slider at its lowest and its highest.
+            These are not costs. A swing is the difference in gross profit between that slider at its lowest and its highest.
           </p>
         </section>
 
@@ -529,19 +537,18 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
       <div className="bg-surface border border-line rounded-xl max-w-3xl mx-auto mb-8 p-3 sm:p-4"
         data-testid="answer">
         <div className="max-w-3xl mx-auto">
-          {/* CONTRIBUTION, NOT PROFIT. This counts what the CAR costs and nothing the business pays
-              whether the car exists or not — the advertising contract, rent, insurance. A figure that
-              excludes every fixed cost is a contribution, and "Profit" in 24px bold invited the exact
-              misreading the swing column was fixed for the day before. */}
+          {/* GROSS PROFIT ON THIS CAR — qualified, not avoided. This counts what the CAR costs and
+              nothing the business pays whether the car exists or not (the Autotrader subscription, rent,
+              insurance), and no tax. The BARE word "Profit" in 24px bold was the defect: it read as the
+              bottom line. "Gross profit on this car" says which profit, and the subtitle names both
+              exclusions underneath. */}
           <div className="flex items-baseline justify-between">
             <span className="text-sm text-muted">{answer.label}</span>
-            <span className={`text-2xl font-bold tabular-nums ${answer.negative ? 'text-danger' : 'text-ink'}`} data-testid="contribution">
+            <span className={`text-2xl font-bold tabular-nums ${answer.negative ? 'text-danger' : 'text-ink'}`} data-testid="gross-profit">
               {answer.text}
             </span>
           </div>
-          <p className="text-[11px] text-muted" data-testid="contribution-means">
-            What this car adds before your fixed monthly costs — not profit.
-          </p>
+          <p className="text-[11px] text-muted" data-testid="gross-profit-means">{answer.subtitle}</p>
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <div className="flex justify-between"><dt className="text-muted">VAT</dt><dd className="text-ink tabular-nums" data-testid="out-vat">{moneyExact(r.vatDuePence)}</dd></div>
             <div className="flex justify-between"><dt className="text-muted">Workshop time</dt><dd className="text-ink tabular-nums" data-testid="out-workshop">{moneyExact(r.workshopCostPence)}</dd></div>
@@ -574,18 +581,18 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             <p className="mt-2 text-xs text-muted" data-testid="break-even">
               {/* Phrased to put the contract first so the sentence needs no verb agreement with a
                   number that changes: "2 sales a month covers" was wrong and "cover" reads oddly at 1. */}
-              At this contribution, your {money(inputs.autotraderMonthlyPence)} Autotrader subscription
+              At this gross profit, your {money(inputs.autotraderMonthlyPence)} Autotrader subscription
               needs <strong className="text-ink">{needed} {needed === 1 ? 'sale' : 'sales'} a month</strong>.
             </p>
           ) : inputs.autotraderMonthlyPence > 0 ? (
             <p className="mt-2 text-xs text-danger" data-testid="break-even-impossible">
-              No number of sales covers your {money(inputs.autotraderMonthlyPence)} Autotrader subscription at this contribution.
+              No number of sales covers your {money(inputs.autotraderMonthlyPence)} Autotrader subscription at this gross profit.
             </p>
           ) : null}
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}
           <p className="mt-2 text-xs text-muted" data-testid="out-uncounted">
             Workshop time and cost of money take {moneyExact(r.workshopCostPence + r.stockingCostPence)} out of this.
-            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong> — dragging it across its range moves contribution by {moneyExact(biggest.swingPence)}.</>}
+            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong> — dragging it across its range moves gross profit by {moneyExact(biggest.swingPence)}.</>}
           </p>
         </div>
       </div>

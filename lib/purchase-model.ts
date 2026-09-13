@@ -534,15 +534,21 @@ export function defaultInputs(): ModelInputs {
 }
 
 /**
- * ── IT IS A CONTRIBUTION, NOT A PROFIT (owner, 2026-09-13) ──────────────────────────────────────
+ * ── GROSS PROFIT ON THIS CAR, AND WHAT THAT EXCLUDES (owner, 2026-09-13) ────────────────────────
  * This model counts what the CAR costs. It counts nothing the business pays whether or not the car
- * exists: the Autotrader contract, rent, insurance, the phone bill. A figure that excludes every
- * fixed cost is a CONTRIBUTION — what this car adds before the standing costs — and calling it
- * profit invites exactly the misreading the swing column was fixed for a day earlier.
+ * exists — the Autotrader subscription, rent, insurance, the phone bill — and it counts no tax.
  *
- * The field was `profitPence` and the screen said "Profit" in 24px bold. The database column is
- * still `profit_pence`: renaming it is a constraining migration for a word, and the store maps it
- * (lib/purchase-model-store) with the mismatch stated there rather than left to be rediscovered.
+ * The bare word "Profit" was the original defect: in 24px bold it read as the bottom line, the same
+ * class of error as a swing read as a cost. The answer is not to avoid the word but to QUALIFY it.
+ * "Gross profit on this car" says WHICH profit, and the screen names both exclusions underneath:
+ * "Before your fixed monthly costs and tax." Two named exclusions, neither claiming to be the only one.
+ *
+ * ── ONE NAME FOR ONE NUMBER, AND ONE STATED MISMATCH ────────────────────────────────────────────
+ * The field and the screen now agree. Only the COLUMN differs — `profit_pence`, because renaming it is
+ * a constraining migration for a word — and that single mismatch is stated at the one line that crosses
+ * the boundary, in lib/purchase-model-store. The number went profitPence, then contributionPence, now
+ * grossProfitPence; three unstated names for one number was the outcome to avoid, so the middle one is
+ * gone rather than layered under the new one.
  */
 export type ModelResult = {
   vat: VatPosition;
@@ -555,9 +561,9 @@ export type ModelResult = {
   stockingCostPence: number;
   otherCostsPence: number;
   totalCostsPence: number;
-  contributionPence: number;
+  grossProfitPence: number;
   /** Profit before the two costs a garage rarely counts, so the tool can show what they take out. */
-  contributionBeforeWorkshopAndMoneyPence: number;
+  grossProfitBeforeWorkshopAndMoneyPence: number;
 };
 
 /**
@@ -598,8 +604,8 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
     vat, fee, funding, vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
-    contributionPence: gross - total,
-    contributionBeforeWorkshopAndMoneyPence: gross - other,
+    grossProfitPence: gross - total,
+    grossProfitBeforeWorkshopAndMoneyPence: gross - other,
   };
 }
 
@@ -623,8 +629,8 @@ export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = 
   const rows = SLIDERS.map((s) => {
     // THE SAME OPTIONS AS THE ANSWER. A ranking computed against a different model from the figure
     // above it would be a list of swings in a world the person is not looking at.
-    const low = computeModel({ ...i, [s.key]: s.min }, opts).contributionPence;
-    const high = computeModel({ ...i, [s.key]: s.max }, opts).contributionPence;
+    const low = computeModel({ ...i, [s.key]: s.min }, opts).grossProfitPence;
+    const high = computeModel({ ...i, [s.key]: s.max }, opts).grossProfitPence;
     return { key: s.key, label: s.label, swingPence: Math.abs(high - low) };
   });
   // Descending by swing; ties by the slider's own order, so the list never jitters between equal rows.
@@ -633,21 +639,21 @@ export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = 
 }
 
 /**
- * HOW MANY SALES A MONTH COVER A FIXED MONTHLY COST, at this contribution per car.
+ * HOW MANY SALES A MONTH COVER A FIXED MONTHLY COST, at this gross profit per car.
  *
  * The honest direction for the question. "What does advertising cost per car?" cannot be answered
  * without knowing how many cars sell, which is the thing being worked out; "how many sales would
- * cover £1,500?" can be answered from one car's contribution, and the person already knows whether
+ * cover £1,500?" can be answered from one car's gross profit, and the person already knows whether
  * that number is reachable.
  *
  * NULL, not zero and not Infinity, in the three cases where there is no answer: no contract to
- * cover, and a contribution of zero or less — no quantity of a car that loses money covers anything,
+ * cover, and a gross profit of zero or less — no quantity of a car that loses money covers anything,
  * and a rounded-up division would print a confident figure for an impossible question.
  */
-export function salesToCoverMonthly(contributionPence: number, monthlyFixedPence: number): number | null {
+export function salesToCoverMonthly(grossProfitPence: number, monthlyFixedPence: number): number | null {
   if (monthlyFixedPence <= 0) return null;
-  if (contributionPence <= 0) return null;
-  return Math.ceil(monthlyFixedPence / contributionPence);
+  if (grossProfitPence <= 0) return null;
+  return Math.ceil(monthlyFixedPence / grossProfitPence);
 }
 
 /** Clamp a slider to its own definition. The form is the prompt; this is the rule. */

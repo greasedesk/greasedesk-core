@@ -135,12 +135,15 @@ export async function saveModel(a: SaveArgs): Promise<{ id: string } | { refused
     label, vehicle_ident,
     inputs: inputs as unknown as object,
     purchase_pence: inputs.purchasePence, sale_pence: inputs.salePence,
-    // THE COLUMN IS `profit_pence` AND THE FIELD IS `contributionPence`, deliberately. The figure was
-    // always a contribution — it counts nothing the business pays whether the car exists or not — and
-    // the name was corrected on 2026-09-13. Renaming the COLUMN is a constraining migration for a
-    // word, so the mismatch lives here, in the one line that crosses the boundary, rather than in a
-    // reader's memory. Nothing else may read `profit_pence` and call it profit.
-    vat_status: inputs.vatStatus, profit_pence: result.contributionPence,
+    // ── THE ONE PLACE THE NAMES DIFFER, AND IT IS STATED RATHER THAN REMEMBERED ─────────────────
+    // COLUMN `profit_pence`, FIELD `grossProfitPence`, SCREEN "Gross profit on this car". The field and
+    // the screen agree deliberately; only the column lags, because renaming it is a constraining
+    // migration for a word. This line is the whole boundary — nothing else in the codebase reads
+    // `profit_pence`, and nothing may read it and call it profit without that qualification.
+    //
+    // The number has been called three things: profitPence, then grossProfitPence, now grossProfitPence.
+    // Two are GONE rather than layered — three unstated names for one number is what this avoids.
+    vat_status: inputs.vatStatus, profit_pence: result.grossProfitPence,
   };
 
   if (a.id) {

@@ -70,19 +70,19 @@ try {
   const near = (a, b) => Math.abs(a - b) <= 2;
 
   check('MARGIN: £333.33 to HMRC, £1,666.67 profit, £8,000 out',
-    near(mgn.vat.vatToHmrcPence, 33333) && near(mgn.contributionPence, 166667) && mgn.vat.cashOutPence === 800000,
-    `${mgn.vat.vatToHmrcPence}p · ${mgn.contributionPence}p · ${mgn.vat.cashOutPence}p`);
+    near(mgn.vat.vatToHmrcPence, 33333) && near(mgn.grossProfitPence, 166667) && mgn.vat.cashOutPence === 800000,
+    `${mgn.vat.vatToHmrcPence}p · ${mgn.grossProfitPence}p · ${mgn.vat.cashOutPence}p`);
   check('QUALIFYING, price INCLUDES VAT: £333.33 to HMRC, £1,666.67 profit, £8,000 out',
-    near(inc.vat.vatToHmrcPence, 33333) && near(inc.contributionPence, 166667) && inc.vat.cashOutPence === 800000,
-    `${inc.vat.vatToHmrcPence}p · ${inc.contributionPence}p · ${inc.vat.cashOutPence}p`);
+    near(inc.vat.vatToHmrcPence, 33333) && near(inc.grossProfitPence, 166667) && inc.vat.cashOutPence === 800000,
+    `${inc.vat.vatToHmrcPence}p · ${inc.grossProfitPence}p · ${inc.vat.cashOutPence}p`);
   check('QUALIFYING, price PLUS VAT: £66.67 to HMRC, £333.33 profit, £9,600 out',
-    near(plus.vat.vatToHmrcPence, 6667) && near(plus.contributionPence, 33333) && plus.vat.cashOutPence === 960000,
-    `${plus.vat.vatToHmrcPence}p · ${plus.contributionPence}p · ${plus.vat.cashOutPence}p`);
+    near(plus.vat.vatToHmrcPence, 6667) && near(plus.grossProfitPence, 33333) && plus.vat.cashOutPence === 960000,
+    `${plus.vat.vatToHmrcPence}p · ${plus.grossProfitPence}p · ${plus.vat.cashOutPence}p`);
   check('  …so margin and inclusive-VAT are THE SAME PROFIT — the reclaim cancels the output VAT',
-    near(mgn.contributionPence, inc.contributionPence),
-    `${mgn.contributionPence}p vs ${inc.contributionPence}p — the shipped version claimed the toggle was worth £1,333 here`);
-  check('  …and plus-VAT is the one that differs, by £1,333', near(inc.contributionPence - plus.contributionPence, 133333),
-    `${(inc.contributionPence - plus.contributionPence) / 100} pounds`);
+    near(mgn.grossProfitPence, inc.grossProfitPence),
+    `${mgn.grossProfitPence}p vs ${inc.grossProfitPence}p — the shipped version claimed the toggle was worth £1,333 here`);
+  check('  …and plus-VAT is the one that differs, by £1,333', near(inc.grossProfitPence - plus.grossProfitPence, 133333),
+    `${(inc.grossProfitPence - plus.grossProfitPence) / 100} pounds`);
 
   console.log('\n— cash out is not cost, and the cost of money is charged on the cash —');
   check('a plus-VAT purchase takes 20% more out of the bank than the car costs',
@@ -141,8 +141,8 @@ try {
   const base = { ...M.defaultInputs(), purchasePence: IN, salePence: OUT, vatStatus: 'margin' };
   const at = (patch) => M.computeModel({ ...base, ...patch });
   const d30 = at({ daysInStock: 30 }), d90 = at({ daysInStock: 90 });
-  check('dragging days in stock 30 → 90 takes money OUT', d90.contributionPence < d30.contributionPence,
-    `${(d30.contributionPence - d90.contributionPence) / 100} pounds of stocking cost appears`);
+  check('dragging days in stock 30 → 90 takes money OUT', d90.grossProfitPence < d30.grossProfitPence,
+    `${(d30.grossProfitPence - d90.grossProfitPence) / 100} pounds of stocking cost appears`);
   check('  …and it is the stocking cost that moved, nothing else', d90.stockingCostPence > d30.stockingCostPence
     && d90.workshopCostPence === d30.workshopCostPence && d90.otherCostsPence === d30.otherCostsPence,
     `${d30.stockingCostPence}p → ${d90.stockingCostPence}p`);
@@ -154,8 +154,8 @@ try {
   const h4 = at({ prepHours: 4 }), h2 = at({ prepHours: 2 });
   check('halving prep hours halves the workshop cost', h2.workshopCostPence * 2 === h4.workshopCostPence,
     `${h4.workshopCostPence}p → ${h2.workshopCostPence}p`);
-  check('  …and the profit moves by exactly that', h2.contributionPence - h4.contributionPence === h4.workshopCostPence - h2.workshopCostPence);
-  check('the two costs a garage rarely counts are separable', at({}).contributionBeforeWorkshopAndMoneyPence - at({}).contributionPence
+  check('  …and the profit moves by exactly that', h2.grossProfitPence - h4.grossProfitPence === h4.workshopCostPence - h2.workshopCostPence);
+  check('the two costs a garage rarely counts are separable', at({}).grossProfitBeforeWorkshopAndMoneyPence - at({}).grossProfitPence
     === at({}).workshopCostPence + at({}).stockingCostPence,
     'so the tool can say what they take out, rather than only netting them silently');
   check('a zero-day, zero-hour model charges neither', at({ daysInStock: 0, prepHours: 0 }).stockingCostPence === 0
@@ -168,8 +168,8 @@ try {
   check('  …in descending order of swing', ranked.every((x, i) => i === 0 || ranked[i - 1].swingPence >= x.swingPence));
   check('  …and the swing is the profit across that slider\'s OWN range, others held', (() => {
     const s = M.SLIDERS.find((x) => x.key === 'daysInStock');
-    const lo = M.computeModel({ ...base, daysInStock: s.min }).contributionPence;
-    const hi = M.computeModel({ ...base, daysInStock: s.max }).contributionPence;
+    const lo = M.computeModel({ ...base, daysInStock: s.min }).grossProfitPence;
+    const hi = M.computeModel({ ...base, daysInStock: s.max }).grossProfitPence;
     return ranked.find((x) => x.key === 'daysInStock').swingPence === Math.abs(hi - lo);
   })());
   // IT IS LOCAL, and that is the property the label promises. Change one input and the ranking may
@@ -197,12 +197,12 @@ try {
    * list under a heading is not enough: the FIGURE has to carry it, because a reader who takes in
    * only the label and the number must still know it is not money spent.
    */
-  check('the swing column is TITLED', /data-testid="sensitivity-heading"/.test(page) && /Moves contribution by/.test(page));
+  check('the swing column is TITLED', /data-testid="sensitivity-heading"/.test(page) && /Moves gross profit by/.test(page));
   check('  …every figure is prefixed ± and carries the word "swing"', /±\{money\(x\.swingPence\)\}/.test(page) && /swing<\/span>/.test(page),
     'a bare right-aligned amount in a column of amounts reads as an amount');
   check('  …and the page says outright they are not costs', /data-testid="sensitivity-not-cost"/.test(page)
     && /These are not costs/.test(page) && /lowest and its highest/.test(page));
-  check('  …while the summary teaches it in words for the top one', /dragging it across its range moves contribution by/.test(page),
+  check('  …while the summary teaches it in words for the top one', /dragging it across its range moves gross profit by/.test(page),
     'the one figure most likely to be read alone');
   check('  …and the limit is beside the ranking, not in a footer', page.indexOf('sensitivity-limit') < page.indexOf('sensitivity-list'));
   check('no figure from the garage\'s own accounts reaches this page', !/monthlyWageBill|costsInWindow|charged-labour|getAvailableHours/.test(page),
@@ -229,7 +229,7 @@ try {
   const html = await pageRes.text();
   check('the page answers 200 for a signed-in admin', pageRes.status === 200, `HTTP ${pageRes.status}`);
   for (const t of ['sliders', 'sensitivity-list', 'sensitivity-heading', 'sensitivity-not-cost', 'answer', 'out-cash',
-    'contribution', 'contribution-means', 'input-autotrader', 'autotrader-note'])
+    'gross-profit', 'gross-profit-means', 'input-autotrader', 'autotrader-note'])
     check(`  …and renders [${t}]`, html.includes(`data-testid="${t}"`), t);
   /**
    * Read the swing cells the way a PERSON reads them, not as a substring of the page. React's SSR
@@ -249,7 +249,7 @@ try {
   /**
    * ── THE WORD, AND THE FIXED COST THAT IS NOT DIVIDED ──────────────────────────────────────────
    * The headline figure counts nothing the business pays whether the car exists or not, so it is a
-   * CONTRIBUTION. It was labelled "Profit" in 24px bold, which is the same class of error as the
+   * GROSS PROFIT. It was labelled "Profit" in 24px bold, which is the same class of error as the
    * swing column: a word that invites the reading the number cannot support.
    *
    * And Autotrader broke the premise underneath the advertising slider. It is a MONTHLY CONTRACT —
@@ -257,18 +257,37 @@ try {
    * model exists to work out. The page therefore divides NOTHING: it asks the question the other way
    * round, which is answerable from one car.
    */
-  console.log('\n— a contribution, and a contract that is never divided —');
-  check('the headline is a CONTRIBUTION, not a profit', hasKey(page, 'label', "'Contribution'")
-    && !/>Profit</.test(page) && !/'Profit'/.test(page),
-    'banning the old word too: the next reader will reach for it for the same reason I did');
+  console.log('\n— a gross profit, and a contract that is never divided —');
+  /**
+   * ── THE BAN CHANGED SHAPE; IT DID NOT GO ──────────────────────────────────────────────────────
+   * DO NOT DELETE THIS AS CONTRADICTED BY THE LABEL. The original defect was the BARE word "Profit" in
+   * 24px bold: unqualified it reads as the bottom line, and this figure excludes every fixed cost and
+   * all tax. That reading is still wrong and still one edit away.
+   *
+   * What is permitted is the QUALIFIED form. "Gross profit on this car" carries its own qualification —
+   * it says WHICH profit — and the subtitle underneath names both exclusions. So the qualified label is
+   * required and a bare `Profit` label is still refused. A reader who sees "profit" on screen and assumes
+   * the ban lapsed should read this paragraph rather than delete the clause.
+   */
+  check('the headline is the QUALIFIED form', hasKey(page, 'label', "'Gross profit on this car'"),
+    'which profit, said on the face of it');
+  check('  …and the BARE word Profit is still refused as a label',
+    !/>Profit</.test(page) && !/'Profit'/.test(page) && !hasKey(page, 'label', "'Profit'"),
+    'unqualified, it reads as the bottom line — which this figure is not');
+  check('  …and the subtitle names BOTH exclusions',
+    hasKey(page, 'subtitle', "'Before your fixed monthly costs and tax.'") && /data-testid="gross-profit-means"/.test(page),
+    'fixed monthly costs AND tax — "gross" alone tells a reader nothing about which costs are missing');
+  check('  …from one expression, so the label and its qualification cannot drift apart',
+    /answer\.subtitle/.test(page),
+    'a qualified label whose qualification lives elsewhere is a bare label waiting to happen');
   check('  …and ONE expression feeds both places it is shown', (() => {
     // answer.label / answer.text are read by the sticky line and by the panel at the foot. Counting the
     // readers is what stops a later edit hardcoding the figure in one of them and letting them diverge.
     const reads = (page.match(/answer\.(label|text|negative)/g) ?? []).length;
     return /const answer = \{/.test(page) && reads >= 5;
   })(), 'two renderings of one number is a divergence waiting to happen');
-  check('  …and the page says what that means', /data-testid="contribution-means"/.test(page)
-    && /before your fixed monthly costs/.test(page) && /not profit/.test(page));
+  check('  …and the page says what that means', /data-testid="gross-profit-means"/.test(page)
+    && /Before your fixed monthly costs and tax/.test(page));
   /**
    * ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE ───────────────────────────────────────────────
    * Autotrader has its own named monthly line because it is the industry standard and the one
@@ -314,21 +333,21 @@ try {
     'a fixed monthly cost has no range to swing across');
 
   // THE ARITHMETIC OF THE REFUSAL, as a pure function, with each case named.
-  check('sales-to-cover divides the contract by the contribution', M.salesToCoverMonthly(50000, 150000) === 3,
+  check('sales-to-cover divides the contract by the gross profit', M.salesToCoverMonthly(50000, 150000) === 3,
     '£1,500 a month over £500 a car = 3 sales');
   check('  …and ROUNDS UP, because a part-sale covers nothing', M.salesToCoverMonthly(40000, 150000) === 4,
     '3.75 → 4');
   check('  …no contract, no sentence', M.salesToCoverMonthly(50000, 0) === null);
-  check('  …and a contribution of zero or less has NO answer, not infinity', M.salesToCoverMonthly(0, 150000) === null
+  check('  …and a gross profit of zero or less has NO answer, not infinity', M.salesToCoverMonthly(0, 150000) === null
     && M.salesToCoverMonthly(-1, 150000) === null,
     'no quantity of a car that loses money covers a fixed cost — a rounded-up division would print a confident figure for an impossible question');
 
   // AND IT IS NOT A COST. The whole point: it must change no figure in the breakdown.
   const noAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 0 });
   const bigAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 500000 });
-  check('the monthly contract changes NOTHING in the per-car answer', noAd.contributionPence === bigAd.contributionPence
+  check('the monthly contract changes NOTHING in the per-car answer', noAd.grossProfitPence === bigAd.grossProfitPence
     && noAd.totalCostsPence === bigAd.totalCostsPence && noAd.otherCostsPence === bigAd.otherCostsPence,
-    `£0 and £5,000/month both give ${noAd.contributionPence}p — the moment it enters a cost, the page is dividing a fixed cost by a turnover it does not know`);
+    `£0 and £5,000/month both give ${noAd.grossProfitPence}p — the moment it enters a cost, the page is dividing a fixed cost by a turnover it does not know`);
   check('  …and it is not in the ranking either', !M.sensitivity(M.defaultInputs()).some((x) => x.key === 'autotraderMonthlyPence'),
     'the ranking swings sliders across their range; a monthly contract is not one of them');
 
@@ -466,8 +485,8 @@ try {
   check('vatPosition with no margin base given == the base being the purchase price',
     JSON.stringify(viaDefault) === JSON.stringify(viaBase), 'the new parameter changes nothing when nobody passes it');
   check('  …and fees of zero leave the whole answer untouched',
-    M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'trade' }).contributionPence
-    && M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'private' }).contributionPence,
+    M.computeModel(legacy).grossProfitPence === M.computeModel({ ...legacy, source: 'trade' }).grossProfitPence
+    && M.computeModel(legacy).grossProfitPence === M.computeModel({ ...legacy, source: 'private' }).grossProfitPence,
     'the source alone moves no money; only a fee does');
 
   /**
@@ -604,14 +623,14 @@ try {
   await bpage.fill('[data-testid="input-autotrader"]', '1500');
   await bpage.waitForSelector('[data-testid="break-even"]', { timeout: 15000 });
   const sentence = ((await bpage.locator('[data-testid="break-even"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  // THE NUMBER IS DERIVED HERE TOO, from the same pure function against the shown contribution — so the
+  // THE NUMBER IS DERIVED HERE TOO, from the same pure function against the shown gross profit — so the
   // clause compares the screen with the rule, not with a constant I typed and would have to maintain.
-  const shown = ((await bpage.locator('[data-testid="contribution"]').textContent()) ?? '').replace(/[£,\s]/g, '');
+  const shown = ((await bpage.locator('[data-testid="gross-profit"]').textContent()) ?? '').replace(/[£,\s]/g, '');
   const expect = M.salesToCoverMonthly(Math.round(Number(shown) * 100), 150000);
   check('the sentence says how many sales cover the contract', /needs \d+ sales? a month/.test(sentence) && sentence.includes('£1,500'),
     JSON.stringify(sentence));
   check(`  …and the figure is the rule's own answer (${expect})`, new RegExp(`\\b${expect}\\b`).test(sentence),
-    `contribution on screen ${shown}, so ${expect} — compared against the function, not against a number I hardcoded`);
+    `gross profit on screen ${shown}, so ${expect} — compared against the function, not against a number I hardcoded`);
 
   /**
    * ── THE TWO CLICKS, DRIVEN ────────────────────────────────────────────────────────────────────
@@ -634,21 +653,21 @@ try {
     // sticky bar deleted. A visibility check that an invisible element satisfies is not a check.
     const painted = !!r && r.width > 0 && r.height > 0 && !!el.offsetParent;
     return { inViewport: painted && r.top >= 0 && r.bottom <= window.innerHeight,
-      text: document.querySelector('[data-testid="contribution-top"]')?.textContent?.trim() ?? null,
-      bottom: document.querySelector('[data-testid="contribution"]')?.textContent?.trim() ?? null };
+      text: document.querySelector('[data-testid="gross-profit-top"]')?.textContent?.trim() ?? null,
+      bottom: document.querySelector('[data-testid="gross-profit"]')?.textContent?.trim() ?? null };
   });
   const atSlider = await glance();
   check('with a slider on screen, the answer is too', atSlider.inViewport === true,
-    `contribution reads ${atSlider.text} at the top while the sliders are under the cursor`);
+    `gross profit reads ${atSlider.text} at the top while the sliders are under the cursor`);
   check('  …and it is the same figure as the panel at the foot', atSlider.text === atSlider.bottom && !!atSlider.text,
     `top ${atSlider.text} · bottom ${atSlider.bottom} — two renderings of one number, from one expression`);
-  check('  …and it says CONTRIBUTION, not profit', /Contribution/.test((await bpage.locator('[data-testid="answer-top"]').textContent()) ?? ''),
-    'the agreed word, in both places');
+  check('  …and it names WHICH profit, not a bare one', /Gross profit on this car/.test((await bpage.locator('[data-testid="answer-top"]').textContent()) ?? ''),
+    'the qualified label, in both places it is shown');
 
   // MOVE A SLIDER AND WATCH THE TOP CHANGE. This is the thing the tool is for.
   await bpage.locator('[data-testid="slider-partsPence"]').focus();
   await bpage.locator('[data-testid="slider-partsPence"]').press('End');
-  await bpage.waitForFunction((was) => document.querySelector('[data-testid="contribution-top"]')?.textContent?.trim() !== was,
+  await bpage.waitForFunction((was) => document.querySelector('[data-testid="gross-profit-top"]')?.textContent?.trim() !== was,
     atSlider.text, { timeout: 15000 });
   const moved = await glance();
   check('dragging a slider changes the figure at the top, while it is still on screen',
@@ -774,7 +793,7 @@ try {
     && rows.find((x) => x.k === 'facility').first !== '—',
     'the two questions are different: what the money COSTS, and what it DEMANDS before the car sells');
 
-  // AND THE IMPOSSIBLE CASE IS A REFUSAL, NOT INFINITY. Sale below purchase: the contribution goes
+  // AND THE IMPOSSIBLE CASE IS A REFUSAL, NOT INFINITY. Sale below purchase: the gross profit goes
   // negative and no quantity of sales covers anything.
   //
   // BOTH FIGURES ARE SET HERE, not just the sale. Earlier clauses in this leg type the worked invoice
@@ -785,7 +804,7 @@ try {
   await bpage.fill('[data-testid="input-sale"]', '5000');
   await bpage.waitForSelector('[data-testid="break-even-impossible"]', { timeout: 15000 });
   const refusal = ((await bpage.locator('[data-testid="break-even-impossible"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  check('a contribution that cannot cover it says so, and prints no number of sales', /No number of sales covers/.test(refusal)
+  check('a gross profit that cannot cover it says so, and prints no number of sales', /No number of sales covers/.test(refusal)
     && !/\d+ sales? a month/.test(refusal),
     JSON.stringify(refusal));
   check('  …and the confident sentence is GONE, not sitting beside it',
@@ -818,8 +837,8 @@ try {
   console.log('\n— the denormalised columns cannot disagree with the inputs —');
   const row = await prisma.purchaseModel.findUnique({ where: { id: first.id }, select: { purchase_pence: true, sale_pence: true, vat_status: true, profit_pence: true, inputs: true, status: true } });
   const recomputed = M.computeModel(S.normaliseInputs(row.inputs));
-  check('the stored profit is the profit the stored inputs produce', row.profit_pence === recomputed.contributionPence,
-    `${row.profit_pence} vs ${recomputed.contributionPence} — one computation writes both`);
+  check('the stored profit is the profit the stored inputs produce', row.profit_pence === recomputed.grossProfitPence,
+    `${row.profit_pence} vs ${recomputed.grossProfitPence} — one computation writes both`);
   check('  …and the copies match too', row.purchase_pence === changed.inputs.purchasePence && row.vat_status === changed.inputs.vatStatus);
   check('the status is from the vocabulary, which lives in the leaf not the database', M.MODEL_STATUSES.includes(row.status),
     `'${row.status}' — a CHECK here would make adding 'bought' a constraining migration, which is the room the column exists for`);
