@@ -72,7 +72,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setMoney = (k: 'purchasePence' | 'salePence' | 'autotraderMonthlyPence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
   async function save() {
@@ -128,8 +128,8 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
    */
   const answer = { label: 'Contribution', text: moneyExact(r.contributionPence), negative: r.contributionPence < 0 };
 
-  const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.adContractMonthlyPence),
-    [r.contributionPence, inputs.adContractMonthlyPence]);
+  const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.autotraderMonthlyPence),
+    [r.contributionPence, inputs.autotraderMonthlyPence]);
   return (
     <>
       <Head><title>Buying a car — GreaseDesk</title></Head>
@@ -162,20 +162,22 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
           </label>
         </section>
 
-        {/* ── A MONTHLY COST, KEPT OUT OF THE CAR ─────────────────────────────────────────────────
-            Deliberately NOT a slider and not inside the per-car section: every slider above is a cost
-            this car carries, and putting a fixed overhead among them would invite the division the
-            whole design refuses. It changes no figure in the breakdown; it answers one question at the
-            bottom of the page. Blank by default — £1,500 is one dealer's quote, not a typical number. */}
+        {/* ── THE AUTOTRADER LINE, KEPT OUT OF THE CAR ────────────────────────────────────────────
+            Its own named field because it is the industry standard and the one advertising number a
+            dealer can recite. Deliberately NOT a slider and not inside the per-car section: every slider
+            there is a cost this car carries, and a fixed overhead among them would invite the division
+            the whole design refuses. It changes no figure in the breakdown; it answers one question at
+            the foot of the page. Blank by default — £1,500 is one dealer's quote, not a typical number. */}
         <section className="mt-6 border-t border-line pt-4">
-          <label className="text-sm text-muted">Advertising contract, per month
-            <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.adContractMonthlyPence / 100) || ''}
-              onChange={setMoney('adContractMonthlyPence')} data-testid="input-ad-contract" placeholder="0"
+          <label className="text-sm text-muted">Autotrader, per month
+            <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.autotraderMonthlyPence / 100) || ''}
+              onChange={setMoney('autotraderMonthlyPence')} data-testid="input-autotrader" placeholder="0"
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
           </label>
-          <p className="mt-1 text-xs text-muted" data-testid="ad-contract-note">
-            Autotrader and the rest, as you actually pay for them. This is <strong>not</strong> divided into the car —
+          <p className="mt-1 text-xs text-muted" data-testid="autotrader-note">
+            Your Autotrader subscription, as you actually pay for it. This is <strong>not</strong> divided into this car —
             what each car would have to carry depends on how many you sell, which is what you are working out.
+            Everything else you advertise on is the <strong>Additional advertising</strong> slider.
           </p>
         </section>
 
@@ -572,12 +574,12 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             <p className="mt-2 text-xs text-muted" data-testid="break-even">
               {/* Phrased to put the contract first so the sentence needs no verb agreement with a
                   number that changes: "2 sales a month covers" was wrong and "cover" reads oddly at 1. */}
-              At this contribution, your {money(inputs.adContractMonthlyPence)} advertising contract
+              At this contribution, your {money(inputs.autotraderMonthlyPence)} Autotrader subscription
               needs <strong className="text-ink">{needed} {needed === 1 ? 'sale' : 'sales'} a month</strong>.
             </p>
-          ) : inputs.adContractMonthlyPence > 0 ? (
+          ) : inputs.autotraderMonthlyPence > 0 ? (
             <p className="mt-2 text-xs text-danger" data-testid="break-even-impossible">
-              No number of sales covers your {money(inputs.adContractMonthlyPence)} advertising contract at this contribution.
+              No number of sales covers your {money(inputs.autotraderMonthlyPence)} Autotrader subscription at this contribution.
             </p>
           ) : null}
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}

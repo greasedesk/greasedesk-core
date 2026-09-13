@@ -229,7 +229,7 @@ try {
   const html = await pageRes.text();
   check('the page answers 200 for a signed-in admin', pageRes.status === 200, `HTTP ${pageRes.status}`);
   for (const t of ['sliders', 'sensitivity-list', 'sensitivity-heading', 'sensitivity-not-cost', 'answer', 'out-cash',
-    'contribution', 'contribution-means', 'input-ad-contract', 'ad-contract-note'])
+    'contribution', 'contribution-means', 'input-autotrader', 'autotrader-note'])
     check(`  …and renders [${t}]`, html.includes(`data-testid="${t}"`), t);
   /**
    * Read the swing cells the way a PERSON reads them, not as a substring of the page. React's SSR
@@ -269,10 +269,49 @@ try {
   })(), 'two renderings of one number is a divergence waiting to happen');
   check('  …and the page says what that means', /data-testid="contribution-means"/.test(page)
     && /before your fixed monthly costs/.test(page) && /not profit/.test(page));
-  check('the advertising slider no longer promises every platform',
-    !/across every platform/.test(M.SLIDERS.find((x) => x.key === 'advertisingPence').note)
-    && /not this/.test(M.SLIDERS.find((x) => x.key === 'advertisingPence').note),
-    `the note reads: ${JSON.stringify(M.SLIDERS.find((x) => x.key === 'advertisingPence').note)}`);
+  /**
+   * ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE ───────────────────────────────────────────────
+   * Autotrader has its own named monthly line because it is the industry standard and the one
+   * advertising figure a dealer can recite. The slider is EVERYTHING ELSE, and its note names the
+   * examples — "additional" means nothing until you know what it is additional to.
+   */
+  const adSlider = M.SLIDERS.find((x) => x.key === 'advertisingPence');
+  check('the per-car slider is ADDITIONAL advertising', adSlider.label === 'Additional advertising',
+    JSON.stringify(adSlider.label));
+  check('  …and its note names the platforms it covers', ['eBay', 'Gumtree', 'Facebook Marketplace']
+    .every((x) => adSlider.note.includes(x)) && /beyond the Autotrader subscription/.test(adSlider.note),
+    JSON.stringify(adSlider.note));
+  check('  …and no longer promises every platform', !/across every platform/.test(adSlider.note),
+    'the dominant platform is a subscription, and this field cannot cover it');
+  check('the monthly field is named for Autotrader, on the page', /data-testid="input-autotrader"/.test(page)
+    && /Autotrader, per month/.test(page),
+    'its own line rather than a generic "platform contracts", because that is the number a dealer knows');
+  check('  …and its note says it is the subscription and is NOT divided into this car',
+    /data-testid="autotrader-note"/.test(page) && /Your Autotrader subscription/.test(page)
+    && /not<\/strong> divided into this car/.test(page),
+    'the denominator is exactly what the page cannot know');
+  check('  …and points at the slider for everything else', /Additional advertising<\/strong> slider/.test(page));
+  check('the break-even sentence names the subscription', /Autotrader subscription\s*\n?\s*needs/.test(page)
+    || /Autotrader subscription/.test(page),
+    'what the sales have to cover is a named contract, not "advertising"');
+
+  // AND THE KEY THAT EXISTED FOR A FEW HOURS IS STILL READ. `adContractMonthlyPence` was the field's
+  // name before it became the named Autotrader line; a model saved in that window holds the figure under
+  // the old key, and dropping the fallback would silently zero somebody's subscription. Asserted,
+  // because I wrote that fallback and then removed it in a red-proof with NO clause noticing.
+  check('a model saved under the OLD monthly key keeps its figure',
+    S.normaliseInputs({ adContractMonthlyPence: 150000 }).autotraderMonthlyPence === 150000,
+    '£1,500 typed before the rename still reads £1,500 after it');
+  check('  …and the new key wins when both are present',
+    S.normaliseInputs({ adContractMonthlyPence: 150000, autotraderMonthlyPence: 500000 }).autotraderMonthlyPence === 500000,
+    'the fallback is a fallback, not an override');
+
+  /** THE RANKING ROW FOLLOWS THE SLIDER, because both read SLIDERS — asserted, not assumed. */
+  const rankedLabels = M.sensitivity(M.defaultInputs()).map((x) => x.label);
+  check('the ranking row reads "Additional advertising"', rankedLabels.includes('Additional advertising'),
+    JSON.stringify(rankedLabels.filter((l) => /advertis/i.test(l))));
+  check('  …and the subscription is NOT a row in it', !rankedLabels.some((l) => /Autotrader/i.test(l)),
+    'a fixed monthly cost has no range to swing across');
 
   // THE ARITHMETIC OF THE REFUSAL, as a pure function, with each case named.
   check('sales-to-cover divides the contract by the contribution', M.salesToCoverMonthly(50000, 150000) === 3,
@@ -285,12 +324,12 @@ try {
     'no quantity of a car that loses money covers a fixed cost — a rounded-up division would print a confident figure for an impossible question');
 
   // AND IT IS NOT A COST. The whole point: it must change no figure in the breakdown.
-  const noAd = M.computeModel({ ...M.defaultInputs(), adContractMonthlyPence: 0 });
-  const bigAd = M.computeModel({ ...M.defaultInputs(), adContractMonthlyPence: 500000 });
+  const noAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 0 });
+  const bigAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 500000 });
   check('the monthly contract changes NOTHING in the per-car answer', noAd.contributionPence === bigAd.contributionPence
     && noAd.totalCostsPence === bigAd.totalCostsPence && noAd.otherCostsPence === bigAd.otherCostsPence,
     `£0 and £5,000/month both give ${noAd.contributionPence}p — the moment it enters a cost, the page is dividing a fixed cost by a turnover it does not know`);
-  check('  …and it is not in the ranking either', !M.sensitivity(M.defaultInputs()).some((x) => x.key === 'adContractMonthlyPence'),
+  check('  …and it is not in the ranking either', !M.sensitivity(M.defaultInputs()).some((x) => x.key === 'autotraderMonthlyPence'),
     'the ranking swings sliders across their range; a monthly contract is not one of them');
 
   /**
@@ -553,7 +592,7 @@ try {
   await bpage.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([bpage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), bpage.click('button[type="submit"]')]);
   await bpage.goto(`${gateOrigin()}/admin/purchase`, { waitUntil: 'domcontentloaded' });
-  await bpage.waitForSelector('[data-testid="input-ad-contract"]', { timeout: 25000 });
+  await bpage.waitForSelector('[data-testid="input-autotrader"]', { timeout: 25000 });
 
   // NOTHING TYPED, NOTHING CLAIMED. The default is blank, so there is no sentence to misread.
   check('with no contract typed there is no break-even sentence',
@@ -562,7 +601,7 @@ try {
     'blank by default — £1,500 is one dealer\'s quote, not a typical figure');
 
   // £1,500 a month against the default car. WAIT ON THE CONDITION (the sentence appearing), never a sleep.
-  await bpage.fill('[data-testid="input-ad-contract"]', '1500');
+  await bpage.fill('[data-testid="input-autotrader"]', '1500');
   await bpage.waitForSelector('[data-testid="break-even"]', { timeout: 15000 });
   const sentence = ((await bpage.locator('[data-testid="break-even"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
   // THE NUMBER IS DERIVED HERE TOO, from the same pure function against the shown contribution — so the

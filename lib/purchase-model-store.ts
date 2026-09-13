@@ -103,10 +103,15 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     // DEFAULTS TO PLUS VAT (false): it preserves the behaviour that shipped and is the conservative
     // reading — it produces the lower profit. An absent field is therefore never the generous answer.
     purchaseIncludesVat: b.purchaseIncludesVat === true,
-    // ABSENT MEANS ZERO, AND ZERO MEANS NO SENTENCE. A model saved before this field existed reads
-    // back with no advertising contract, so the break-even line simply does not appear — it does not
-    // appear with a made-up figure in it. Capped at £100k/month: above that it is a typo.
-    adContractMonthlyPence: Math.min(10000000, Math.max(0, Math.round(num(b.adContractMonthlyPence, 0)))),
+    // ABSENT MEANS ZERO, AND ZERO MEANS NO SENTENCE. A model saved before this field existed reads back
+    // with no subscription, so the break-even line simply does not appear — it does not appear with a
+    // made-up figure in it. Capped at £100k/month: above that it is a typo.
+    //
+    // THE OLD KEY IS STILL READ. It was `adContractMonthlyPence` for a few hours on 2026-09-13 before
+    // the field became the named Autotrader line; a model saved in that window holds the same number
+    // under the old name, and dropping it would quietly zero somebody's subscription.
+    autotraderMonthlyPence: Math.min(10000000, Math.max(0, Math.round(
+      num(b.autotraderMonthlyPence, num(b.adContractMonthlyPence, 0))))),
     ...Object.fromEntries(SLIDERS.map((s) => [s.key, clampSlider(s.key, num(b[s.key], s.def))])) as Record<SliderKey, number>,
   };
   return out;

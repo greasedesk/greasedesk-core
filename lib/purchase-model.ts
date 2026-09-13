@@ -444,11 +444,17 @@ export const SLIDERS: SliderDef[] = [
     note: 'Parts and consumables fitted during prep, at cost.' },
   { key: 'daysInStock', label: 'Days in stock', unit: 'days', min: 0, max: 180, step: 5, def: 45,
     note: 'Bought to sold. This is what the cost of money is charged over.' },
-  { key: 'advertisingPence', label: 'Advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
-    // WAS: "Per car, across every platform it is listed on." It cannot be: the platforms are a MONTHLY
-    // CONTRACT, and no per-car figure for a fixed cost has a denominator this page knows. The note now
-    // describes only what genuinely varies by car, and the contract has its own field above.
-    note: 'Per car only — photography, a paid boost on one listing. Your monthly platform contract is not this.' },
+  { key: 'advertisingPence', label: 'Additional advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
+    // ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE (owner, 2026-09-13) ─────────────────────────
+    // Autotrader is the industry standard and carries its own named monthly line; this slider is
+    // EVERYTHING ELSE, and it is per car because that spend genuinely is. The note names the examples
+    // rather than describing a category, because "additional" only means something once you know what
+    // it is additional to.
+    //
+    // It was 'Advertising' with the note "Per car, across every platform it is listed on" — which the
+    // product cannot deliver, because the dominant platform is a subscription and no per-car figure for
+    // a fixed cost has a denominator this page knows.
+    note: 'eBay, Gumtree, Facebook Marketplace, a paid boost, photography — anything beyond the Autotrader subscription.' },
   { key: 'warrantyPence', label: 'Warranty', unit: 'money', min: 0, max: 100000, step: 2500, def: 15000,
     note: 'What you expect this car to cost you after it leaves — provision, not a policy price.' },
   { key: 'deliveryInPence', label: 'Delivery in', unit: 'money', min: 0, max: 50000, step: 1000, def: 12000,
@@ -467,20 +473,25 @@ export const SLIDERS: SliderDef[] = [
 export type ModelInputs = {
   purchasePence: number; salePence: number; vatStatus: VatStatus;
   /**
-   * THE MONTHLY ADVERTISING CONTRACT, AND IT IS NEVER DIVIDED INTO A CAR. Autotrader is about £1,500
-   * a month for ten cars and £5,000+ for a bigger dealer — a fixed overhead, not a per-car cost.
-   * Dividing it gives £150 a car at ten sales and £300 at five, so a per-car advertising figure asks
-   * the user for a number that depends on turnover, which is partly what this model exists to work
-   * out. The same circularity as the workshop rate.
+   * THE AUTOTRADER SUBSCRIPTION, PER MONTH — its own named line, because it is the industry standard
+   * and every garage knows what it pays for it. Lumping it in with "platform contracts" would hide the
+   * one number a dealer can recite from memory.
+   *
+   * IT IS NEVER DIVIDED INTO A CAR. About £1,500 a month for ten cars, £5,000+ for a bigger dealer —
+   * a fixed overhead. Dividing it gives £150 a car at ten sales and £300 at five, so a per-car figure
+   * asks the user for a number that depends on turnover, which is partly what this model exists to
+   * work out. The same circularity as the workshop rate.
    *
    * So it is NOT a cost here and nothing adds it to one. It drives ONE derived sentence — how many
-   * sales a month this contribution would have to cover it — which turns the circularity into an
-   * output instead of hiding it in an input.
+   * sales a month would cover it — which turns the circularity into an output instead of an input.
    *
-   * DEFAULT ZERO. £1,500 is the owner's own quote, not a typical figure, and shipping it as a default
-   * would state one dealer's contract as a fact about every garage.
+   * Everything else a car is advertised on is the `advertisingPence` SLIDER, which is per car because
+   * that spend genuinely is. The split is by PLATFORM, not by cost shape.
+   *
+   * DEFAULT ZERO. £1,500 is one dealer's quote, not a typical figure, and shipping it as a default
+   * would state it as a fact about every garage.
    */
-  adContractMonthlyPence: number;
+  autotraderMonthlyPence: number;
   /** WHERE IT CAME FROM. Decides what a fee does, and what the VAT toggle is allowed to say. */
   source: PurchaseSource;
   /**
@@ -518,7 +529,7 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', premiumPence: 0, servicesPence: 0,
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, autotraderMonthlyPence: 0, source: 'auction', premiumPence: 0, servicesPence: 0,
     funding: { kind: 'cash' }, ...sliders };
 }
 
