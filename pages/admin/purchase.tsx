@@ -25,7 +25,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider,
   GROSS_BASIS_NOTE, SALE_BASIS_NOTE, FLAGGED_COSTS, VAT_TREATMENTS,
-  perSlotMonthlyPence, slotUtilisation,
+  perSlotMonthlyPence, slotUtilisation, sliderRange,
   type AdvertisingPackage, type FlaggedCost, type VatTreatment,
   SOURCES, SOURCE_RULES, availableVatStatuses, hasFeeSlot,
   FUNDING_KINDS, blankFacility, fundingCost,
@@ -86,6 +86,10 @@ export default function PurchaseModelPage(
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
+  // ONE READER OF THE RANGE, so the control, its note and the ranking cannot disagree about what the
+  // slider spans. The ranking calls sliderRange itself, on the same inputs.
+  const range = (s: typeof SLIDERS[number]) => sliderRange(s, inputs.purchasePence, inputs[s.key]);
+
   const setMoney = (k: 'purchasePence' | 'salePence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
@@ -590,19 +594,30 @@ export default function PurchaseModelPage(
         <section className="mt-6 space-y-5" data-testid="sliders">
           {SLIDERS.map((s) => (
             <div key={s.key}>
+              {/* THE RANGE THE PERSON SEES, narrowed to this car where the cost tracks what the car is
+                  worth. NOT the validation cap — that stays static in lib/purchase-model, because the
+                  store clamps stored values to it and a scaled clamp would rewrite saved models. */}
               <div className="flex items-baseline justify-between gap-3">
                 <label htmlFor={`s-${s.key}`} className="text-sm font-medium text-ink">{s.label}</label>
                 <span className="text-base font-semibold text-ink tabular-nums" data-testid={`value-${s.key}`}>
                   {showSlider(s.key, inputs[s.key])}
                 </span>
               </div>
-              <input id={`s-${s.key}`} type="range" min={s.min} max={s.max} step={s.step} value={inputs[s.key]}
+              <input id={`s-${s.key}`} type="range" min={range(s).min} max={range(s).max} step={range(s).step}
+                value={inputs[s.key]}
                 onChange={set(s.key)} data-testid={`slider-${s.key}`}
                 className="mt-2 w-full h-11 accent-[var(--accent)]" />
               {/* THE RANGE IS PART OF THE HONESTY: a garage that has never measured prep hours does
                   not know whether four is normal, and a bare number implies somebody knows. */}
               <p className="text-xs text-muted">
-                {s.note} <span className="whitespace-nowrap">Range {showSlider(s.key, s.min)}–{showSlider(s.key, s.max)}.</span>
+                {s.note}{' '}
+                {/* SAY THAT IT IS SCALED, AND TO WHAT. A dealer wondering why parts stops at £600 is
+                    reasoning correctly from what they can see, and would be right to distrust it. */}
+                <span className="whitespace-nowrap" data-testid={`range-${s.key}`}>
+                  Range {showSlider(s.key, range(s).min)}–{showSlider(s.key, range(s).max)}
+                  {range(s).scaled && <>, scaled to a {money(inputs.purchasePence)} car</>}
+                  {range(s).widened && <> — widened to fit what you have entered</>}.
+                </span>
                 {/* THE BASIS COMES FROM THE SLIDER'S OWN DECLARATION, not from a note somebody remembered
                     to write — so a money slider cannot be added later without saying which figure it wants. */}
                 {s.basis === 'gross' && (

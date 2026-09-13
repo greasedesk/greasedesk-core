@@ -169,9 +169,12 @@ try {
   check('every slider is ranked', ranked.length === M.SLIDERS.length, `${ranked.length} of ${M.SLIDERS.length}`);
   check('  …in descending order of swing', ranked.every((x, i) => i === 0 || ranked[i - 1].swingPence >= x.swingPence));
   check('  …and the swing is the profit across that slider\'s OWN range, others held', (() => {
-    const s = M.SLIDERS.find((x) => x.key === 'daysInStock');
-    const lo = M.computeModel({ ...base, daysInStock: s.min }).grossProfitPence;
-    const hi = M.computeModel({ ...base, daysInStock: s.max }).grossProfitPence;
+    // THROUGH sliderRange, which is what the person sees. For daysInStock that IS the cap (it does not
+    // scale), so this clause reads the same as it always did — but it now reads the right thing.
+    const sd = M.SLIDERS.find((x) => x.key === 'daysInStock');
+    const r = M.sliderRange(sd, base.purchasePence, base.daysInStock);
+    const lo = M.computeModel({ ...base, daysInStock: r.min }).grossProfitPence;
+    const hi = M.computeModel({ ...base, daysInStock: r.max }).grossProfitPence;
     return ranked.find((x) => x.key === 'daysInStock').swingPence === Math.abs(hi - lo);
   })());
   // IT IS LOCAL, and that is the property the label promises. Change one input and the ranking may
@@ -185,8 +188,8 @@ try {
   const page = code(readFileSync('pages/admin/purchase.tsx', 'utf8'));
   check('the page says once, plainly, that nothing is measured', /Nothing here is measured from your own data/.test(page)
     && /data-testid="assumption-notice"/.test(page));
-  check('every slider shows its RANGE as well as its value', /Range \{showSlider\(s\.key, s\.min\)\}/.test(page),
-    'a bare number implies somebody knows what normal is');
+  check('every slider shows its RANGE as well as its value', /Range \{showSlider\(s\.key, range\(s\)\.min\)\}/.test(page),
+    'a bare number implies somebody knows what normal is — and it is the range on screen, not the cap');
   check('  …and every slider carries a note saying what it covers', M.SLIDERS.every((s) => s.note.length > 20),
     M.SLIDERS.filter((s) => s.note.length <= 20).map((s) => s.key).join(', ') || `${M.SLIDERS.length} notes`);
   check('the RANKING carries the limit, in the words the owner set', /this model’s inputs under these assumptions/i.test(page)
@@ -499,6 +502,101 @@ try {
     'a typed per-slot figure is a second answer to a question the contract has already settled');
   check('  …and an undescribed package says so rather than charging a guess',
     /data-testid="per-slot-unknown"/.test(page) && /no advertising cost is charged at all/.test(page));
+  /**
+   * ── A RANGE IS AN AFFORDANCE; A CAP IS A RULE. THEY WERE ONE NUMBER ───────────────────────────
+   * `min`/`max` was the validation cap AND the slider's extent AND the sensitivity domain. The visible
+   * symptom was the ranking on a £1,250 Mini putting Parts top on a £0–£2,000 domain that car cannot
+   * occupy. The dangerous half was quieter: the store clamps stored values to the cap ON READ, so
+   * narrowing the range would have rewritten saved models.
+   */
+  console.log('\n— the range you see, and the cap that guards what is stored —');
+
+  /**
+   * THE CLAUSE THAT MATTERS. A stored model whose value exceeds the scaled maximum must come back
+   * BYTE-IDENTICAL — same value, same profit — because a range is a UI decision and must never reach
+   * into a saved document. Same shape as the funding and cost-VAT migrations, which is the clause that
+   * has caught the most in this whole model.
+   */
+  const engineCar = {
+    purchasePence: 125000, salePence: 400000, vatStatus: 'margin', source: 'auction',
+    partsPence: 90000,          // a £900 engine on a £1,250 car — well past the £500 scaled maximum
+    warrantyPence: 60000,       // and £600 of warranty, past its £250 one
+    prepHours: 8, workshopCostPerHourPence: 4500, deliveryInPence: 25000, daysInStock: 109,
+  };
+  const storedEngine = S.normaliseInputs(engineCar);
+  check('a stored value ABOVE the scaled maximum survives the read', storedEngine.partsPence === 90000
+    && storedEngine.warrantyPence === 60000,
+    `parts ${storedEngine.partsPence}p, warranty ${storedEngine.warrantyPence}p — the scaled maxima are 50000p and 25000p`);
+  check('  …and the answer is identical to the byte', (() => {
+    const stored = M.computeModel(storedEngine, { vatRegistered: true }).grossProfitPence;
+    // recomputed from the RAW figures, never through the range machinery
+    const direct = M.computeModel({ ...M.defaultInputs(), ...engineCar, partsPence: 90000, warrantyPence: 60000 },
+      { vatRegistered: true }).grossProfitPence;
+    return stored === direct;
+  })(), 'a UI decision reaching into a stored document is the failure this clause exists for');
+  check('  …because the clamp is the CAP, not the range',
+    M.clampSlider('partsPence', 90000) === 90000 && M.clampSlider('partsPence', 300000) === 200000,
+    '£900 passes because the cap is £2,000; £3,000 is still refused');
+  /**
+   * AND THE CLAMP CANNOT BE MADE CAR-AWARE AT ALL. The behavioural clauses above miss one variant: a
+   * clampSlider that takes a purchase price and DEFAULTS it to the £8,000 car still passes them, because
+   * at £8,000 the scaled range is the cap. Measured — that exact mutation scored 0 failures of 274.
+   * So the structure is asserted too: nothing in this function may consult a range or a car.
+   */
+  // `leafSrc` is declared further down; this one is named for what it is sliced from.
+  const clampSrc = readSrc('lib/purchase-model.ts', 'utf8');
+  const clampBody = clampSrc.slice(clampSrc.indexOf('export function clampSlider'),
+    clampSrc.indexOf('\n}', clampSrc.indexOf('export function clampSlider')));
+  check('  …and clampSlider consults no range and no car', !/sliderRange|purchase/i.test(clampBody)
+    && /capMax/.test(clampBody) && /capMin/.test(clampBody),
+    'a purchase-aware clamp is the failure this whole split exists to prevent, and it passes the behavioural clauses');
+
+  /** THE £8,000 CAR IS UNCHANGED — which is what makes this a fix for cheap cars, not a change to all. */
+  for (const sl of M.SLIDERS) {
+    const r = M.sliderRange(sl, 800000, sl.def);
+    check(`  …${sl.key} at £8,000: range is its old one`, r.min === sl.capMin && r.max === sl.capMax && r.step === sl.step,
+      `${r.min}–${r.max} step ${r.step} against cap ${sl.capMin}–${sl.capMax} step ${sl.step}`);
+  }
+
+  /** AND IT NARROWS WHERE THE COST TRACKS THE CAR, NOWHERE ELSE. */
+  const at1250 = (k) => M.sliderRange(M.SLIDERS.find((x) => x.key === k), 125000, 0);
+  check('parts and warranty narrow for a £1,250 car', at1250('partsPence').max === 50000
+    && at1250('warrantyPence').max === 25000,
+    `parts £0–${at1250('partsPence').max / 100}, warranty £0–${at1250('warrantyPence').max / 100} — floors, not percentages, at this price`);
+  check('  …and their step gets finer, never coarser', at1250('warrantyPence').step < M.SLIDERS.find((x) => x.key === 'warrantyPence').step
+    && at1250('partsPence').step <= M.SLIDERS.find((x) => x.key === 'partsPence').step,
+    'a £250 range with a £25 step is ten notches and cannot express £137');
+  for (const k of ['prepHours', 'deliveryInPence', 'deliveryOutPence', 'workshopCostPerHourPence', 'daysInStock', 'costOfMoneyAnnualPct', 'advertisingPence']) {
+    const sl = M.SLIDERS.find((x) => x.key === k);
+    check(`  …${k} does NOT scale`, M.sliderRange(sl, 125000, sl.def).max === sl.capMax && !sl.scale,
+      k === 'prepHours' ? 'a cheap car often needs MORE work — scaling this would be wrong, not unhelpful'
+        : k.startsWith('delivery') ? 'a transporter costs the same for a Mini as for an ML350 — YP61LBF paid £250 against a £1,250 hammer'
+        : 'a property of the business, or not money at all');
+  }
+
+  /** THE RANGE ALWAYS CONTAINS THE CURRENT VALUE, and says when that is why it is wide. */
+  const wide = M.sliderRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 90000);
+  check('a value past the scaled maximum widens the range instead of clamping it', wide.max === 90000
+    && wide.widened === true && wide.scaled === true,
+    'a control that cannot reach its own value is broken; one that clamps to reach it has rewritten a saved answer');
+  check('  …and the page says why it is wider than usual', /data-testid={`range-\$\{s\.key\}`}/.test(page)
+    && /widened to fit what you have entered/.test(page) && /scaled to a \{money\(inputs\.purchasePence\)\} car/.test(page),
+    'a dealer wondering why parts stops at £600 is reasoning correctly from what they can see');
+  check('  …but never past the validation cap', M.sliderRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 500000).max === 200000,
+    'the affordance widens to fit a real value, not to fit a typo');
+
+  /** AND THE RANKING NOW RANKS THE CAR RATHER THAN THE RANGE. */
+  const mini = { ...M.defaultInputs(), ...engineCar, partsPence: 25000, warrantyPence: 0,
+    advertisingPence: 0, deliveryOutPence: 0, slotCostPerMonthPence: 0, costOfMoneyAnnualPct: 0,
+    premiumPence: 26520, servicesPence: 8160, purchaseIncludesVat: true };
+  const ranked1250 = M.sensitivity(mini, { vatRegistered: true });
+  check('on a £1,250 car Parts is no longer top by construction', ranked1250[0].key !== 'partsPence',
+    `top is now ${ranked1250[0].label} ±£${(ranked1250[0].swingPence / 100).toFixed(2)}; Parts is ${ranked1250.findIndex((x) => x.key === 'partsPence') + 1}th`);
+  check('  …while the £8,000 car ranks exactly as it did', (() => {
+    const d = M.sensitivity(M.defaultInputs(), { vatRegistered: true });
+    return d[0].key === 'partsPence' && d[0].swingPence === 200000;
+  })(), 'Parts ±£2,000 at the top, unchanged — the default car is the control in this experiment');
+
   /**
    * ── AUTOTRADER IS A PER-CAR COST WITH A KNOWN DENOMINATOR ─────────────────────────────────────
    * The package is X slots, not a lump sum, so the per-slot figure comes from the contract and a car
@@ -1193,8 +1291,9 @@ try {
   const api = await fetch(`${gateOrigin()}/api/purchase-model`);
   check('the endpoint refuses an unauthenticated caller', api.status === 401, `HTTP ${api.status}`);
   check('a blank label is refused', 'refused' in await S.saveModel({ groupId: ZZ_GROUP, userId: owner.id, label: '   ', vehicleIdent: '', inputs: base }));
-  check('a slider outside its range is CLAMPED, not stored', S.normaliseInputs({ ...base, daysInStock: 9999 }).daysInStock
-    === M.SLIDERS.find((s) => s.key === 'daysInStock').max, 'the form is the prompt; this is the rule');
+  check('a slider outside its CAP is clamped, not stored', S.normaliseInputs({ ...base, daysInStock: 9999 }).daysInStock
+    === M.SLIDERS.find((s) => s.key === 'daysInStock').capMax,
+    'the cap is the rule; the displayed range is an affordance and never touches a stored value');
 } catch (e) {
   check('gate run completed', false, describeError(e));
 } finally {

@@ -650,11 +650,34 @@ export function slotUtilisation(pkg: AdvertisingPackage): SlotUtilisation | null
  */
 export type FieldBasis = 'gross' | 'no_vat' | 'n/a';
 
+/**
+ * ── TWO JOBS THAT WERE ONE NUMBER ───────────────────────────────────────────────────────────────
+ * `min`/`max` used to be the validation cap AND the slider's extent AND the sensitivity domain. One
+ * field, three jobs, and they only agreed by accident — which surfaced when the ranking on a £1,250
+ * Mini put Parts top with a swing measured across £0–£2,000, a range in which most values are
+ * impossible for that car.
+ *
+ * The dangerous half was quieter. lib/purchase-model-store clamps every stored value to `max` ON READ,
+ * so the range was never merely an affordance: narrowing it would have silently rewritten saved models
+ * — a £900 engine on a cheap car becoming £500 the next time somebody opened it, and its profit with it.
+ *
+ *   capMin / capMax   VALIDATION. What a stored value is clamped to. STATIC, never scaled, and
+ *                     deliberately unchanged from the single range that preceded the split, so no
+ *                     stored value can move.
+ *   scale             DISPLAY and SENSITIVITY. How the visible range narrows for a cheaper car.
+ *                     Absent means this slider never scales, which is most of them.
+ */
 export type SliderDef = {
   key: SliderKey; label: string; unit: 'money' | 'hours' | 'days' | 'percent';
   /** Declared per slider so the note and the arithmetic cannot drift apart. */
   basis: FieldBasis;
-  min: number; max: number; step: number; def: number;
+  capMin: number; capMax: number; step: number; def: number;
+  /**
+   * HOW THE VISIBLE RANGE NARROWS WITH THE CAR. Only where the cost genuinely tracks what the car is
+   * worth. The coefficients are chosen so an £8,000 car — the default — gets EXACTLY its old range, so
+   * this is a fix for cheap cars and not a change to every model.
+   */
+  scale?: { pctOfPurchase: number; floorPence: number };
   /** Said on screen beside the control, because a range with no reason is another invented number. */
   note: string;
 };
@@ -671,13 +694,15 @@ export type SliderKey =
  * platforms" is a number pretending to be a definition.
  */
 export const SLIDERS: SliderDef[] = [
-  { key: 'prepHours', basis: 'n/a', label: 'Prep hours', unit: 'hours', min: 0, max: 20, step: 0.5, def: 4,
+  { key: 'prepHours', basis: 'n/a', label: 'Prep hours', unit: 'hours', capMin: 0, capMax: 20, step: 0.5, def: 4,
     note: 'Workshop time before it goes on sale — valet, MOT, service, the small jobs.' },
-  { key: 'partsPence', basis: 'gross', label: 'Parts', unit: 'money', min: 0, max: 200000, step: 2500, def: 25000,
+  { key: 'partsPence', basis: 'gross', label: 'Parts', unit: 'money', capMin: 0, capMax: 200000, step: 2500, def: 25000,
+    // 25% of an £8,000 car is £2,000 — its old range exactly. £500 floor: a cheap car can still need a clutch.
+    scale: { pctOfPurchase: 0.25, floorPence: 50000 },
     note: 'Parts and consumables fitted during prep, at cost.' },
-  { key: 'daysInStock', basis: 'n/a', label: 'Days in stock', unit: 'days', min: 0, max: 180, step: 5, def: 45,
+  { key: 'daysInStock', basis: 'n/a', label: 'Days in stock', unit: 'days', capMin: 0, capMax: 180, step: 5, def: 45,
     note: 'Bought to sold. This is what the cost of money is charged over.' },
-  { key: 'advertisingPence', basis: 'gross', label: 'Additional advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
+  { key: 'advertisingPence', basis: 'gross', label: 'Additional advertising', unit: 'money', capMin: 0, capMax: 30000, step: 500, def: 6000,
     // ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE (owner, 2026-09-13) ─────────────────────────
     // Autotrader is the industry standard and carries its own named monthly line; this slider is
     // EVERYTHING ELSE, and it is per car because that spend genuinely is. The note names the examples
@@ -688,20 +713,69 @@ export const SLIDERS: SliderDef[] = [
     // product cannot deliver, because the dominant platform is a subscription and no per-car figure for
     // a fixed cost has a denominator this page knows.
     note: 'eBay, Gumtree, Facebook Marketplace, a paid boost, photography — anything beyond the Autotrader subscription.' },
-  { key: 'warrantyPence', basis: 'gross', label: 'Warranty', unit: 'money', min: 0, max: 100000, step: 2500, def: 15000,
+  { key: 'warrantyPence', basis: 'gross', label: 'Warranty', unit: 'money', capMin: 0, capMax: 100000, step: 2500, def: 15000,
+    // 12.5% of £8,000 is £1,000 — its old range exactly. A provision tracks what the car is worth.
+    scale: { pctOfPurchase: 0.125, floorPence: 25000 },
     note: 'What you expect this car to cost you after it leaves — provision, not a policy price.' },
-  { key: 'deliveryInPence', basis: 'gross', label: 'Delivery in', unit: 'money', min: 0, max: 50000, step: 1000, def: 12000,
+  { key: 'deliveryInPence', basis: 'gross', label: 'Delivery in', unit: 'money', capMin: 0, capMax: 50000, step: 1000, def: 12000,
     note: 'Getting it from the auction or the seller to you.' },
-  { key: 'deliveryOutPence', basis: 'gross', label: 'Delivery out', unit: 'money', min: 0, max: 50000, step: 1000, def: 0,
+  { key: 'deliveryOutPence', basis: 'gross', label: 'Delivery out', unit: 'money', capMin: 0, capMax: 50000, step: 1000, def: 0,
     note: 'Getting it to the buyer, if you are paying for that.' },
-  { key: 'workshopCostPerHourPence', basis: 'no_vat', label: 'Workshop cost per hour', unit: 'money', min: 2000, max: 9000, step: 250, def: 4500,
+  { key: 'workshopCostPerHourPence', basis: 'no_vat', label: 'Workshop cost per hour', unit: 'money', capMin: 2000, capMax: 9000, step: 250, def: 4500,
     note: 'What an hour in your workshop COSTS you — not what you charge. A slider until the standing-still rate exists.' },
-  { key: 'costOfMoneyAnnualPct', basis: 'n/a', label: 'Cost of money', unit: 'percent', min: 0, max: 20, step: 0.5, def: 9,
+  { key: 'costOfMoneyAnnualPct', basis: 'n/a', label: 'Cost of money', unit: 'percent', capMin: 0, capMax: 20, step: 0.5, def: 9,
     // WAS: "stocking finance, an overdraft, or what the cash would otherwise earn" — three things with
     // different shapes behind one annual rate. A facility is a repayment schedule and now has its own
     // model, so this rate is the one that applies to the two that genuinely ARE rates.
     note: 'Annual rate on your own money or an overdraft. A stocking facility is not a rate — choose it below instead.' },
 ];
+
+/**
+ * A STEP THAT SUITS THE RANGE, and never coarser than the slider already was. Narrowing warranty to
+ * £250 while leaving a £25 step would give ten notches — a control that cannot express £137. Only ever
+ * finer, so the £8,000 car keeps the exact step it has.
+ */
+function niceStep(maxPence: number, defaultStep: number): number {
+  const candidates = [100, 250, 500, 1000, 2500, 5000, 10000];
+  const fits = candidates.find((c) => maxPence / c <= 40) ?? defaultStep;
+  return Math.min(defaultStep, fits);
+}
+
+export type SliderRange = {
+  min: number; max: number; step: number;
+  /** Whether the car narrowed this range. False for the sliders that never scale. */
+  scaled: boolean;
+  /** Whether the CURRENT VALUE pushed the range back out past the scaled maximum. */
+  widened: boolean;
+};
+
+/**
+ * THE RANGE A PERSON SEES AND THE RANKING MEASURES. Not the validation cap — see the note on SliderDef.
+ *
+ * ── IT ALWAYS CONTAINS THE CURRENT VALUE ────────────────────────────────────────────────────────
+ * A £1,250 car scales Parts to £0–£500. A stored model with a £900 engine in it must still show that
+ * £900: a control that cannot reach its own value is broken, and a control that CLAMPS to reach it has
+ * rewritten a saved answer. So the range widens instead, and says why.
+ *
+ * ── WHAT DOES NOT SCALE, AND WHY EACH ONE ───────────────────────────────────────────────────────
+ * Only parts and warranty carry a `scale`. Prep hours do not — a cheap car often needs MORE work, so
+ * scaling them would be wrong rather than merely unhelpful. Delivery does not — a transporter from
+ * Leeds to Tipton costs the same for a Mini as for an ML350, and on YP61LBF £250 of delivery against a
+ * £1,250 hammer would have been called implausible by any value-scaled range. Workshop cost per hour is
+ * a property of the business, not the car. Days and rates are not money.
+ */
+export function sliderRange(s: SliderDef, purchasePence: number, currentValue: number): SliderRange {
+  if (!s.scale) return { min: s.capMin, max: s.capMax, step: s.step, scaled: false, widened: false };
+  const scaledMax = Math.max(s.scale.floorPence, Math.round(Math.max(0, purchasePence) * s.scale.pctOfPurchase));
+  const max = Math.min(s.capMax, Math.max(scaledMax, Math.round(currentValue)));
+  return {
+    min: s.capMin,
+    max,
+    step: niceStep(max, s.step),
+    scaled: true,
+    widened: max > scaledMax,
+  };
+}
 
 export type ModelInputs = {
   purchasePence: number; salePence: number; vatStatus: VatStatus;
@@ -902,10 +976,14 @@ export type Sensitivity = { key: SliderKey; label: string; swingPence: number };
  */
 export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = {}): Sensitivity[] {
   const rows = SLIDERS.map((s) => {
+    // THE RANGE ON SCREEN, not the validation cap. Measured across £0–£2,000 of parts, a £1,250 Mini
+    // ranked Parts first on a domain most of which that car cannot occupy; measured across its own
+    // £0–£500 it ranks fifth, and the top lever becomes the workshop time — which is what the car says.
+    const r = sliderRange(s, i.purchasePence, i[s.key]);
     // THE SAME OPTIONS AS THE ANSWER. A ranking computed against a different model from the figure
     // above it would be a list of swings in a world the person is not looking at.
-    const low = computeModel({ ...i, [s.key]: s.min }, opts).grossProfitPence;
-    const high = computeModel({ ...i, [s.key]: s.max }, opts).grossProfitPence;
+    const low = computeModel({ ...i, [s.key]: r.min }, opts).grossProfitPence;
+    const high = computeModel({ ...i, [s.key]: r.max }, opts).grossProfitPence;
     return { key: s.key, label: s.label, swingPence: Math.abs(high - low) };
   });
   // Descending by swing; ties by the slider's own order, so the list never jitters between equal rows.
@@ -923,10 +1001,14 @@ export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = 
  * slotUtilisation replaces it with the question the slot count makes available: are the slots full?
  */
 
-/** Clamp a slider to its own definition. The form is the prompt; this is the rule. */
+/**
+ * CLAMP TO THE VALIDATION CAP — never to the displayed range. The store calls this on every read, so
+ * clamping to a scaled range would rewrite a stored value whenever the car it belongs to made that
+ * range narrower. The cap is static and unchanged from before the split, so nothing stored can move.
+ */
 export function clampSlider(key: SliderKey, value: number): number {
   const s = SLIDERS.find((x) => x.key === key);
   if (!s) return value;
   if (!Number.isFinite(value)) return s.def;
-  return Math.min(s.max, Math.max(s.min, value));
+  return Math.min(s.capMax, Math.max(s.capMin, value));
 }
