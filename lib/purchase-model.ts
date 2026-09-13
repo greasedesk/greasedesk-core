@@ -664,8 +664,27 @@ export type FieldBasis = 'gross' | 'no_vat' | 'n/a';
  *   capMin / capMax   VALIDATION. What a stored value is clamped to. STATIC, never scaled, and
  *                     deliberately unchanged from the single range that preceded the split, so no
  *                     stored value can move.
- *   scale             DISPLAY and SENSITIVITY. How the visible range narrows for a cheaper car.
+ *   scale             THE SWING THE RANKING USES — and, since 2026-09-14, NOTHING ELSE.
  *                     Absent means this slider never scales, which is most of them.
+ *
+ * ── WHY scale NO LONGER TOUCHES THE CONTROL ────────────────────────────────────────────────────
+ * One field was answering two different questions and getting one of them wrong.
+ *
+ *   "What may I enter?"          — never car-scaled. A £750 car offered £0–£500 of parts, so a real
+ *                                  £1,800 engine could not be typed at all. A cheap car is exactly the
+ *                                  one that needs an engine; the ceiling was tightest where the spend
+ *                                  is most likely to be large. The person holding the invoice knows
+ *                                  more about this car than a ratio does.
+ *
+ *   "What would plausibly move   — car-aware, and must stay so. Swinging Parts across £0–£3,500 on a
+ *    this the most?"               £1,250 Mini puts Parts top of the ranking BY CONSTRUCTION, on a
+ *                                  domain most of that car cannot occupy. Measured across its own
+ *                                  £0–£500 the top lever becomes workshop time, which is what the car
+ *                                  actually says.
+ *
+ * So `sliderRange` (the control) is the static cap, and `swingRange` (the ranking) keeps the scaling.
+ * Answering both from one function is what made removing the entry ceiling look like it had to cost
+ * the ranking its honesty. It does not.
  */
 export type SliderDef = {
   key: SliderKey; label: string; unit: 'money' | 'hours' | 'days' | 'percent';
@@ -694,9 +713,9 @@ export type SliderKey =
  * platforms" is a number pretending to be a definition.
  */
 export const SLIDERS: SliderDef[] = [
-  { key: 'prepHours', basis: 'n/a', label: 'Prep hours', unit: 'hours', capMin: 0, capMax: 20, step: 0.5, def: 4,
+  { key: 'prepHours', basis: 'n/a', label: 'Prep hours', unit: 'hours', capMin: 0, capMax: 40, step: 0.5, def: 4,
     note: 'Workshop time before it goes on sale — valet, MOT, service, the small jobs.' },
-  { key: 'partsPence', basis: 'gross', label: 'Parts', unit: 'money', capMin: 0, capMax: 200000, step: 2500, def: 25000,
+  { key: 'partsPence', basis: 'gross', label: 'Parts', unit: 'money', capMin: 0, capMax: 350000, step: 2500, def: 25000,
     // 25% of an £8,000 car is £2,000 — its old range exactly. £500 floor: a cheap car can still need a clutch.
     scale: { pctOfPurchase: 0.25, floorPence: 50000 },
     note: 'Parts and consumables fitted during prep, at cost.' },
@@ -764,7 +783,21 @@ export type SliderRange = {
  * £1,250 hammer would have been called implausible by any value-scaled range. Workshop cost per hour is
  * a property of the business, not the car. Days and rates are not money.
  */
-export function sliderRange(s: SliderDef, purchasePence: number, currentValue: number): SliderRange {
+/**
+ * WHAT THE CONTROL SPANS. The validation cap, always — no car narrows it. `scaled` and `widened` are
+ * retained as `false` so callers that render them keep compiling; they describe a narrowing this
+ * function no longer does, and a reader who sees them false is being told the truth.
+ */
+export function sliderRange(s: SliderDef): SliderRange {
+  return { min: s.capMin, max: s.capMax, step: s.step, scaled: false, widened: false };
+}
+
+/**
+ * WHAT THE RANKING SWINGS ACROSS — the old scaled range, now used for the one question it was always
+ * right about. Still contains the current value: swinging across a domain that excludes where the
+ * person actually is would rank a move they have already made as impossible.
+ */
+export function swingRange(s: SliderDef, purchasePence: number, currentValue: number): SliderRange {
   if (!s.scale) return { min: s.capMin, max: s.capMax, step: s.step, scaled: false, widened: false };
   const scaledMax = Math.max(s.scale.floorPence, Math.round(Math.max(0, purchasePence) * s.scale.pctOfPurchase));
   const max = Math.min(s.capMax, Math.max(scaledMax, Math.round(currentValue)));
@@ -979,7 +1012,7 @@ export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = 
     // THE RANGE ON SCREEN, not the validation cap. Measured across £0–£2,000 of parts, a £1,250 Mini
     // ranked Parts first on a domain most of which that car cannot occupy; measured across its own
     // £0–£500 it ranks fifth, and the top lever becomes the workshop time — which is what the car says.
-    const r = sliderRange(s, i.purchasePence, i[s.key]);
+    const r = swingRange(s, i.purchasePence, i[s.key]);
     // THE SAME OPTIONS AS THE ANSWER. A ranking computed against a different model from the figure
     // above it would be a list of swings in a world the person is not looking at.
     const low = computeModel({ ...i, [s.key]: r.min }, opts).grossProfitPence;

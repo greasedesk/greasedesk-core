@@ -17,10 +17,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCES, SOURCE_RULES, VAT_STATUSES, availableVatStatuses, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
+// LEAF import — lib/stock reaches no database, so this cannot ship Prisma to the browser.
+import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 
 type Row = {
   stockItemId: string; vehicleId: string; registration: string; description: string | null;
   acquiredAt: string; daysInStock: number; purchasePence: number; vatStatus: string; source: string;
+  prepPence: number; prepUnknownLines: number; prepCards: number;
 };
 
 const money = (p: number) => `£${(p / 100).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
@@ -78,6 +81,10 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
           ...f,
           make: f.make || body.make || '',
           model: f.model || body.model || '',
+          // TYPED WINS over looked-up for first registration: unlike the MOT date this is not a fact
+          // DVSA is authoritative about — it is the date on the logbook, and the person holding the
+          // logbook is looking at it. Fill the blank, never overwrite an answer.
+          firstRegistered: f.firstRegistered || body.firstRegistered || '',
           motExpiry: body.motExpiry ?? f.motExpiry,
         }));
       } else setDvsaMot(null);
@@ -145,6 +152,15 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
         {rows && rows.length > 0 && (
           <p className="mt-1 text-sm text-muted" data-testid="stock-summary">
             {rows.length} {rows.length === 1 ? 'car' : 'cars'} in stock, {money(total)} tied up.
+          </p>
+        )}
+        {/* THE NOTE, ONCE, UNDER THE FIGURE IT QUALIFIES — not on every row, where it would become
+            furniture and stop being read. Labour absent is a STATED omission, not a zero. */}
+        {rows && rows.some((r) => r.prepCards > 0) && (
+          <p className="mt-1 text-xs text-muted" data-testid="prep-note">
+            Prep is parts at trade cost from cards marked as work on our own stock. {LABOUR_AT_ZERO_NOTE}
+            {rows.some((r) => r.prepUnknownLines > 0)
+              && ' A ° marks a car with parts whose trade cost nobody recorded — that car’s figure is a floor, not a total.'}
           </p>
         )}
         {msg && <p className="mt-2 text-sm text-ink" data-testid="stock-msg">{msg}</p>}
@@ -312,6 +328,8 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                   <th className="text-left py-1">Bought</th>
                   <th className="text-right py-1">Days in stock</th>
                   <th className="text-right py-1">Paid</th>
+                  <th className="text-right py-1">Prep</th>
+                  <th className="text-right py-1">In it</th>
                   <th className="text-left py-1 pl-3">VAT</th>
                 </tr>
               </thead>
@@ -331,6 +349,19 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                       {r.daysInStock}
                     </td>
                     <td className="py-2 text-right text-ink tabular-nums">{money(r.purchasePence)}</td>
+                    {/* PARTS AT TRADE COST from prep cards linked to this car. Labour is absent because
+                        there is no measured workshop rate — the note under the table says so rather
+                        than a zero implying nobody worked on it. A ° marks a car with parts whose cost
+                        nobody recorded: the figure is then a floor, not a total. */}
+                    <td className="py-2 text-right text-muted tabular-nums" data-testid={`prep-${r.registration}`}>
+                      {r.prepCards ? money(r.prepPence) : '—'}
+                      {r.prepUnknownLines > 0 && <span className="text-danger" title="Some parts have no trade cost recorded">°</span>}
+                    </td>
+                    {/* WHAT THE CAR OWES YOU SO FAR. The number a person actually wants when they look
+                        at a yard: what has to come back before this one has made anything. */}
+                    <td className="py-2 text-right text-ink font-medium tabular-nums" data-testid={`inv-${r.registration}`}>
+                      {money(r.purchasePence + r.prepPence)}
+                    </td>
                     <td className="py-2 pl-3 text-muted">{r.vatStatus === 'margin' ? 'Margin' : 'Qualifying'}</td>
                   </tr>
                 ))}

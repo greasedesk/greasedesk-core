@@ -86,9 +86,31 @@ export default function PurchaseModelPage(
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  // ONE READER OF THE RANGE, so the control, its note and the ranking cannot disagree about what the
-  // slider spans. The ranking calls sliderRange itself, on the same inputs.
-  const range = (s: typeof SLIDERS[number]) => sliderRange(s, inputs.purchasePence, inputs[s.key]);
+
+  /**
+   * TYPE THE FIGURE YOU HAVE. A slider is for exploring, and it is the wrong instrument entirely when
+   * you are holding an invoice for £1,800 of parts: you are not asking "what if", you are entering a
+   * number you already know, and dragging to it is both slow and imprecise at a £25 step.
+   *
+   * Same clamp as the slider — clampSlider is the one validator, so a typed value cannot reach a state
+   * the dragged one could not. A money box is in POUNDS because that is what is on the invoice; hours
+   * and percent are typed in their own unit. Blank reads as zero rather than NaN, and only on commit:
+   * clamping mid-keystroke would fight someone typing "1800" one digit at a time.
+   */
+  const typed = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const s = SLIDERS.find((x) => x.key === k)!;
+    const raw = Number(e.target.value || 0);
+    if (!Number.isFinite(raw)) return;
+    setInputs((p) => ({ ...p, [k]: clampSlider(k, s.unit === 'money' ? Math.round(raw * 100) : raw) }));
+  };
+  /** The same value in the unit the box shows — pence become pounds, everything else is itself. */
+  const typedValue = (k: SliderKey) => {
+    const s = SLIDERS.find((x) => x.key === k)!;
+    return s.unit === 'money' ? (inputs[k] / 100).toFixed(2) : String(inputs[k]);
+  };
+  // ONE READER OF THE CONTROL'S RANGE. The ranking asks a DIFFERENT question and calls swingRange —
+  // see lib/purchase-model for why one function answering both got the entry ceiling wrong.
+  const range = (s: typeof SLIDERS[number]) => sliderRange(s);
 
   const setMoney = (k: 'purchasePence' | 'salePence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
@@ -603,20 +625,37 @@ export default function PurchaseModelPage(
                   {showSlider(s.key, inputs[s.key])}
                 </span>
               </div>
-              <input id={`s-${s.key}`} type="range" min={range(s).min} max={range(s).max} step={range(s).step}
-                value={inputs[s.key]}
-                onChange={set(s.key)} data-testid={`slider-${s.key}`}
-                className="mt-2 w-full h-11 accent-[var(--accent)]" />
+              <div className="mt-2 flex items-center gap-3">
+                <input id={`s-${s.key}`} type="range" min={range(s).min} max={range(s).max} step={range(s).step}
+                  value={inputs[s.key]}
+                  onChange={set(s.key)} data-testid={`slider-${s.key}`}
+                  className="flex-1 h-11 accent-[var(--accent)]" />
+                {/* THE SAME NUMBER, TYPEABLE. Not a second source — both write inputs[s.key] through
+                    the same clamp, so the box and the slider cannot disagree about the value. */}
+                <span className="flex items-center gap-1 shrink-0">
+                  {s.unit === 'money' && <span className="text-sm text-muted">£</span>}
+                  <input type="number" inputMode="decimal"
+                    min={s.unit === 'money' ? s.capMin / 100 : s.capMin}
+                    max={s.unit === 'money' ? s.capMax / 100 : s.capMax}
+                    step={s.unit === 'money' ? 1 : s.step}
+                    value={typedValue(s.key)} onChange={typed(s.key)}
+                    data-testid={`typed-${s.key}`} aria-label={`${s.label}, type a figure`}
+                    className="w-24 min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-right tabular-nums" />
+                  {s.unit === 'hours' && <span className="text-sm text-muted">h</span>}
+                  {s.unit === 'percent' && <span className="text-sm text-muted">%</span>}
+                  {s.unit === 'days' && <span className="text-sm text-muted">d</span>}
+                </span>
+              </div>
               {/* THE RANGE IS PART OF THE HONESTY: a garage that has never measured prep hours does
                   not know whether four is normal, and a bare number implies somebody knows. */}
               <p className="text-xs text-muted">
                 {s.note}{' '}
-                {/* SAY THAT IT IS SCALED, AND TO WHAT. A dealer wondering why parts stops at £600 is
-                    reasoning correctly from what they can see, and would be right to distrust it. */}
+                {/* SAY THAT IT IS SCALED, AND TO WHAT. A dealer wondering why a slider stops where it
+                    does is reasoning correctly from what they can see, and would be right to distrust
+                    it. Parts no longer scales at all — see lib/purchase-model for why that was wrong. */}
                 <span className="whitespace-nowrap" data-testid={`range-${s.key}`}>
-                  Range {showSlider(s.key, range(s).min)}–{showSlider(s.key, range(s).max)}
-                  {range(s).scaled && <>, scaled to a {money(inputs.purchasePence)} car</>}
-                  {range(s).widened && <> — widened to fit what you have entered</>}.
+                  Range {showSlider(s.key, range(s).min)}–{showSlider(s.key, range(s).max)}. Type an exact figure
+                  in the box if the slider will not land on it.
                 </span>
                 {/* THE BASIS COMES FROM THE SLIDER'S OWN DECLARATION, not from a note somebody remembered
                     to write — so a money slider cannot be added later without saying which figure it wants. */}
@@ -633,8 +672,11 @@ export default function PurchaseModelPage(
         <section className="mt-8" data-testid="sensitivity">
           <h2 className="text-sm font-semibold text-ink">What moves this the most</h2>
           <p className="text-xs text-muted" data-testid="sensitivity-limit">
-            This ranks <strong>this model’s inputs under these assumptions</strong> — each one swung across its own
-            range with the others held where you have them. It is not a claim about your business.
+            This ranks <strong>this model’s inputs under these assumptions</strong> — each one swung across a range
+            sized to <strong>this car</strong>, with the others held where you have them. That is a narrower span than the
+            boxes above allow you to type, deliberately: you can enter a £3,500 engine on a £1,250 Mini, but ranking
+            Parts across £3,500 on that car would put it top of this list by construction rather than because the car
+            says so. It is not a claim about your business.
           </p>
           {/* ── THE NUMBER MUST SAY WHAT IT IS ────────────────────────────────────────────────────
               These are SWINGS — how far gross profit moves when an input is dragged across its whole range

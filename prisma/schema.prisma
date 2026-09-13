@@ -2962,6 +2962,21 @@ model JobCard {
   // Warranty / comeback: work redone free (a job came back). REAL cost (parts/labour still on the
   // estimate) but ZERO revenue — reporting reads revenue as 0 when set, cost unchanged. Faithful margin.
   is_comeback       Boolean @default(false)
+  /// ── AN INTERNAL PREP CARD: WORK ON OUR OWN STOCK, NOT A CUSTOMER'S CAR ────────────────────────
+  /// The StockItem this card is preparing. NULL = an ordinary customer card, which is nearly all of
+  /// them. Set = this card bills nobody: its parts accrue to that car's reconditioning cost base and
+  /// every invoice path refuses it (lib/stock-prep, one predicate).
+  ///
+  /// THE LINK IS THE FLAG. A separate is_internal_stock boolean could disagree with it, and then two
+  /// readers would answer "is this internal?" differently — so there is one column and one predicate.
+  ///
+  /// NOT inferred from "this vehicle happens to be in stock": a customer can legitimately pay for work
+  /// on a car we own (a deposit-taken sale with an extra fitted), so linking is an explicit act.
+  ///
+  /// NO FOREIGN KEY, deliberately. JobCard is a table production writes constantly; ADD CONSTRAINT
+  /// pointing into StockItem would be a constraining migration on a shared database. Same precedent
+  /// as Invoice.stock_disposal_id, decided for the same reason.
+  stock_item_id     String?
 
   // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
   stage_details_done     Boolean @default(false) // 1. Job Card (details/estimate)

@@ -22,6 +22,7 @@ import { printedNeedsBlock, printedMeasuredBlock, openDueItemsForVehicle } from 
 import { printedWorkDoneBlock } from '@/lib/due-item-closure';
 import { printedTyreLines } from '@/lib/tyres';
 import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
+import { INTERNAL_STOCK_INVOICE_REFUSAL, isInternalStock } from '@/lib/stock-prep';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
@@ -340,7 +341,23 @@ export async function reissueDivergence(
   return billingDivergence(db, invoice.job_card_id, { series: invoice.series });
 }
 
+/**
+ * ── A CAR WE OWN HAS NOBODY TO INVOICE ──────────────────────────────────────────────────────────
+ *
+ * Guards EVERY mint entry point rather than the chargeable one, and that is the point: the warranty
+ * and historical paths mint real numbers out of real sequences, so guarding only the obvious door
+ * would leave two open. Same shape as refuseIfVoid, which guards eight paths for the same reason.
+ *
+ * A prep card's costs are already counted against the car in the stock book. Minting an invoice would
+ * put a debtor on the books for a car the garage owns and count the same money twice.
+ */
+async function refuseIfInternalStock(tx: Prisma.TransactionClient, jobCardId: string): Promise<void> {
+  const card = await tx.jobCard.findUnique({ where: { id: jobCardId }, select: { stock_item_id: true } });
+  if (isInternalStock(card)) throw new Error(`IMPORT_ASSERT:${INTERNAL_STOCK_INVOICE_REFUSAL}`);
+}
+
 export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
+  await refuseIfInternalStock(tx, jobCardId);
   // ── THE CARD MUST BILL WHAT IT SAYS IT BILLS ─────────────────────────────────────────────────
   // The commonest job in a garage is finding extra work mid-repair, agreeing it on the phone and
   // billing it. Before this, that ended in a silently short invoice: the extra line sat on the card
@@ -373,6 +390,7 @@ export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardI
  * the frozen snapshot IS the ledger everywhere downstream.
  */
 export async function issueHistoricalInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
+  await refuseIfInternalStock(tx, jobCardId);
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'historical');
   const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
   await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' });
@@ -381,6 +399,7 @@ export async function issueHistoricalInvoiceForCard(tx: Prisma.TransactionClient
 
 /** Mint a warranty invoice, freeze the goodwill shape, and land TERMINAL at `settled` — all one tx. */
 export async function issueWarrantyInvoiceForCard(tx: Prisma.TransactionClient, jobCardId: string, groupId: string, warrantyTexts: { goodwill: string; noCharge: string }): Promise<string> {
+  await refuseIfInternalStock(tx, jobCardId);
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'warranty');
   const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
   await snapshotInvoiceLines(tx, inv, warrantyTexts);

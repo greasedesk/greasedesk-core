@@ -85,7 +85,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   if (!row) return null;
 
   // Card ownership proven → NOW safe to read its invoice + audit trail (keyed on the card).
-  const [invoiceRow, clockRows, auditRows, latestQuote] = await Promise.all([
+  const [invoiceRow, clockRows, auditRows, latestQuote, openStockItem] = await Promise.all([
     prisma.invoice.findUnique({
       where: { job_card_id: cardId },
       // `lines` USED to be `take: 1` — existence alone answered "are the lines FROZEN?", which is
@@ -131,6 +131,15 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       orderBy: { version: 'desc' },
       select: { status: true },
     }) as Promise<{ status: string } | null>,
+    /**
+     * IS THIS CAR IN OUR STOCK RIGHT NOW? Undisposed only — a car we sold last year is not ours to
+     * prep, and its costs were frozen at disposal. Read on the card's OWN vehicle_id so the control
+     * cannot offer to accrue this work to a different car.
+     */
+    prisma.stockItem.findFirst({
+      where: { group_id: groupId, vehicle_id: row.vehicle_id, disposal: { is: null } },
+      select: { id: true },
+    }) as Promise<{ id: string } | null>,
   ]);
   // No live customer link: the latest version is superseded (clears the moment a fresh quote is sent,
   // as the new `sent` version becomes the latest).
@@ -658,6 +667,16 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       lastMotDate: row.vehicle?.last_mot_date ? (row.vehicle.last_mot_date as Date).toISOString().slice(0, 10) : null,
     },
     flags, isComeback: !!row.is_comeback,
+    /**
+     * IS THIS CAR OURS, AND IS THIS CARD PREPARING IT? Two different facts, both needed: a card can be
+     * linked (stockPrep.linkedTo) and a car can be in stock without this card being prep for it
+     * (stockPrep.openStockItemId). The control only appears when the car is actually ours — offering
+     * "this is stock prep" on a customer's car is an invitation to a mistake nobody would notice.
+     */
+    stockPrep: {
+      linkedTo: row.stock_item_id ?? null,
+      openStockItemId: openStockItem?.id ?? null,
+    },
     duplicatedFrom, costsInherited,
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
     clock,

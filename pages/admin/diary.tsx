@@ -1038,6 +1038,7 @@ export default function DiaryPage(props: PageProps) {
                     priceVisible={pane.data.priceVisible} costVisible={pane.data.costVisible}
                     labourRate={pane.data.labourRate}
                     owner={pane.data.owner} vehicle={pane.data.vehicle} flags={pane.data.flags} isComeback={pane.data.isComeback}
+                    stockPrep={pane.data.stockPrep}
                     duplicatedFrom={pane.data.duplicatedFrom} costsInherited={pane.data.costsInherited}
                     vehicleIdLabel={pane.data.vehicleIdLabel} vehicleLookupProvider={pane.data.vehicleLookupProvider}
                     garageNotes={pane.data.garageNotes} currency={pane.data.currency} locale={pane.data.locale}

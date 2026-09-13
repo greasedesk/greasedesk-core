@@ -91,6 +91,8 @@ type PageProps = {
   };
   flags: string[];
   isComeback: boolean;
+  /** Is this car in our stock, and is this card preparing it? See lib/stock-prep. */
+  stockPrep: { linkedTo: string | null; openStockItemId: string | null };
   duplicatedFrom: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
   vehicleIdLabel: string;
   vehicleLookupProvider: LookupProviderName;
@@ -197,6 +199,7 @@ export default function JobCardDetailPage(props: PageProps) {
         vehicle={props.vehicle}
         flags={props.flags}
         isComeback={props.isComeback}
+        stockPrep={props.stockPrep}
         duplicatedFrom={props.duplicatedFrom}
         vehicleIdLabel={props.vehicleIdLabel}
         vehicleLookupProvider={props.vehicleLookupProvider}

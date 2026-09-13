@@ -535,8 +535,12 @@ try {
     return stored === direct;
   })(), 'a UI decision reaching into a stored document is the failure this clause exists for');
   check('  …because the clamp is the CAP, not the range',
-    M.clampSlider('partsPence', 90000) === 90000 && M.clampSlider('partsPence', 300000) === 200000,
-    '£900 passes because the cap is £2,000; £3,000 is still refused');
+    M.clampSlider('partsPence', 90000) === 90000 && M.clampSlider('partsPence', 400000) === 350000,
+    '£900 and £1,800 pass because the cap is £3,500; £4,000 is still refused');
+  check('  …and a real £1,800 engine can now be entered at all',
+    M.clampSlider('partsPence', 180000) === 180000,
+    'the old £2,000 cap took a £1,800 bill, but the £750 car scaled the CONTROL to £0–£500 and it could not be typed');
+  check('prep hours reach 40, not 20', M.clampSlider('prepHours', 40) === 40 && M.clampSlider('prepHours', 41) === 40);
   /**
    * AND THE CLAMP CANNOT BE MADE CAR-AWARE AT ALL. The behavioural clauses above miss one variant: a
    * clampSlider that takes a purchase price and DEFAULTS it to the £8,000 car still passes them, because
@@ -559,13 +563,29 @@ try {
   }
 
   /** AND IT NARROWS WHERE THE COST TRACKS THE CAR, NOWHERE ELSE. */
-  const at1250 = (k) => M.sliderRange(M.SLIDERS.find((x) => x.key === k), 125000, 0);
-  check('parts and warranty narrow for a £1,250 car', at1250('partsPence').max === 50000
+  const at1250 = (k) => M.swingRange(M.SLIDERS.find((x) => x.key === k), 125000, 0);
+  check('the RANKING still narrows for a £1,250 car', at1250('partsPence').max === 50000
     && at1250('warrantyPence').max === 25000,
     `parts £0–${at1250('partsPence').max / 100}, warranty £0–${at1250('warrantyPence').max / 100} — floors, not percentages, at this price`);
   check('  …and their step gets finer, never coarser', at1250('warrantyPence').step < M.SLIDERS.find((x) => x.key === 'warrantyPence').step
     && at1250('partsPence').step <= M.SLIDERS.find((x) => x.key === 'partsPence').step,
     'a £250 range with a £25 step is ten notches and cannot express £137');
+
+  /**
+   * ── AND THE CONTROL DOES NOT NARROW, WHICH IS THE WHOLE POINT OF THE SPLIT ────────────────────
+   * The two clauses above and the three below assert the SAME price against the SAME slider and must
+   * disagree. If one function ever answers both questions again, they cannot both hold.
+   */
+  const ctl = (k) => M.sliderRange(M.SLIDERS.find((x) => x.key === k));
+  check('the CONTROL spans the full cap on the same £1,250 car',
+    ctl('partsPence').max === 350000 && ctl('warrantyPence').max === 100000,
+    `parts £0–${ctl('partsPence').max / 100} — a cheap car is exactly the one that needs an engine`);
+  check('  …so the control and the ranking genuinely DISAGREE about parts on this car',
+    ctl('partsPence').max !== at1250('partsPence').max,
+    'if these ever match, one function is answering both questions again');
+  check('  …and the control is not a function of the price at all',
+    M.sliderRange.length === 1,
+    'a control range that takes a purchase price can be made car-aware again by accident');
   for (const k of ['prepHours', 'deliveryInPence', 'deliveryOutPence', 'workshopCostPerHourPence', 'daysInStock', 'costOfMoneyAnnualPct', 'advertisingPence']) {
     const sl = M.SLIDERS.find((x) => x.key === k);
     check(`  …${k} does NOT scale`, M.sliderRange(sl, 125000, sl.def).max === sl.capMax && !sl.scale,
@@ -575,15 +595,27 @@ try {
   }
 
   /** THE RANGE ALWAYS CONTAINS THE CURRENT VALUE, and says when that is why it is wide. */
-  const wide = M.sliderRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 90000);
-  check('a value past the scaled maximum widens the range instead of clamping it', wide.max === 90000
+  const wide = M.swingRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 90000);
+  check('a swing past the scaled maximum widens to include it instead of clamping', wide.max === 90000
     && wide.widened === true && wide.scaled === true,
-    'a control that cannot reach its own value is broken; one that clamps to reach it has rewritten a saved answer');
-  check('  …and the page says why it is wider than usual', /data-testid={`range-\$\{s\.key\}`}/.test(page)
-    && /widened to fit what you have entered/.test(page) && /scaled to a \{money\(inputs\.purchasePence\)\} car/.test(page),
-    'a dealer wondering why parts stops at £600 is reasoning correctly from what they can see');
-  check('  …but never past the validation cap', M.sliderRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 500000).max === 200000,
-    'the affordance widens to fit a real value, not to fit a typo');
+    'ranking a move the person has already made as impossible is worse than a wide swing');
+  check('  …but never past the validation cap', M.swingRange(M.SLIDERS.find((x) => x.key === 'partsPence'), 125000, 500000).max === 350000,
+    'the swing widens to fit a real value, not to fit a typo');
+
+  /** ── AND THE PAGE OFFERS THE TYPED BOX THE SLIDER CANNOT REPLACE ────────────────────────────── */
+  check('every slider has a typed box beside it', /data-testid={`typed-\$\{s\.key\}`}/.test(page)
+    && /type="number"/.test(page));
+  check('  …and it writes through the SAME clamp as the slider, so the two cannot disagree',
+    (page.match(/clampSlider\(/g) || []).length >= 2 && /const typed = \(k: SliderKey\)/.test(page),
+    'a second writer with its own validation is a second answer for one number');
+  check('  …and a money box is typed in POUNDS, because that is what is on the invoice',
+    /s\.unit === 'money' \? Math\.round\(raw \* 100\) : raw/.test(page));
+  check('the control range note tells the reader to type when the slider will not land',
+    /Type an exact figure/.test(page) && !/scaled to a \{money\(inputs\.purchasePence\)\} car/.test(page),
+    'the control no longer scales, so a note saying it does would be false');
+  check('the RANKING discloses that its swing is narrower than what you may type',
+    /sized to <strong>this car<\/strong>/.test(page) && /by construction/.test(page),
+    'two ranges on one page, and the reader is told which is which');
 
   /** AND THE RANKING NOW RANKS THE CAR RATHER THAN THE RANGE. */
   const mini = { ...M.defaultInputs(), ...engineCar, partsPence: 25000, warrantyPence: 0,

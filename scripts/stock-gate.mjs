@@ -12,6 +12,9 @@ import './_ts.mjs';
 const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
 const SI = await import('../lib/stock-intake.ts');
+const SP = await import('../lib/stock-prep.ts');
+const { hasKey } = await import('../lib/anchored-match.ts');
+const DV = await import('../lib/dvsa.ts');
 const OD = await import('../lib/odometer.ts');
 const { readFileSync } = await import('node:fs');
 const { gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
@@ -23,7 +26,7 @@ const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 
 let prisma;
 let browser = null;
-let made = { items: [], vehicles: [] };
+let made = { items: [], vehicles: [], cards: [] };
 try {
   prisma = await gatePrisma();
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
@@ -439,6 +442,35 @@ try {
     !/mot_checked_at/.test(readFileSync('lib/stock-intake.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''))
       && !/mot_checked_at/.test(readFileSync('lib/stock-store.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').split('VEHICLE_INTAKE_FIELDS')[1] ?? ''));
 
+  console.log('\n— DVSA supplies first registration, from the field that means it —');
+  /**
+   * A REAL DVSA-SHAPED PAYLOAD, through the real parse. An import: first USED abroad in 2016, first
+   * REGISTERED here in 2019. Taking the wrong field ages the car by three years on every screen.
+   */
+  const payload = {
+    make: 'BMW', model: '320D', primaryColour: 'Blue', fuelType: 'Diesel', engineSize: '1995',
+    registrationDate: '2019-04-11', firstUsedDate: '2016-09-02', manufactureDate: '2016-01-01',
+    motTests: [{ expiryDate: '2027-08-02', completedDate: '2026-08-01', odometerValue: '84231', odometerUnit: 'mi' }],
+  };
+  const parsed = DV.vehicleFromPayload(payload);
+  check('firstRegistered comes back from the lookup at all', parsed.firstRegistered === '2019-04-11',
+    `got ${parsed.firstRegistered}`);
+  check('  …from registrationDate, NOT firstUsedDate — they differ exactly for an import',
+    parsed.firstRegistered !== '2016-09-02',
+    'firstUsedDate would make every import read three years older than its UK registration');
+  check('  …and make, model and MOT expiry still arrive with it',
+    parsed.make === 'BMW' && parsed.model === '320D' && parsed.motExpiry === '2027-08-02');
+  check('a payload with no registration date yields nothing rather than a guess',
+    DV.vehicleFromPayload({ make: 'X', firstUsedDate: '2016-09-02' }).firstRegistered === undefined);
+  const intakePage = readFileSync('pages/admin/stock.tsx', 'utf8');
+  check('the intake form fills the field from the lookup',
+    hasKey(intakePage, 'firstRegistered', /f\.firstRegistered \|\| body\.firstRegistered/));
+  check('  …without overwriting what the person typed off the logbook',
+    /f\.firstRegistered \|\|/.test(intakePage),
+    'DVSA is not authoritative about this one — the person holding the V5C is looking at it');
+  check('MOT stays read-only when DVSA answered, and open when it did not',
+    /readOnly={dvsaMot !== null}/.test(intakePage) && /recorded as stated, not verified/.test(intakePage));
+
   console.log('\n— first registration cannot be after the day it was bought —');
   const bought = new Date('2024-06-01T12:00:00Z');
   check('a future first registration is refused',
@@ -528,12 +560,125 @@ try {
     kept.vin_normalized === 'WVWZZZ1KZAW123456' && kept.is_import === true && kept.v5c_reference === '123456789012',
     'a form silent about a field is not a statement that the stored value was wrong');
 
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  INTERNAL PREP — work on a car WE OWN bills nobody and costs the car
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the link IS the flag —');
+  check('a card with a stock item is internal', SP.isInternalStock({ stock_item_id: 'x' }) === true);
+  check('a card without one is not', SP.isInternalStock({ stock_item_id: null }) === false
+    && SP.isInternalStock({}) === false && SP.isInternalStock(null) === false);
+  /**
+   * COMMENTS STRIPPED FIRST. The schema comment for stock_item_id EXPLAINS that no such boolean
+   * exists, and naming it there is the clearest way to say so — so an unstripped scan flags the
+   * documentation of the rule as a breach of it. Fifth instance of that shape in two days.
+   */
+  const schemaCode = readFileSync('prisma/schema.prisma', 'utf8')
+    .replace(/^\s*\/\/\/?.*$/gm, '');
+  check('there is NO second boolean to disagree with the link',
+    !/is_internal_stock/.test(schemaCode),
+    'two readers answering "is this internal?" differently is the failure this avoids');
+  check('  …and the scan can still SEE such a column — it finds stock_item_id in the same stripped source',
+    /stock_item_id\s+String\?/.test(schemaCode),
+    'a stripper that removed the code too would pass this file and every other');
+
+  console.log('\n— parts at TRADE COST, labour at zero, unknowns counted —');
+  const lines = [
+    { item_type: 'part', qty: '2', unit_cost: '45.50' },
+    { item_type: 'labour', qty: '3', unit_cost: '60.00' },
+    { item_type: 'part', qty: '1', unit_cost: null },
+    { item_type: 'fixed', qty: '1', unit_cost: '99.00' },
+  ];
+  const c = SP.prepCost(lines);
+  check('parts are valued at unit_cost × qty', c.partsPence === 9100, `${c.partsPence}p — 2 × £45.50`);
+  check('LABOUR IS NOT IN THE FIGURE, and is counted so the note is not about an empty set',
+    c.labourLines === 1 && c.partsPence === 9100,
+    'a £60/h labour line would have added £180 if it had been valued');
+  check('  …and that holds when labour is the ONLY thing on the card',
+    SP.prepCost([{ item_type: 'labour', qty: '3', unit_cost: '60.00' }]).partsPence === 0,
+    'the mixed-line case passes even when labour IS valued, because the parts total dwarfs nothing — this one cannot');
+  check('a NULL trade cost is UNKNOWN, never zero', c.unknownCostLines === 2,
+    'the uncatalogued part AND the fixed bundle — a cost base quietly missing a turbo reads as a better margin');
+  check('  …and the note only speaks when there ARE unknowns',
+    SP.unknownCostNote(c) !== null && SP.unknownCostNote({ partsPence: 1, unknownCostLines: 0, labourLines: 0 }) === null,
+    'a warning shown always is furniture and stops being read');
+  check('the labour note is the BOOK’s wording, not a second one',
+    SP.PREP_LABOUR_NOTE === S.LABOUR_AT_ZERO_NOTE);
+
+  console.log('\n— and an internal card cannot be invoiced, by any door —');
+  const issueSrc = readFileSync('lib/invoice-issue.ts', 'utf8');
+  const mintFns = issueSrc.split('\n').filter((l) => /^export async function issue\w*ForCard\(/.test(l));
+  check('every mint entry point is known to this clause', mintFns.length === 3, `${mintFns.length}`);
+  check('EVERY one of them refuses an internal card first',
+    (issueSrc.match(/await refuseIfInternalStock\(tx, jobCardId\);/g) || []).length === mintFns.length,
+    'guarding only the chargeable door leaves the warranty and historical sequences open');
+  check('  …and the refusal explains what to do instead',
+    /unlink it from the stock item first/i.test(SP.INTERNAL_STOCK_INVOICE_REFUSAL),
+    'a refusal that only says no gets worked around by converting the card back');
+
+  console.log('\n— the cost lands on the car, live, through the real writer —');
+  const regP = `ZZSTK${Math.floor(Math.random() * 900 + 100)}P`;
+  const vP = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regP, acquiredAt: bought });
+  if ('refused' in vP) throw new Error(vP.refused);
+  made.vehicles.push(vP.id);
+  const itemP = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vP.id, acquiredAt: bought,
+    purchasePence: 200000, vatStatus: 'margin', source: 'auction',
+  });
+  if ('refused' in itemP) throw new Error(itemP.refused);
+  made.items.push(itemP.id);
+
+  const site = await prisma.site.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const prepCard = await prisma.jobCard.create({
+    data: {
+      group_id: ZZ_GROUP, site_id: site.id, vehicle_id: vP.id, stock_item_id: itemP.id,
+      items: { create: [
+        { item_type: 'part', description: 'ZZ prep disc', qty: 2, unit_cost: 45.5, unit_price: 90 },
+        { item_type: 'labour', description: 'ZZ prep fitting', qty: 3, unit_cost: 60, unit_price: 180 },
+      ] },
+    },
+    select: { id: true },
+  });
+  made.cards = [...(made.cards ?? []), prepCard.id];
+
+  const live = await ST.liveStockCosts(ZZ_GROUP, itemP.id);
+  check('the live cost base sees the prep card', live.cards === 1 && live.partsPence === 9100,
+    `${live.cards} card(s), ${live.partsPence}p`);
+  check('  …and the labour on it is NOT money out', live.labourLines === 1 && live.partsPence === 9100);
+
+  const listed = (await ST.stockList(ZZ_GROUP, new Date())).find((r) => r.stockItemId === itemP.id);
+  check('the yard list shows the same figure the library computed',
+    listed.prepPence === live.partsPence && listed.prepCards === 1,
+    `list ${listed.prepPence}p vs library ${live.partsPence}p — two readers of one number must agree`);
+
+  console.log('\n— frozen at disposal, once, per card —');
+  const soldP = await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemP.id,
+    disposedAt: new Date('2026-07-01T12:00:00Z'), kind: 'sold', salePence: 300000, costs: [],
+  });
+  if ('refused' in soldP) throw new Error(soldP.refused);
+  const snaps = await prisma.stockCostSnapshot.findMany({
+    where: { stock_item_id: itemP.id }, select: { amount_pence: true, job_card_id: true, kind: true },
+  });
+  check('disposal froze the prep spend without being told the figure',
+    snaps.length === 1 && snaps[0].amount_pence === 9100,
+    `${snaps.length} snapshot(s) — the caller passed costs: []`);
+  check('  …and it names the CARD, so the figure can be walked back to the work',
+    snaps[0].job_card_id === prepCard.id,
+    'a book entry saying "£91 of parts" cannot be checked against anything');
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (prisma) {
     try {
+      if (made.cards?.length) {
+        await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: made.cards } } });
+        await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: made.cards } } })
+          .catch(() => {});  // AuditLog is append-only by standing rule; these are the run's OWN rows
+        await prisma.jobCard.deleteMany({ where: { id: { in: made.cards }, group_id: ZZ_GROUP } });
+      }
       // BY THEIR OWN IDS, on ZZ only. Disposals and cost snapshots cascade from the item.
       if (made.items.length) {
         const d = await prisma.stockItem.deleteMany({ where: { id: { in: made.items.filter(Boolean) }, group_id: ZZ_GROUP } });

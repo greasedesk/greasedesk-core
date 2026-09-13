@@ -14,6 +14,7 @@ import {
   parseWarranted, vinAtIntake,
 } from '@/lib/stock-intake';
 import { recordOdometerReadings } from '@/lib/odometer';
+import { prepCost, type PrepCost } from '@/lib/stock-prep';
 
 const asMoney = (v: unknown, cap = 100000000): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -139,6 +140,44 @@ export async function recordDisposal(a: {
       }))
       .filter((c) => c.amount_pence > 0 && c.description.length > 0);
     if (costs.length) await tx.stockCostSnapshot.createMany({ data: costs });
+
+    /**
+     * ── AND FREEZE WHAT THE PREP CARDS CONSUMED, PER CARD ────────────────────────────────────────
+     *
+     * Prep costs are LIVE while the car is in stock — a card edited today changes what the car has
+     * cost today — and frozen here, in the same transaction as the disposal, for the reason invoice
+     * lines freeze at mint: re-running last year's quarter must give what it gave then.
+     *
+     * ONE SNAPSHOT PER CARD, not one total. A book entry saying "£1,240 of parts" cannot be checked
+     * against anything; one saying "£380, card 1043" can be walked back to the work. And a caller may
+     * ALSO pass costs by hand (a delivery invoice, an MOT) — those are kept, so this adds rather than
+     * replaces. Cards already snapshotted are skipped, so a re-disposal cannot double a car's costs.
+     */
+    const alreadyFrozen = new Set(
+      (await tx.stockCostSnapshot.findMany({
+        where: { stock_item_id: a.stockItemId, job_card_id: { not: null } },
+        select: { job_card_id: true },
+      })).map((r) => r.job_card_id as string),
+    );
+    const prepCards = await tx.jobCard.findMany({
+      where: { group_id: a.groupId, stock_item_id: a.stockItemId },
+      select: { id: true, items: { select: { item_type: true, qty: true, unit_cost: true } } },
+    });
+    const prepRows = prepCards
+      .filter((c) => !alreadyFrozen.has(c.id))
+      .map((c) => ({ id: c.id, cost: prepCost(c.items as never) }))
+      .filter((c) => c.cost.partsPence > 0)
+      .map((c) => ({
+        group_id: a.groupId, stock_item_id: a.stockItemId, kind: 'parts',
+        // The unknowns travel WITH the figure. A frozen £380 that silently omitted a £400 turbo is
+        // indistinguishable later from a car that only used £380 of parts.
+        description: c.cost.unknownCostLines
+          ? `Prep parts (${c.cost.unknownCostLines} line(s) with no trade cost, not included)`
+          : 'Prep parts',
+        amount_pence: c.cost.partsPence,
+        job_card_id: c.id,
+      }));
+    if (prepRows.length) await tx.stockCostSnapshot.createMany({ data: prepRows });
     return d;
   });
   return { id: created.id };
@@ -154,6 +193,11 @@ export type StockListRow = {
   purchasePence: number;
   vatStatus: string;
   source: string;
+  /** LIVE prep spend: parts at TRADE COST from linked internal cards. Frozen at disposal, not before. */
+  prepPence: number;
+  /** Lines with no trade cost recorded — counted, never valued at zero. */
+  prepUnknownLines: number;
+  prepCards: number;
 };
 
 /**
@@ -172,6 +216,33 @@ export async function stockList(groupId: string, asOf: Date): Promise<StockListR
     },
     orderBy: { acquired_at: 'asc' },
   });
+
+  /**
+   * THE PREP CARDS, IN ONE QUERY, JOINED HERE.
+   *
+   * JobCard.stock_item_id carries NO foreign key — deliberately, so the migration stayed additive on
+   * a shared database — which means Prisma has no relation to include and this is a second query
+   * rather than a nested select. One query for the whole yard, not one per car: the join happens in
+   * memory over a two-figure list.
+   */
+  const prepByItem = new Map<string, { partsPence: number; unknownCostLines: number; cards: number }>();
+  if (rows.length) {
+    const cards = await prisma.jobCard.findMany({
+      where: { group_id: groupId, stock_item_id: { in: rows.map((r) => r.id) } },
+      select: { stock_item_id: true, items: { select: { item_type: true, qty: true, unit_cost: true } } },
+    });
+    for (const c of cards) {
+      const key = c.stock_item_id as string;
+      const one = prepCost(c.items as never);
+      const acc = prepByItem.get(key) ?? { partsPence: 0, unknownCostLines: 0, cards: 0 };
+      prepByItem.set(key, {
+        partsPence: acc.partsPence + one.partsPence,
+        unknownCostLines: acc.unknownCostLines + one.unknownCostLines,
+        cards: acc.cards + 1,
+      });
+    }
+  }
+
   return rows.map((r) => ({
     stockItemId: r.id,
     vehicleId: r.vehicle_id,
@@ -182,6 +253,9 @@ export async function stockList(groupId: string, asOf: Date): Promise<StockListR
     purchasePence: r.purchase_pence,
     vatStatus: r.vat_status,
     source: r.source,
+    prepPence: prepByItem.get(r.id)?.partsPence ?? 0,
+    prepUnknownLines: prepByItem.get(r.id)?.unknownCostLines ?? 0,
+    prepCards: prepByItem.get(r.id)?.cards ?? 0,
   }));
 }
 
@@ -439,3 +513,32 @@ export function bookVatTotal(disposals: BookEntry[]): { duePence: number; unsett
 }
 
 export { vatPositionFor };
+
+
+/**
+ * WHAT THIS CAR HAS COST IN PREP, RIGHT NOW — the live figure, read from the cards themselves.
+ *
+ * LIVE, not stored: while a car is in stock the answer changes whenever a prep card does, and a
+ * stored total would be a second copy going stale between edits. It is frozen exactly once, at
+ * disposal, by recordDisposal — after which the book reads the snapshots and never this.
+ *
+ * Returns the unknown-cost count alongside the money, because a cost base is only trustworthy if it
+ * can say what it does not know. See lib/stock-prep for why labour is not in the figure.
+ */
+export async function liveStockCosts(
+  groupId: string, stockItemId: string,
+): Promise<PrepCost & { cards: number }> {
+  const cards = await prisma.jobCard.findMany({
+    where: { group_id: groupId, stock_item_id: stockItemId },
+    select: { id: true, items: { select: { item_type: true, qty: true, unit_cost: true } } },
+  });
+  const totals = cards.reduce<PrepCost>((acc, c) => {
+    const one = prepCost(c.items as never);
+    return {
+      partsPence: acc.partsPence + one.partsPence,
+      unknownCostLines: acc.unknownCostLines + one.unknownCostLines,
+      labourLines: acc.labourLines + one.labourLines,
+    };
+  }, { partsPence: 0, unknownCostLines: 0, labourLines: 0 });
+  return { ...totals, cards: cards.length };
+}

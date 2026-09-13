@@ -123,6 +123,7 @@ type Props = {
   };
   flags: string[];
   isComeback: boolean;
+  stockPrep: { linkedTo: string | null; openStockItemId: string | null };
   // Duplicate provenance (both nullable/absent on ordinary cards). ownershipChanged drives the
   // prominent vehicle-reowned notice; costsInherited drives the Quote-tab stale-cost advisory.
   duplicatedFrom?: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
@@ -178,6 +179,7 @@ export default function JobCardWorkspace(p: Props) {
     stages?: Record<StageKey, boolean>;
     skipped?: { intake: boolean; injob: boolean; complete: boolean };
     isComeback?: boolean;
+    stockPrepLinkedTo?: string | null;
     invoice?: { id: string; number: string; status?: 'issued' | 'paid_pending' | 'paid'; offersPayLink?: boolean; refund?: { kind: 'partial' | 'full'; refundedPennies: number; receivedPennies: number; at: string | null } | null } | null;
     events?: AuditEvent[];
     booking?: CardBooking;
@@ -202,6 +204,7 @@ export default function JobCardWorkspace(p: Props) {
     stages: ov.stages ?? p.stages,
     skipped: ov.skipped ?? p.skipped,
     isComeback: ov.isComeback ?? p.isComeback,
+    stockPrepLinkedTo: ov.stockPrepLinkedTo !== undefined ? ov.stockPrepLinkedTo : p.stockPrep.linkedTo,
     invoice: ov.invoice !== undefined ? ov.invoice : p.invoice,
     events: ov.events ?? p.events,
     booking: ov.booking !== undefined ? ov.booking : p.booking,
@@ -347,6 +350,18 @@ export default function JobCardWorkspace(p: Props) {
   const setComeback = (v: boolean) =>
     run(`comeback:${v}`, () => fetch('/api/jobcard-comeback', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobCardId: p.jobCardId, isComeback: v }) }),
       { isComeback: v });
+
+  /**
+   * INTERNAL PREP: this card is work on a car WE OWN. The link IS the flag, so ticking the box sends
+   * the stock item id and clearing it sends null — there is no second boolean that could disagree.
+   */
+  const setStockPrep = (v: boolean) => {
+    const to = v ? p.stockPrep.openStockItemId : null;
+    return run(`stockprep:${v}`, () => fetch('/api/jobcard-stock-prep', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobCardId: p.jobCardId, stockItemId: to }),
+    }), { stockPrepLinkedTo: to });
+  };
 
   // ---- PRE-MINT VIN/MILEAGE BACKSTOP (prompt-and-skip, never a block) ----
   // State lives HERE (not in the nested pane component) so optimistic re-renders can't wipe it.
@@ -905,6 +920,23 @@ export default function JobCardWorkspace(p: Props) {
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
               <input type="checkbox" className="w-5 h-5 mt-0.5" checked={eff.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
+            </label>
+          )}
+          {/* ONLY WHEN THE CAR IS ACTUALLY OURS. Offering "this is stock prep" on a customer's car is
+              an invitation to a mistake nobody would notice until a debtor went missing — so the
+              control does not exist unless this vehicle has an OPEN stock record. */}
+          {p.canOperate && !inactive && p.stockPrep.openStockItemId && (
+            <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer mt-3"
+              data-testid="stock-prep-toggle">
+              <input type="checkbox" className="w-5 h-5 mt-0.5" checked={!!eff.stockPrepLinkedTo}
+                disabled={busy !== null} onChange={(e) => setStockPrep(e.target.checked)} />
+              <span>
+                <span className="font-semibold text-ink">This is prep on a car we own</span>
+                <span className="block text-xs text-muted mt-0.5">
+                  Nobody is invoiced. The parts count against this car in the stock book, at trade cost —
+                  labour is not costed, because there is no measured workshop rate to cost it at.
+                </span>
+              </span>
             </label>
           )}
       </div>

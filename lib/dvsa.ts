@@ -12,6 +12,15 @@ import { sameRegistration } from '@/lib/vehicle-identity';
 import { normaliseOdometer } from '@/lib/odometer';
 export type DvsaVehicle = {
   make?: string; model?: string; colour?: string; fuel?: string; engineCc?: number; year?: number;
+  /**
+   * FIRST REGISTRATION — the DATE, which this response has carried all along and which `year` above
+   * was throwing away after taking four characters off it. Manufacture and registration differ on any
+   * car built late in a year, and trade values are counted from registration.
+   *
+   * `registrationDate`, NOT `firstUsedDate`. They differ precisely for imports — first used abroad,
+   * registered here later — and an import is exactly the car this field is being captured for.
+   */
+  firstRegistered?: string;
   // MOT reference (from the most recent test) — feeds the display + the banked reminder feature.
   motExpiry?: string; lastMotMileage?: number; lastMotDate?: string; // ISO dates + miles
   /**
@@ -205,6 +214,53 @@ export function motClientWrite(
   };
 }
 
+/**
+ * ── THE PARSE, AS A PURE FUNCTION ───────────────────────────────────────────────────────────────
+ *
+ * Split out of dvsaLookup so it can be asserted against a real DVSA-shaped payload without a network
+ * call. It was inline, and the consequence was measurable: a clause about what this lookup returns
+ * could only scan the source, and a mutation removing a field scored GREEN against the whole suite.
+ * A parse nothing can execute is a parse nothing checks.
+ */
+export function vehicleFromPayload(
+  d: any,
+  ctx: {
+    withExpiry?: any; withOdo?: any; tests?: any[];
+    odometerHistory?: Array<{ date: string; miles: number }>;
+  } = {},
+): DvsaVehicle {
+  const tests = ctx.tests ?? (Array.isArray(d?.motTests) ? d.motTests : []);
+  const withExpiry = ctx.withExpiry ?? tests.find((t: any) => t?.expiryDate);
+  const withOdo = ctx.withOdo ?? tests.find((t: any) => t?.odometerValue);
+
+  // Year of manufacture — DVSA gives dates, not a bare year; take the first 4-digit year we find.
+  const yearOf = (): number | undefined => {
+    for (const f of [d?.manufactureDate, d?.firstUsedDate, d?.registrationDate]) {
+      const y = parseInt(String(f ?? '').slice(0, 4), 10);
+      if (y >= 1900 && y <= 2100) return y;
+    }
+    return undefined;
+  };
+  return {
+    make: d?.make ? String(d.make) : undefined,
+    model: d?.model ? String(d.model) : undefined,
+    colour: d?.primaryColour ? String(d.primaryColour) : undefined,
+    fuel: d?.fuelType ? String(d.fuelType) : undefined,
+    engineCc: parseInt10(d?.engineSize),
+    year: yearOf(),
+    /**
+     * registrationDate, NOT firstUsedDate. They differ precisely for an import — first used abroad,
+     * registered here later — and the import is the car this field exists to capture. Taking
+     * firstUsedDate would make every import look older than its UK registration says.
+     */
+    firstRegistered: parseMotDate(d?.registrationDate),
+    motExpiry: parseMotDate(withExpiry?.expiryDate),
+    lastMotMileage: parseInt10(withOdo?.odometerValue),
+    lastMotDate: parseMotDate(tests[0]?.completedDate),
+    odometerHistory: ctx.odometerHistory,
+  };
+}
+
 export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   // Env presence — NAMES/booleans only, never values.
@@ -240,27 +296,8 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
     const odometerHistory = tests
       .map((t) => ({ date: parseMotDate(t?.completedDate), miles: normaliseOdometer(t?.odometerValue, t?.odometerUnit, t?.odometerResultType) }))
       .filter((r): r is { date: string; miles: number } => typeof r.date === 'string' && r.miles != null);
-    // Year of manufacture — DVSA gives dates, not a bare year; take the first 4-digit year we find.
-    const yearOf = (): number | undefined => {
-      for (const f of [d.manufactureDate, d.firstUsedDate, d.registrationDate]) {
-        const y = parseInt(String(f ?? '').slice(0, 4), 10);
-        if (y >= 1900 && y <= 2100) return y;
-      }
-      return undefined;
-    };
-    const out = {
-      make: d.make ? String(d.make) : undefined,
-      model: d.model ? String(d.model) : undefined,
-      colour: d.primaryColour ? String(d.primaryColour) : undefined,
-      fuel: d.fuelType ? String(d.fuelType) : undefined,
-      engineCc: parseInt10(d.engineSize),
-      year: yearOf(),
-      motExpiry: parseMotDate(withExpiry?.expiryDate),
-      lastMotMileage: parseInt10(withOdo?.odometerValue),
-      lastMotDate: parseMotDate(tests[0]?.completedDate),
-      odometerHistory,
-    };
-    console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc, year: out.year, motExpiry: out.motExpiry, lastMotMileage: out.lastMotMileage });
+    const out = vehicleFromPayload(d, { withExpiry, withOdo, tests, odometerHistory });
+    console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc, year: out.year, firstRegistered: out.firstRegistered, motExpiry: out.motExpiry, lastMotMileage: out.lastMotMileage });
     return out;
   } catch (e: any) {
     console.error('[dvsa] MOT API: exception', e?.name || e?.message);
