@@ -67,14 +67,37 @@ export type PurchaseSource = (typeof SOURCES)[number];
  * Scheme, or whether a given dealer's fee carries VAT. Those belong to the garage's accountant; what
  * is modelled here is the SHAPE each answer implies, and the source is the person's own statement.
  */
+/**
+ * ── TWO FEES ON ONE INVOICE, AND THEY ARE DIFFERENT MECHANISMS ──────────────────────────────────
+ * A Manheim or BCA invoice carries both, and treating them as one amount is wrong in both directions:
+ *
+ *   BUYER'S PREMIUM — VAT is INSIDE it and is not shown separately (HMRC VAT Notice 718/1, and the
+ *   invoice states it on its face). It forms part of the price of the goods, so it goes INTO the figure
+ *   the margin is measured from, and NOTHING is reclaimable from it. The garage types £265.20 exactly
+ *   as printed: this model neither adds VAT to that figure nor recovers any from it.
+ *
+ *   INDEMNITIES — Simulcast, SureCheck and the like. Standard rated with the VAT shown SEPARATELY,
+ *   reclaimable if registered, and never part of the margin base. The garage types the NET figure and
+ *   the model works the VAT out.
+ *
+ * A dealer's admin fee is mechanically the same as an indemnity — a separate standard-rated service —
+ * so it uses the same slot under its own label. The LABELS are the words on the invoice, deliberately:
+ * "buyer's premium" and "indemnities" are what the garage is reading off the page in front of them.
+ *
+ * ── THE INVARIANT, NOW ACROSS TWO FEE TYPES ─────────────────────────────────────────────────────
+ * A fee is either in the margin base OR reclaimable. Never both, and NEVER NEITHER — each type has
+ * exactly one relief route, and a type with no route is a fee quietly costing more than it should.
+ * Asserted per source per slot, with the garage registered, because that is the case in which both
+ * routes are available and a missing one cannot hide behind "not registered".
+ */
+export type FeeSlot = 'premium' | 'services';
+
+export type SourceFee = { slot: FeeSlot; /** The invoice's own word for it. */ label: string; note: string };
+
 export type SourceRule = {
   label: string;
-  /** Does a buyer's fee form part of the price the MARGIN is measured from? */
-  feeInMarginBase: boolean;
-  /** What becomes of VAT on the fee itself. `in_goods_price` = inside the purchase, nothing separate. */
-  feeVat: 'in_goods_price' | 'reclaimable' | 'none';
-  /** Whether this source can produce a fee at all — private sellers do not invoice one. */
-  hasFee: boolean;
+  /** Which fees this source's invoice can carry, in the order they appear on it. */
+  fees: SourceFee[];
   /** The VAT treatments this source can actually produce. */
   vatStatuses: readonly VatStatus[];
   note: string;
@@ -82,26 +105,39 @@ export type SourceRule = {
 
 export const SOURCE_RULES: Record<PurchaseSource, SourceRule> = {
   auction: {
-    label: 'Auction', feeInMarginBase: true, feeVat: 'in_goods_price', hasFee: true,
+    label: 'Auction',
     vatStatuses: VAT_STATUSES,
-    note: 'The buyer’s fee is invoiced as part of the price of the car, so on a margin car it raises the figure your margin is measured from — and costs you less than it looks.',
+    fees: [
+      { slot: 'premium', label: 'Buyer’s premium',
+        note: 'VAT is inside this figure and not shown separately, so type it exactly as the invoice has it. It forms part of the car’s price, so your margin is measured from it — and nothing is reclaimable from it.' },
+      { slot: 'services', label: 'Indemnities',
+        note: 'Simulcast, SureCheck and the like — standard rated with the VAT shown separately. Type the NET figure; the VAT is reclaimable and it never touches your margin.' },
+    ],
+    note: 'The buyer’s premium is invoiced as part of the price of the car; the indemnities are separate services. They behave differently, so they are asked for separately.',
   },
   trade: {
-    label: 'Another dealer', feeInMarginBase: false, feeVat: 'reclaimable', hasFee: true,
+    label: 'Another dealer',
     vatStatuses: VAT_STATUSES,
+    fees: [
+      { slot: 'services', label: 'Admin or delivery fee',
+        note: 'A separate standard-rated service. Type the net figure — the VAT is reclaimable and it never changes your margin.' },
+    ],
     note: 'An admin or delivery fee from a dealer is a separate service, not part of the car’s price. It never changes your margin; it is a straight cost.',
   },
   private: {
-    label: 'Private seller', feeInMarginBase: false, feeVat: 'none', hasFee: false,
-    vatStatuses: ['margin'],
+    label: 'Private seller', fees: [], vatStatuses: ['margin'],
     note: 'No fee and no VAT invoice, so there is nothing to reclaim — this car can only be sold on the margin scheme.',
   },
   part_exchange: {
-    label: 'Part-exchange', feeInMarginBase: false, feeVat: 'none', hasFee: false,
-    vatStatuses: ['margin'],
+    label: 'Part-exchange', fees: [], vatStatuses: ['margin'],
     note: 'The purchase price IS the allowance you gave against the other car. No fee, no VAT invoice, margin scheme only.',
   },
 };
+
+/** Does this source's invoice carry that fee? One reader, so the form and the writer cannot disagree. */
+export function hasFeeSlot(source: PurchaseSource, slot: FeeSlot): boolean {
+  return SOURCE_RULES[source].fees.some((f) => f.slot === slot);
+}
 
 /** What the toggle may offer for this source. One reader, so the page and the writer cannot disagree. */
 export function availableVatStatuses(source: PurchaseSource): readonly VatStatus[] {
@@ -109,48 +145,51 @@ export function availableVatStatuses(source: PurchaseSource): readonly VatStatus
 }
 
 export type FeePosition = {
-  /** Added to the price the margin is measured from. Zero unless the source folds it in. */
+  /** The buyer's premium, VAT-inclusive, exactly as typed. Zero where the invoice carries none. */
+  premiumPence: number;
+  /** Standard-rated services, NET, as typed. */
+  servicesPence: number;
+  /** VAT on those services — worked out here, because the invoice shows it separately. */
+  servicesVatPence: number;
+  /** Added to the price the margin is measured from. The premium, and only the premium. */
   inMarginBasePence: number;
-  /** What the fee takes out of the bank, VAT on the fee included. */
+  /** What the fees take out of the bank, the services' VAT included. */
   cashOutPence: number;
-  /** VAT on the fee that comes back. Zero unless the source makes it separately reclaimable. */
+  /** VAT that comes back: the services' VAT, and only when registered. */
   reclaimablePence: number;
-  /** The fee as a COST, after anything reclaimed. */
+  /** The fees as a COST, after anything reclaimed. */
   netCostPence: number;
 };
 
 /**
- * THE FEE, BY SOURCE. Four numbers for the same reason the VAT position is four: what leaves the
- * bank, what comes back, what it costs, and what it does to the margin are different questions.
+ * THE FEES, BY SOURCE. Seven numbers rather than one because the two mechanisms differ in every respect
+ * that matters: where the VAT is, whether it comes back, and whether the margin moves.
  *
  * `vatRegistered` is passed in rather than stored. It is the TENANT's registration, read from the tax
- * profile on every render — persisting it into a saved model's inputs would freeze a fact about the
- * business inside a document about a car, and it would be wrong the day they registered.
+ * profile on every render — persisting it into a saved model would freeze a fact about the business
+ * inside a document about a car, and it would be wrong the day they registered.
  */
 export function feePosition(
-  source: PurchaseSource, feePence: number, vatRegistered: boolean,
+  source: PurchaseSource,
+  fees: { premiumPence: number; servicesPence: number },
+  vatRegistered: boolean,
 ): FeePosition {
-  const rule = SOURCE_RULES[source];
-  const fee = rule.hasFee ? Math.max(0, Math.round(feePence)) : 0;
-  if (fee === 0) return { inMarginBasePence: 0, cashOutPence: 0, reclaimablePence: 0, netCostPence: 0 };
-
-  if (rule.feeInMarginBase) {
-    // IN THE GOODS PRICE. The relief comes through the margin, so there is nothing to reclaim — and
-    // claiming both would be the double count the invariant forbids.
-    return { inMarginBasePence: fee, cashOutPence: fee, reclaimablePence: 0, netCostPence: fee };
-  }
-  if (rule.feeVat === 'reclaimable') {
-    // A SERVICE, STANDARD RATED ON TOP. The typed fee is the net amount — that is how a dealer quotes
-    // an admin fee — so VAT is added to what leaves the bank and comes back only if registered.
-    const vat = Math.round(fee * 0.2);
-    return {
-      inMarginBasePence: 0,
-      cashOutPence: fee + vat,
-      reclaimablePence: vatRegistered ? vat : 0,
-      netCostPence: fee + (vatRegistered ? 0 : vat),
-    };
-  }
-  return { inMarginBasePence: 0, cashOutPence: fee, reclaimablePence: 0, netCostPence: fee };
+  // A FIGURE FOR A FEE THIS INVOICE CANNOT CARRY IS NOT A COST. It is a stale field from a changed
+  // answer — a private seller invoices no premium — and reading it would be inventing money.
+  const premium = hasFeeSlot(source, 'premium') ? Math.max(0, Math.round(fees.premiumPence)) : 0;
+  const services = hasFeeSlot(source, 'services') ? Math.max(0, Math.round(fees.servicesPence)) : 0;
+  const servicesVat = Math.round(services * 0.2);
+  const reclaimable = vatRegistered ? servicesVat : 0;
+  return {
+    premiumPence: premium,
+    servicesPence: services,
+    servicesVatPence: servicesVat,
+    // THE PREMIUM ONLY. Its VAT is already inside it, which is precisely why it cannot also be reclaimed.
+    inMarginBasePence: premium,
+    cashOutPence: premium + services + servicesVat,
+    reclaimablePence: reclaimable,
+    netCostPence: premium + services + servicesVat - reclaimable,
+  };
 }
 
 /** The UK VAT fraction on a VAT-inclusive amount at 20%: 20/120. */
@@ -450,10 +489,16 @@ export type ModelInputs = {
    */
   funding: FundingPlan;
   /**
-   * THE BUYER'S FEE — the auction's premium, or a dealer's admin fee. Typed NET: that is how both are
-   * quoted. What it does to the answer is SOURCE_RULES' business, not this field's.
+   * THE BUYER'S PREMIUM, typed exactly as the invoice prints it — VAT INSIDE, nothing added and nothing
+   * recovered. Auction invoices only; SOURCE_RULES decides that, not this field.
    */
-  buyerFeePence: number;
+  premiumPence: number;
+  /**
+   * STANDARD-RATED SERVICES on the purchase invoice, NET: an auction's indemnities, a dealer's admin
+   * fee. One field because the mechanism is identical; the LABEL differs by source because the words on
+   * the invoice differ, and those are the words the garage is reading.
+   */
+  servicesPence: number;
   /**
    * DOES THE TYPED PURCHASE PRICE INCLUDE VAT? Only meaningful when the car is VAT qualifying — on
    * the margin scheme nothing is recoverable and the typed figure is simply what you paid.
@@ -473,7 +518,7 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', buyerFeePence: 0,
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', premiumPence: 0, servicesPence: 0,
     funding: { kind: 'cash' }, ...sliders };
 }
 
@@ -516,7 +561,7 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // THE FEE FIRST, because on a margin car it changes the figure the VAT is worked out from. A fee
   // added afterwards as a cost would give the right total and the wrong VAT, which is the error this
   // whole slice exists to prevent.
-  const fee = feePosition(i.source, i.buyerFeePence, opts.vatRegistered === true);
+  const fee = feePosition(i.source, { premiumPence: i.premiumPence, servicesPence: i.servicesPence }, opts.vatRegistered === true);
   const vat = vatPosition(i.purchasePence, i.salePence, i.vatStatus, i.purchaseIncludesVat,
     i.purchasePence + fee.inMarginBasePence);
   const workshop = Math.round(i.prepHours * i.workshopCostPerHourPence);

@@ -8,7 +8,7 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource, type FundingPlan,
+  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource, type FundingPlan, hasFeeSlot,
 } from '@/lib/purchase-model';
 
 /** Whatever arrived over the wire, made safe: every slider clamped to its own definition. */
@@ -45,6 +45,21 @@ function normaliseFunding(raw: unknown): FundingPlan {
   return { kind: 'cash' };
 }
 
+/**
+ * A PRE-SPLIT MODEL'S `buyerFeePence`, PUT WHERE THAT SOURCE ALREADY TREATED IT.
+ *
+ * Auction rules folded the old single fee into the margin base with its VAT inside — that is a PREMIUM.
+ * Trade rules treated it as a net standard-rated service — the SERVICES slot. Every other source had no
+ * fee at all. Returns 0 for the slot the old value did not mean, so nothing is counted twice.
+ */
+function legacyFee(b: Record<string, unknown>, source: PurchaseSource, slot: 'premium' | 'services'): number {
+  const old = typeof b.buyerFeePence === 'number' ? b.buyerFeePence : Number(b.buyerFeePence);
+  if (!Number.isFinite(old) || old <= 0) return 0;
+  if (source === 'auction') return slot === 'premium' ? old : 0;
+  if (source === 'trade') return slot === 'services' ? old : 0;
+  return 0;
+}
+
 export function normaliseInputs(raw: unknown): ModelInputs {
   const b = (raw ?? {}) as Record<string, unknown>;
   const num = (v: unknown, fallback: number) => {
@@ -61,10 +76,21 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     salePence: Math.max(0, Math.round(num(b.salePence, d.salePence))),
     source,
     funding: normaliseFunding(b.funding),
-    // THE FEE IS ZERO FOR A SOURCE THAT CANNOT CHARGE ONE. A private seller does not invoice a premium,
-    // so a fee arriving with source 'private' is a stale field from a changed answer, not a cost.
-    buyerFeePence: SOURCE_RULES[source].hasFee
-      ? Math.min(5000000, Math.max(0, Math.round(num(b.buyerFeePence, 0))))
+    // ── A FEE IS ZERO WHERE THE INVOICE CANNOT CARRY IT ─────────────────────────────────────────
+    // A private seller invoices no premium, so a figure arriving with source 'private' is a stale field
+    // from a changed answer, not a cost. hasFeeSlot is the one reader of that rule.
+    //
+    // AND THE ONE-FIELD MODELS ARE CARRIED OVER FAITHFULLY. Until 2026-09-13 there was a single
+    // `buyerFeePence` whose MEANING depended on the source: on an auction the rules folded it into the
+    // margin base with its VAT inside (a premium), on a trade purchase they treated it as a net
+    // standard-rated service. It migrates to whichever slot that source already applied to it, so no
+    // stored answer moves. Mapping it to one slot for both would have changed every old auction model
+    // by 20% of the fee, silently.
+    premiumPence: hasFeeSlot(source, 'premium')
+      ? Math.min(5000000, Math.max(0, Math.round(num(b.premiumPence, legacyFee(b, source, 'premium')))))
+      : 0,
+    servicesPence: hasFeeSlot(source, 'services')
+      ? Math.min(5000000, Math.max(0, Math.round(num(b.servicesPence, legacyFee(b, source, 'services')))))
       : 0,
     // ── THE CONSTRAINT LIVES HERE, NOT ONLY IN THE FORM ─────────────────────────────────────────
     // A car bought privately cannot be VAT qualifying: there is no VAT invoice to reclaim against. The

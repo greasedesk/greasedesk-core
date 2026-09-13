@@ -20,6 +20,8 @@ const { gatePrisma, describeError, gateOrigin, serverReady, ZZ_GROUP } = await i
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
 const { randomUUID } = await import('node:crypto');
+// KEY MATCHERS COME FROM ONE PLACE — a hand-written /label: 'x'/ matches the substring, not the key.
+const { hasKey } = await import('../lib/anchored-match.ts');
 const M = await import('../lib/purchase-model.ts');
 const S = await import('../lib/purchase-model-store.ts');
 
@@ -256,9 +258,15 @@ try {
    * round, which is answerable from one car.
    */
   console.log('\n— a contribution, and a contract that is never divided —');
-  check('the headline is a CONTRIBUTION, not a profit', /<span className="text-sm text-muted">Contribution<\/span>/.test(page)
-    && !/>Profit<\/span>/.test(page),
+  check('the headline is a CONTRIBUTION, not a profit', hasKey(page, 'label', "'Contribution'")
+    && !/>Profit</.test(page) && !/'Profit'/.test(page),
     'banning the old word too: the next reader will reach for it for the same reason I did');
+  check('  …and ONE expression feeds both places it is shown', (() => {
+    // answer.label / answer.text are read by the sticky line and by the panel at the foot. Counting the
+    // readers is what stops a later edit hardcoding the figure in one of them and letting them diverge.
+    const reads = (page.match(/answer\.(label|text|negative)/g) ?? []).length;
+    return /const answer = \{/.test(page) && reads >= 5;
+  })(), 'two renderings of one number is a divergence waiting to happen');
   check('  …and the page says what that means', /data-testid="contribution-means"/.test(page)
     && /before your fixed monthly costs/.test(page) && /not profit/.test(page));
   check('the advertising slider no longer promises every platform',
@@ -292,45 +300,103 @@ try {
    * the VAT on it £50. The same £300 from a dealer is a separate standard-rated service — a flat cost
    * that never touches the margin. Same money typed, two answers £50 apart.
    */
-  console.log('\n— the source decides what a fee is —');
-  // A BARE CAR: every cost zeroed so the only thing moving is the fee. Named feeBase because `base`
-  // is already taken in this file by the worked £8,000/£10,000 case.
-  const feeBase = { ...M.defaultInputs(), purchasePence: 800000, salePence: 1000000, vatStatus: 'margin',
-    prepHours: 0, partsPence: 0, advertisingPence: 0, warrantyPence: 0, deliveryInPence: 0,
-    deliveryOutPence: 0, daysInStock: 0, buyerFeePence: 30000 };
-  const atAuction = M.computeModel({ ...feeBase, source: 'auction' });
-  const fromTrade = M.computeModel({ ...feeBase, source: 'trade' }, { vatRegistered: true });
-  check('an auction fee raises the price the MARGIN is measured from', atAuction.fee.inMarginBasePence === 30000,
-    'invoiced as part of the goods, so the relief comes through the margin');
-  check('  …and the VAT due falls by a sixth of it', (() => {
-    const noFee = M.computeModel({ ...feeBase, source: 'auction', buyerFeePence: 0 });
-    return Math.abs((noFee.vatDuePence - atAuction.vatDuePence) - 5000) <= 1;   // £300/6 = £50, ±1p for rounding
-  })(), '£300 of fee = £50 less VAT, so the fee costs £250 not £300');
-  check('a dealer fee does NOT touch the margin', fromTrade.fee.inMarginBasePence === 0
-    && M.computeModel({ ...feeBase, source: 'trade', buyerFeePence: 0 }, { vatRegistered: true }).vatDuePence === fromTrade.vatDuePence,
-    'a separate service: the VAT due is identical with and without it');
-  check('  …and the SAME £300 leaves the two garages differently off',
-    atAuction.contributionPence !== fromTrade.contributionPence,
-    `auction ${atAuction.contributionPence}p vs trade ${fromTrade.contributionPence}p — one number typed, two answers, which is why this is a question and not a slider`);
+  console.log('\n— two fees on one invoice, and they are different mechanisms —');
 
   /**
-   * THE INVARIANT, FOR EVERY SOURCE. A fee is EITHER inside the margin base OR reclaimable, never
-   * both. Asserted across the whole table rather than on the two rows I happened to write, because the
-   * next row added is the one that will get it wrong.
+   * ── THE WORKED INVOICE (owner, from a real Manheim invoice) ────────────────────────────────────
+   * hammer £1,250.00 · premium £265.20 · indemnities £68.00 net + £13.60 VAT
+   *   → margin base £1,515.20 · reclaimable input VAT £13.60 · cash out £1,596.80
+   *
+   * Asserted as EXACT pennies. These are not derived figures with a rounding question — they are the
+   * numbers printed on the invoice, and a tolerance here would be a tolerance on arithmetic that has
+   * only one right answer.
+   */
+  const HAMMER = 125000, PREMIUM = 26520, INDEMNITIES = 6800, INDEMNITY_VAT = 1360;
+  const invoiceCase = {
+    ...M.defaultInputs(), source: 'auction', vatStatus: 'margin',
+    purchasePence: HAMMER, salePence: 200000, premiumPence: PREMIUM, servicesPence: INDEMNITIES,
+    prepHours: 0, partsPence: 0, advertisingPence: 0, warrantyPence: 0,
+    deliveryInPence: 0, deliveryOutPence: 0, daysInStock: 0,
+  };
+  const fees = M.feePosition('auction', { premiumPence: PREMIUM, servicesPence: INDEMNITIES }, true);
+  check('the premium goes INTO the margin base', fees.inMarginBasePence === PREMIUM,
+    `${fees.inMarginBasePence}p — VAT is inside it (VAT Notice 718/1), so it is part of the price of the goods`);
+  check('  …so the margin base is £1,515.20', HAMMER + fees.inMarginBasePence === 151520,
+    `${HAMMER + fees.inMarginBasePence}p = hammer £1,250.00 + premium £265.20`);
+  check('  …and NOTHING is reclaimable from the premium', (() => {
+    const premiumOnly = M.feePosition('auction', { premiumPence: PREMIUM, servicesPence: 0 }, true);
+    return premiumOnly.reclaimablePence === 0;
+  })(), 'its VAT is already inside the figure; recovering it as well would be counting it twice');
+  check('  …and no VAT is ADDED to it either', (() => {
+    const premiumOnly = M.feePosition('auction', { premiumPence: PREMIUM, servicesPence: 0 }, true);
+    return premiumOnly.cashOutPence === PREMIUM;
+  })(), 'typed exactly as the invoice prints it — £265.20 leaves the bank, not £318.24');
+
+  check('the indemnities are standard rated, VAT worked out', fees.servicesVatPence === INDEMNITY_VAT,
+    `£68.00 net → ${fees.servicesVatPence}p VAT, and the invoice shows £13.60`);
+  check('  …reclaimable input VAT is £13.60', fees.reclaimablePence === INDEMNITY_VAT, `${fees.reclaimablePence}p`);
+  check('  …and they are NOT in the margin base', (() => {
+    const servicesOnly = M.feePosition('auction', { premiumPence: 0, servicesPence: INDEMNITIES }, true);
+    return servicesOnly.inMarginBasePence === 0;
+  })(), 'a separate service, so the margin never sees it');
+
+  const whole = M.computeModel(invoiceCase, { vatRegistered: true });
+  check('cash out is £1,596.80', whole.vat.cashOutPence + whole.fee.cashOutPence === 159680,
+    `${whole.vat.cashOutPence + whole.fee.cashOutPence}p = £1,250.00 + £265.20 + £68.00 + £13.60`);
+  check('  …and the VAT on the sale is worked out from the £1,515.20 base', (() => {
+    // margin = 2000.00 − 1515.20 = 484.80; VAT at 1/6 = 80.80
+    const noPremium = M.computeModel({ ...invoiceCase, premiumPence: 0 }, { vatRegistered: true });
+    return Math.abs(whole.vat.outputVatPence - 8080) <= 1 && noPremium.vat.outputVatPence > whole.vat.outputVatPence;
+  })(), `${whole.vat.outputVatPence}p on a £484.80 margin — and it is LOWER than without the premium, which is the whole mechanism`);
+
+  /**
+   * THE INVARIANT, NOW ACROSS TWO FEE TYPES AND EVERY SOURCE: in the margin base OR reclaimable, never
+   * both and NEVER NEITHER. Tested with the garage REGISTERED, because that is the case in which both
+   * routes are open — an unregistered garage reclaims nothing, and a missing route would hide behind it.
    */
   for (const src of M.SOURCES) {
-    const f = M.feePosition(src, 30000, true);
-    check(`  …${src}: the fee is in the margin base OR reclaimable, never both`,
-      !(f.inMarginBasePence > 0 && f.reclaimablePence > 0),
-      `base +${f.inMarginBasePence}p, reclaim ${f.reclaimablePence}p — counting it twice is the failure mode`);
+    for (const f of M.SOURCE_RULES[src].fees) {
+      const only = M.feePosition(src, { premiumPence: f.slot === 'premium' ? 10000 : 0, servicesPence: f.slot === 'services' ? 10000 : 0 }, true);
+      const inBase = only.inMarginBasePence > 0, reclaim = only.reclaimablePence > 0;
+      check(`  …${src}/${f.slot} (${f.label}): exactly one relief route`, inBase !== reclaim,
+        `in margin base: ${inBase}, reclaimable: ${reclaim} — both is double counting, neither is a fee quietly costing more than it should`);
+    }
   }
-  check('a private sale and a part-exchange carry NO fee at all', M.feePosition('private', 30000, true).cashOutPence === 0
-    && M.feePosition('part_exchange', 30000, true).cashOutPence === 0,
-    'a typed fee on a source that cannot invoice one is a stale field, not a cost');
-  check('an unregistered garage does not reclaim the dealer fee’s VAT',
-    M.feePosition('trade', 30000, false).reclaimablePence === 0
-    && M.feePosition('trade', 30000, false).netCostPence === 36000,
-    '£300 + VAT is a £360 cost when there is nothing to reclaim it against');
+  check('a private sale and a part-exchange carry NO fee at all',
+    M.feePosition('private', { premiumPence: 30000, servicesPence: 30000 }, true).cashOutPence === 0
+    && M.feePosition('part_exchange', { premiumPence: 30000, servicesPence: 30000 }, true).cashOutPence === 0,
+    'a typed figure on an invoice that cannot carry it is a stale field, not a cost');
+  check('a dealer invoice carries the SERVICE fee and no premium',
+    M.hasFeeSlot('trade', 'services') === true && M.hasFeeSlot('trade', 'premium') === false,
+    'an admin fee is mechanically an indemnity; there is no premium on a trade invoice');
+  check('an unregistered garage reclaims nothing and carries the VAT as cost', (() => {
+    const u = M.feePosition('trade', { premiumPence: 0, servicesPence: 30000 }, false);
+    return u.reclaimablePence === 0 && u.netCostPence === 36000;
+  })(), '£300 + VAT is a £360 cost when there is nothing to reclaim it against');
+
+  /** THE LABELS ARE THE INVOICE'S OWN WORDS, because that is what the garage is reading while they type. */
+  const auctionFees = M.SOURCE_RULES.auction.fees.map((f) => f.label);
+  check('the auction labels are "Buyer’s premium" and "Indemnities"',
+    auctionFees.some((l) => /Buyer’s premium/.test(l)) && auctionFees.some((l) => /Indemnities/.test(l)),
+    JSON.stringify(auctionFees));
+  check('  …and the premium’s note says the VAT is inside it',
+    /VAT is inside this figure and not shown separately/.test(M.SOURCE_RULES.auction.fees[0].note));
+  check('  …and the indemnities’ note asks for the NET figure',
+    /Type the NET figure/.test(M.SOURCE_RULES.auction.fees[1].note));
+
+  /**
+   * AND THE ONE-FIELD MODELS STILL READ THE SAME. `buyerFeePence` MEANT different things by source, so it
+   * migrates to the slot that source already applied it to. Mapping it to one slot for both would have
+   * changed every stored auction model by 20% of the fee, silently.
+   */
+  const legacyAuction = S.normaliseInputs({ source: 'auction', buyerFeePence: 26520, purchasePence: HAMMER, salePence: 200000 });
+  const legacyTrade = S.normaliseInputs({ source: 'trade', buyerFeePence: 30000, purchasePence: HAMMER, salePence: 200000 });
+  check('an old AUCTION fee becomes the premium', legacyAuction.premiumPence === 26520 && legacyAuction.servicesPence === 0,
+    'the old rules folded it into the margin base with its VAT inside — that is a premium');
+  check('  …and an old TRADE fee becomes the service', legacyTrade.servicesPence === 30000 && legacyTrade.premiumPence === 0,
+    'the old rules treated it as a net standard-rated service');
+  check('  …and neither is counted twice', legacyAuction.premiumPence + legacyAuction.servicesPence === 26520
+    && legacyTrade.premiumPence + legacyTrade.servicesPence === 30000);
 
   /**
    * ── THE WRONG ANSWER THAT WAS TWO CLICKS AWAY ─────────────────────────────────────────────────
@@ -342,10 +408,11 @@ try {
     && M.availableVatStatuses('part_exchange').join() === 'margin');
   check('  …while auction and trade can be either', M.availableVatStatuses('auction').length === 2
     && M.availableVatStatuses('trade').length === 2);
-  const forced = S.normaliseInputs({ source: 'private', vatStatus: 'qualifying', buyerFeePence: 30000 });
+  const forced = S.normaliseInputs({ source: 'private', vatStatus: 'qualifying', premiumPence: 30000, servicesPence: 30000 });
   check('the WRITER refuses an impossible pair, not just the form', forced.vatStatus === 'margin',
     'posted source=private + vatStatus=qualifying, stored as margin — this is what a hand-made POST meets');
-  check('  …and drops a fee the source cannot charge', forced.buyerFeePence === 0, `${forced.buyerFeePence}p`);
+  check('  …and drops fees the source cannot charge', forced.premiumPence === 0 && forced.servicesPence === 0,
+    `premium ${forced.premiumPence}p, services ${forced.servicesPence}p`);
   check('  …and an unknown source falls back rather than throwing', S.normaliseInputs({ source: 'ebay' }).source === 'auction',
     'normalising a document, not validating a form');
 
@@ -354,12 +421,12 @@ try {
    * every answer that predates the source question is identical — asserted rather than assumed,
    * because "it defaults to the old behaviour" is the claim most often made and least often checked.
    */
-  const legacy = { ...M.defaultInputs(), buyerFeePence: 0 };
+  const legacy = { ...M.defaultInputs(), premiumPence: 0, servicesPence: 0 };
   const viaDefault = M.vatPosition(800000, 1000000, 'margin', false);
   const viaBase = M.vatPosition(800000, 1000000, 'margin', false, 800000);
   check('vatPosition with no margin base given == the base being the purchase price',
     JSON.stringify(viaDefault) === JSON.stringify(viaBase), 'the new parameter changes nothing when nobody passes it');
-  check('  …and a fee of zero leaves the whole answer untouched',
+  check('  …and fees of zero leave the whole answer untouched',
     M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'trade' }).contributionPence
     && M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'private' }).contributionPence,
     'the source alone moves no money; only a fee does');
@@ -513,35 +580,108 @@ try {
    * The writer refuses the pair (asserted above, as a pure function); this asserts the SCREEN never
    * offers it — which is a different claim, and the one a person actually meets.
    */
+  /**
+   * ── THE ANSWER IS VISIBLE WHILE A SLIDER MOVES ────────────────────────────────────────────────
+   * Measured before it was built: on desktop the panel is `sm:static` and sat 2020px down a 2906px page,
+   * 1220px below the fold with a slider under the cursor. The sticky line at the top is the fix, and this
+   * drives it the way a person does — scroll to a slider, move it, and look at the top of the screen.
+   */
+  await bpage.locator('[data-testid="slider-partsPence"]').scrollIntoViewIfNeeded();
+  const glance = async () => bpage.evaluate(() => {
+    const el = document.querySelector('[data-testid="answer-top"]');
+    const r = el?.getBoundingClientRect();
+    // NON-ZERO SIZE, THEN POSITION. `top >= 0 && bottom <= innerHeight` is TRUE of a display:none
+    // element — its rect is 0×0 at the origin — so the first version of this clause passed with the
+    // sticky bar deleted. A visibility check that an invisible element satisfies is not a check.
+    const painted = !!r && r.width > 0 && r.height > 0 && !!el.offsetParent;
+    return { inViewport: painted && r.top >= 0 && r.bottom <= window.innerHeight,
+      text: document.querySelector('[data-testid="contribution-top"]')?.textContent?.trim() ?? null,
+      bottom: document.querySelector('[data-testid="contribution"]')?.textContent?.trim() ?? null };
+  });
+  const atSlider = await glance();
+  check('with a slider on screen, the answer is too', atSlider.inViewport === true,
+    `contribution reads ${atSlider.text} at the top while the sliders are under the cursor`);
+  check('  …and it is the same figure as the panel at the foot', atSlider.text === atSlider.bottom && !!atSlider.text,
+    `top ${atSlider.text} · bottom ${atSlider.bottom} — two renderings of one number, from one expression`);
+  check('  …and it says CONTRIBUTION, not profit', /Contribution/.test((await bpage.locator('[data-testid="answer-top"]').textContent()) ?? ''),
+    'the agreed word, in both places');
+
+  // MOVE A SLIDER AND WATCH THE TOP CHANGE. This is the thing the tool is for.
+  await bpage.locator('[data-testid="slider-partsPence"]').focus();
+  await bpage.locator('[data-testid="slider-partsPence"]').press('End');
+  await bpage.waitForFunction((was) => document.querySelector('[data-testid="contribution-top"]')?.textContent?.trim() !== was,
+    atSlider.text, { timeout: 15000 });
+  const moved = await glance();
+  check('dragging a slider changes the figure at the top, while it is still on screen',
+    moved.text !== atSlider.text && moved.inViewport === true && moved.text === moved.bottom,
+    `${atSlider.text} → ${moved.text}`);
+
+  /**
+   * ── AND NOTHING HIDES BEHIND THE PANEL ON A PHONE ─────────────────────────────────────────────
+   * The fixed panel measures 214px on a 360x640 screen and the page reserved 160px (pb-40), so the foot
+   * of it sat underneath — including "Save this model", which a person could see and not reach. Measured
+   * at the real viewport, against the real panel edge, because the numbers are the whole finding.
+   */
+  await bpage.setViewportSize({ width: 360, height: 640 });
+  await bpage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const foot = await bpage.evaluate(() => {
+    const panel = document.querySelector('[data-testid="answer"]').getBoundingClientRect();
+    const focusable = [...document.querySelectorAll('button, input, a[href]')]
+      .filter((el) => el.getBoundingClientRect().height > 0 && !el.closest('[data-testid="answer"]'));
+    const last = focusable[focusable.length - 1];
+    const lr = last.getBoundingClientRect();
+    return { label: (last.textContent || last.tagName).trim().slice(0, 24),
+      clearPx: Math.round(panel.top - lr.bottom), reachable: lr.bottom <= panel.top,
+      panelPosition: getComputedStyle(document.querySelector('[data-testid="answer"]')).position };
+  });
+  check('at the foot of a 360x640 phone, nothing is behind the answer panel', foot.reachable === true,
+    `"${foot.label}" clears the panel by ${foot.clearPx}px`);
+  // AND THE REASON IT CANNOT RECUR: there is no fixed overlay to hide behind. A clearance expressed as a
+  // fixed padding was wrong in principle — the panel's height changes with state (a stocking facility adds
+  // two lines), so pb-56 passed at rest and failed by 13px with a facility chosen.
+  check('  …because the panel is in the FLOW, not an overlay', foot.panelPosition === 'static',
+    `position: ${foot.panelPosition} — a constant cannot reserve space for a panel whose height varies`);
+  await bpage.setViewportSize({ width: 1280, height: 800 });
+
+  /**
+   * ── TWO FEE FIELDS, THE INVOICE'S OWN WORDS ───────────────────────────────────────────────────
+   */
+  await bpage.click('[data-testid="source-auction"]');
+  await bpage.waitForSelector('[data-testid="input-premium"]', { timeout: 15000 });
+  check('an auction invoice asks for the premium AND the indemnities separately',
+    (await bpage.locator('[data-testid="input-premium"]').count()) === 1
+    && (await bpage.locator('[data-testid="input-services"]').count()) === 1);
+  check('  …under the words the invoice uses',
+    /Buyer’s premium/.test((await bpage.locator('[data-testid="fee-field-premium"]').textContent()) ?? '')
+    && /Indemnities/.test((await bpage.locator('[data-testid="fee-field-services"]').textContent()) ?? ''));
+
+  // THE REAL INVOICE, TYPED IN: £1,250 hammer, £265.20 premium, £68 indemnities.
+  await bpage.fill('[data-testid="input-purchase"]', '1250');
+  await bpage.fill('[data-testid="input-premium"]', '265.20');
+  await bpage.fill('[data-testid="input-services"]', '68');
+  await bpage.waitForSelector('[data-testid="fee-effect-premium"]', { timeout: 15000 });
+  const prem = ((await bpage.locator('[data-testid="fee-effect-premium"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  const serv = ((await bpage.locator('[data-testid="fee-effect-services"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('the page states the margin base as £1,515.20', prem.includes('£1,515.20'), JSON.stringify(prem));
+  check('  …and says the premium’s VAT is already inside it', /nothing to reclaim/.test(prem));
+  check('  …and states the indemnities’ VAT separately, at £13.60', serv.includes('£13.60'), JSON.stringify(serv));
+  check('  …and says it is not in the margin', /none of it in your margin/.test(serv));
+
+  /** A PRIVATE SALE ASKS FOR NEITHER, and still cannot be VAT qualifying. */
   await bpage.click('[data-testid="source-private"]');
   await bpage.waitForSelector('[data-testid="vat-forced"]', { timeout: 15000 });
   check('a private purchase does not OFFER VAT qualifying',
     (await bpage.locator('[data-testid="vat-qualifying"]').count()) === 0
     && (await bpage.locator('[data-testid="vat-margin"]').count()) === 1,
     'filtered, not disabled — a greyed control invites "why not?", and the source note answers it already');
-  check('  …and says why, where the choice used to be',
-    /no VAT invoice to reclaim against/.test((await bpage.locator('[data-testid="vat-forced"]').textContent()) ?? ''));
-  check('  …and asks for no fee a private seller would never charge',
-    (await bpage.locator('[data-testid="fee-field"]').count()) === 0,
+  check('  …and asks for neither fee', (await bpage.locator('[data-testid="input-premium"]').count()) === 0
+    && (await bpage.locator('[data-testid="input-services"]').count()) === 0,
     'absent rather than zeroed: an empty box invites a number that means nothing');
-
-  // SWITCHING BACK RESTORES THE CHOICE, and a typed fee then says what it did in pounds.
-  await bpage.click('[data-testid="source-auction"]');
-  await bpage.waitForSelector('[data-testid="input-fee"]', { timeout: 15000 });
-  check('an auction purchase offers both treatments again',
-    (await bpage.locator('[data-testid="vat-qualifying"]').count()) === 1);
-  await bpage.fill('[data-testid="input-fee"]', '300');
-  await bpage.waitForSelector('[data-testid="fee-effect"]', { timeout: 15000 });
-  const feeSaid = ((await bpage.locator('[data-testid="fee-effect"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  check('the page says what the auction fee DID, in pounds', /margin is measured from/.test(feeSaid),
-    JSON.stringify(feeSaid));
-  // AND THE DISCRIMINATOR: the same £300 from a dealer says something different.
   await bpage.click('[data-testid="source-trade"]');
-  await bpage.waitForSelector('[data-testid="fee-effect"]', { timeout: 15000 });
-  const tradeSaid = ((await bpage.locator('[data-testid="fee-effect"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  check('  …and the same fee from a dealer says something DIFFERENT', tradeSaid !== feeSaid
-    && /does not change your margin/.test(tradeSaid),
-    JSON.stringify(tradeSaid));
+  await bpage.waitForSelector('[data-testid="input-services"]', { timeout: 15000 });
+  check('a dealer invoice asks for the admin fee only, under its own label',
+    (await bpage.locator('[data-testid="input-premium"]').count()) === 0
+    && /Admin or delivery fee/.test((await bpage.locator('[data-testid="fee-field-services"]').textContent()) ?? ''));
 
   /**
    * ── THE FACILITY, TYPED IN AND READ BACK ──────────────────────────────────────────────────────
@@ -597,6 +737,12 @@ try {
 
   // AND THE IMPOSSIBLE CASE IS A REFUSAL, NOT INFINITY. Sale below purchase: the contribution goes
   // negative and no quantity of sales covers anything.
+  //
+  // BOTH FIGURES ARE SET HERE, not just the sale. Earlier clauses in this leg type the worked invoice
+  // (£1,250 hammer), so "sale 5000" stopped being a loss and this block waited fifteen seconds for a
+  // refusal that was never coming. A clause that inherits state from the one above it is a clause whose
+  // meaning changes when somebody edits the one above it.
+  await bpage.fill('[data-testid="input-purchase"]', '20000');
   await bpage.fill('[data-testid="input-sale"]', '5000');
   await bpage.waitForSelector('[data-testid="break-even-impossible"]', { timeout: 15000 });
   const refusal = ((await bpage.locator('[data-testid="break-even-impossible"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();

@@ -24,7 +24,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
-  SOURCES, SOURCE_RULES, availableVatStatuses,
+  SOURCES, SOURCE_RULES, availableVatStatuses, hasFeeSlot,
   FUNDING_KINDS, blankFacility, fundingCost,
   type ModelInputs, type SliderKey, type VatStatus,
 } from '@/lib/purchase-model';
@@ -72,7 +72,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence' | 'buyerFeePence') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
   async function save() {
@@ -117,13 +117,33 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
     ];
   }, [r.vat.cashOutPence, r.fee.cashOutPence, inputs.daysInStock, inputs.costOfMoneyAnnualPct, inputs.funding]);
 
+  /**
+   * THE ANSWER IS SHOWN TWICE, FROM ONE PLACE. Measured before it was changed: on desktop the panel is
+   * `sm:static`, so it sat 2020px down a 2906px page — 1220px below the fold while a slider was under the
+   * cursor, which is the whole point of the tool. On a 360x640 phone it was visible but took 214px of the
+   * screen, and pb-40 (160px) was less than that, so the foot of the page hid behind it.
+   *
+   * Two renderings of one number is a divergence waiting to happen, so the figure and the word come from
+   * HERE and both places read them — purchase-model-gate asserts the two agree on the served page.
+   */
+  const answer = { label: 'Contribution', text: moneyExact(r.contributionPence), negative: r.contributionPence < 0 };
+
   const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.adContractMonthlyPence),
     [r.contributionPence, inputs.adContractMonthlyPence]);
   return (
     <>
       <Head><title>Buying a car — GreaseDesk</title></Head>
-      <div className="max-w-3xl mx-auto px-3 sm:px-6 py-4 pb-40 sm:pb-8">
-        <h1 className="text-2xl font-bold text-ink">Buying a car</h1>
+      <div className="max-w-3xl mx-auto px-3 sm:px-6 py-4 pb-8">
+        {/* STICKY, ON EVERY VIEWPORT. Not `sm:` only: "visible while a slider is moving" should not depend
+            on how wide the screen is, and one behaviour is easier to reason about than two. One line, ~40px,
+            so it costs a phone far less than the 214px panel at the foot. */}
+        <div className="sticky top-0 z-20 -mx-3 sm:-mx-6 px-3 sm:px-6 py-2 bg-surface border-b border-line flex items-baseline justify-between"
+          data-testid="answer-top">
+          <span className="text-xs uppercase tracking-wide text-muted">{answer.label}</span>
+          <span className={`text-lg font-bold tabular-nums ${answer.negative ? 'text-danger' : 'text-ink'}`}
+            data-testid="contribution-top">{answer.text}</span>
+        </div>
+        <h1 className="mt-3 text-2xl font-bold text-ink">Buying a car</h1>
         {/* SAID ONCE, PLAINLY, AT THE TOP. */}
         <p className="mt-1 text-sm text-muted" data-testid="assumption-notice">
           Every figure on this page is one you have chosen. Nothing here is measured from your own data.
@@ -178,7 +198,8 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
                   return {
                     ...p, source: v,
                     vatStatus: allowed.includes(p.vatStatus) ? p.vatStatus : allowed[0],
-                    buyerFeePence: SOURCE_RULES[v].hasFee ? p.buyerFeePence : 0,
+                    premiumPence: hasFeeSlot(v, 'premium') ? p.premiumPence : 0,
+                    servicesPence: hasFeeSlot(v, 'services') ? p.servicesPence : 0,
                   };
                 })}
                 className={`min-h-[44px] rounded-lg border text-sm font-medium ${
@@ -189,25 +210,41 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
           </div>
           <p className="mt-1 text-xs text-muted" data-testid="source-note">{SOURCE_RULES[inputs.source].note}</p>
 
-          {/* THE FEE, ONLY WHERE ONE EXISTS. A private seller does not invoice a premium, so the field
-              is absent rather than zeroed — an empty box invites a number that means nothing. */}
-          {SOURCE_RULES[inputs.source].hasFee && (
-            <label className="mt-3 block text-sm text-muted" data-testid="fee-field">
-              {inputs.source === 'auction' ? 'Buyer’s fee' : 'Admin or delivery fee'}
-              <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.buyerFeePence / 100) || ''}
-                onChange={setMoney('buyerFeePence')} data-testid="input-fee" placeholder="0"
+          {/* ── ONE FIELD PER FEE THE INVOICE ACTUALLY CARRIES ───────────────────────────────────
+              Not two amounts of one thing: a premium has its VAT inside it and moves the margin base, an
+              indemnity has its VAT shown separately and is reclaimable. The labels are the words the
+              invoice uses, because that is what the garage is reading while they type. Absent where the
+              source invoices none — an empty box invites a number that means nothing. */}
+          {SOURCE_RULES[inputs.source].fees.map((f) => (
+            <label key={f.slot} className="mt-3 block text-sm text-muted" data-testid={`fee-field-${f.slot}`}>
+              {f.label}
+              <input type="number" inputMode="decimal" min={0} step="0.01"
+                value={(f.slot === 'premium' ? inputs.premiumPence : inputs.servicesPence) / 100 || ''}
+                onChange={setMoney(f.slot === 'premium' ? 'premiumPence' : 'servicesPence')}
+                data-testid={`input-${f.slot}`} placeholder="0"
                 className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
+              <span className="mt-1 block text-xs text-muted" data-testid={`fee-note-${f.slot}`}>{f.note}</span>
             </label>
+          ))}
+
+          {/* WHAT THEY ACTUALLY DID, in pounds, because the difference between the two is the point and
+              a reader cannot derive it from the figures they typed. One line each, only once typed. */}
+          {r.fee.premiumPence > 0 && (
+            <p className="mt-2 text-xs text-ink" data-testid="fee-effect-premium">
+              The premium is part of the car’s price, so your margin is measured from{' '}
+              <strong>{moneyExact(inputs.purchasePence + r.fee.inMarginBasePence)}</strong>
+              {inputs.vatStatus === 'margin' && <> — which is {moneyExact(Math.round(r.fee.inMarginBasePence / 6))} less VAT than if it sat outside</>}.
+              {' '}Its VAT is already inside it, so there is nothing to reclaim.
+            </p>
           )}
-          {/* WHAT IT ACTUALLY DID — said in pounds, because the two answers differ and the difference
-              is the point. Only once a fee is typed: a sentence about £0 teaches nothing. */}
-          {inputs.buyerFeePence > 0 && (
-            <p className="mt-1 text-xs text-ink" data-testid="fee-effect">
-              {r.fee.inMarginBasePence > 0
-                ? `Invoiced as part of the car, so your margin is measured from ${money(inputs.purchasePence + r.fee.inMarginBasePence)} — the fee costs you ${moneyExact(r.fee.netCostPence - (inputs.vatStatus === 'margin' ? Math.round(r.fee.inMarginBasePence / 6) : 0))} after the VAT it saves.`
-                : r.fee.reclaimablePence > 0
-                  ? `A separate service: ${moneyExact(r.fee.cashOutPence)} leaves the bank, ${moneyExact(r.fee.reclaimablePence)} of VAT comes back, and it does not change your margin.`
-                  : `A straight cost of ${moneyExact(r.fee.netCostPence)}. It does not change your margin.`}
+          {r.fee.servicesPence > 0 && (
+            <p className="mt-1 text-xs text-ink" data-testid="fee-effect-services">
+              {SOURCE_RULES[inputs.source].fees.find((f) => f.slot === 'services')?.label} of {moneyExact(r.fee.servicesPence)}
+              {' '}plus {moneyExact(r.fee.servicesVatPence)} VAT — {moneyExact(r.fee.servicesPence + r.fee.servicesVatPence)} out of the bank,
+              {r.fee.reclaimablePence > 0
+                ? <> {moneyExact(r.fee.reclaimablePence)} of it back on your next return,</>
+                : <> none of it reclaimable while you are not registered,</>}
+              {' '}and none of it in your margin.
             </p>
           )}
         </fieldset>
@@ -474,8 +511,20 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
         </section>
       </div>
 
-      {/* THE ANSWER, STICKY ON A PHONE so it stays under the thumb while the sliders move above it. */}
-      <div className="fixed bottom-0 inset-x-0 sm:static bg-surface border-t border-line sm:border sm:rounded-xl sm:max-w-3xl sm:mx-auto sm:mb-8 p-3 sm:p-4"
+      {/* ── THE BREAKDOWN SITS IN THE FLOW, ON EVERY VIEWPORT ────────────────────────────────────
+          It used to be `fixed bottom-0` on a phone so the figure stayed under the thumb. The sticky line
+          at the TOP does that job now, and the overlay was costing more than it gave:
+
+            · 214px of a 640px screen, a third of it, permanently;
+            · the foot of the page hid underneath — "Save this model" sat 54px behind it, visible and
+              unreachable — and the clearance was a FIXED padding against a panel whose height CHANGES
+              with state. Raising pb-40 to pb-56 fixed the default case and broke again the moment a
+              stocking facility added two lines to the panel (measured: −13px). A constant cannot
+              reserve space for a variable.
+
+          Static, so the overlap cannot exist. The number a person watches while dragging is at the top;
+          the breakdown is below, where reading it covers nothing. */}
+      <div className="bg-surface border border-line rounded-xl max-w-3xl mx-auto mb-8 p-3 sm:p-4"
         data-testid="answer">
         <div className="max-w-3xl mx-auto">
           {/* CONTRIBUTION, NOT PROFIT. This counts what the CAR costs and nothing the business pays
@@ -483,9 +532,9 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               excludes every fixed cost is a contribution, and "Profit" in 24px bold invited the exact
               misreading the swing column was fixed for the day before. */}
           <div className="flex items-baseline justify-between">
-            <span className="text-sm text-muted">Contribution</span>
-            <span className={`text-2xl font-bold tabular-nums ${r.contributionPence < 0 ? 'text-danger' : 'text-ink'}`} data-testid="contribution">
-              {moneyExact(r.contributionPence)}
+            <span className="text-sm text-muted">{answer.label}</span>
+            <span className={`text-2xl font-bold tabular-nums ${answer.negative ? 'text-danger' : 'text-ink'}`} data-testid="contribution">
+              {answer.text}
             </span>
           </div>
           <p className="text-[11px] text-muted" data-testid="contribution-means">
