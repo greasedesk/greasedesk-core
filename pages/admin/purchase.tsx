@@ -23,7 +23,7 @@ import Head from 'next/head';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
-  SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider,
+  SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
   type ModelInputs, type SliderKey, type VatStatus,
 } from '@/lib/purchase-model';
 
@@ -67,7 +67,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  const setMoney = (k: 'purchasePence' | 'salePence') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
   async function save() {
@@ -91,6 +91,10 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
   }
 
   const biggest = ranked[0];
+  // NULL when there is no contract to cover, and null when the contribution is zero or less: no
+  // quantity of a car that loses money covers anything. The page renders a refusal rather than ∞.
+  const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.adContractMonthlyPence),
+    [r.contributionPence, inputs.adContractMonthlyPence]);
   return (
     <>
       <Head><title>Buying a car — GreaseDesk</title></Head>
@@ -112,6 +116,23 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               data-testid="input-sale"
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
           </label>
+        </section>
+
+        {/* ── A MONTHLY COST, KEPT OUT OF THE CAR ─────────────────────────────────────────────────
+            Deliberately NOT a slider and not inside the per-car section: every slider above is a cost
+            this car carries, and putting a fixed overhead among them would invite the division the
+            whole design refuses. It changes no figure in the breakdown; it answers one question at the
+            bottom of the page. Blank by default — £1,500 is one dealer's quote, not a typical number. */}
+        <section className="mt-6 border-t border-line pt-4">
+          <label className="text-sm text-muted">Advertising contract, per month
+            <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.adContractMonthlyPence / 100) || ''}
+              onChange={setMoney('adContractMonthlyPence')} data-testid="input-ad-contract" placeholder="0"
+              className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
+          </label>
+          <p className="mt-1 text-xs text-muted" data-testid="ad-contract-note">
+            Autotrader and the rest, as you actually pay for them. This is <strong>not</strong> divided into the car —
+            what each car would have to carry depends on how many you sell, which is what you are working out.
+          </p>
         </section>
 
         {/* THE TOGGLE, NOT AN ASSUMPTION. £8,000 in and £10,000 out is £333 on the margin scheme and
@@ -200,7 +221,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             range with the others held where you have them. It is not a claim about your business.
           </p>
           {/* ── THE NUMBER MUST SAY WHAT IT IS ────────────────────────────────────────────────────
-              These are SWINGS — how far profit moves when an input is dragged across its whole range
+              These are SWINGS — how far contribution moves when an input is dragged across its whole range
               — and they sat right-aligned in the same column as nine slider VALUES, formatted
               identically. The owner read £2,000 here against £800 on the Parts slider and called it a
               mismatch; if the person who specified the feature misreads it, the header was never
@@ -209,7 +230,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             data-testid="sensitivity-heading">
             <span className="w-4" />
             <span className="flex-1">Input</span>
-            <span>Moves profit by</span>
+            <span>Moves contribution by</span>
           </div>
           <ol className="mt-1 space-y-1" data-testid="sensitivity-list">
             {ranked.map((x, i) => (
@@ -223,7 +244,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             ))}
           </ol>
           <p className="mt-2 text-xs text-muted" data-testid="sensitivity-not-cost">
-            These are not costs. A swing is the difference in profit between that slider at its lowest and its highest.
+            These are not costs. A swing is the difference in contribution between that slider at its lowest and its highest.
           </p>
         </section>
 
@@ -262,12 +283,19 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
       <div className="fixed bottom-0 inset-x-0 sm:static bg-surface border-t border-line sm:border sm:rounded-xl sm:max-w-3xl sm:mx-auto sm:mb-8 p-3 sm:p-4"
         data-testid="answer">
         <div className="max-w-3xl mx-auto">
+          {/* CONTRIBUTION, NOT PROFIT. This counts what the CAR costs and nothing the business pays
+              whether the car exists or not — the advertising contract, rent, insurance. A figure that
+              excludes every fixed cost is a contribution, and "Profit" in 24px bold invited the exact
+              misreading the swing column was fixed for the day before. */}
           <div className="flex items-baseline justify-between">
-            <span className="text-sm text-muted">Profit</span>
-            <span className={`text-2xl font-bold tabular-nums ${r.profitPence < 0 ? 'text-danger' : 'text-ink'}`} data-testid="profit">
-              {moneyExact(r.profitPence)}
+            <span className="text-sm text-muted">Contribution</span>
+            <span className={`text-2xl font-bold tabular-nums ${r.contributionPence < 0 ? 'text-danger' : 'text-ink'}`} data-testid="contribution">
+              {moneyExact(r.contributionPence)}
             </span>
           </div>
+          <p className="text-[11px] text-muted" data-testid="contribution-means">
+            What this car adds before your fixed monthly costs — not profit.
+          </p>
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <div className="flex justify-between"><dt className="text-muted">VAT</dt><dd className="text-ink tabular-nums" data-testid="out-vat">{moneyExact(r.vatDuePence)}</dd></div>
             <div className="flex justify-between"><dt className="text-muted">Workshop time</dt><dd className="text-ink tabular-nums" data-testid="out-workshop">{moneyExact(r.workshopCostPence)}</dd></div>
@@ -282,10 +310,28 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             {r.vat.inputVatPence > 0 && <> — including {moneyExact(r.vat.inputVatPence)} of VAT you reclaim later.</>}
             {' '}The cost of money is charged on that.
           </p>
+          {/* ── THE FIXED COST, AS A QUESTION THIS PAGE CAN ANSWER ──────────────────────────────
+              Autotrader is a monthly contract: about £1,500 for ten cars, £5,000+ for a bigger
+              dealer. Dividing it gives £150 a car at ten sales and £300 at five, so a per-car
+              advertising figure asks for a number that depends on turnover — which is partly what
+              this model exists to work out. The denominator is exactly what the page cannot know.
+              So nothing is divided. The contract drives ONE sentence, in the honest direction. */}
+          {needed !== null ? (
+            <p className="mt-2 text-xs text-muted" data-testid="break-even">
+              {/* Phrased to put the contract first so the sentence needs no verb agreement with a
+                  number that changes: "2 sales a month covers" was wrong and "cover" reads oddly at 1. */}
+              At this contribution, your {money(inputs.adContractMonthlyPence)} advertising contract
+              needs <strong className="text-ink">{needed} {needed === 1 ? 'sale' : 'sales'} a month</strong>.
+            </p>
+          ) : inputs.adContractMonthlyPence > 0 ? (
+            <p className="mt-2 text-xs text-danger" data-testid="break-even-impossible">
+              No number of sales covers your {money(inputs.adContractMonthlyPence)} advertising contract at this contribution.
+            </p>
+          ) : null}
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}
           <p className="mt-2 text-xs text-muted" data-testid="out-uncounted">
             Workshop time and cost of money take {moneyExact(r.workshopCostPence + r.stockingCostPence)} out of this.
-            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong> — dragging it across its range moves profit by {moneyExact(biggest.swingPence)}.</>}
+            {biggest && <> Biggest lever right now: <strong>{biggest.label}</strong> — dragging it across its range moves contribution by {moneyExact(biggest.swingPence)}.</>}
           </p>
         </div>
       </div>

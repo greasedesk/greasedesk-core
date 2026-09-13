@@ -145,7 +145,10 @@ export const SLIDERS: SliderDef[] = [
   { key: 'daysInStock', label: 'Days in stock', unit: 'days', min: 0, max: 180, step: 5, def: 45,
     note: 'Bought to sold. This is what the cost of money is charged over.' },
   { key: 'advertisingPence', label: 'Advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
-    note: 'Per car, across every platform it is listed on.' },
+    // WAS: "Per car, across every platform it is listed on." It cannot be: the platforms are a MONTHLY
+    // CONTRACT, and no per-car figure for a fixed cost has a denominator this page knows. The note now
+    // describes only what genuinely varies by car, and the contract has its own field above.
+    note: 'Per car only — photography, a paid boost on one listing. Your monthly platform contract is not this.' },
   { key: 'warrantyPence', label: 'Warranty', unit: 'money', min: 0, max: 100000, step: 2500, def: 15000,
     note: 'What you expect this car to cost you after it leaves — provision, not a policy price.' },
   { key: 'deliveryInPence', label: 'Delivery in', unit: 'money', min: 0, max: 50000, step: 1000, def: 12000,
@@ -160,6 +163,21 @@ export const SLIDERS: SliderDef[] = [
 
 export type ModelInputs = {
   purchasePence: number; salePence: number; vatStatus: VatStatus;
+  /**
+   * THE MONTHLY ADVERTISING CONTRACT, AND IT IS NEVER DIVIDED INTO A CAR. Autotrader is about £1,500
+   * a month for ten cars and £5,000+ for a bigger dealer — a fixed overhead, not a per-car cost.
+   * Dividing it gives £150 a car at ten sales and £300 at five, so a per-car advertising figure asks
+   * the user for a number that depends on turnover, which is partly what this model exists to work
+   * out. The same circularity as the workshop rate.
+   *
+   * So it is NOT a cost here and nothing adds it to one. It drives ONE derived sentence — how many
+   * sales a month this contribution would have to cover it — which turns the circularity into an
+   * output instead of hiding it in an input.
+   *
+   * DEFAULT ZERO. £1,500 is the owner's own quote, not a typical figure, and shipping it as a default
+   * would state one dealer's contract as a fact about every garage.
+   */
+  adContractMonthlyPence: number;
   /**
    * DOES THE TYPED PURCHASE PRICE INCLUDE VAT? Only meaningful when the car is VAT qualifying — on
    * the margin scheme nothing is recoverable and the typed figure is simply what you paid.
@@ -179,9 +197,20 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, ...sliders };
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, ...sliders };
 }
 
+/**
+ * ── IT IS A CONTRIBUTION, NOT A PROFIT (owner, 2026-09-13) ──────────────────────────────────────
+ * This model counts what the CAR costs. It counts nothing the business pays whether or not the car
+ * exists: the Autotrader contract, rent, insurance, the phone bill. A figure that excludes every
+ * fixed cost is a CONTRIBUTION — what this car adds before the standing costs — and calling it
+ * profit invites exactly the misreading the swing column was fixed for a day earlier.
+ *
+ * The field was `profitPence` and the screen said "Profit" in 24px bold. The database column is
+ * still `profit_pence`: renaming it is a constraining migration for a word, and the store maps it
+ * (lib/purchase-model-store) with the mismatch stated there rather than left to be rediscovered.
+ */
 export type ModelResult = {
   vat: VatPosition;
   vatDuePence: number;
@@ -189,9 +218,9 @@ export type ModelResult = {
   stockingCostPence: number;
   otherCostsPence: number;
   totalCostsPence: number;
-  profitPence: number;
+  contributionPence: number;
   /** Profit before the two costs a garage rarely counts, so the tool can show what they take out. */
-  profitBeforeWorkshopAndMoneyPence: number;
+  contributionBeforeWorkshopAndMoneyPence: number;
 };
 
 /**
@@ -216,8 +245,8 @@ export function computeModel(i: ModelInputs): ModelResult {
     vat, vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
-    profitPence: gross - total,
-    profitBeforeWorkshopAndMoneyPence: gross - other,
+    contributionPence: gross - total,
+    contributionBeforeWorkshopAndMoneyPence: gross - other,
   };
 }
 
@@ -239,13 +268,31 @@ export type Sensitivity = { key: SliderKey; label: string; swingPence: number };
  */
 export function sensitivity(i: ModelInputs): Sensitivity[] {
   const rows = SLIDERS.map((s) => {
-    const low = computeModel({ ...i, [s.key]: s.min }).profitPence;
-    const high = computeModel({ ...i, [s.key]: s.max }).profitPence;
+    const low = computeModel({ ...i, [s.key]: s.min }).contributionPence;
+    const high = computeModel({ ...i, [s.key]: s.max }).contributionPence;
     return { key: s.key, label: s.label, swingPence: Math.abs(high - low) };
   });
   // Descending by swing; ties by the slider's own order, so the list never jitters between equal rows.
   return rows.sort((a, b) => b.swingPence - a.swingPence
     || SLIDERS.findIndex((s) => s.key === a.key) - SLIDERS.findIndex((s) => s.key === b.key));
+}
+
+/**
+ * HOW MANY SALES A MONTH COVER A FIXED MONTHLY COST, at this contribution per car.
+ *
+ * The honest direction for the question. "What does advertising cost per car?" cannot be answered
+ * without knowing how many cars sell, which is the thing being worked out; "how many sales would
+ * cover £1,500?" can be answered from one car's contribution, and the person already knows whether
+ * that number is reachable.
+ *
+ * NULL, not zero and not Infinity, in the three cases where there is no answer: no contract to
+ * cover, and a contribution of zero or less — no quantity of a car that loses money covers anything,
+ * and a rounded-up division would print a confident figure for an impossible question.
+ */
+export function salesToCoverMonthly(contributionPence: number, monthlyFixedPence: number): number | null {
+  if (monthlyFixedPence <= 0) return null;
+  if (contributionPence <= 0) return null;
+  return Math.ceil(monthlyFixedPence / contributionPence);
 }
 
 /** Clamp a slider to its own definition. The form is the prompt; this is the rule. */
