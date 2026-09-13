@@ -175,6 +175,65 @@ import { DEV_PORT } from './_dev-port.mjs';
  * version of this and is now this.
  */
 export const EXIT_UNRUN = 4;
+/**
+ * ── A CREDENTIAL A GATE CANNOT NAME, IT CAN STILL REMOVE ────────────────────────────────────────
+ * A gate that POSTs /api/invoice-sms never sees the magic link it caused: the endpoint mints it, the
+ * customer's own phone goes on it, and the id is never returned. Three gates did exactly that and
+ * reported green, and ZZ accumulated 105 LIVE pay credentials between 30 August and 12 September —
+ * one per suite run, each valid for fourteen days. Nothing was wrong with any single gate's
+ * assertions; the litter was simply nobody's.
+ *
+ * So the tenant's links are photographed BEFORE the act and again after, and anything new is removed
+ * BY ITS OWN ID. That is the nearest thing to tearing down by the fixture's own id when the fixture
+ * was never handed to you — and it is why this is a diff rather than a `created_at >= startedAt`
+ * sweep, which would also take a link another process minted during the run.
+ *
+ * Usage:
+ *   const creds = await trackCredentials(prisma, ZZ);   // before anything that might mint
+ *   …                                                   // drive the endpoint
+ *   const r = await creds.release();                    // in the finally
+ *   check('teardown left no credential behind', r.ok, r.detail);
+ *
+ * release() DELETES, matching what every hand-written gate teardown here already does. It is scoped
+ * to ids that did not exist at snapshot time, on one tenant, and it refuses to touch a link that has
+ * been USED — a used credential is evidence about behaviour, and deleting it hides what happened.
+ */
+export async function trackCredentials(prisma, groupId) {
+  if (!groupId) throw new Error('trackCredentials: a groupId is required — an unscoped sweep is not a teardown');
+  const idsOf = async () => new Set((await prisma.customerMagicLink.findMany({
+    where: { group_id: groupId }, select: { id: true },
+  })).map((r) => r.id));
+  const before = await idsOf();
+  return {
+    before,
+    async release() {
+      const after = await idsOf();
+      const fresh = [...after].filter((id) => !before.has(id));
+      if (!fresh.length) return { ok: true, deleted: 0, kept: 0, detail: 'nothing was minted' };
+      // A USED link stays. It says something happened; the point of the teardown is litter, not history.
+      const used = await prisma.customerMagicLink.findMany({
+        where: { id: { in: fresh }, OR: [{ use_count: { gt: 0 } }, { consumed_at: { not: null } }] },
+        select: { id: true },
+      });
+      const usedIds = new Set(used.map((r) => r.id));
+      const removable = fresh.filter((id) => !usedIds.has(id));
+      const del = removable.length
+        ? await prisma.customerMagicLink.deleteMany({ where: { id: { in: removable }, group_id: groupId } })
+        : { count: 0 };
+      const leftLive = await prisma.customerMagicLink.count({
+        where: { group_id: groupId, revoked_at: null, consumed_at: null, expires_at: { gt: new Date() } },
+      });
+      return {
+        ok: del.count === removable.length && leftLive === 0,
+        deleted: del.count, kept: usedIds.size,
+        detail: `${del.count} of ${removable.length} removed`
+          + (usedIds.size ? `, ${usedIds.size} USED and kept` : '')
+          + `; ${leftLive} live credential(s) left on the tenant`,
+      };
+    },
+  };
+}
+
 export function declineToRun(reason) {
   console.log(`\nUNRUN — ${reason}`);
   console.log('  Nothing was tested. This is not a failure of the code under test.');

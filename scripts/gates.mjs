@@ -174,6 +174,7 @@ const TIERS = {
     'intake-prompts-gate', 'intake-report-gate', 'quote-worklist-gate', 'prospect-gate', 'no-show-gate', 'notify-scope-gate',
     'nullable-annotation-gate', 'observation-key-gate', 'odometer-gate', 'photo-partition-gate',
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
+    'credential-residue-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
     'mot-sweep-stamp-gate', 'enum-drift-gate', 'tax-display-gate', 'trial-extend-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate', 'quote-drafts-gate', 'costbase-clip-gate', 'retry-transient-gate', 'wage-per-month-gate', 'costs-gate',
@@ -509,7 +510,9 @@ for (const g of plan) {
     results[g] = { gate: g, unrun: true, unmet: true, reason: why, tier: tierOf(g) };
     console.log(`UNRUN ${g.padEnd(32)} ${why}`);
   } else {
+    const ranFrom = Date.now();
     const res = await run(g);
+    const ranTo = Date.now();
     // ── THE TAIL IS KEPT FOR RED GATES ONLY ──────────────────────────────────────────────────
     // `firstFailure` is the FIRST ✗ line, capped at 110 characters, and for a gate that dies that
     // line is its catch-all: "run completed — page.waitForSelector: Timeout 30000ms exceeded" says
@@ -532,7 +535,7 @@ for (const g of plan) {
     // reds, which is how "body padding-bottom 0px" sat for two days over a dead customer pay page.
     const unrun = res.code === EXIT_UNRUN;
     const reason = unrun ? (res.log.match(/UNRUN — ([^\n]+)/) ?? [])[1] ?? 'declined to start' : null;
-    results[g] = { ...res, unrun, reason, tier: tierOf(g), log: res.code === 0 ? undefined : res.log };
+    results[g] = { ...res, unrun, reason, tier: tierOf(g), ranFrom, ranTo, log: res.code === 0 ? undefined : res.log };
     const state = res.code === 0 ? 'ok   ' : unrun ? 'UNRUN' : 'RED  ';
     console.log(`${state} ${g.padEnd(32)} ${String(res.seconds).padStart(6)}s  ${!unrun && res.failures != null ? `${res.failures} of ${res.assertions}` : ''}`);
     if (unrun) console.log(`        ${reason}`);
@@ -540,6 +543,38 @@ for (const g of plan) {
   }
   writeFileSync(RESULTS, JSON.stringify(results, null, 1));
 }
+
+// ── WHAT THE SUITE LEFT BEHIND ─────────────────────────────────────────────────────────────────
+// A magic link is a REAL CREDENTIAL. Three gates POSTed /api/invoice-sms, which mints one with the
+// customer's own phone on it and never returns its id, so they had nothing to tear down and did not
+// try — and ZZ collected 105 live pay credentials between 30 August and 12 September, one per run.
+// Every gate was green. The litter was nobody's, which is exactly why the SUITE has to own it.
+//
+// Asked once, here, and attributed by each gate's own run window: gates are sequential, so the
+// windows do not overlap and a leftover credential belongs to exactly one of them. One extra child
+// process per run, not one per gate — a count between all 135 gates would cost a minute and a half.
+const creds = await new Promise((resolve) => {
+  const p = spawn(process.execPath, [path.join(ROOT, 'scripts', '_live-credentials.mjs')],
+    { cwd: ROOT, env: { ...process.env, GATE_ALLOW_PIPE: '1' }, stdio: ['ignore', 'pipe', 'ignore'] });
+  let buf = '';
+  p.stdout.on('data', (d) => { buf += d; });
+  p.on('close', () => { try { resolve(JSON.parse(buf.slice(buf.indexOf('{"ok"')))); } catch { resolve({ ok: false, reason: 'no_answer' }); } });
+  p.on('error', () => resolve({ ok: false, reason: 'no_answer' }));
+});
+const litter = [];
+if (creds.ok) {
+  for (const c of creds.live) {
+    const owner = Object.values(results).find((r) => r.ranFrom && c.at >= r.ranFrom && c.at <= r.ranTo);
+    litter.push({ ...c, gate: owner?.gate ?? null });
+  }
+}
+// PRINTED EVEN AT ZERO, like LIMITER and UNRUN: a line that only appears on a bad day is a line
+// nobody is looking for on that day.
+const credLine = !creds.ok
+  ? `CREDENTIALS: NOT checked (${creds.reason}) — the suite cannot say whether it left a live credential behind`
+  : litter.length === 0
+    ? 'CREDENTIALS: the suite left no live credential on the gate tenant'
+    : `CREDENTIALS: ${litter.length} LIVE credential(s) left behind — ${[...new Set(litter.map((l) => l.gate ?? 'outside any gate run'))].join(', ')}`;
 
 // ── THE SUMMARY, WITH THREE STATES ─────────────────────────────────────────────────────────────
 const all = Object.values(results);
@@ -570,6 +605,15 @@ if (unrunGates.length) console.log('\n  An unrun gate has told you nothing. Clea
 // only when it is bad news is a line the reader stops looking for.
 // THE COST, STATED. Absorbed silently, this reads as free; it is not, and the number is what tells
 // a reader whether the suite is close to spending a budget it does not own.
+console.log(`\n${credLine}`);
+for (const l of litter) {
+  console.log(`  ${new Date(l.at).toISOString()}  ${l.purpose.padEnd(12)} ${l.recipient.padEnd(24)} ${l.gate ?? 'outside any gate run — not the suite’s'}`);
+}
+if (litter.length) {
+  console.log('  A gate minted a credential and did not remove it. trackCredentials() in');
+  console.log('  _gate-preflight photographs the tenant\'s links and deletes what is new, by id.');
+}
+
 console.log(`\n${reapLine}`);
 console.log('  Budget, re-measured 2026-09-09 after the diagnostics moved off /c/:');
 console.log('    core 0  ·  money 17 magic:ip + 7 repauth:ip  ·  slow 3 magic:ip  ·  the runner itself 0');
@@ -584,4 +628,7 @@ console.log(`${'='.repeat(76)}\n`);
 
 // 1 = something is broken. 5 = nothing is broken and something was not tested. Distinct, because a
 // caller that treats them the same is a caller that cannot tell coverage from correctness.
-process.exit(red.length ? 1 : unrunGates.length ? 5 : 0);
+// A LIVE CREDENTIAL LEFT BEHIND IS BROKEN, NOT MERELY UNTIDY. credential-residue-gate asserts the
+// same invariant and would catch it on the NEXT run; failing the run that CAUSED it is what makes the
+// offending gate findable while the person who changed it is still looking.
+process.exit(red.length || litter.length ? 1 : unrunGates.length ? 5 : 0);

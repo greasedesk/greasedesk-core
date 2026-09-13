@@ -21,6 +21,7 @@ import { canManageSite } from '@/lib/admin-guard';
 import { buildInvoiceDoc } from '@/lib/invoice-doc';
 import { balanceOwedPennies } from '@/lib/invoice';
 import { mintInvoicePayLink } from '@/lib/invoice-pay-link';
+import { revokeMagicLink } from '@/lib/magic-link';
 import { reachabilityForJobCard } from '@/lib/message-threads';
 import { sendNotification } from '@/lib/notify';
 import { smsAllowance } from '@/lib/sms-allowance';
@@ -84,6 +85,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const advice = why.code === 'allowance_spent' ? ' Top up, or email the invoice instead.'
       : why.retryable ? ' Please try again shortly.'
       : '';
+    // THE CREDENTIAL GOES WITH THE MESSAGE THAT NEVER LEFT. This response hands back no url, so
+    // after it nobody outside the database can reach this link — and it would stay live for
+    // fourteen days. Revoked rather than deleted: the row is the record that a send was attempted.
+    // Consistent with the sentence below, which already says outright that nothing was sent.
+    await revokeMagicLink(link.id, 'unsent');
     // THE STATUS FOLLOWS THE FACT. 502 says an upstream failed and is only true when one did.
     return res.status(why.retryable ? 502 : 409)
       .json({ code: why.code, retryable: why.retryable, message: `${why.message} Nothing was sent.${advice}`, allowance });

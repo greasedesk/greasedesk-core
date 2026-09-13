@@ -266,7 +266,21 @@ export async function resolveMagicLink(
  * written before 2026-08-08, plus `in_progress` (ruling): a started job has no true reason word,
  * and "invoiced" would be a lie while "cancelled" would be a worse one.
  */
-export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | 'no_show' | null;
+/**
+ * WHY A LINK WAS RETIRED. `unsent` is the newest and the least obvious: the message it was minted for
+ * never went out, so nobody outside this database has ever seen the token.
+ *
+ * It exists because of a real accumulation — ZZ held 105 live pay credentials by 2026-09-12, one per
+ * suite run. The cause was not the gates: /api/invoice-sms mints the link, attempts the send, and on
+ * failure returns "Nothing was sent." WITHOUT the url. The credential was then reachable from nowhere
+ * except the table, valid for fourteen days, and indistinguishable from one a customer is holding.
+ *
+ * THE TEST FOR WHETHER A FAILED SEND SHOULD REVOKE IS WHETHER THE CALLER GETS THE URL BACK.
+ * quote-send and intake-report-send hand it over deliberately — "the link below still works" — so an
+ * operator can pass it on by hand, and revoking there would remove value the product promises. The
+ * two invoice paths hand back nothing, so there the link is litter.
+ */
+export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | 'no_show' | 'unsent' | null;
 
 /** Kill one link (sent to the wrong address). Idempotent. */
 export async function revokeMagicLink(id: string, reason: RevokeReason): Promise<void> {

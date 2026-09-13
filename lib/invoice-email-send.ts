@@ -18,6 +18,7 @@ import { tServer } from '@/lib/server-i18n';
 import { writeAudit } from '@/lib/audit';
 import { resolveReplyTo } from '@/lib/reply-to';
 import { mintInvoicePayLink, payOnlineFor } from '@/lib/invoice-pay-link';
+import { revokeMagicLink } from '@/lib/magic-link';
 
 export type InvoiceSendResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NO_RECIPIENT' | 'SEND_FAILED' | 'SUPPRESSED' | 'ERROR'; message: string };
 
@@ -57,12 +58,15 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
   // are translated strings, not HTML — the invoice_document template builds the markup.
   const subject = t('email.subject', { number: doc.number, garage: displayName });
 
+  // HOISTED OUT OF THE TRY so the catch can retire it. A render or a provider throw left the same
+  // orphan as a refused send: minted, never delivered, live for a fortnight, and returned to nobody.
+  let payLink: Awaited<ReturnType<typeof mintInvoicePayLink>> = null;
   try {
     // MINTED BEFORE THE PDF RENDERS, deliberately. Nothing on the PDF uses it yet, but the QR code
     // and the SMS are the next slice and all three must carry the SAME url from ONE mint — so the
     // call belongs above the render, not beside the email body. Returns null on a receipt, a void,
     // an unlocked invoice or a zero-total document; see lib/invoice-pay-link for why each.
-    const payLink = await mintInvoicePayLink({ doc, groupId, recipient: to, createdByUserId: actorUserId });
+    payLink = await mintInvoicePayLink({ doc, groupId, recipient: to, createdByUserId: actorUserId });
     // ONE MINT, THREE SURFACES. The PDF gets the same URL as the email button, plus a QR of it and
     // the garage's real payment marks. Null when there is nothing to pay, and the document then
     // carries no payment prompt at all.
@@ -103,7 +107,11 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
     // A REFUSAL is not a transport failure and must not read as one — the customer asked not to be
     // emailed, and the caller is told so plainly rather than being shown "try again shortly".
     if (sent.suppressed) return { ok: false, code: 'SUPPRESSED', message: 'This customer has opted out of email — the invoice was not sent. Print or hand over the PDF instead.' };
-    if (!sent.ok) return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };
+    if (!sent.ok) {
+      // Nothing reached the customer and this return carries no url, so the link is unreachable.
+      if (payLink) await revokeMagicLink(payLink.id, 'unsent');
+      return { ok: false, code: 'SEND_FAILED', message: 'The email service didn’t accept the message — please try again shortly.' };
+    }
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await writeAudit(tx, {
         groupId, userId: actorUserId, jobCardId: doc.jobCardId, action: 'invoice.sent',
@@ -118,6 +126,8 @@ export async function sendInvoiceEmail(invoiceId: string, groupId: string, actor
     return { ok: true };
   } catch (e) {
     console.error('Invoice email error:', e);
+    // The same orphan, by a different route. Best-effort: a failure here must not replace the real error.
+    if (payLink) await revokeMagicLink(payLink.id, 'unsent').catch(() => {});
     return { ok: false, code: 'ERROR', message: 'Could not send the invoice.' };
   }
 }
