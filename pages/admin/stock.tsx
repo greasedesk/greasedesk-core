@@ -35,7 +35,17 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
     registration: '', make: '', model: '', acquiredAt: today(),
     purchase: '', premium: '', services: '',
     source: 'auction' as PurchaseSource, vatStatus: 'margin' as VatStatus,
+    // The auction invoice's own fields. Blank is a real answer for every one of them.
+    vin: '', firstRegistered: '', motExpiry: '', v5cReference: '',
+    isImport: 'unknown', mileage: '', mileageWarranted: 'unknown',
   });
+  /**
+   * DID DVSA ANSWER FOR THIS PLATE? Not "did we ask" — a lookup that fails teaches nothing, and a
+   * form that locked its MOT field on a failed lookup would be unfillable for exactly the imports
+   * this screen exists to record. Null until asked, false when asked and told nothing.
+   */
+  const [dvsaMot, setDvsaMot] = useState<string | null>(null);
+  const [looking, setLooking] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/stock');
@@ -46,6 +56,37 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
   // ONLY WHAT THIS SOURCE CAN PRODUCE — the same rule as the purchase model, from the same reader, so
   // a private purchase cannot be recorded as VAT qualifying here either.
   const allowedVat = useMemo(() => availableVatStatuses(form.source), [form.source]);
+
+  /**
+   * PRE-POPULATE FROM DVSA, and say so. Runs when the plate is finished with, not on every keystroke.
+   *
+   * What comes back is a verified fact and the field goes READ-ONLY: the server refuses a typed date
+   * that contradicts a checked one, so an editable box here would only invite a refusal at the end of
+   * a form. Where DVSA has nothing — an import, a car too new to have been tested — the field stays
+   * open and whatever is typed is stored as stated, never as verified.
+   */
+  async function lookupPlate(reg: string) {
+    const plate = reg.trim();
+    if (plate.length < 2) return;
+    setLooking(true);
+    try {
+      const res = await fetch(`/api/dvsa-lookup?reg=${encodeURIComponent(plate)}`);
+      const body = await res.json().catch(() => ({}));
+      if (body?.found) {
+        setDvsaMot(body.motExpiry ?? null);
+        setForm((f) => ({
+          ...f,
+          make: f.make || body.make || '',
+          model: f.model || body.model || '',
+          motExpiry: body.motExpiry ?? f.motExpiry,
+        }));
+      } else setDvsaMot(null);
+    } catch {
+      setDvsaMot(null);   // a failed lookup leaves the field OPEN; it does not claim DVSA said nothing
+    } finally {
+      setLooking(false);
+    }
+  }
 
   async function add() {
     setBusy(true); setMsg(null);
@@ -59,12 +100,21 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
           premiumPence: Math.round(Number(form.premium || 0) * 100),
           servicesPence: Math.round(Number(form.services || 0) * 100),
           source: form.source, vatStatus: form.vatStatus,
+          vin: form.vin, firstRegistered: form.firstRegistered, motExpiry: form.motExpiry,
+          v5cReference: form.v5cReference, isImport: form.isImport,
+          mileageMiles: form.mileage === '' ? null : Number(form.mileage),
+          mileageWarranted: form.mileageWarranted,
         }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         setMsg(`${form.registration.toUpperCase()} is in stock.`);
-        setForm({ ...form, registration: '', make: '', model: '', purchase: '', premium: '', services: '' });
+        setForm({
+          ...form, registration: '', make: '', model: '', purchase: '', premium: '', services: '',
+          vin: '', firstRegistered: '', motExpiry: '', v5cReference: '',
+          isImport: 'unknown', mileage: '', mileageWarranted: 'unknown',
+        });
+        setDvsaMot(null);
         setAdding(false);
         await load();
       } else {
@@ -104,6 +154,7 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <label className="text-sm text-muted">Registration
                 <input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })}
+                  onBlur={(e) => void lookupPlate(e.target.value)}
                   data-testid="input-reg" autoCapitalize="characters"
                   className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg uppercase" />
               </label>
@@ -116,6 +167,59 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                 <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
                   data-testid="input-model"
                   className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+              </label>
+              <label className="text-sm text-muted">VIN
+                <input value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value.toUpperCase() })}
+                  data-testid="input-vin" autoCapitalize="characters" maxLength={20} spellCheck={false}
+                  className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink uppercase" />
+              </label>
+              <label className="text-sm text-muted">First registered
+                <input type="date" value={form.firstRegistered} max={today()}
+                  onChange={(e) => setForm({ ...form, firstRegistered: e.target.value })}
+                  data-testid="input-first-registered" className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+              </label>
+              {/*
+                MOT EXPIRY, AND WHERE IT CAME FROM. Read-only once DVSA has answered — the record is
+                theirs, and the server refuses a typed date that contradicts a checked one, so an open
+                box would collect a value only to reject it. Open when DVSA has nothing, which is the
+                import and the not-yet-tested car: those are typed, stored, and never marked verified.
+              */}
+              <label className="text-sm text-muted">MOT expires
+                <input type="date" value={form.motExpiry} readOnly={dvsaMot !== null}
+                  onChange={(e) => setForm({ ...form, motExpiry: e.target.value })}
+                  data-testid="input-mot-expiry"
+                  className={`mt-1 w-full min-h-[44px] p-2 border border-line rounded-lg text-ink ${dvsaMot !== null ? 'bg-canvas' : 'bg-surface'}`} />
+                <span className="block mt-1 text-xs text-muted" data-testid="mot-provenance">
+                  {looking ? 'Checking DVSA…'
+                    : dvsaMot !== null ? 'From DVSA — verified, so it cannot be edited here.'
+                    : 'DVSA has no MOT for this plate. Anything you type is recorded as stated, not verified.'}
+                </span>
+              </label>
+              <label className="text-sm text-muted">Mileage
+                <input type="number" inputMode="numeric" min={0} value={form.mileage}
+                  onChange={(e) => setForm({ ...form, mileage: e.target.value })}
+                  data-testid="input-mileage" className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+              </label>
+              <label className="text-sm text-muted">Mileage warranted
+                <select value={form.mileageWarranted} data-testid="input-warranted"
+                  onChange={(e) => setForm({ ...form, mileageWarranted: e.target.value })} className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink">
+                  <option value="unknown">Not stated</option>
+                  <option value="yes">Warranted</option>
+                  <option value="no">Not warranted</option>
+                </select>
+              </label>
+              <label className="text-sm text-muted">V5C reference
+                <input value={form.v5cReference} onChange={(e) => setForm({ ...form, v5cReference: e.target.value })}
+                  data-testid="input-v5c" autoComplete="off" spellCheck={false} className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+                <span className="block mt-1 text-xs text-muted">Held, never shown again or written to a trail.</span>
+              </label>
+              <label className="text-sm text-muted">Import
+                <select value={form.isImport} data-testid="input-import"
+                  onChange={(e) => setForm({ ...form, isImport: e.target.value })} className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink">
+                  <option value="unknown">Not recorded</option>
+                  <option value="no">UK supplied</option>
+                  <option value="yes">Imported</option>
+                </select>
               </label>
               <label className="text-sm text-muted">Bought on
                 <input type="date" value={form.acquiredAt} max={today()}

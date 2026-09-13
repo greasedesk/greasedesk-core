@@ -9,6 +9,11 @@ import {
   type BookRow, type DisposalKind,
 } from '@/lib/stock';
 import { SOURCES, VAT_STATUSES, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
+import {
+  firstRegisteredRefusal, motExpiryDecision, normaliseV5c, parseImportStatus, parseMiles,
+  parseWarranted, vinAtIntake,
+} from '@/lib/stock-intake';
+import { recordOdometerReadings } from '@/lib/odometer';
 
 const asMoney = (v: unknown, cap = 100000000): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -20,6 +25,8 @@ export async function takeIntoStock(a: {
   groupId: string; userId: string; vehicleId: string; acquiredAt: Date;
   purchasePence: unknown; vatStatus: unknown; source: unknown;
   premiumPence?: unknown; servicesPence?: unknown;
+  /** The reading off the purchase invoice, and whether the seller stood behind it. */
+  mileageMiles?: unknown; mileageWarranted?: unknown;
 }): Promise<{ id: string } | { refused: string }> {
   // THE CAR MUST BE THIS TENANT'S. Checked here because this is the door, not in each caller.
   const vehicle = await prisma.vehicle.findFirst({
@@ -51,9 +58,29 @@ export async function takeIntoStock(a: {
       // CAPTURED AT PURCHASE. Never re-read from the tenant's profile: a margin car stays a margin car.
       vat_status: vatStatus, source,
       premium_pence: asMoney(a.premiumPence), services_pence: asMoney(a.servicesPence),
+      // A TERM OF THIS SALE, not a fact about the car — see the schema comment for why it lives here.
+      mileage_warranted: parseWarranted(a.mileageWarranted),
     },
     select: { id: true },
   });
+
+  /**
+   * THE MILEAGE IS A READING, NOT A COLUMN. It goes into the same series the MOT history and every
+   * visit go into, under its own source, so the mileage trend on this car counts the day we bought it
+   * like any other day. Storing it on the stock item instead would have given a number no chart could
+   * see and a second place to ask a car how far it has gone.
+   *
+   * AFTER the stock row, deliberately. A reading is a fact about the car that stands whether or not
+   * this purchase completes, so it must not be able to prevent the purchase being recorded; and
+   * recordOdometerReadings upserts on (vehicle, source, date), so a retried intake writes one row.
+   */
+  const miles = parseMiles(a.mileageMiles);
+  if ('miles' in miles && miles.miles !== null) {
+    await recordOdometerReadings(prisma, {
+      groupId: a.groupId, vehicleId: a.vehicleId, source: 'auction',
+      readings: [{ date: a.acquiredAt, miles: miles.miles }],
+    });
+  }
   return { id: row.id };
 }
 
@@ -167,6 +194,9 @@ export async function stockList(groupId: string, asOf: Date): Promise<StockListR
  */
 export async function findOrCreateVehicle(a: {
   groupId: string; registration: string; make?: string | null; model?: string | null;
+  /** Auction-invoice facts about the CAR. Each optional; each refuses rather than guessing. */
+  vin?: unknown; firstRegistered?: Date | null; motExpiry?: Date | null;
+  isImport?: unknown; v5cReference?: unknown; acquiredAt?: Date | null; now?: Date;
 }): Promise<{ id: string } | { refused: string }> {
   const reg = a.registration.trim().toUpperCase();
   if (reg.length < 2) return { refused: 'Type the registration.' };
@@ -174,9 +204,9 @@ export async function findOrCreateVehicle(a: {
   // THE INDEXED MATCH FIRST — it covers all but the legacy rows and costs one indexed lookup.
   const found = await prisma.vehicle.findFirst({
     where: { group_id: a.groupId, OR: [{ registration: reg }, { registration_normalized: normalised }] },
-    select: { id: true },
+    select: VEHICLE_INTAKE_FIELDS,
   });
-  if (found) return found;
+  if (found) return applyIntakeAttributes(found, a);
 
   /**
    * ── AND A FALLBACK THAT DOES NOT TRUST THE COLUMN ───────────────────────────────────────────
@@ -193,15 +223,138 @@ export async function findOrCreateVehicle(a: {
      WHERE "group_id" = ${a.groupId}
        AND regexp_replace(upper("registration"), '[^A-Z0-9]', '', 'g') = ${normalised}
      LIMIT 1`;
-  if (legacy.length) return { id: legacy[0].id };
+  if (legacy.length) {
+    const row = await prisma.vehicle.findUnique({
+      where: { id: legacy[0].id }, select: VEHICLE_INTAKE_FIELDS,
+    });
+    if (row) return applyIntakeAttributes(row, a);
+  }
+
+  /**
+   * A NEW CAR STILL HAS TO PASS THE SAME CHECKS. Validating only the update path would mean the very
+   * first record of a car — the one with nothing to compare against and therefore the one whose
+   * mistakes last longest — is the one nothing checks. So the attributes are decided against an empty
+   * vehicle BEFORE the row exists: a refusal must not leave a half-made car behind.
+   */
+  const attrs = decideIntakeAttributes(
+    { id: null, registration: reg, vin_normalized: null, mot_expiry: null, mot_checked_at: null }, a,
+  );
+  if ('refused' in attrs) return attrs;
+  const collision = await vinCollision(a.groupId, (attrs.data.vin_normalized as string | undefined) ?? null, null);
+  if (collision) return collision;
+
   const made = await prisma.vehicle.create({
     data: {
       group_id: a.groupId, registration: reg, registration_normalized: normalised,
       make: a.make?.trim() || null, model: a.model?.trim() || null,
+      ...attrs.data,
     },
     select: { id: true },
   });
   return made;
+}
+
+/** What intake needs to know about a car that is already on file, and nothing more. */
+const VEHICLE_INTAKE_FIELDS = {
+  id: true, registration: true, vin_normalized: true, mot_expiry: true, mot_checked_at: true,
+} as const;
+
+type VehicleIntakeRow = {
+  id: string | null; registration: string; vin_normalized: string | null;
+  mot_expiry: Date | null; mot_checked_at: Date | null;
+};
+
+type IntakeArgs = Parameters<typeof findOrCreateVehicle>[0];
+
+/**
+ * ── THE VIN IS AN IDENTITY, NOT A FIELD ─────────────────────────────────────────────────────────
+ *
+ * VehicleIdentity carries UNIQUE(group_id, vin_normalized), so a VIN is the tenant's canonical answer
+ * to "which car is this". Two ways that goes wrong, and both FAIL CLOSED — the same rule
+ * `sameRegistration` already applies to MOT writes, for the same reason: every one of these is a
+ * request to write one car's facts onto another, and "we do not know which car this is" has exactly
+ * one safe answer.
+ *
+ *   - the VIN is already on a DIFFERENT car in this tenant. Silently attaching would give two cars one
+ *     identity and make the wrong one invisible rather than merely mislabelled;
+ *   - this car already has a DIFFERENT VIN. Overwriting would rewrite the identity of a car that has
+ *     history, quietly, from a form about a purchase.
+ *
+ * Both refusals NAME the other car. "VIN already in use" sends someone hunting through a list; "that
+ * VIN is on YE64 KLM" ends the question.
+ */
+async function vinCollision(
+  groupId: string, vin: string | null, selfId: string | null,
+): Promise<{ refused: string } | null> {
+  if (!vin) return null;
+  const clash = await prisma.vehicle.findFirst({
+    where: { group_id: groupId, vin_normalized: vin, ...(selfId ? { id: { not: selfId } } : {}) },
+    select: { registration: true },
+  });
+  if (!clash) return null;
+  return {
+    refused: `That VIN is already on ${clash.registration} in this account. `
+      + 'Two cars cannot share a VIN — check the logbook, or correct the other record first.',
+  };
+}
+
+/** The pure half: every refusal decided against the car as it stands, before anything is written. */
+function decideIntakeAttributes(
+  v: VehicleIntakeRow, a: IntakeArgs,
+): { data: Record<string, unknown> } | { refused: string } {
+  const data: Record<string, unknown> = {};
+
+  const vin = vinAtIntake(a.vin);
+  if ('refused' in vin) return vin;
+  if (vin.vin) {
+    if (v.vin_normalized && v.vin_normalized !== vin.vin) {
+      return {
+        refused: `${v.registration} is already recorded with a different VIN. A purchase form does not `
+          + 'get to change which car this is — fix it on the vehicle record if the stored one is wrong.',
+      };
+    }
+    data.vin = vin.vin;
+    data.vin_normalized = vin.vin;
+  }
+
+  if (a.firstRegistered && a.acquiredAt) {
+    const bad = firstRegisteredRefusal(a.firstRegistered, a.acquiredAt, a.now ?? new Date());
+    if (bad) return { refused: bad };
+  }
+  if (a.firstRegistered) data.first_registered = a.firstRegistered;
+
+  /**
+   * MOT: the owner's rule, enforced by a pure function so it is testable without DVSA. A typed date
+   * may fill a silence and may never overwrite a checked one — and because mot_checked_at is stamped
+   * ONLY by a real DVSA answer, writing the date and leaving the stamp alone IS the provenance. No
+   * new column, and no way for this path to make a car look verified.
+   */
+  const mot = motExpiryDecision({ motExpiry: v.mot_expiry, motCheckedAt: v.mot_checked_at }, a.motExpiry ?? null);
+  if ('refused' in mot) return mot;
+  if (mot.write) data.mot_expiry = mot.write;
+
+  // ABSENT NEVER ERASES. A form submitted without a field is silent about it, not a statement that the
+  // stored value was wrong — the three-state parse turns "unknown" into null, and null must not write.
+  const imported = parseImportStatus(a.isImport);
+  if (imported !== null) data.is_import = imported;
+  const v5c = normaliseV5c(a.v5cReference);
+  if (v5c) data.v5c_reference = v5c;
+
+  return { data };
+}
+
+/** The writing half: decide, check the VIN against the rest of the tenant, then update if anything moved. */
+async function applyIntakeAttributes(
+  v: VehicleIntakeRow & { id: string }, a: IntakeArgs,
+): Promise<{ id: string } | { refused: string }> {
+  const attrs = decideIntakeAttributes(v, a);
+  if ('refused' in attrs) return attrs;
+  const collision = await vinCollision(a.groupId, (attrs.data.vin_normalized as string | undefined) ?? null, v.id);
+  if (collision) return collision;
+  if (Object.keys(attrs.data).length) {
+    await prisma.vehicle.update({ where: { id: v.id }, data: attrs.data });
+  }
+  return { id: v.id };
 }
 
 export type BookEntry = {

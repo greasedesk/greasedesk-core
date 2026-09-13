@@ -10,6 +10,19 @@
  * trail necessarily starts empty and fills going forward.
  */
 import type { Prisma } from '@prisma/client';
+import { redactDeep } from '@/lib/redact';
+
+/**
+ * EVERY diff_json goes through here. Not a convenience — the four writers below are four chances to
+ * forget, and a fifth writer added later is a fifth. Putting the redaction in the shared expression
+ * means a new writer inherits it by writing the same line as its siblings, and `audit-redaction-gate`
+ * asserts no `diff_json:` in this file is built any other way.
+ *
+ * The V5C reference is what this protects: a logbook number transfers keepership, so it must not sit
+ * in a trail a colleague can read. See lib/redact for why a key blacklist is the shape here.
+ */
+const diffJson = (diff: unknown): Prisma.InputJsonValue | undefined =>
+  diff === undefined || diff === null ? undefined : (redactDeep(diff) as Prisma.InputJsonValue);
 
 export type AuditAction =
   | `status.${string}`      // status.accepted, status.invoiced, status.paid, status.declined, …
@@ -258,7 +271,7 @@ export async function writeUserAudit(
       entity: 'user',
       entity_id: args.targetUserId,
       action: args.action,
-      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+      diff_json: diffJson(args.diff),
     },
   });
 }
@@ -276,7 +289,7 @@ export async function writeThreadAudit(
       entity: 'message_thread',
       entity_id: args.threadId,
       action: args.action,
-      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+      diff_json: diffJson(args.diff),
     },
   });
 }
@@ -294,7 +307,7 @@ export async function writeImportAudit(
       entity: 'import_batch',
       entity_id: args.batchId,
       action: args.action,
-      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+      diff_json: diffJson(args.diff),
     },
   });
 }
@@ -321,7 +334,7 @@ export async function writeAudit(
       entity: args.entity ?? 'job_card',
       entity_id: args.entityId ?? (args.jobCardId as string),
       action: args.action,
-      diff_json: (args.diff ?? undefined) as Prisma.InputJsonValue | undefined,
+      diff_json: diffJson(args.diff),
     },
   });
 }

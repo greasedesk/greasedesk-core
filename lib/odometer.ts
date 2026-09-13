@@ -141,8 +141,19 @@ export type MileageRate =
  * the Prisma `orderBy` below can express this at all — a coincidence worth naming, because a third
  * source whose name sorted between them would silently split the two orderings. odometer-gate
  * asserts the two agree.
+ *
+ * THE THIRD SOURCE ARRIVED (2026-09-13) and the warning above was the specification for adding it.
+ * `auction` is a mileage read off a purchase invoice. It sorts FIRST alphabetically, so it had to
+ * rank first, and mot/visit shift to 1 and 2 — only the ORDER between them matters, never the
+ * numbers. That the two constraints agreed is not luck: least-attested first is also what the rank
+ * means. An auction reading is a number on someone else's paperwork, frequently not warranted at
+ * all; a visit reading is one we took at the car. Where a day carries both, the one we took is the
+ * endpoint, and `mileageRate` only ever uses endpoints.
+ *
+ * A source that could NOT satisfy both would be the signal to stop and change the orderBy, not to
+ * pick a rank and hope. odometer-gate fails on exactly that.
  */
-export const READING_SOURCE_ORDER: Record<string, number> = { mot: 0, visit: 1 };
+export const READING_SOURCE_ORDER: Record<string, number> = { auction: 0, mot: 1, visit: 2 };
 const sourceRank = (s?: string): number => READING_SOURCE_ORDER[s ?? ''] ?? 0;
 
 /**
@@ -315,7 +326,7 @@ export function visitEndMileage(card: { odometerIn: number | null; odometerOut: 
 
 export async function recordOdometerReadings(
   db: Prisma.TransactionClient | Db,
-  args: { groupId: string; vehicleId: string; source: 'mot' | 'visit'; readings: Array<{ date: string | Date; miles: number }> },
+  args: { groupId: string; vehicleId: string; source: 'mot' | 'visit' | 'auction'; readings: Array<{ date: string | Date; miles: number }> },
 ): Promise<number> {
   let n = 0;
   for (const r of args.readings) {

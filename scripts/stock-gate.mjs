@@ -11,6 +11,8 @@ const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.
 import './_ts.mjs';
 const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
+const SI = await import('../lib/stock-intake.ts');
+const OD = await import('../lib/odometer.ts');
 const { readFileSync } = await import('node:fs');
 const { gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -381,6 +383,150 @@ try {
   check('a car that has left no longer appears in the yard',
     (await page.locator(`[data-testid="stock-row-${reg}"]`).count()) === 0,
     'the list is what is in stock, not what was ever bought');
+
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  THE AUCTION INVOICE — the facts that arrive with the car, and where each of them belongs
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the VIN is an identity, so intake is stricter than anywhere else —');
+
+  check('a good VIN normalises through the SHARED chokepoint, not a local copy',
+    SI.vinAtIntake(' wvw-zzz1kz aw123456 ').vin === 'WVWZZZ1KZAW123456');
+  check('  …and the module does not hand-roll upper/trim',
+    !/toUpperCase\(\)/.test(readFileSync('lib/stock-intake.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').split('normaliseV5c')[0]),
+    'a second normaliser diverges from normalizeVin on punctuation and splits the dedup key');
+  check('blank is not an error — a plate and nothing else is a real auction',
+    SI.vinAtIntake('').vin === null && SI.vinAtIntake(null).vin === null && SI.vinAtIntake(undefined).vin === null);
+  check('a 16-character VIN is REFUSED, and the refusal says the length',
+    /16/.test(SI.vinAtIntake('WVWZZZ1KZAW12345').refused ?? ''));
+  check('a VIN containing I, O or Q is REFUSED and says which letters',
+    /I, O or Q/.test(SI.vinAtIntake('WVWZZZ1KZAWI23456').refused ?? ''));
+  check('  …and that is STRICTER than quick-validate, deliberately',
+    (await import('../lib/quick-validate.ts')).vinWarn('WVWZZZ1KZAW12345') === 'vin'
+      && 'refused' in SI.vinAtIntake('WVWZZZ1KZAW12345'),
+    'warn on a job card, refuse at the identity anchor');
+
+  console.log('\n— import status and warranted mileage are THREE-state —');
+  check('unrecorded is null, not false',
+    SI.parseImportStatus('unknown') === null && SI.parseImportStatus(undefined) === null
+      && SI.parseImportStatus('') === null);
+  check('  …and "no" is a positive statement of UK supply',
+    SI.parseImportStatus('no') === false && SI.parseImportStatus('yes') === true);
+  check('warranted follows the same three states',
+    SI.parseWarranted('unknown') === null && SI.parseWarranted('no') === false && SI.parseWarranted('yes') === true);
+  check('the schema column is NULLABLE, so the third state can be stored at all',
+    /mileage_warranted Boolean\?/.test(readFileSync('prisma/schema.prisma', 'utf8'))
+      && /is_import\s+Boolean\?/.test(readFileSync('prisma/schema.prisma', 'utf8')),
+    'a NOT NULL column with a default would make every unasked car claim to be UK-supplied');
+
+  console.log('\n— MOT: fill a silence, never overwrite a check —');
+  const dvsaDay = new Date('2027-08-02T12:00:00Z');
+  const typed = new Date('2027-08-02T12:00:00Z');
+  const other = new Date('2026-01-01T12:00:00Z');
+  check('DVSA never answered → the typed date is WRITTEN',
+    SI.motExpiryDecision({ motExpiry: null, motCheckedAt: null }, typed).write?.getTime() === typed.getTime());
+  check('  …and the reason names it as stated, not verified',
+    SI.motExpiryDecision({ motExpiry: null, motCheckedAt: null }, typed).reason === 'stated_dvsa_silent');
+  check('DVSA answered and the typed date AGREES → nothing is written',
+    SI.motExpiryDecision({ motExpiry: dvsaDay, motCheckedAt: new Date() }, typed).write === null);
+  check('DVSA answered and the typed date DIFFERS → REFUSED, naming the checked date',
+    /2027-08-02/.test(SI.motExpiryDecision({ motExpiry: dvsaDay, motCheckedAt: new Date() }, other).refused ?? ''));
+  check('  …refused, not silently dropped — a dropped edit leaves the garage believing it took',
+    'refused' in SI.motExpiryDecision({ motExpiry: dvsaDay, motCheckedAt: new Date() }, other));
+  check('nothing typed is never a refusal',
+    SI.motExpiryDecision({ motExpiry: dvsaDay, motCheckedAt: new Date() }, null).write === null);
+  check('NO PATH HERE STAMPS mot_checked_at — the stamp means DVSA answered and only dvsa.ts may set it',
+    !/mot_checked_at/.test(readFileSync('lib/stock-intake.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''))
+      && !/mot_checked_at/.test(readFileSync('lib/stock-store.ts', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').split('VEHICLE_INTAKE_FIELDS')[1] ?? ''));
+
+  console.log('\n— first registration cannot be after the day it was bought —');
+  const bought = new Date('2024-06-01T12:00:00Z');
+  check('a future first registration is refused',
+    !!SI.firstRegisteredRefusal(new Date('2030-01-01T12:00:00Z'), bought, new Date('2026-09-13T12:00:00Z')));
+  check('registered AFTER the purchase is refused, and the refusal shows both dates',
+    /2024-06-01/.test(SI.firstRegisteredRefusal(new Date('2024-09-01T12:00:00Z'), bought, new Date('2026-09-13T12:00:00Z')) ?? '')
+      && /2024-09-01/.test(SI.firstRegisteredRefusal(new Date('2024-09-01T12:00:00Z'), bought, new Date('2026-09-13T12:00:00Z')) ?? ''));
+  check('a normal one passes', SI.firstRegisteredRefusal(new Date('2018-03-01T12:00:00Z'), bought, new Date('2026-09-13T12:00:00Z')) === null);
+
+  console.log('\n— mileage is a READING, and auction is the least-attested source —');
+  check('the auction source exists and ranks FIRST', OD.READING_SOURCE_ORDER.auction === 0);
+  check('  …and the rank still agrees with the alphabet the orderBy can express',
+    (() => { const r = Object.entries(OD.READING_SOURCE_ORDER).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+             return JSON.stringify(r) === JSON.stringify([...r].sort()); })(),
+    'readingsForVehicle can only say source:asc — a rank disagreeing with it splits the two orderings');
+  check('  …so a visit on the same day still wins the tie, which is what sets the rate',
+    OD.compareReadings({ date: bought, miles: 1, source: 'auction' }, { date: bought, miles: 2, source: 'visit' }) < 0);
+  check('mileage refuses a negative and an absurd figure, and passes a real one',
+    'refused' in SI.parseMiles(-1) && 'refused' in SI.parseMiles(2_000_000) && SI.parseMiles('84,231').miles === 84231);
+  check('blank mileage is not an error', SI.parseMiles('').miles === null && SI.parseMiles(null).miles === null);
+
+  console.log('\n— and the reading actually lands on the car, through the real writer —');
+  const regA = `ZZSTK${Math.floor(Math.random() * 900 + 100)}A`;
+  const vA = await ST.findOrCreateVehicle({
+    groupId: ZZ_GROUP, registration: regA, vin: 'WVWZZZ1KZAW123456',
+    firstRegistered: new Date('2018-03-01T12:00:00Z'), isImport: 'yes',
+    v5cReference: '1234 5678 9012', acquiredAt: bought,
+  });
+  if ('refused' in vA) throw new Error(`fixture vehicle refused: ${vA.refused}`);
+  made.vehicles.push(vA.id);
+  const storedA = await prisma.vehicle.findUnique({
+    where: { id: vA.id },
+    select: { vin: true, vin_normalized: true, first_registered: true, is_import: true, v5c_reference: true },
+  });
+  check('the VIN, first registration, import flag and V5C are all on the CAR',
+    storedA.vin_normalized === 'WVWZZZ1KZAW123456' && storedA.is_import === true
+      && storedA.first_registered?.toISOString().slice(0, 10) === '2018-03-01'
+      && storedA.v5c_reference === '123456789012',
+    'the V5C is stored normalised — spaces out, which is how it is quoted');
+
+  const tookA = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vA.id, acquiredAt: bought,
+    purchasePence: 150000, vatStatus: 'margin', source: 'auction',
+    mileageMiles: 84231, mileageWarranted: 'no',
+  });
+  if ('refused' in tookA) throw new Error(`fixture stock refused: ${tookA.refused}`);
+  made.items.push(tookA.id);
+  const readings = await OD.readingsForVehicle(prisma, ZZ_GROUP, vA.id);   // POSITIONAL — an object silently matches nothing
+  check('the mileage went into the odometer SERIES, under source auction',
+    readings.some((r) => r.miles === 84231 && r.source === 'auction'),
+    `${readings.length} reading(s)`);
+  check('  …and NOT onto a column of the stock item',
+    !/mileage_miles|miles\s+Int/.test(readFileSync('prisma/schema.prisma', 'utf8').split('model StockItem')[1].split('}')[0]),
+    'a second place to ask a car how far it has gone is a second answer');
+  const warranted = await prisma.stockItem.findUnique({ where: { id: tookA.id }, select: { mileage_warranted: true } });
+  check('warranted is on the STOCK ITEM — the term belongs to this purchase, not to the car',
+    warranted.mileage_warranted === false);
+
+  console.log('\n— the VIN fails closed, both ways, and names the other car —');
+  const regB = `ZZSTK${Math.floor(Math.random() * 900 + 100)}B`;
+  const clash = await ST.findOrCreateVehicle({
+    groupId: ZZ_GROUP, registration: regB, vin: 'WVWZZZ1KZAW123456', acquiredAt: bought,
+  });
+  check('a VIN already on ANOTHER car is refused',
+    'refused' in clash, 'refused' in clash ? clash.refused.slice(0, 60) : 'IT MERGED THEM');
+  check('  …and the refusal names the registration it clashed with',
+    'refused' in clash && clash.refused.includes(regA));
+  check('  …and no second car was created by the attempt',
+    (await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: regB } })) === 0,
+    'a refusal that leaves a half-made car behind is worse than none');
+  const overwrite = await ST.findOrCreateVehicle({
+    groupId: ZZ_GROUP, registration: regA, vin: 'WVWZZZ1KZAW999999', acquiredAt: bought,
+  });
+  check('a DIFFERENT VIN on a car that already has one is refused, not overwritten',
+    'refused' in overwrite);
+  check('  …and the stored VIN is untouched',
+    (await prisma.vehicle.findUnique({ where: { id: vA.id }, select: { vin_normalized: true } })).vin_normalized === 'WVWZZZ1KZAW123456');
+
+  console.log('\n— absent never erases —');
+  const silentIntake = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regA, acquiredAt: bought });
+  check('a second intake with no VIN, no V5C and no import answer resolves the SAME car',
+    'id' in silentIntake && silentIntake.id === vA.id);
+  const kept = await prisma.vehicle.findUnique({
+    where: { id: vA.id }, select: { vin_normalized: true, is_import: true, v5c_reference: true },
+  });
+  check('  …the car still has its VIN, its import flag and its V5C',
+    kept.vin_normalized === 'WVWZZZ1KZAW123456' && kept.is_import === true && kept.v5c_reference === '123456789012',
+    'a form silent about a field is not a statement that the stored value was wrong');
 
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));

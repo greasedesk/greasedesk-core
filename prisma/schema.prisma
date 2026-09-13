@@ -2720,7 +2720,9 @@ model VehicleOdometerReading {
   group_id   String
   vehicle_id String
 
-  /// 'mot' (DVSA test history) | 'visit' (odometer_in, read by us at the car).
+  /// 'mot' (DVSA test history) | 'visit' (odometer_in, read by us at the car) | 'auction' (read
+  /// off a purchase invoice when the car was taken into stock — the least-attested of the three,
+  /// which is why it ranks first in lib/odometer's READING_SOURCE_ORDER and loses same-day ties).
   source       String
   reading_date DateTime @db.Date
   /// MILES, normalised at the boundary. DVSA reports an odometerUnit of mi OR km; an unrecognised
@@ -2770,6 +2772,18 @@ model Vehicle {
   /// same marketing list. See pages/api/mot-refresh.
   mot_checked_at          DateTime?
   mileage_at_create       Int?
+  /// FIRST REGISTRATION, the date — `year` above is DVLA's year of MANUFACTURE and the two differ
+  /// on any car built late in a year. Trade values and warranty windows are counted from this one.
+  /// NULL = never captured; nothing infers it from `year`, because a wrong month is worse than none.
+  first_registered        DateTime? @db.Date
+  /// TRI-STATE, and NULL is the common state: nobody has said. FALSE is a positive statement that
+  /// the car is UK-supplied. A boolean default would make every unasked car claim to be a UK car,
+  /// and an import that reads as UK-supplied is precisely the one that surprises a buyer at resale.
+  is_import               Boolean?
+  /// V5C DOCUMENT REFERENCE — the logbook number. Quoting it is how keepership is transferred and
+  /// how a car is taxed online, so it is nearer a password than a registration: lib/redact strips it
+  /// from every audit diff, and no API response returns it. NULL = not captured. See lib/redact.
+  v5c_reference           String?
   created_at              DateTime  @default(now())
 
   group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
@@ -5221,6 +5235,11 @@ model StockItem {
   premium_pence    Int @default(0)
   /// Standard-rated services on the purchase invoice, GROSS like every money field.
   services_pence   Int @default(0)
+  /// WAS THE MILEAGE WARRANTED — a term of THIS purchase, not a property of the car. The seller
+  /// standing behind the reading is a promise made to us by them; the next owner of the car does not
+  /// inherit it, which is why it lives on the stock item and the reading itself lives on the vehicle.
+  /// TRI-STATE: NULL = not stated (a private purchase has no such term), TRUE/FALSE = the sale said.
+  mileage_warranted Boolean?
   created_by_user_id String
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
