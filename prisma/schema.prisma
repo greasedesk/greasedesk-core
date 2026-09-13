@@ -566,6 +566,9 @@ model Group {
   clockSessions   JobClockSession[]
   purchaseModels  PurchaseModel[]
   purchaseModelDefaults PurchaseModelDefaults?
+  stockItems            StockItem[]
+  stockDisposals        StockDisposal[]
+  stockCostSnapshots    StockCostSnapshot[]
 }
 
 /**
@@ -2788,6 +2791,7 @@ model Vehicle {
   battery_readings BatteryReading[]
   marketing_contacts MarketingContact[]
   schedule_readings  ServiceScheduleReading[]
+  stockItems StockItem[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
@@ -3205,6 +3209,13 @@ model VerificationToken {
 // ───────────────────────────────────────────────────────────────────────────────
 
 model Invoice {
+  /// THE DISPOSAL THIS INVOICE IS FOR, when it is a stock sale. DELIBERATELY NO FOREIGN KEY, following
+  /// PurchaseModel.vehicle_id: an FK from an existing table is ALTER TABLE ADD CONSTRAINT, which is
+  /// CONSTRAINING and would have cost this slice a second push for one column. The referential
+  /// constraint comes later, in a migration containing nothing but foreign keys, once the code that
+  /// writes this is deployed. NULL on every garage invoice, which is all of them today.
+  stock_disposal_id String?
+
   // PROVENANCE. external_ref carries the ORIGINAL system's number (Xero) — the GreaseDesk series
   // is still minted normally and stays gapless; on imported invoices the UI shows external_ref as
   // the primary number with the GreaseDesk number secondary.
@@ -5186,6 +5197,102 @@ model PurchaseModel {
 ///
 /// JSONB rather than a column per cost, for the same reason PurchaseModel.inputs is JSONB: the set of
 /// flagged costs will grow, and growing it must not be a migration.
+/// ── A CAR THE GARAGE OWNS ───────────────────────────────────────────────────────────────────────
+/// THERE IS NO OWNERSHIP EDGE. The garage is not a Customer — a garage-as-customer row would appear in
+/// marketing lists and MOT reminders and the garage would start texting itself. THIS ROW is the
+/// assertion of ownership, and the absence of a disposal is the assertion that it still holds.
+model StockItem {
+  id         String   @id @default(uuid())
+  group_id   String
+  /// The car's identity. Vehicle is identity-only since the weld was retired, which is exactly what
+  /// makes it safe to point at from here without implying a customer.
+  vehicle_id String
+  /// WHEN IT BECAME STOCK. The book's period boundary reads this, so it is a date the garage states
+  /// rather than a created_at they cannot correct.
+  acquired_at DateTime
+  /// WHAT WAS PAID FOR THE CAR ITSELF. The margin is measured from this and nothing else.
+  purchase_pence Int
+  /// CAPTURED AT PURCHASE AND NEVER RE-READ. A car bought under the margin scheme stays a margin car
+  /// whatever the tenant's own status does later; reading it live would re-rate history.
+  vat_status String
+  /// lib/purchase-model SOURCES — auction, trade, private, part-exchange. Decides what a fee did.
+  source           String
+  /// The buyer's premium, VAT inside by definition, part of the price of the goods.
+  premium_pence    Int @default(0)
+  /// Standard-rated services on the purchase invoice, GROSS like every money field.
+  services_pence   Int @default(0)
+  created_by_user_id String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vehicle  Vehicle   @relation(fields: [vehicle_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  disposal StockDisposal?
+  costs    StockCostSnapshot[]
+
+  @@index([group_id, acquired_at])
+}
+
+/// ── HOW A CAR LEFT, WHICH IS NOT ALWAYS A SALE ──────────────────────────────────────────────────
+/// Three of the five kinds have no sale price. A disposal — not an invoice — is what closes a stock
+/// item: a car can leave without one (traded out, scrapped, returned, taken into own use) and an
+/// invoice may be raised before handover. The invoice REFERENCES this row, never the other way about.
+model StockDisposal {
+  id            String   @id @default(uuid())
+  group_id      String
+  /// ONE DISPOSAL PER ITEM, enforced by @unique INSIDE the table. Deliberately not a separate
+  /// CREATE UNIQUE INDEX: that statement classifies CONSTRAINING even on a brand-new table, and would
+  /// have cost this slice a second push for a rule the table can state itself.
+  stock_item_id String   @unique
+  /// WHEN IT LEFT — its own date, independent of any invoice.
+  disposed_at   DateTime
+  /// lib/stock DISPOSAL_KINDS.
+  kind          String
+  /// NULL for the three kinds that are not sales. An honest null, never a zero.
+  sale_pence    Int?
+  /// NULL = nothing was written down, which is the ordinary case. A free-text aside for the awkward
+  /// disposals — who it went to, why it came back — never a field anything reads or totals.
+  note          String?
+  created_by_user_id String
+  created_at DateTime @default(now())
+
+  group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([group_id, disposed_at])
+}
+
+/// ── WHAT PREP COST, FROZEN WHEN THE CAR LEFT ────────────────────────────────────────────────────
+/// Live while the car is in stock; snapshotted at disposal, for the same reason invoice lines freeze
+/// at mint — a prep card edited in March must not move a book that was read in February. The book is a
+/// QUERY and these frozen rows are what make re-running it next year give what it gave then.
+///
+/// COSTS NEVER TOUCH THE MARGIN. Under the margin scheme prep may not be added to the purchase price,
+/// so these rows are management information sitting beside the compliance figures, never inside them.
+model StockCostSnapshot {
+  id            String @id @default(uuid())
+  group_id      String
+  stock_item_id String
+  /// 'parts' | 'labour' | 'delivery' | 'other' — a vocabulary in lib/stock, not a database CHECK, so
+  /// a later kind is a deploy rather than a two-push cycle.
+  kind          String
+  description   String
+  /// GROSS, like every money figure in this product.
+  amount_pence  Int
+  /// The prep card this came from. NULL = it came from no card — a delivery invoice or an MOT typed
+  /// straight onto the car — which is a real and common way for a cost to arrive, not a missing link.
+  ///
+  /// NO FOREIGN KEY even when it is set: an admin can hard-delete a job card, and a frozen cost must
+  /// survive that. The snapshot IS the record, not a view of one.
+  job_card_id   String?
+  captured_at   DateTime @default(now())
+
+  group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([group_id, stock_item_id])
+}
+
 model PurchaseModelDefaults {
   /// PRIMARY KEY IS THE GROUP. One row per tenant by construction — no partial unique index, no
   /// "which row wins" question, and an upsert is the only shape a writer can take.

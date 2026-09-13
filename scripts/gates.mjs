@@ -175,6 +175,7 @@ const TIERS = {
     'nullable-annotation-gate', 'observation-key-gate', 'odometer-gate', 'photo-partition-gate',
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'credential-residue-gate',
+    'stock-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
     'tyres-gate', 'marketing-lists-gate', 'intake-escalation-gate',
     'mot-sweep-stamp-gate', 'enum-drift-gate', 'tax-display-gate', 'trial-extend-gate', 'printed-countdown-gate', 'invoice-blocks-gate', 'quote-lead-gate', 'quote-drafts-gate', 'costbase-clip-gate', 'retry-transient-gate', 'wage-per-month-gate', 'costs-gate',
