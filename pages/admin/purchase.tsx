@@ -25,6 +25,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
   SOURCES, SOURCE_RULES, availableVatStatuses,
+  FUNDING_KINDS, blankFacility, fundingCost,
   type ModelInputs, type SliderKey, type VatStatus,
 } from '@/lib/purchase-model';
 
@@ -97,6 +98,25 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
   const biggest = ranked[0];
   // NULL when there is no contract to cover, and null when the contribution is zero or less: no
   // quantity of a car that loses money covers anything. The page renders a refusal rather than ∞.
+  /**
+   * THE SAME CAR ON ALL THREE PLANS. Computed through the one fundingCost the answer uses, so the
+   * comparison cannot drift from the figure above it — and including the plan currently chosen, because
+   * a comparison that hides your own option makes you work out where you already are.
+   *
+   * The facility row uses the terms AS TYPED. With nothing entered it costs nothing, and the panel says
+   * so rather than inventing a rate card to make the row look populated.
+   */
+  const compare = useMemo(() => {
+    const amount = r.vat.cashOutPence + r.fee.cashOutPence;
+    const shared = { amountPence: amount, daysInStock: inputs.daysInStock, annualPct: inputs.costOfMoneyAnnualPct };
+    const facility = inputs.funding.kind === 'facility' ? inputs.funding : blankFacility();
+    return [
+      { kind: 'cash' as const, label: 'Own cash', cost: fundingCost({ kind: 'cash' }, shared) },
+      { kind: 'overdraft' as const, label: 'Overdraft', cost: fundingCost({ kind: 'overdraft', arrangementFeePence: inputs.funding.kind === 'overdraft' ? inputs.funding.arrangementFeePence : 0 }, shared) },
+      { kind: 'facility' as const, label: 'Stocking facility', cost: fundingCost(facility, shared) },
+    ];
+  }, [r.vat.cashOutPence, r.fee.cashOutPence, inputs.daysInStock, inputs.costOfMoneyAnnualPct, inputs.funding]);
+
   const needed = useMemo(() => salesToCoverMonthly(r.contributionPence, inputs.adContractMonthlyPence),
     [r.contributionPence, inputs.adContractMonthlyPence]);
   return (
@@ -189,6 +209,82 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
                   ? `A separate service: ${moneyExact(r.fee.cashOutPence)} leaves the bank, ${moneyExact(r.fee.reclaimablePence)} of VAT comes back, and it does not change your margin.`
                   : `A straight cost of ${moneyExact(r.fee.netCostPence)}. It does not change your margin.`}
             </p>
+          )}
+        </fieldset>
+
+        {/* ── HOW IS IT PAID FOR? THREE SHAPES, NOT ONE RATE ───────────────────────────────────────
+            The cost-of-money slider is an annual percentage. A stocking facility is not: it CURTAILS —
+            takes a slice of the advance back every month whether or not the car has sold — which is a
+            repayment schedule. Treating it as a rate gets the interest wrong (the balance declines) and
+            the cash badly wrong (money must be found before the sale). */}
+        <fieldset className="mt-6 border-t border-line pt-4" data-testid="funding-question">
+          <legend className="text-sm text-muted">How are you paying for it?</legend>
+          <div className="mt-1 flex gap-2">
+            {FUNDING_KINDS.map((k) => (
+              <button key={k} type="button" data-testid={`funding-${k}`}
+                onClick={() => setInputs((p) => ({
+                  ...p,
+                  // A FACILITY STARTS BLANK, never with somebody's rate card in it.
+                  funding: k === 'cash' ? { kind: 'cash' }
+                    : k === 'overdraft' ? { kind: 'overdraft', arrangementFeePence: 0 }
+                    : blankFacility(),
+                }))}
+                className={`flex-1 min-h-[44px] rounded-lg border text-sm font-medium ${
+                  inputs.funding.kind === k ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'}`}>
+                {k === 'cash' ? 'Own cash' : k === 'overdraft' ? 'Overdraft' : 'Stocking facility'}
+              </button>
+            ))}
+          </div>
+
+          {inputs.funding.kind === 'overdraft' && (
+            <label className="mt-3 block text-sm text-muted" data-testid="overdraft-fee-field">Arrangement fee
+              <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.funding.arrangementFeePence / 100) || ''}
+                onChange={(e) => setInputs((p) => ({ ...p, funding: { kind: 'overdraft', arrangementFeePence: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) } }))}
+                data-testid="input-overdraft-fee" placeholder="0"
+                className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
+            </label>
+          )}
+
+          {inputs.funding.kind === 'facility' && (
+            <div className="mt-3" data-testid="facility-terms">
+              {/* BLANK, AND IT SAYS WHY. "Roughly 10% a month" describes one product; a default is the
+                  strongest claim an interface can make, and this one is not ours to make. */}
+              <p className="text-xs text-muted" data-testid="facility-read-your-agreement">
+                These come from your own agreement — read it rather than guessing. Nothing is filled in for you.
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {([
+                  ['advancePct', 'Advance, % of price', '%'],
+                  ['monthlyPctOfAdvance', 'Charge, % a month', '%'],
+                  ['curtailPctPerMonth', 'Curtailment, % a month', '%'],
+                  ['graceDays', 'Grace, days', 'd'],
+                  ['termDays', 'Term, days', 'd'],
+                ] as [keyof Extract<ModelInputs['funding'], { kind: 'facility' }>, string, string][]).map(([k, label]) => (
+                  <label key={String(k)} className="text-xs text-muted">{label}
+                    <input type="number" inputMode="decimal" min={0}
+                      value={(inputs.funding as Extract<ModelInputs['funding'], { kind: 'facility' }>)[k] as number || ''}
+                      onChange={(e) => setInputs((p) => ({ ...p, funding: { ...(p.funding as Extract<ModelInputs['funding'], { kind: 'facility' }>), [k]: Math.max(0, Number(e.target.value || 0)) } }))}
+                      data-testid={`input-facility-${String(k)}`} placeholder="0"
+                      className="mt-1 w-full min-h-[40px] p-2 bg-surface border border-line rounded-lg text-ink" />
+                  </label>
+                ))}
+                <label className="text-xs text-muted">Fee per car
+                  <input type="number" inputMode="decimal" min={0}
+                    value={Math.round((inputs.funding as Extract<ModelInputs['funding'], { kind: 'facility' }>).perUnitFeePence / 100) || ''}
+                    onChange={(e) => setInputs((p) => ({ ...p, funding: { ...(p.funding as Extract<ModelInputs['funding'], { kind: 'facility' }>), perUnitFeePence: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) } }))}
+                    data-testid="input-facility-perUnitFeePence" placeholder="0"
+                    className="mt-1 w-full min-h-[40px] p-2 bg-surface border border-line rounded-lg text-ink" />
+                </label>
+              </div>
+              {/* A REFUSAL, NOT A COST. The facility does not quietly charge more for day 150 of a
+                  120-day term — it demands the balance. */}
+              {r.funding.overTerm === true && (
+                <p className="mt-2 text-xs text-danger" data-testid="over-term">
+                  {inputs.daysInStock} days is longer than your {(inputs.funding as Extract<ModelInputs['funding'], { kind: 'facility' }>).termDays}-day term.
+                  The balance falls due before the car sells — this is not a cost to add, it is a plan that does not work.
+                </p>
+              )}
+            </div>
           )}
         </fieldset>
 
@@ -309,6 +405,39 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               </li>
             ))}
           </ol>
+          {/* SAID OUT LOUD, because the biggest lever on a facility-funded car may be the FACILITY, and
+              a ranking that silently omits it would be the same kind of lie as a swing read as a cost.
+              A plan is a choice between shapes, not a number with a range, so it cannot be swung —
+              it is compared instead, below. */}
+          <p className="mt-2 text-xs text-muted" data-testid="sensitivity-scope">
+            This ranks the sliders only. How you pay for the car is a choice, not a range — compare the three below.
+          </p>
+          {/* ── THE THREE SHAPES, SIDE BY SIDE ────────────────────────────────────────────────────
+              Two columns, because the two questions are different: what the money COSTS, and what it
+              DEMANDS before the car sells. A facility can be cheaper than an overdraft and still be the
+              plan that empties the bank in October. */}
+          <div className="mt-4 border-t border-line pt-3" data-testid="funding-compare">
+            <div className="flex items-baseline gap-2 text-[11px] uppercase tracking-wide text-muted border-b border-line pb-1">
+              <span className="flex-1">Paying for it</span>
+              <span className="w-24 text-right">Costs</span>
+              <span className="w-32 text-right">Wants back first</span>
+            </div>
+            {compare.map((c) => (
+              <div key={c.kind} className={`flex items-center gap-2 text-sm py-1 ${inputs.funding.kind === c.kind ? 'text-ink font-medium' : 'text-muted'}`}
+                data-testid={`compare-${c.kind}`}>
+                <span className="flex-1">{c.label}{inputs.funding.kind === c.kind ? ' — yours' : ''}</span>
+                <span className="w-24 text-right tabular-nums" data-testid={`compare-cost-${c.kind}`}>{money(c.cost.totalPence)}</span>
+                <span className="w-32 text-right tabular-nums" data-testid={`compare-before-${c.kind}`}>
+                  {c.cost.cashBeforeSalePence > 0 ? money(c.cost.cashBeforeSalePence) : '—'}
+                </span>
+              </div>
+            ))}
+            {inputs.funding.kind !== 'facility' && compare[2].cost.totalPence === 0 && (
+              <p className="mt-1 text-xs text-muted" data-testid="facility-unfilled">
+                The facility row is empty because its terms are not entered — choose Stocking facility above and put your own agreement in.
+              </p>
+            )}
+          </div>
           <p className="mt-2 text-xs text-muted" data-testid="sensitivity-not-cost">
             These are not costs. A swing is the difference in contribution between that slider at its lowest and its highest.
           </p>
@@ -376,6 +505,14 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             {r.vat.inputVatPence > 0 && <> — including {moneyExact(r.vat.inputVatPence)} of VAT you reclaim later.</>}
             {' '}The cost of money is charged on that.
           </p>
+          {/* THE NUMBER AN ANNUAL PERCENTAGE CANNOT EXPRESS, beside cash out because it is the same
+              question: how much money is this car actually taking out of the bank, and when. */}
+          {r.funding.cashBeforeSalePence > 0 && (
+            <p className="mt-1 text-xs text-ink" data-testid="cash-before-sale">
+              And <strong>{moneyExact(r.funding.cashBeforeSalePence)}</strong> of that must be repaid before the car sells —
+              {' '}{r.funding.schedule.length} {r.funding.schedule.length === 1 ? 'payment' : 'payments'} falling due while you still have it.
+            </p>
+          )}
           {/* ── THE FIXED COST, AS A QUESTION THIS PAGE CAN ANSWER ──────────────────────────────
               Autotrader is a monthly contract: about £1,500 for ten cars, £5,000+ for a bigger
               dealer. Dividing it gives £150 a car at ten sales and £300 at five, so a per-car

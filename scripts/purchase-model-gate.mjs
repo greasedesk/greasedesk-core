@@ -365,6 +365,100 @@ try {
     'the source alone moves no money; only a fee does');
 
   /**
+   * ── THREE SHAPES, AND ONLY TWO OF THEM ARE INTEREST ───────────────────────────────────────────
+   * A facility CURTAILS: it takes a slice of the advance back every month whether or not the car has
+   * sold. That is a repayment schedule, and an annual percentage gets both halves wrong — the interest,
+   * because the balance declines, and the cash, because money must be found before the sale.
+   */
+  console.log('\n— the funding plan, and the cash it wants before the sale —');
+  const fundArgs = { amountPence: 800000, daysInStock: 90, annualPct: 9 };
+  const cash = M.fundingCost({ kind: 'cash' }, fundArgs);
+  const od = M.fundingCost({ kind: 'overdraft', arrangementFeePence: 15000 }, fundArgs);
+  const fac = M.fundingCost({ kind: 'facility', advancePct: 100, monthlyPctOfAdvance: 1.5,
+    curtailPctPerMonth: 10, graceDays: 0, perUnitFeePence: 3000, termDays: 120 }, fundArgs);
+
+  check('cash is simple interest over the days held', Math.abs(cash.interestPence - Math.round(800000 * 0.09 * (90 / 365))) <= 1,
+    `${cash.interestPence}p on £8,000 at 9% for 90 days`);
+  check('  …and demands nothing before the sale', cash.cashBeforeSalePence === 0 && cash.schedule.length === 0);
+  check('an overdraft is the same interest plus its fee', od.interestPence === cash.interestPence
+    && od.feesPence === 15000 && od.totalPence === cash.interestPence + 15000,
+    'a rate and a flat charge — the same SHAPE as cash, which is why they share the slider');
+  check('  …and also demands nothing before the sale', od.cashBeforeSalePence === 0,
+    'the balance is flat until the car sells; nothing is called in');
+
+  /**
+   * THE NUMBER NO ANNUAL PERCENTAGE CAN EXPRESS. At 10% of the advance a month over ninety days, three
+   * curtailments fall due before any buyer appears — 30% of an £8,000 car, £2,400, out of the bank.
+   */
+  check('a facility demands CASH BEFORE THE SALE', fac.cashBeforeSalePence > 0 && fac.schedule.length === 3,
+    `${fac.cashBeforeSalePence}p across ${fac.schedule.length} payments at days ${fac.schedule.map((x) => x.day).join(', ')}`);
+  check('  …and it is the curtailments, not the interest', (() => {
+    const principal = fac.schedule.reduce((a, x) => a + x.principalPence, 0);
+    return principal === 240000 && fac.cashBeforeSalePence > principal;   // 3 × 10% of £8,000
+  })(), '£2,400 of principal over 90 days — 30% of the car, before a buyer appears');
+  check('  …charged on a DECLINING balance, so it is not 3 × the first month', (() => {
+    const charges = fac.schedule.map((x) => x.chargePence);
+    return charges[0] > charges[1] && charges[1] > charges[2];
+  })(), `${fac.schedule.map((x) => x.chargePence).join('p, ')}p — each month is charged on what is left`);
+  check('  …and a grace period moves the first payment out', (() => {
+    const g = M.fundingCost({ kind: 'facility', advancePct: 100, monthlyPctOfAdvance: 1.5, curtailPctPerMonth: 10,
+      graceDays: 60, perUnitFeePence: 0, termDays: 0 }, fundArgs);
+    return g.schedule.length === 1 && g.schedule[0].day === 90;
+  })(), '60 days of grace over a 90-day hold leaves one payment, not three');
+
+  /** OVER TERM IS A REFUSAL, NOT A COST — and an unstated term is not a satisfied one. */
+  // BOTH DIRECTIONS. 90 days inside a 120-day term must NOT be flagged — a guard that fires on a hold
+  // the agreement allows would teach the reader to ignore it.
+  check('a hold INSIDE the term is not flagged', fac.overTerm === false, '90 days held against a 120-day term');
+  check('  …and 150 days on that same term IS', M.fundingCost({ kind: 'facility', advancePct: 100, monthlyPctOfAdvance: 1,
+    curtailPctPerMonth: 10, graceDays: 0, perUnitFeePence: 0, termDays: 120 }, { ...fundArgs, daysInStock: 150 }).overTerm === true,
+    'the balance falls due before the car sells — a plan that does not work, not a cost to add');
+  check('  …and an UNSTATED term answers null, never false', M.fundingCost({ kind: 'facility', advancePct: 100,
+    monthlyPctOfAdvance: 1, curtailPctPerMonth: 10, graceDays: 0, perUnitFeePence: 0, termDays: 0 }, fundArgs).overTerm === null,
+    'an unknown term is not a satisfied one — three states, not a boolean');
+
+  /** NOBODY'S RATE CARD SHIPS AS A DEFAULT. */
+  const blank = M.blankFacility();
+  check('a blank facility claims nothing', M.fundingCost(blank, fundArgs).totalPence === 0
+    && M.fundingCost(blank, fundArgs).cashBeforeSalePence === 0,
+    'every field zero until the garage reads their own agreement');
+  check('  …and no facility figure is a default anywhere', Object.entries(blank).every(([k, v]) => k === 'kind' || v === 0),
+    JSON.stringify(blank) + ' — "roughly 10% a month" describes one product, and a default is the strongest claim an interface can make');
+  check('  …and the page says to read the agreement', /data-testid="facility-read-your-agreement"/.test(page)
+    && /read it rather than guessing/.test(page));
+
+  /**
+   * ── A STORED MODEL'S ANSWER CANNOT MOVE ───────────────────────────────────────────────────────
+   * Every model saved before this slice has no `funding` key. Asserted by normalising a document with
+   * no plan in it and comparing the WHOLE result against the arithmetic that shipped — not by reasoning
+   * that the cash branch looks the same.
+   */
+  const legacyDoc = { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', daysInStock: 45, costOfMoneyAnnualPct: 9 };
+  const reread = S.normaliseInputs(legacyDoc);
+  check('a saved model with NO funding key reads back as cash', reread.funding.kind === 'cash',
+    JSON.stringify(reread.funding));
+  check('  …and its cost of money is the simple-interest line that shipped', (() => {
+    const got = M.computeModel(reread).stockingCostPence;
+    const shipped = Math.round(M.computeModel(reread).vat.cashOutPence * (9 / 100) * (45 / 365));
+    return got === shipped;
+  })(), 'the figure is recomputed here from the old formula and compared, so "it defaults to the old behaviour" is checked rather than claimed');
+  check('  …and an unrecognised plan is cash too, not a crash', S.normaliseInputs({ ...legacyDoc, funding: { kind: 'crypto' } }).funding.kind === 'cash',
+    'normalising a document, not validating a form');
+  check('  …and a facility\'s missing numbers are zero, never invented', (() => {
+    const f = S.normaliseInputs({ ...legacyDoc, funding: { kind: 'facility' } }).funding;
+    return f.kind === 'facility' && f.advancePct === 0 && f.curtailPctPerMonth === 0 && f.termDays === 0;
+  })());
+
+  /** THE RANKING STAYS ON THE SLIDERS, AND SAYS SO. */
+  check('the funding plan is not in the ranking', !M.sensitivity(M.defaultInputs()).some((x) => String(x.key).includes('funding')),
+    'a plan is a choice between shapes, not a number with a range — it cannot be swung');
+  check('  …and the page says that outright, beside the list', /data-testid="sensitivity-scope"/.test(page)
+    && /ranks the sliders only/.test(page) && /not a range/.test(page),
+    'a ranking that silently omitted the biggest lever would be the same lie as a swing read as a cost');
+  check('  …so it is compared instead', /data-testid="funding-compare"/.test(page)
+    && /data-testid={`compare-\${c.kind}`}/.test(page));
+
+  /**
    * ── EVERY BROWSER CLAUSE RUNS LAST, AND THAT IS DELIBERATE ────────────────────────────────────
    * A waitForSelector that times out THROWS, and the catch ends the run — so every clause after it is
    * never reached and reports nothing. On 2026-09-13 a mutation letting a private purchase be VAT
@@ -448,6 +542,58 @@ try {
   check('  …and the same fee from a dealer says something DIFFERENT', tradeSaid !== feeSaid
     && /does not change your margin/.test(tradeSaid),
     JSON.stringify(tradeSaid));
+
+  /**
+   * ── THE FACILITY, TYPED IN AND READ BACK ──────────────────────────────────────────────────────
+   * The terms live in React state and the refusal depends on them, so neither can be seen in served
+   * HTML. Typed into the real fields, read off the real screen.
+   */
+  await bpage.click('[data-testid="funding-facility"]');
+  await bpage.waitForSelector('[data-testid="facility-terms"]', { timeout: 15000 });
+  check('choosing a facility asks for the agreement’s own terms, filled in with nothing',
+    /read it rather than guessing/.test((await bpage.locator('[data-testid="facility-read-your-agreement"]').textContent()) ?? '')
+    && (await bpage.locator('[data-testid="input-facility-curtailPctPerMonth"]').inputValue()) === '',
+    'blank, because a default is the strongest claim an interface can make');
+  // AND AN EMPTY FACILITY SAYS NOTHING — no cash demanded, no refusal, no invented rate.
+  check('  …and claims nothing until it is filled in',
+    (await bpage.locator('[data-testid="cash-before-sale"]').count()) === 0
+    && (await bpage.locator('[data-testid="over-term"]').count()) === 0);
+
+  // THE OWNER'S OWN EXAMPLE: 100% advance, 10% a month, no grace, 120-day term — on a 45-day hold.
+  for (const [field, value] of [['advancePct', '100'], ['monthlyPctOfAdvance', '1.5'],
+    ['curtailPctPerMonth', '10'], ['termDays', '120']]) {
+    await bpage.fill(`[data-testid="input-facility-${field}"]`, value);
+  }
+  await bpage.waitForSelector('[data-testid="cash-before-sale"]', { timeout: 15000 });
+  const before = ((await bpage.locator('[data-testid="cash-before-sale"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('the page states the cash wanted back BEFORE the sale', /must be repaid before the car sells/.test(before)
+    && /£/.test(before), JSON.stringify(before));
+
+  // OVER TERM: hold it longer than the agreement allows and the page refuses rather than charging more.
+  /**
+   * A REAL KEYPRESS ON THE SLIDER. Setting `el.value` — even through HTMLInputElement's native setter,
+   * the usual workaround — moves the DOM and leaves React's state at 45: measured, not assumed. The
+   * control is focused and End is pressed, which is both reliable and something a person can actually
+   * do. 180 days is the slider's own maximum, comfortably past the 120-day term.
+   */
+  await bpage.locator('[data-testid="slider-daysInStock"]').focus();
+  await bpage.locator('[data-testid="slider-daysInStock"]').press('End');
+  await bpage.waitForSelector('[data-testid="over-term"]', { timeout: 15000 });
+  const overTerm = ((await bpage.locator('[data-testid="over-term"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('holding it past the term is a REFUSAL, not a bigger number', /not a cost to add/.test(overTerm)
+    && /balance falls due before the car sells/.test(overTerm), JSON.stringify(overTerm));
+
+  // THE THREE-WAY COMPARISON, on the same car, with the chosen plan marked.
+  const rows = await Promise.all(['cash', 'overdraft', 'facility'].map(async (k) => ({
+    k, cost: ((await bpage.locator(`[data-testid="compare-cost-${k}"]`).textContent()) ?? '').trim(),
+    first: ((await bpage.locator(`[data-testid="compare-before-${k}"]`).textContent()) ?? '').trim(),
+  })));
+  check('all three plans are shown on the same car', rows.every((x) => x.cost.startsWith('£')),
+    rows.map((x) => `${x.k} ${x.cost}/${x.first}`).join(' · '));
+  check('  …and only the facility wants anything back first', rows.find((x) => x.k === 'cash').first === '—'
+    && rows.find((x) => x.k === 'overdraft').first === '—'
+    && rows.find((x) => x.k === 'facility').first !== '—',
+    'the two questions are different: what the money COSTS, and what it DEMANDS before the car sells');
 
   // AND THE IMPOSSIBLE CASE IS A REFUSAL, NOT INFINITY. Sale below purchase: the contribution goes
   // negative and no quantity of sales covers anything.

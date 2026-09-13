@@ -242,6 +242,143 @@ export function vatPosition(
   };
 }
 
+export const FUNDING_KINDS = ['cash', 'overdraft', 'facility'] as const;
+export type FundingKind = (typeof FUNDING_KINDS)[number];
+
+/**
+ * ── THREE WAYS OF PAYING FOR A CAR, AND ONLY TWO OF THEM ARE INTEREST ───────────────────────────
+ * The cost-of-money slider is an annual percentage. A real stocking facility is not one: NextGear
+ * CURTAILS — it demands a slice of the advance back every month — which is a REPAYMENT SCHEDULE, not
+ * a rate. Modelling it as an annual percentage gets two things wrong at once: the interest, because
+ * the balance declines, and the cash, because money must be found before the car sells.
+ *
+ *   CASH       own money. The cost is what it would otherwise have earned. Nothing to repay.
+ *   OVERDRAFT  interest on a balance that stays flat until the sale, plus an arrangement fee.
+ *   FACILITY   advances part of the price, charges a fee per car, charges on the OUTSTANDING
+ *              balance, and takes principal back on a schedule whether or not the car has sold —
+ *              with a term limit after which the whole balance is due.
+ *
+ * ── THE NUMBER AN ANNUAL PERCENTAGE CANNOT EXPRESS ──────────────────────────────────────────────
+ * CASH BEFORE SALE. At 10% of the advance a month over a ninety-day hold, 30% of the advance is paid
+ * back before any buyer appears — £2,400 on an £8,000 car. That is the figure that breaks a garage,
+ * and no rate on any slider can say it.
+ *
+ * ── NO RATE CARD SHIPS AS A DEFAULT ─────────────────────────────────────────────────────────────
+ * The facility's fields start at ZERO and the screen asks the garage to read their own agreement.
+ * "Roughly 10% a month" is the owner's description of one product, not a fact about every facility,
+ * and a default is the strongest claim an interface can make. Same rule as the slider ranges.
+ *
+ * ── WHY `cash` CARRIES NO RATE OF ITS OWN ───────────────────────────────────────────────────────
+ * The annual rate stays on the EXISTING slider. A rate inside the plan as well would be two homes for
+ * one number, and the two would diverge the first time somebody edited one of them.
+ */
+export type FundingPlan =
+  | { kind: 'cash' }
+  | { kind: 'overdraft'; arrangementFeePence: number }
+  | {
+      kind: 'facility';
+      /** How much of the purchase price the facility advances. The rest is the garage's own deposit. */
+      advancePct: number;
+      /** The facility's charge, per month, on the OUTSTANDING advance. Not an annual rate. */
+      monthlyPctOfAdvance: number;
+      /** Principal taken back each month, as a percentage of the ORIGINAL advance. The curtailment. */
+      curtailPctPerMonth: number;
+      /** Days before the first curtailment falls due. */
+      graceDays: number;
+      /** A flat charge per car at drawdown. */
+      perUnitFeePence: number;
+      /** The whole balance is due by this many days. 0 means the agreement's term is not stated. */
+      termDays: number;
+    };
+
+export type FundingCost = {
+  /** The charge for the money, over the days held. */
+  interestPence: number;
+  /** Flat charges — an arrangement fee, a per-car drawdown fee. */
+  feesPence: number;
+  /** Both together: the cost of money for this car. */
+  totalPence: number;
+  /**
+   * CASH THE GARAGE MUST FIND BEFORE THE CAR SELLS — curtailments and charges falling due during the
+   * hold. Zero for cash and for an overdraft; the whole point of modelling a facility separately.
+   */
+  cashBeforeSalePence: number;
+  /** What falls due when, so the figure above can be read rather than trusted. */
+  schedule: { day: number; principalPence: number; chargePence: number }[];
+  /**
+   * THE HOLD IS LONGER THAN THE AGREEMENT ALLOWS. A refusal, not a cost: the facility does not
+   * quietly charge more for day 150 of a 120-day term, it demands the balance. Null when the
+   * agreement's term has not been entered — an unknown term is not a satisfied one.
+   */
+  overTerm: boolean | null;
+};
+
+/**
+ * WHAT THE MONEY COSTS, BY PLAN. `amountPence` is the cash tied up in the car — cashOut from the VAT
+ * position plus any fee, because VAT and an auction premium are out of the bank just as long as the car.
+ */
+export function fundingCost(
+  plan: FundingPlan, args: { amountPence: number; daysInStock: number; annualPct: number },
+): FundingCost {
+  const amount = Math.max(0, Math.round(args.amountPence));
+  const days = Math.max(0, args.daysInStock);
+  const simple = Math.round(amount * (args.annualPct / 100) * (days / 365));
+
+  if (plan.kind === 'cash') {
+    // IDENTICAL TO WHAT SHIPPED. Simple interest over the days held, on the cash that left the bank.
+    // Every model saved before funding existed reads back as this, so its answer cannot move.
+    return { interestPence: simple, feesPence: 0, totalPence: simple, cashBeforeSalePence: 0, schedule: [], overTerm: null };
+  }
+  if (plan.kind === 'overdraft') {
+    const fees = Math.max(0, Math.round(plan.arrangementFeePence));
+    return {
+      interestPence: simple, feesPence: fees, totalPence: simple + fees,
+      // The balance is flat until the sale and the interest is small and monthly; nothing is DEMANDED
+      // before the car sells, which is the distinction this field exists to draw.
+      cashBeforeSalePence: 0, schedule: [], overTerm: null,
+    };
+  }
+
+  // ── THE FACILITY: A SCHEDULE, WALKED MONTH BY MONTH ────────────────────────────────────────────
+  const advance = Math.min(amount, Math.round(amount * (Math.max(0, plan.advancePct) / 100)));
+  const fees = Math.max(0, Math.round(plan.perUnitFeePence));
+  const curtailEach = Math.round(advance * (Math.max(0, plan.curtailPctPerMonth) / 100));
+  const monthlyRate = Math.max(0, plan.monthlyPctOfAdvance) / 100;
+  const schedule: FundingCost['schedule'] = [];
+  let outstanding = advance;
+  let interest = 0;
+  let dueBeforeSale = 0;
+  // Month ends at 30-day steps after the grace period. Thirty days, not a calendar month: the model
+  // has no dates in it — only a number of days held — and inventing a start date to get calendar
+  // months would be a precision the input does not carry.
+  for (let month = 1; month <= 24 && outstanding > 0; month += 1) {
+    const day = Math.max(0, plan.graceDays) + month * 30;
+    if (day > days) break;                       // the car sold before this one fell due
+    const charge = Math.round(outstanding * monthlyRate);
+    const principal = Math.min(outstanding, curtailEach);
+    interest += charge;
+    outstanding -= principal;
+    dueBeforeSale += principal + charge;
+    schedule.push({ day, principalPence: principal, chargePence: charge });
+  }
+  // The part-month the car is held beyond the last curtailment still carries a charge.
+  const lastDay = schedule.length ? schedule[schedule.length - 1].day : 0;
+  if (outstanding > 0 && days > lastDay) {
+    interest += Math.round(outstanding * monthlyRate * ((days - lastDay) / 30));
+  }
+  return {
+    interestPence: interest, feesPence: fees, totalPence: interest + fees,
+    cashBeforeSalePence: dueBeforeSale,
+    schedule,
+    overTerm: plan.termDays > 0 ? days > plan.termDays : null,
+  };
+}
+
+/** A facility with nothing entered yet. Every figure zero, so it claims nothing until it is filled in. */
+export function blankFacility(): FundingPlan {
+  return { kind: 'facility', advancePct: 0, monthlyPctOfAdvance: 0, curtailPctPerMonth: 0, graceDays: 0, perUnitFeePence: 0, termDays: 0 };
+}
+
 /** A slider: what it is, where it starts, and what counts as a plausible span for it. */
 export type SliderDef = {
   key: SliderKey; label: string; unit: 'money' | 'hours' | 'days' | 'percent';
@@ -282,7 +419,10 @@ export const SLIDERS: SliderDef[] = [
   { key: 'workshopCostPerHourPence', label: 'Workshop cost per hour', unit: 'money', min: 2000, max: 9000, step: 250, def: 4500,
     note: 'What an hour in your workshop COSTS you — not what you charge. A slider until the standing-still rate exists.' },
   { key: 'costOfMoneyAnnualPct', label: 'Cost of money', unit: 'percent', min: 0, max: 20, step: 0.5, def: 9,
-    note: 'Annual rate on the money tied up in the car — stocking finance, an overdraft, or what the cash would otherwise earn.' },
+    // WAS: "stocking finance, an overdraft, or what the cash would otherwise earn" — three things with
+    // different shapes behind one annual rate. A facility is a repayment schedule and now has its own
+    // model, so this rate is the one that applies to the two that genuinely ARE rates.
+    note: 'Annual rate on your own money or an overdraft. A stocking facility is not a rate — choose it below instead.' },
 ];
 
 export type ModelInputs = {
@@ -304,6 +444,11 @@ export type ModelInputs = {
   adContractMonthlyPence: number;
   /** WHERE IT CAME FROM. Decides what a fee does, and what the VAT toggle is allowed to say. */
   source: PurchaseSource;
+  /**
+   * HOW THE CAR IS PAID FOR. Absent in every model saved before 2026-09-13, and the store maps that
+   * to `{ kind: 'cash' }`, whose arithmetic is exactly what shipped — so no stored answer moves.
+   */
+  funding: FundingPlan;
   /**
    * THE BUYER'S FEE — the auction's premium, or a dealer's admin fee. Typed NET: that is how both are
    * quoted. What it does to the answer is SOURCE_RULES' business, not this field's.
@@ -328,7 +473,8 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', buyerFeePence: 0, ...sliders };
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', buyerFeePence: 0,
+    funding: { kind: 'cash' }, ...sliders };
 }
 
 /**
@@ -346,6 +492,8 @@ export type ModelResult = {
   vat: VatPosition;
   /** What the buyer's fee did — to the bank, to the margin, and to the cost. */
   fee: FeePosition;
+  /** What the money cost, and what must be repaid before the car sells. */
+  funding: FundingCost;
   vatDuePence: number;
   workshopCostPence: number;
   stockingCostPence: number;
@@ -376,7 +524,13 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // return; interest is paid on money that has gone, not on money that will come back.
   // ON THE CASH, FEE INCLUDED. The fee leaves the bank with the car and is tied up just as long.
   const cashOut = vat.cashOutPence + fee.cashOutPence;
-  const stocking = Math.round(cashOut * (i.costOfMoneyAnnualPct / 100) * (i.daysInStock / 365));
+  // THROUGH THE PLAN, ALWAYS — including `cash`, whose branch is the arithmetic that shipped. Keeping
+  // one path means the comparison panel and the answer cannot drift apart, which a second copy of the
+  // simple-interest line here would guarantee within a slice or two.
+  const funding = fundingCost(i.funding, {
+    amountPence: cashOut, daysInStock: i.daysInStock, annualPct: i.costOfMoneyAnnualPct,
+  });
+  const stocking = funding.totalPence;
   const other = i.partsPence + i.advertisingPence + i.warrantyPence + i.deliveryInPence + i.deliveryOutPence;
   const total = workshop + stocking + other;
   // Revenue net of the VAT charged on the sale, less what the car and the fee actually cost after any
@@ -385,7 +539,7 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // counting it in both places is exactly what the invariant forbids.
   const gross = i.salePence - vat.outputVatPence - vat.netCostPence - fee.netCostPence;
   return {
-    vat, fee, vatDuePence: vat.vatToHmrcPence,
+    vat, fee, funding, vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
     contributionPence: gross - total,

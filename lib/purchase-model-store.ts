@@ -8,10 +8,43 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource,
+  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource, type FundingPlan,
 } from '@/lib/purchase-model';
 
 /** Whatever arrived over the wire, made safe: every slider clamped to its own definition. */
+/**
+ * ── AN ABSENT PLAN IS CASH, AND CASH IS WHAT SHIPPED ────────────────────────────────────────────
+ * Every model saved before 2026-09-13 has no `funding` key at all. It reads back as `{ kind: 'cash' }`,
+ * whose branch in fundingCost is the simple-interest line that was there before — so a stored answer
+ * cannot move. purchase-model-gate asserts that equality directly rather than by reasoning about it.
+ *
+ * An unrecognised kind is cash for the same reason: normalising a document, not validating a form.
+ * Nothing here invents a facility's terms — a missing number is zero, and a facility of zeroes costs
+ * nothing and says so on screen, which is honest. A plausible default would not be.
+ */
+function normaliseFunding(raw: unknown): FundingPlan {
+  const f = (raw ?? {}) as Record<string, unknown>;
+  const n = (v: unknown, cap: number) => {
+    const x = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(x) ? Math.min(cap, Math.max(0, x)) : 0;
+  };
+  if (f.kind === 'overdraft') {
+    return { kind: 'overdraft', arrangementFeePence: Math.round(n(f.arrangementFeePence, 5000000)) };
+  }
+  if (f.kind === 'facility') {
+    return {
+      kind: 'facility',
+      advancePct: n(f.advancePct, 100),
+      monthlyPctOfAdvance: n(f.monthlyPctOfAdvance, 10),
+      curtailPctPerMonth: n(f.curtailPctPerMonth, 100),
+      graceDays: Math.round(n(f.graceDays, 180)),
+      perUnitFeePence: Math.round(n(f.perUnitFeePence, 1000000)),
+      termDays: Math.round(n(f.termDays, 730)),
+    };
+  }
+  return { kind: 'cash' };
+}
+
 export function normaliseInputs(raw: unknown): ModelInputs {
   const b = (raw ?? {}) as Record<string, unknown>;
   const num = (v: unknown, fallback: number) => {
@@ -27,6 +60,7 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     purchasePence: Math.max(0, Math.round(num(b.purchasePence, d.purchasePence))),
     salePence: Math.max(0, Math.round(num(b.salePence, d.salePence))),
     source,
+    funding: normaliseFunding(b.funding),
     // THE FEE IS ZERO FOR A SOURCE THAT CANNOT CHARGE ONE. A private seller does not invoice a premium,
     // so a fee arriving with source 'private' is a stale field from a changed answer, not a cost.
     buyerFeePence: SOURCE_RULES[source].hasFee
