@@ -8,7 +8,7 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource, type FundingPlan, hasFeeSlot,
+  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource, type FundingPlan, hasFeeSlot, FLAGGED_COSTS, VAT_TREATMENTS, defaultCostVat, type FlaggedCost, type VatTreatment,
 } from '@/lib/purchase-model';
 
 /** Whatever arrived over the wire, made safe: every slider clamped to its own definition. */
@@ -75,6 +75,16 @@ function toGross(value: number, basis: unknown): number {
   return Math.round(value * 1.2);
 }
 
+/** One treatment per flagged cost, defaulting per defaultCostVat and ignoring anything unrecognised. */
+function normaliseCostVat(raw: unknown): Record<FlaggedCost, VatTreatment> {
+  const given = (raw ?? {}) as Record<string, unknown>;
+  const out = defaultCostVat();
+  for (const k of FLAGGED_COSTS) {
+    if ((VAT_TREATMENTS as readonly string[]).includes(String(given[k]))) out[k] = given[k] as VatTreatment;
+  }
+  return out;
+}
+
 export function normaliseInputs(raw: unknown): ModelInputs {
   const b = (raw ?? {}) as Record<string, unknown>;
   const num = (v: unknown, fallback: number) => {
@@ -91,6 +101,12 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     salePence: Math.max(0, Math.round(num(b.salePence, d.salePence))),
     source,
     funding: normaliseFunding(b.funding),
+    // ── ABSENT IS THE DEFAULT, AND THE DEFAULT IS TODAY'S ARITHMETIC ────────────────────────────
+    // A document written before suppliers could be flagged has no map at all, and the defaults make
+    // every cost equal to what was paid — which is exactly what that document meant when it was saved.
+    // An unrecognised treatment falls back the same way rather than throwing: this normalises a
+    // document, it does not validate a form.
+    costVat: normaliseCostVat(b.costVat),
     // ── A FEE IS ZERO WHERE THE INVOICE CANNOT CARRY IT ─────────────────────────────────────────
     // A private seller invoices no premium, so a figure arriving with source 'private' is a stale field
     // from a changed answer, not a cost. hasFeeSlot is the one reader of that rule.

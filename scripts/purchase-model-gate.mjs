@@ -19,6 +19,7 @@ import './_ts.mjs';
 const { gatePrisma, describeError, gateOrigin, serverReady, ZZ_GROUP } = await import('./_gate-preflight.mjs');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
+const readSrc = readFileSync;
 const { randomUUID } = await import('node:crypto');
 // KEY MATCHERS COME FROM ONE PLACE — a hand-written /label: 'x'/ matches the substring, not the key.
 const { hasKey } = await import('../lib/anchored-match.ts');
@@ -31,6 +32,7 @@ const code = (s) => s.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).j
 const prisma = await gatePrisma();
 const made = [];
 let browser = null;
+let wroteDefaults = false;
 const pounds = (p) => Math.round(p / 100);
 
 try {
@@ -288,6 +290,100 @@ try {
   })(), 'two renderings of one number is a divergence waiting to happen');
   check('  …and the page says what that means', /data-testid="gross-profit-means"/.test(page)
     && /Before your fixed monthly costs and tax/.test(page));
+  /**
+   * ── RECOVERABILITY IS PER COST, NOT PER PAGE ──────────────────────────────────────────────────
+   * One garage's recovery man, paint shop and car wash are not registered; another's haulier and
+   * bodyshop are. Same field, same typed figure, real cost differing by a fifth. Every cost behaved as
+   * though nothing was recoverable until now — right for the first garage, wrong for the second, and
+   * never asked either way.
+   */
+  console.log('\n— what each supplier does with VAT —');
+
+  check('the three treatments exist as a vocabulary', M.VAT_TREATMENTS.length === 3
+    && M.VAT_TREATMENTS.includes('standard_recoverable') && M.VAT_TREATMENTS.includes('standard_not_recoverable')
+    && M.VAT_TREATMENTS.includes('no_vat'), M.VAT_TREATMENTS.join(', '));
+
+  const rec = M.costPosition(60000, 'standard_recoverable', true);
+  const notRec = M.costPosition(60000, 'standard_not_recoverable', true);
+  const noVat = M.costPosition(60000, 'no_vat', true);
+  check('a recoverable £600 costs £500', rec.cashPence === 60000 && rec.reclaimablePence === 10000 && rec.costPence === 50000,
+    `£600 out of the bank, £100 back, £500 of cost`);
+  check('  …not recoverable: the VAT is real and stays', notRec.vatInsidePence === 10000
+    && notRec.reclaimablePence === 0 && notRec.costPence === 60000,
+    'there IS £100 of VAT in it and we do not get it — a different fact from there being none');
+  check('  …no VAT charged: there is none inside it', noVat.vatInsidePence === 0 && noVat.costPence === 60000,
+    'what an unregistered supplier does');
+  /**
+   * TWO OF THE THREE COST THE SAME, AND THEY ARE STILL DIFFERENT. A later reader will want to fold
+   * these into a boolean. This clause is what makes that a red rather than a tidy-up.
+   */
+  check('the two non-recovering states cost the same but SAY different things',
+    notRec.costPence === noVat.costPence && notRec.vatInsidePence !== noVat.vatInsidePence,
+    'same arithmetic, different invoice — only "no VAT" is true of an unregistered supplier');
+  check('an unregistered garage recovers nothing even from a recoverable cost',
+    M.costPosition(60000, 'standard_recoverable', false).reclaimablePence === 0,
+    'the tenant’s own registration gates this exactly as it gates the indemnities');
+
+  /**
+   * ── THE DEFAULTS ARE TODAY'S ARITHMETIC, TO THE PENNY ─────────────────────────────────────────
+   * The strongest argument for the conservative default is not that it is cautious — it is that
+   * turning this feature on moves no answer at all. Recomputed here from the old formula rather than
+   * reasoned about.
+   */
+  const dflt = M.defaultInputs();
+  check('the warranty defaults to NO VAT', dflt.costVat.warrantyPence === 'no_vat',
+    'insurance-backed cover carries IPT, not VAT — there is no input tax in it to argue about');
+  check('  …and everything else to standard-rated, NOT recoverable',
+    M.FLAGGED_COSTS.filter((k) => k !== 'warrantyPence').every((k) => dflt.costVat[k] === 'standard_not_recoverable'),
+    JSON.stringify(dflt.costVat));
+  check('at the defaults, costs equal the old raw sum exactly', (() => {
+    const r0 = M.computeModel(dflt, { vatRegistered: true });
+    const oldSum = dflt.partsPence + dflt.advertisingPence + dflt.warrantyPence + dflt.deliveryInPence + dflt.deliveryOutPence;
+    return r0.otherCostsPence === oldSum && r0.costVatReclaimablePence === 0;
+  })(), 'the whole feature is a no-op until somebody answers a question — which is what makes it safe to ship');
+  check('  …and a stored model with no map at all reads the same way',
+    JSON.stringify(S.normaliseInputs({ purchasePence: 800000, salePence: 1000000 }).costVat) === JSON.stringify(M.defaultCostVat()),
+    'absent is the default, and the default is what that document meant when it was written');
+  check('  …an unrecognised treatment falls back rather than throwing',
+    S.normaliseInputs({ costVat: { partsPence: 'zero_rated_maybe' } }).costVat.partsPence === 'standard_not_recoverable',
+    'normalising a document, not validating a form');
+
+  /**
+   * ── THE SWING IS ON COST, NOT CASH ────────────────────────────────────────────────────────────
+   * A recoverable cost must not read as a fifth more important than it is, or the ranking recommends
+   * squeezing the wrong supplier.
+   */
+  const swingOf = (inputs, key) => M.sensitivity(inputs, { vatRegistered: true }).find((x) => x.key === key).swingPence;
+  const plain = swingOf(dflt, 'partsPence');
+  const recoverable = swingOf({ ...dflt, costVat: { ...dflt.costVat, partsPence: 'standard_recoverable' } }, 'partsPence');
+  check('a recoverable cost swings LESS than one that is not', recoverable < plain,
+    `£${(plain / 100).toFixed(2)} → £${(recoverable / 100).toFixed(2)} — the part that comes back is not at stake`);
+  check('  …by its VAT, within a penny of a sixth', Math.abs((plain - recoverable) - Math.round(plain / 6)) <= 2,
+    'the swing is measured on what the cost COSTS');
+  check('  …and cash out is unmoved by the treatment', (() => {
+    const a = M.computeModel(dflt, { vatRegistered: true });
+    const b = M.computeModel({ ...dflt, costVat: { ...dflt.costVat, partsPence: 'standard_recoverable' } }, { vatRegistered: true });
+    return a.costCashPence === b.costCashPence && a.otherCostsPence !== b.otherCostsPence;
+  })(), 'the same money leaves the bank either way; only what it COSTS differs');
+
+  /** THE SEED IS NOT THE TRUTH — the tenant row starts a model and is never read by the arithmetic. */
+  const defaultsSrc = readSrc('lib/purchase-model-defaults.ts', 'utf8');
+  // COMMENTS STRIPPED FIRST. This file EXPLAINS why computeModel must not read it, so a scanner that
+  // cannot tell prose from code finds the very word it is banning — which is exactly what it did.
+  const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('the tenant defaults are never read during a calculation',
+    !/computeModel|sensitivity/.test(stripComments(defaultsSrc))
+    && !/purchase-model-defaults/.test(stripComments(readSrc('lib/purchase-model.ts', 'utf8'))),
+    'changing a standing answer must not rewrite a saved car’s result');
+  check('  …and the page seeds from them rather than reading them live',
+    hasKey(page, 'costVat', 'costVatDefaults') && /useState<ModelInputs>\(\(\) => \(\{ \.\.\.defaultInputs\(\)/.test(page),
+    'the starting value of the model’s own state, then owned by the model');
+  check('  …the writer normalises before storing, so a row cannot lie about what it holds',
+    /const clean = normaliseCostVatMap\(args\.costVat\)/.test(defaultsSrc));
+  check('  …and it is an upsert on the group, so "which row wins" cannot be asked',
+    /upsert\(/.test(defaultsSrc) && hasKey(defaultsSrc, 'where', /\{\s*group_id: args\.groupId\s*\}/),
+    'the group is the primary key, so the table cannot hold two answers for one garage');
+
   /**
    * ── ONE CONVENTION, AND EVERY MONEY FIELD SAYS IT ─────────────────────────────────────────────
    * A page mixing net and gross figures is wrong by a fifth in places nobody can see, because both
@@ -770,6 +866,55 @@ try {
     `${atSlider.text} → ${moved.text}`);
 
   /**
+   * ── THE SUPPLIER ANSWERS, DRIVEN AND REMEMBERED ───────────────────────────────────────────────
+   * The selector, the figure it changes, and the tenant write it performs. The row is deleted at the
+   * end of the run: this gate writes a REAL tenant-wide setting on ZZ, which is the kind of fixture
+   * that must not outlive its run.
+   */
+  await bpage.locator('[data-testid="supplier-vat"]').scrollIntoViewIfNeeded();
+  check('the supplier answers live in one place, not bolted to each slider',
+    (await bpage.locator('[data-testid="supplier-vat"]').count()) === 1
+    && (await bpage.locator('[data-testid^="supplier-row-"]').count()) === M.FLAGGED_COSTS.length,
+    `${M.FLAGGED_COSTS.length} rows — five three-state selectors among the sliders would treble the height of the part being dragged`);
+  check('  …and the warranty starts at no VAT', (await bpage.locator('[data-testid="supplier-vat-warrantyPence"]').inputValue()) === 'no_vat',
+    'insurance-backed cover is the common case');
+  check('  …with nothing reclaimable until something is answered',
+    (await bpage.locator('[data-testid="cost-vat-reclaim"]').count()) === 0,
+    'the feature is a no-op until a question is answered');
+
+  // ANSWER ONE, AND WATCH THE FIGURE MOVE.
+  const beforeVat = ((await bpage.locator('[data-testid="gross-profit-top"]').textContent()) ?? '').trim();
+  await bpage.selectOption('[data-testid="supplier-vat-partsPence"]', 'standard_recoverable');
+  await bpage.waitForSelector('[data-testid="cost-vat-reclaim"]', { timeout: 15000 });
+  const reclaimLine = ((await bpage.locator('[data-testid="cost-vat-reclaim"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  const afterVat = ((await bpage.locator('[data-testid="gross-profit-top"]').textContent()) ?? '').trim();
+  check('marking parts recoverable states the cash, the reclaim and the cost',
+    /leaves the bank/.test(reclaimLine) && /comes back on your next return/.test(reclaimLine),
+    JSON.stringify(reclaimLine));
+  check('  …and gross profit rises by the VAT that comes back', afterVat !== beforeVat,
+    `${beforeVat} → ${afterVat}`);
+
+  // AND IT REMEMBERS — a real write to a real tenant row, removed in the teardown below.
+  await bpage.click('[data-testid="remember-suppliers"]');
+  await bpage.waitForSelector('[data-testid="remember-suppliers-msg"]', { timeout: 15000 });
+  const remembered = ((await bpage.locator('[data-testid="remember-suppliers-msg"]').textContent()) ?? '').trim();
+  check('the answers can be remembered for next time', /Saved for every new model/.test(remembered), JSON.stringify(remembered));
+  // `row` is taken later in this file by the saved-model check; naming it for what it is avoids the
+  // collision and reads better anyway.
+  const defaultsRow = await prisma.purchaseModelDefaults.findUnique({
+    where: { group_id: ZZ_GROUP }, select: { cost_vat: true },
+  });
+  wroteDefaults = !!defaultsRow;
+  check('  …and the tenant row says so', defaultsRow?.cost_vat?.partsPence === 'standard_recoverable',
+    JSON.stringify(defaultsRow?.cost_vat ?? null));
+  // READ BACK THROUGH THE ONE READER, not by inspecting the column again — that is what a later page
+  // load will do, so it is what proves the answer will actually seed the next model.
+  const reseeded = await (await import('../lib/purchase-model-defaults.ts')).getCostVatDefaults(ZZ_GROUP);
+  check('  …and the one reader hands it back, ready to seed the next model',
+    reseeded.partsPence === 'standard_recoverable' && reseeded.warrantyPence === 'no_vat',
+    JSON.stringify(reseeded));
+
+  /**
    * ── AND NOTHING HIDES BEHIND THE PANEL ON A PHONE ─────────────────────────────────────────────
    * The fixed panel measures 214px on a 360x640 screen and the page reserved 160px (pb-40), so the foot
    * of it sat underneath — including "Save this model", which a person could see and not reach. Measured
@@ -966,6 +1111,12 @@ try {
 } finally {
   await browser?.close().catch(() => {});
   try {
+    // A TENANT-WIDE SETTING WRITTEN BY A GATE IS A FIXTURE. ZZ had no row before this ran and must have
+    // none after — removed by its own key, on the gate tenant only.
+    if (wroteDefaults) {
+      const d = await prisma.purchaseModelDefaults.deleteMany({ where: { group_id: ZZ_GROUP } });
+      check('teardown removed the tenant defaults this run wrote', d.count === 1, `${d.count} row`);
+    }
     if (made.length) await prisma.purchaseModel.deleteMany({ where: { id: { in: made } } });
     await prisma.purchaseModel.deleteMany({ where: { group_id: ZZ_GROUP, label: { startsWith: 'Gate model ' } } });
     check('teardown removed every fixture', (await prisma.purchaseModel.count({ where: { id: { in: made } } })) === 0);

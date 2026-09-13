@@ -452,6 +452,78 @@ export function blankFacility(): FundingPlan {
   return { kind: 'facility', advancePct: 0, monthlyPctOfAdvance: 0, curtailPctPerMonth: 0, graceDays: 0, perUnitFeePence: 0, termDays: 0 };
 }
 
+/**
+ * ── RECOVERABILITY IS PER COST, NOT PER PAGE ────────────────────────────────────────────────────
+ * One garage's recovery man, paint shop and car wash are not VAT registered. Another's haulier and
+ * bodyshop are. Same field, same typed figure, and the real cost differs by a fifth depending on who
+ * sent the invoice. Until now every cost behaved as though nothing was recoverable — right for the
+ * first garage, wrong for the second, and never asked either way.
+ *
+ * ── THREE STATES, AND TWO OF THEM COST THE SAME. DO NOT COLLAPSE THEM ───────────────────────────
+ *   standard_recoverable      standard rated, and it comes back (if the garage is registered)
+ *   standard_not_recoverable  standard rated, and it does not — the VAT is real and stays a cost
+ *   no_vat                    the supplier does not charge VAT at all: nothing inside the figure
+ *
+ * The last two produce the SAME arithmetic — cost equals what you paid — and a later reader will be
+ * tempted to fold them into a boolean. They must not: they are different facts about the invoice, they
+ * differ to an accountant, and only `no_vat` is true of an unregistered supplier. A warranty is the
+ * clearest case: insurance-backed cover carries IPT rather than VAT, so there is no input tax in it to
+ * argue about, which is a different statement from "there is VAT and we cannot have it back".
+ */
+export const VAT_TREATMENTS = ['standard_recoverable', 'standard_not_recoverable', 'no_vat'] as const;
+export type VatTreatment = (typeof VAT_TREATMENTS)[number];
+
+/** The costs whose treatment can differ by supplier. Everything else is settled by construction. */
+export const FLAGGED_COSTS = ['partsPence', 'warrantyPence', 'deliveryInPence', 'deliveryOutPence', 'advertisingPence'] as const;
+export type FlaggedCost = (typeof FLAGGED_COSTS)[number];
+
+/**
+ * THE DEFAULTS, AND WHY THEY ARE THE CONSERVATIVE ONES.
+ *
+ * `standard_not_recoverable` everywhere except the warranty. Two reasons, and the second is stronger:
+ * it understates rather than flatters, and it is BYTE-IDENTICAL to the arithmetic that shipped — every
+ * cost was already added at its full typed value — so turning this on moves no stored answer at all.
+ *
+ * The warranty defaults to `no_vat` because insurance-backed cover is the common case and carries no
+ * input tax. Same arithmetic as the default above, a different statement about the invoice.
+ */
+export function defaultCostVat(): Record<FlaggedCost, VatTreatment> {
+  return {
+    partsPence: 'standard_not_recoverable',
+    warrantyPence: 'no_vat',
+    deliveryInPence: 'standard_not_recoverable',
+    deliveryOutPence: 'standard_not_recoverable',
+    advertisingPence: 'standard_not_recoverable',
+  };
+}
+
+export type CostPosition = {
+  /** What leaves the bank: the typed figure, always. */
+  cashPence: number;
+  /** VAT inside that figure. Zero only when the supplier charges none. */
+  vatInsidePence: number;
+  /** VAT that comes back — standard-rated AND recoverable AND the garage registered. */
+  reclaimablePence: number;
+  /** The cost after anything reclaimed. This is what profit is measured against. */
+  costPence: number;
+};
+
+/**
+ * ONE COST, UNDER ONE TREATMENT. The typed figure is GROSS throughout (see GROSS_BASIS_NOTE), so the
+ * VAT is extracted rather than added — the same direction as every other calculation on this page.
+ */
+export function costPosition(grossPence: number, treatment: VatTreatment, vatRegistered: boolean): CostPosition {
+  const cash = Math.max(0, Math.round(grossPence));
+  if (treatment === 'no_vat') {
+    return { cashPence: cash, vatInsidePence: 0, reclaimablePence: 0, costPence: cash };
+  }
+  const vatInside = Math.round(cash * VAT_FRACTION);
+  // RECOVERABLE IS NOT ENOUGH ON ITS OWN. An unregistered garage reclaims nothing from anybody, so the
+  // tenant's own registration gates this exactly as it gates the indemnities.
+  const reclaimable = treatment === 'standard_recoverable' && vatRegistered ? vatInside : 0;
+  return { cashPence: cash, vatInsidePence: vatInside, reclaimablePence: reclaimable, costPence: cash - reclaimable };
+}
+
 /** A slider: what it is, where it starts, and what counts as a plausible span for it. */
 /**
  * WHETHER THIS FIELD CAN CARRY VAT AT ALL, and if so on what basis it is typed.
@@ -539,6 +611,11 @@ export type ModelInputs = {
   /** WHERE IT CAME FROM. Decides what a fee does, and what the VAT toggle is allowed to say. */
   source: PurchaseSource;
   /**
+   * HOW EACH COST'S SUPPLIER CHARGES VAT. Per model, seeded from the tenant's remembered answers — a
+   * garage's paint shop does not change between cars, but one car can go to a registered bodyshop.
+   */
+  costVat: Record<FlaggedCost, VatTreatment>;
+  /**
    * HOW THE CAR IS PAID FOR. Absent in every model saved before 2026-09-13, and the store maps that
    * to `{ kind: 'cash' }`, whose arithmetic is exactly what shipped — so no stored answer moves.
    */
@@ -581,7 +658,7 @@ export type ModelInputs = {
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
   return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, autotraderMonthlyPence: 0, source: 'auction', premiumPence: 0, servicesPence: 0,
-    funding: { kind: 'cash' }, ...sliders };
+    funding: { kind: 'cash' }, costVat: defaultCostVat(), ...sliders };
 }
 
 /**
@@ -607,6 +684,12 @@ export type ModelResult = {
   fee: FeePosition;
   /** What the money cost, and what must be repaid before the car sells. */
   funding: FundingCost;
+  /** Each flagged cost, as cash and as cost — they differ wherever the VAT comes back. */
+  costs: ({ key: FlaggedCost } & CostPosition)[];
+  /** VAT recoverable across all the costs. Named separately because it lands on the next return. */
+  costVatReclaimablePence: number;
+  /** What those costs take out of the bank, before any recovery. */
+  costCashPence: number;
   vatDuePence: number;
   workshopCostPence: number;
   stockingCostPence: number;
@@ -644,7 +727,15 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
     amountPence: cashOut, daysInStock: i.daysInStock, annualPct: i.costOfMoneyAnnualPct,
   });
   const stocking = funding.totalPence;
-  const other = i.partsPence + i.advertisingPence + i.warrantyPence + i.deliveryInPence + i.deliveryOutPence;
+  // ── EACH COST THROUGH ITS OWN TREATMENT ────────────────────────────────────────────────────────
+  // The typed figures are gross; what a cost COSTS depends on who invoiced it. Summed as cost, not as
+  // cash — profit is measured against what the car actually costs, and a recoverable cost costs less
+  // than it takes out of the bank. With every treatment at its default this is the arithmetic that
+  // shipped, to the penny, because nothing was recoverable before.
+  const costs = FLAGGED_COSTS.map((k) => ({ key: k, ...costPosition(i[k], i.costVat[k], opts.vatRegistered === true) }));
+  const other = costs.reduce((a, c) => a + c.costPence, 0);
+  const costVatReclaimable = costs.reduce((a, c) => a + c.reclaimablePence, 0);
+  const costCash = costs.reduce((a, c) => a + c.cashPence, 0);
   const total = workshop + stocking + other;
   // Revenue net of the VAT charged on the sale, less what the car and the fee actually cost after any
   // reclaim. The fee's VAT is netted HERE when the source makes it separately reclaimable; when the
@@ -652,7 +743,8 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // counting it in both places is exactly what the invariant forbids.
   const gross = i.salePence - vat.outputVatPence - vat.netCostPence - fee.netCostPence;
   return {
-    vat, fee, funding, vatDuePence: vat.vatToHmrcPence,
+    vat, fee, funding, costs, costVatReclaimablePence: costVatReclaimable, costCashPence: costCash,
+    vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
     grossProfitPence: gross - total,

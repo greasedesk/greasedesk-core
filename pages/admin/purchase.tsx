@@ -24,7 +24,8 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
-  GROSS_BASIS_NOTE, SALE_BASIS_NOTE,
+  GROSS_BASIS_NOTE, SALE_BASIS_NOTE, FLAGGED_COSTS, VAT_TREATMENTS,
+  type FlaggedCost, type VatTreatment,
   SOURCES, SOURCE_RULES, availableVatStatuses, hasFeeSlot,
   FUNDING_KINDS, blankFacility, fundingCost,
   type ModelInputs, type SliderKey, type VatStatus,
@@ -42,8 +43,12 @@ const showSlider = (k: SliderKey, v: number) => {
   return `${v} h`;
 };
 
-export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: boolean }) {
-  const [inputs, setInputs] = useState<ModelInputs>(defaultInputs);
+export default function PurchaseModelPage(
+  { vatRegistered, costVatDefaults }: { vatRegistered: boolean; costVatDefaults: Record<FlaggedCost, VatTreatment> },
+) {
+  // SEEDED FROM THE TENANT, then owned by the model. Changing a standing answer must not rewrite a
+  // saved car's result, so this is the starting value and nothing reads it again.
+  const [inputs, setInputs] = useState<ModelInputs>(() => ({ ...defaultInputs(), costVat: costVatDefaults }));
   // NOT VAT REGISTERED → THE QUALIFYING ROUTE IS NOT OFFERED. Under the threshold there is no
   // recovery and no qualifying sale, so showing the toggle would offer a route they cannot take —
   // and this page's output is a claim about their tax position, which is heavier than a slider.
@@ -75,6 +80,27 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
   const setMoney = (k: 'purchasePence' | 'salePence' | 'autotraderMonthlyPence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
+
+  /**
+   * REMEMBER THESE, and say so. A control that silently succeeds teaches nobody that it did anything —
+   * and this one writes a tenant-wide fact from a page about one car, which is exactly the kind of
+   * write that should announce itself.
+   */
+  const [supplierMsg, setSupplierMsg] = useState<string | null>(null);
+  async function rememberSuppliers() {
+    setBusy(true); setSupplierMsg(null);
+    try {
+      const res = await fetch('/api/purchase-model-defaults', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ costVat: inputs.costVat }),
+      });
+      setSupplierMsg(res.ok ? 'Saved for every new model.' : 'Could not save those.');
+    } catch {
+      setSupplierMsg('Could not save those.');
+    } finally {
+      setBusy(false);   // BUSY CLEARED IN finally, per the standing rule — a same-URL refresh never remounts.
+    }
+  }
 
   async function save() {
     setBusy(true); setMsg(null);
@@ -175,6 +201,64 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
             <span className="mt-1 block text-xs text-muted" data-testid="sale-basis">{SALE_BASIS_NOTE}</span>
           </label>
+        </section>
+
+        {/* ── HOW YOUR SUPPLIERS CHARGE YOU ────────────────────────────────────────────────────────
+            ONE PLACE, not a control bolted to each slider. Five three-state selectors scattered through
+            the sliders would triple the height of the section a person is dragging, for answers that
+            change once a year. Here they sit together, which is also how a garage thinks about them:
+            "my paint shop isn't registered, my parts factor is".
+
+            THE THIRD STATE EARNS ITS PLACE even though it costs the same as the second. "No VAT" is
+            what an unregistered supplier does; "not recoverable" is VAT we pay and cannot have back.
+            Same arithmetic, different fact, and only one of them is true of the recovery man. */}
+        <section className="mt-6 border-t border-line pt-4" data-testid="supplier-vat">
+          <h2 className="text-sm text-muted">How your suppliers charge you</h2>
+          <p className="mt-1 text-xs text-muted" data-testid="supplier-vat-note">
+            Every cost above is what leaves the bank. Whether the VAT inside it comes back depends on who invoiced you —
+            a recovery man who is not VAT registered charges none at all.
+          </p>
+          <div className="mt-2 space-y-2">
+            {FLAGGED_COSTS.map((key) => {
+              const slider = SLIDERS.find((s) => s.key === key)!;
+              return (
+                <div key={key} className="flex items-center gap-2 text-sm" data-testid={`supplier-row-${key}`}>
+                  <span className="flex-1 text-ink">{slider.label}</span>
+                  <select value={inputs.costVat[key]} data-testid={`supplier-vat-${key}`}
+                    onChange={(e) => setInputs((prev) => ({
+                      ...prev, costVat: { ...prev.costVat, [key]: e.target.value as VatTreatment },
+                    }))}
+                    className="min-h-[40px] rounded-lg border border-line bg-surface px-2 text-ink text-sm">
+                    {VAT_TREATMENTS.map((v) => (
+                      <option key={v} value={v}>
+                        {v === 'standard_recoverable' ? 'VAT, and I claim it back'
+                          : v === 'standard_not_recoverable' ? 'VAT, but I cannot claim it'
+                          : 'No VAT charged'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          {/* WHAT IT IS WORTH, so the answer is not an abstraction. Only once something is recoverable. */}
+          {r.costVatReclaimablePence > 0 && (
+            <p className="mt-2 text-xs text-ink" data-testid="cost-vat-reclaim">
+              {moneyExact(r.costCashPence)} of costs leaves the bank and {moneyExact(r.costVatReclaimablePence)} of VAT
+              comes back on your next return, so they cost you {moneyExact(r.costCashPence - r.costVatReclaimablePence)}.
+            </p>
+          )}
+          {!vatRegistered && (
+            <p className="mt-2 text-xs text-muted" data-testid="not-registered-no-reclaim">
+              You are not VAT registered, so nothing is reclaimable whatever a supplier charges — these answers change no figure until you are.
+            </p>
+          )}
+          <button type="button" onClick={rememberSuppliers} disabled={busy}
+            data-testid="remember-suppliers"
+            className="mt-3 min-h-[40px] rounded-lg border border-line px-3 text-sm text-ink disabled:opacity-50">
+            Remember these for next time
+          </button>
+          {supplierMsg && <span className="ml-2 text-xs text-muted" data-testid="remember-suppliers-msg">{supplierMsg}</span>}
         </section>
 
         {/* ── THE AUTOTRADER LINE, KEPT OUT OF THE CAR ────────────────────────────────────────────
@@ -622,5 +706,17 @@ export const getServerSideProps = withI18n([])(async (ctx) => {
   const profile = await getTaxProfile(gate.vis.groupId as string).catch(() => null);
   // FAILS TOWARDS THE SIMPLER TOOL: if the profile cannot be read, offer the margin scheme only.
   // Offering a reclaim to a garage that cannot make one is the expensive direction.
-  return { props: { vatRegistered: profile?.isRegistered === true } };
+  // THE GARAGE'S STANDING ANSWERS about its suppliers, which SEED a new model and are never read by
+  // the arithmetic. Defaults if it has never said — and the defaults are today's behaviour exactly.
+  const { getCostVatDefaults } = await import('@/lib/purchase-model-defaults');
+  const costVatDefaults = await getCostVatDefaults(gate.vis.groupId as string)
+    .catch(() => null);
+  const { defaultCostVat } = await import('@/lib/purchase-model');
+  return {
+    props: {
+      vatRegistered: profile?.isRegistered === true,
+      // FAILS TOWARDS TODAY'S ARITHMETIC, like the line above fails towards the simpler tool.
+      costVatDefaults: costVatDefaults ?? defaultCostVat(),
+    },
+  };
 });
