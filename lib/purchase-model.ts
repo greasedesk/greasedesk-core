@@ -866,7 +866,17 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   return {
     vat, fee, funding, costs, slot, slotCost,
     costVatReclaimablePence: costVatReclaimable, costCashPence: costCash,
-    vatDuePence: vat.vatToHmrcPence,
+    /**
+     * WHAT ACTUALLY REACHES HMRC — output VAT less EVERY input tax the car generates, not just the
+     * VAT inside the purchase. It used to be vat.vatToHmrcPence, which nets only the purchase, so a
+     * margin car with £13.60 of indemnity VAT showed £414.13 against a return that says £400.53. The
+     * profit was right and the line was not, which is the worse of the two: a figure a person can
+     * check against a document they already have, and lose confidence in the whole tool over.
+     *
+     * Three sources of input tax, and all three belong here: the purchase (qualifying only, already
+     * inside vat.vatToHmrcPence), the indemnities, and any cost whose supplier VAT is recoverable.
+     */
+    vatDuePence: vat.vatToHmrcPence - fee.reclaimablePence - costVatReclaimable,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
     grossProfitPence: gross - total,

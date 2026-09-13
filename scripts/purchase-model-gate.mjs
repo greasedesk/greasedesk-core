@@ -636,6 +636,32 @@ try {
   })(), `${whole.vat.outputVatPence}p on a £484.80 margin — and it is LOWER than without the premium, which is the whole mechanism`);
 
   /**
+   * ── THE VAT LINE IS WHAT REACHES HMRC, NOT WHAT THE CAR ALONE OWES ────────────────────────────
+   * It showed output VAT less the PURCHASE's input tax only, so a margin car carrying £13.60 of
+   * indemnity VAT displayed £414.13 while the return said £400.53. A figure a person can check against
+   * a document they already have is the worst kind to be wrong: the profit was right, and the line
+   * being out by £13.60 is what costs them confidence in the whole tool.
+   */
+  // SELF-CONTAINED: `feeBase` is declared further down this file, and a clause that borrows a fixture
+  // from below itself is a clause that breaks when somebody reorders the file.
+  const hmrcBase = { ...M.defaultInputs(), source: 'auction', vatStatus: 'margin',
+    purchasePence: 800000, salePence: 1000000, premiumPence: 0, servicesPence: 30000,
+    prepHours: 0, partsPence: 0, advertisingPence: 0, warrantyPence: 0,
+    deliveryInPence: 0, deliveryOutPence: 0, daysInStock: 0 };
+  const hmrc = M.computeModel(hmrcBase, { vatRegistered: true });
+  check('the VAT line nets the indemnity input tax', hmrc.vatDuePence === hmrc.vat.outputVatPence - hmrc.fee.reclaimablePence,
+    `output ${hmrc.vat.outputVatPence}p less ${hmrc.fee.reclaimablePence}p reclaimed = ${hmrc.vatDuePence}p`);
+  check('  …and a recoverable COST’s VAT too', (() => {
+    const withParts = M.computeModel({ ...hmrcBase, partsPence: 60000,
+      costVat: { ...M.defaultCostVat(), partsPence: 'standard_recoverable' } }, { vatRegistered: true });
+    return withParts.vatDuePence === withParts.vat.outputVatPence - withParts.fee.reclaimablePence - withParts.costVatReclaimablePence;
+  })(), 'three sources of input tax, all three on the line a person compares with their return');
+  check('  …and an unregistered garage nets nothing, so the line is the output VAT', (() => {
+    const un = M.computeModel(hmrcBase, { vatRegistered: false });
+    return un.vatDuePence === un.vat.outputVatPence;
+  })(), 'nothing is reclaimable, so nothing is netted');
+
+  /**
    * THE INVARIANT, NOW ACROSS TWO FEE TYPES AND EVERY SOURCE: in the margin base OR reclaimable, never
    * both and NEVER NEITHER. Tested with the garage REGISTERED, because that is the case in which both
    * routes are open — an unregistered garage reclaims nothing, and a missing route would hide behind it.
