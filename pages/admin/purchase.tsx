@@ -23,9 +23,10 @@ import Head from 'next/head';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
-  SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
+  SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider,
   GROSS_BASIS_NOTE, SALE_BASIS_NOTE, FLAGGED_COSTS, VAT_TREATMENTS,
-  type FlaggedCost, type VatTreatment,
+  perSlotMonthlyPence, slotUtilisation,
+  type AdvertisingPackage, type FlaggedCost, type VatTreatment,
   SOURCES, SOURCE_RULES, availableVatStatuses, hasFeeSlot,
   FUNDING_KINDS, blankFacility, fundingCost,
   type ModelInputs, type SliderKey, type VatStatus,
@@ -44,11 +45,18 @@ const showSlider = (k: SliderKey, v: number) => {
 };
 
 export default function PurchaseModelPage(
-  { vatRegistered, costVatDefaults }: { vatRegistered: boolean; costVatDefaults: Record<FlaggedCost, VatTreatment> },
+  { vatRegistered, costVatDefaults, advertisingPackage }:
+  { vatRegistered: boolean; costVatDefaults: Record<FlaggedCost, VatTreatment>; advertisingPackage: AdvertisingPackage },
 ) {
   // SEEDED FROM THE TENANT, then owned by the model. Changing a standing answer must not rewrite a
   // saved car's result, so this is the starting value and nothing reads it again.
-  const [inputs, setInputs] = useState<ModelInputs>(() => ({ ...defaultInputs(), costVat: costVatDefaults }));
+  const [inputs, setInputs] = useState<ModelInputs>(() => ({
+    ...defaultInputs(),
+    costVat: costVatDefaults,
+    // SEEDED, NOT READ. The per-slot figure is captured into the model when it is created, so changing
+    // the package later cannot rewrite what this car was modelled to cost.
+    slotCostPerMonthPence: perSlotMonthlyPence(advertisingPackage) ?? 0,
+  }));
   // NOT VAT REGISTERED → THE QUALIFYING ROUTE IS NOT OFFERED. Under the threshold there is no
   // recovery and no qualifying sale, so showing the toggle would offer a route they cannot take —
   // and this page's output is a claim about their tax position, which is heavier than a slider.
@@ -78,7 +86,7 @@ export default function PurchaseModelPage(
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  const setMoney = (k: 'purchasePence' | 'salePence' | 'autotraderMonthlyPence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setMoney = (k: 'purchasePence' | 'salePence' | 'premiumPence' | 'servicesPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
   /**
@@ -87,6 +95,41 @@ export default function PurchaseModelPage(
    * write that should announce itself.
    */
   const [supplierMsg, setSupplierMsg] = useState<string | null>(null);
+  const [packageMsg, setPackageMsg] = useState<string | null>(null);
+  // THE PACKAGE IS THE TENANT'S, held here so it can be edited and saved from this page. What SEEDS the
+  // model is the derived per-slot figure below — the package itself never reaches computeModel.
+  const [pkg, setPkg] = useState<AdvertisingPackage>(advertisingPackage);
+
+  /**
+   * EDITING THE PACKAGE RE-SEEDS THE CAR IN FRONT OF YOU, and that is not "reading it live".
+   *
+   * The rule is that a saved model keeps the slot cost it was built with, so renegotiating the contract
+   * next month cannot rewrite it. But a person typing their package here, now, is SAYING what a slot
+   * costs — and leaving the car on screen at £0 until they reload would be obeying the letter of the
+   * rule against its purpose. So an explicit edit re-seeds; nothing else ever does.
+   */
+  const editPackage = (patch: Partial<AdvertisingPackage>) => setPkg((q) => {
+    const next = { ...q, ...patch };
+    setInputs((prev) => ({ ...prev, slotCostPerMonthPence: perSlotMonthlyPence(next) ?? 0 }));
+    return next;
+  });
+  const perSlot = useMemo(() => perSlotMonthlyPence(pkg), [pkg]);
+  const util = useMemo(() => slotUtilisation(pkg), [pkg]);
+
+  async function rememberPackage() {
+    setBusy(true); setPackageMsg(null);
+    try {
+      const res = await fetch('/api/purchase-model-defaults', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ advertising: pkg }),
+      });
+      setPackageMsg(res.ok ? 'Saved.' : 'Could not save that.');
+    } catch {
+      setPackageMsg('Could not save that.');
+    } finally {
+      setBusy(false);
+    }
+  }
   async function rememberSuppliers() {
     setBusy(true); setSupplierMsg(null);
     try {
@@ -163,8 +206,6 @@ export default function PurchaseModelPage(
     negative: r.grossProfitPence < 0,
   };
 
-  const needed = useMemo(() => salesToCoverMonthly(r.grossProfitPence, inputs.autotraderMonthlyPence),
-    [r.grossProfitPence, inputs.autotraderMonthlyPence]);
   return (
     <>
       <Head><title>Buying a car — GreaseDesk</title></Head>
@@ -261,22 +302,77 @@ export default function PurchaseModelPage(
           {supplierMsg && <span className="ml-2 text-xs text-muted" data-testid="remember-suppliers-msg">{supplierMsg}</span>}
         </section>
 
-        {/* ── THE AUTOTRADER LINE, KEPT OUT OF THE CAR ────────────────────────────────────────────
-            Its own named field because it is the industry standard and the one advertising number a
-            dealer can recite. Deliberately NOT a slider and not inside the per-car section: every slider
-            there is a cost this car carries, and a fixed overhead among them would invite the division
-            the whole design refuses. It changes no figure in the breakdown; it answers one question at
-            the foot of the page. Blank by default — £1,500 is one dealer's quote, not a typical number. */}
-        <section className="mt-6 border-t border-line pt-4">
-          <label className="text-sm text-muted">Autotrader, per month
-            <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.autotraderMonthlyPence / 100) || ''}
-              onChange={setMoney('autotraderMonthlyPence')} data-testid="input-autotrader" placeholder="0"
-              className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
-          </label>
-          <p className="mt-1 text-xs text-muted" data-testid="autotrader-note">
-            Your Autotrader subscription, as you actually pay for it — {GROSS_BASIS_NOTE.toLowerCase()} This is <strong>not</strong> divided into this car —
-            what each car would have to carry depends on how many you sell, which is what you are working out.
-            Everything else you advertise on is the <strong>Additional advertising</strong> slider.
+        {/* ── THE ADVERTISING PACKAGE: SLOTS, NOT A LUMP SUM ──────────────────────────────────────
+            Autotrader is X slots at £Y a month, so the per-car cost has a KNOWN denominator and is
+            DERIVED here rather than typed on every model. A car occupies its slot while it is in stock,
+            which makes this a days-in-stock cost — the same driver as the money.
+
+            TENANT LEVEL, and seeded into each model rather than read by the arithmetic: renegotiating
+            the contract must not rewrite the answer on every car already modelled. */}
+        <section className="mt-6 border-t border-line pt-4" data-testid="ad-package">
+          <h2 className="text-sm text-muted">Your advertising package</h2>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <label className="text-xs text-muted">Per month
+              <input type="number" inputMode="decimal" min={0} value={Math.round(pkg.monthlyPence / 100) || ''}
+                onChange={(e) => editPackage({ monthlyPence: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) })}
+                data-testid="input-package-monthly" placeholder="0"
+                className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+            </label>
+            <label className="text-xs text-muted">Slots
+              <input type="number" inputMode="numeric" min={0} value={pkg.slots || ''}
+                onChange={(e) => editPackage({ slots: Math.max(0, Math.round(Number(e.target.value || 0))) })}
+                data-testid="input-package-slots" placeholder="0"
+                className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+            </label>
+            <label className="text-xs text-muted">Cars in stock
+              <input type="number" inputMode="numeric" min={0} value={pkg.carsInStock || ''}
+                onChange={(e) => editPackage({ carsInStock: Math.max(0, Math.round(Number(e.target.value || 0))) })}
+                data-testid="input-package-stock" placeholder="0"
+                className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-muted" data-testid="ad-package-note">
+            {GROSS_BASIS_NOTE} The per-slot cost is worked out from the first two — it is not typed, so it cannot disagree with your contract.
+          </p>
+          {perSlot != null ? (
+            <p className="mt-2 text-xs text-ink" data-testid="per-slot">
+              <strong>{moneyExact(perSlot)}</strong> per slot per month, charged to a car for as long as it is in stock.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-muted" data-testid="per-slot-unknown">
+              Tell us the monthly cost and the slot count and every car carries its share. Until then, no advertising cost is charged at all.
+            </p>
+          )}
+
+          {/* ── SLOT UTILISATION, WHICH REPLACED THE BREAK-EVEN SENTENCE ───────────────────────────
+              "How many sales cover the contract?" was the honest question while the contract looked
+              like a lump sum with no denominator. It states its slot count, so the cost is fully
+              allocated and there is no unallocated overhead left to cover. The live question is
+              whether the slots are occupied, and nobody is asking it. */}
+          {util && (util.emptySlots > 0 || util.unadvertisedCars > 0) && (
+            <p className={`mt-2 text-xs ${util.emptySlots > 0 ? 'text-danger' : 'text-muted'}`} data-testid="slot-utilisation">
+              {util.emptySlots > 0
+                ? <>You are paying for {util.slots} slots and filling {util.carsInStock}. {util.emptySlots} empty {util.emptySlots === 1 ? 'slot costs' : 'slots cost'} you <strong>{moneyExact(util.wastedMonthlyPence)} a month</strong>.</>
+                : <>You have {util.carsInStock} cars and {util.slots} slots — {util.unadvertisedCars} of them {util.unadvertisedCars === 1 ? 'is' : 'are'} not advertised.</>}
+            </p>
+          )}
+          {util && util.emptySlots === 0 && util.unadvertisedCars === 0 && (
+            <p className="mt-2 text-xs text-muted" data-testid="slot-utilisation-full">
+              All {util.slots} slots filled.
+            </p>
+          )}
+
+          <button type="button" onClick={rememberPackage} disabled={busy}
+            data-testid="remember-package"
+            className="mt-3 min-h-[40px] rounded-lg border border-line px-3 text-sm text-ink disabled:opacity-50">
+            Save my package
+          </button>
+          {packageMsg && <span className="ml-2 text-xs text-muted" data-testid="remember-package-msg">{packageMsg}</span>}
+
+          {/* WHAT IS NOT MODELLED, said where it would otherwise be assumed. */}
+          <p className="mt-2 text-[11px] text-muted" data-testid="package-unanswered">
+            Not yet modelled: part-exchange slots for cheap cars, and whether your months run from the 1st or from
+            the day a car is listed. Both change the figures, so neither is guessed.
           </p>
         </section>
 
@@ -667,24 +763,26 @@ export default function PurchaseModelPage(
               {' '}{r.funding.schedule.length} {r.funding.schedule.length === 1 ? 'payment' : 'payments'} falling due while you still have it.
             </p>
           )}
-          {/* ── THE FIXED COST, AS A QUESTION THIS PAGE CAN ANSWER ──────────────────────────────
-              Autotrader is a monthly contract: about £1,500 for ten cars, £5,000+ for a bigger
-              dealer. Dividing it gives £150 a car at ten sales and £300 at five, so a per-car
-              advertising figure asks for a number that depends on turnover — which is partly what
-              this model exists to work out. The denominator is exactly what the page cannot know.
-              So nothing is divided. The contract drives ONE sentence, in the honest direction. */}
-          {needed !== null ? (
-            <p className="mt-2 text-xs text-muted" data-testid="break-even">
-              {/* Phrased to put the contract first so the sentence needs no verb agreement with a
-                  number that changes: "2 sales a month covers" was wrong and "cover" reads oddly at 1. */}
-              At this gross profit, your {money(inputs.autotraderMonthlyPence)} Autotrader subscription
-              needs <strong className="text-ink">{needed} {needed === 1 ? 'sale' : 'sales'} a month</strong>.
+          {/* ── THE SLOT, AND THE BOUNDARY THAT MUST NOT READ AS A BUG ────────────────────────────
+              Charged in whole months because the contract says "or part thereof". That makes the cost a
+              STEP where every other cost on this page is smooth — 30 days £100, 31 days £200 — so the
+              step is explained rather than left to look broken. The boundary is also the most actionable
+              number in the model: it is the one thing a dealer can act on this week.
+
+              The break-even sentence stood here until the slot count arrived. It asked how many sales
+              would cover the contract, which was the honest question while the contract looked like a
+              lump sum with no denominator. It has one, so the cost is fully allocated per car and there
+              is no unallocated overhead left to cover. Utilisation asks the live question instead. */}
+          {inputs.slotCostPerMonthPence > 0 && r.slot.monthsCharged > 0 && (
+            <p className="mt-2 text-xs text-ink" data-testid="slot-charge">
+              Advertising: {r.slot.monthsCharged} {r.slot.monthsCharged === 1 ? 'month' : 'months'} of a slot
+              at {moneyExact(inputs.slotCostPerMonthPence)} — {moneyExact(r.slot.cashPence)}.
+              {r.slot.daysBeforeNextCharge === 0
+                ? <> <strong>One more day starts another month</strong> and costs {moneyExact(r.slot.nextChargePence)}.</>
+                : <> Covered for {r.slot.daysBeforeNextCharge} more {r.slot.daysBeforeNextCharge === 1 ? 'day' : 'days'};
+                    after that it is another {moneyExact(r.slot.nextChargePence)}.</>}
             </p>
-          ) : inputs.autotraderMonthlyPence > 0 ? (
-            <p className="mt-2 text-xs text-danger" data-testid="break-even-impossible">
-              No number of sales covers your {money(inputs.autotraderMonthlyPence)} Autotrader subscription at this gross profit.
-            </p>
-          ) : null}
+          )}
           {/* THE NUMBER NO GARAGE CALCULATES, said out loud rather than buried in the breakdown. */}
           <p className="mt-2 text-xs text-muted" data-testid="out-uncounted">
             Workshop time and cost of money take {moneyExact(r.workshopCostPence + r.stockingCostPence)} out of this.
@@ -709,14 +807,17 @@ export const getServerSideProps = withI18n([])(async (ctx) => {
   // THE GARAGE'S STANDING ANSWERS about its suppliers, which SEED a new model and are never read by
   // the arithmetic. Defaults if it has never said — and the defaults are today's behaviour exactly.
   const { getCostVatDefaults } = await import('@/lib/purchase-model-defaults');
-  const costVatDefaults = await getCostVatDefaults(gate.vis.groupId as string)
-    .catch(() => null);
-  const { defaultCostVat } = await import('@/lib/purchase-model');
+  const costVatDefaults = await getCostVatDefaults(gate.vis.groupId as string).catch(() => null);
+  const { getAdvertisingPackage } = await import('@/lib/purchase-model-defaults');
+  const advertisingPackage = await getAdvertisingPackage(gate.vis.groupId as string).catch(() => null);
+  const { defaultCostVat, emptyAdvertisingPackage } = await import('@/lib/purchase-model');
   return {
     props: {
       vatRegistered: profile?.isRegistered === true,
-      // FAILS TOWARDS TODAY'S ARITHMETIC, like the line above fails towards the simpler tool.
+      // BOTH FAIL TOWARDS TODAY'S ARITHMETIC, like the line above fails towards the simpler tool: the
+      // defaults charge every cost at face value, and an undescribed package charges no slot at all.
       costVatDefaults: costVatDefaults ?? defaultCostVat(),
+      advertisingPackage: advertisingPackage ?? emptyAdvertisingPackage(),
     },
   };
 });

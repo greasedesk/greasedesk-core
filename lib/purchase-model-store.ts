@@ -141,15 +141,15 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     // DEFAULTS TO PLUS VAT (false): it preserves the behaviour that shipped and is the conservative
     // reading — it produces the lower profit. An absent field is therefore never the generous answer.
     purchaseIncludesVat: b.purchaseIncludesVat === true,
-    // ABSENT MEANS ZERO, AND ZERO MEANS NO SENTENCE. A model saved before this field existed reads back
-    // with no subscription, so the break-even line simply does not appear — it does not appear with a
-    // made-up figure in it. Capped at £100k/month: above that it is a typo.
+    // WHAT A SLOT COST WHEN THIS CAR WAS MODELLED, seeded from the garage's package by whoever created
+    // the model. ABSENT MEANS ZERO and zero charges nothing — a model saved before the slot model, or by
+    // a garage that has not described its package, carries no advertising cost at all rather than a
+    // guessed one. Capped at £100k/month: above that it is a typo.
     //
-    // THE OLD KEY IS STILL READ. It was `adContractMonthlyPence` for a few hours on 2026-09-13 before
-    // the field became the named Autotrader line; a model saved in that window holds the same number
-    // under the old name, and dropping it would quietly zero somebody's subscription.
-    autotraderMonthlyPence: Math.min(10000000, Math.max(0, Math.round(
-      num(b.autotraderMonthlyPence, num(b.adContractMonthlyPence, 0))))),
+    // The two short-lived monthly-lump keys (`adContractMonthlyPence`, then `autotraderMonthlyPence`)
+    // are deliberately NOT migrated into this. They were a whole package's monthly cost; this is one
+    // slot's. Reading one as the other would multiply a garage's advertising by its slot count.
+    slotCostPerMonthPence: Math.min(10000000, Math.max(0, Math.round(num(b.slotCostPerMonthPence, 0)))),
     ...Object.fromEntries(SLIDERS.map((s) => [s.key, clampSlider(s.key, num(b[s.key], s.def))])) as Record<SliderKey, number>,
   };
   return out;

@@ -5193,6 +5193,11 @@ model PurchaseModelDefaults {
   /// lib/purchase-model FLAGGED_COSTS → VAT_TREATMENTS. Unrecognised keys and values are ignored on
   /// read (normaliseCostVat), so a value written by a newer deploy cannot break an older reader.
   cost_vat           Json
+  /// lib/purchase-model AdvertisingPackage — monthly cost, slot count, cars in stock. NULL until the
+  /// garage describes its package, and then no slot cost is charged to any car rather than a guessed
+  /// one. JSONB so the two unanswered contract questions (part-exchange slots, billing granularity)
+  /// can be added by a deploy rather than a migration.
+  advertising        Json?
   updated_at         DateTime @updatedAt
   updated_by_user_id String
 

@@ -231,7 +231,7 @@ try {
   const html = await pageRes.text();
   check('the page answers 200 for a signed-in admin', pageRes.status === 200, `HTTP ${pageRes.status}`);
   for (const t of ['sliders', 'sensitivity-list', 'sensitivity-heading', 'sensitivity-not-cost', 'answer', 'out-cash',
-    'gross-profit', 'gross-profit-means', 'input-autotrader', 'autotrader-note'])
+    'gross-profit', 'gross-profit-means', 'input-package-monthly', 'input-package-slots', 'ad-package-note'])
     check(`  …and renders [${t}]`, html.includes(`data-testid="${t}"`), t);
   /**
    * Read the swing cells the way a PERSON reads them, not as a substring of the page. React's SSR
@@ -376,10 +376,14 @@ try {
     && !/purchase-model-defaults/.test(stripComments(readSrc('lib/purchase-model.ts', 'utf8'))),
     'changing a standing answer must not rewrite a saved car’s result');
   check('  …and the page seeds from them rather than reading them live',
-    hasKey(page, 'costVat', 'costVatDefaults') && /useState<ModelInputs>\(\(\) => \(\{ \.\.\.defaultInputs\(\)/.test(page),
-    'the starting value of the model’s own state, then owned by the model');
-  check('  …the writer normalises before storing, so a row cannot lie about what it holds',
-    /const clean = normaliseCostVatMap\(args\.costVat\)/.test(defaultsSrc));
+    hasKey(page, 'costVat', 'costVatDefaults')
+    && hasKey(page, 'slotCostPerMonthPence', /perSlotMonthlyPence\(advertisingPackage\)/)
+    && /useState<ModelInputs>\(\(\) => \(\{/.test(page),
+    'BOTH standing answers seed the model’s own state and are then owned by it — the supplier answers and the per-slot cost');
+  check('  …the writer normalises BOTH halves before storing, so a row cannot lie about what it holds',
+    /normaliseCostVatMap\(/.test(defaultsSrc) && /normaliseAdvertising\(/.test(defaultsSrc)
+    && /upsert\(/.test(defaultsSrc),
+    'one writer for one row — a second upsert would be a second way for it to be half-written');
   check('  …and it is an upsert on the group, so "which row wins" cannot be asked',
     /upsert\(/.test(defaultsSrc) && hasKey(defaultsSrc, 'where', /\{\s*group_id: args\.groupId\s*\}/),
     'the group is the primary key, so the table cannot hold two answers for one garage');
@@ -427,7 +431,7 @@ try {
     M.SLIDERS.find((x) => x.key === 'workshopCostPerHourPence').basis === 'no_vat'
     && M.SLIDERS.find((x) => x.key === 'costOfMoneyAnnualPct').basis === 'n/a',
     'wages carry no input VAT and interest is exempt — a "VAT included" note there would be a lie');
-  check('the subscription says which figure it wants', /data-testid="autotrader-note"/.test(page)
+  check('the package says which figure it wants', /data-testid="ad-package-note"/.test(page)
     && /GROSS_BASIS_NOTE/.test(page),
     'and it feeds every car through days in stock, so an error here is not confined to one model');
 
@@ -487,28 +491,82 @@ try {
     JSON.stringify(adSlider.note));
   check('  …and no longer promises every platform', !/across every platform/.test(adSlider.note),
     'the dominant platform is a subscription, and this field cannot cover it');
-  check('the monthly field is named for Autotrader, on the page', /data-testid="input-autotrader"/.test(page)
-    && /Autotrader, per month/.test(page),
-    'its own line rather than a generic "platform contracts", because that is the number a dealer knows');
-  check('  …and its note says it is the subscription and is NOT divided into this car',
-    /data-testid="autotrader-note"/.test(page) && /Your Autotrader subscription/.test(page)
-    && /not<\/strong> divided into this car/.test(page),
-    'the denominator is exactly what the page cannot know');
-  check('  …and points at the slider for everything else', /Additional advertising<\/strong> slider/.test(page));
-  check('the break-even sentence names the subscription', /Autotrader subscription\s*\n?\s*needs/.test(page)
-    || /Autotrader subscription/.test(page),
-    'what the sales have to cover is a named contract, not "advertising"');
+  check('the package is asked for as a contract, not a lump sum', /data-testid="input-package-monthly"/.test(page)
+    && /data-testid="input-package-slots"/.test(page),
+    'monthly cost AND slot count — the denominator comes from the contract, which is what makes it a per-car cost');
+  check('  …and the per-slot figure is DERIVED, never typed', /data-testid="per-slot"/.test(page)
+    && !/input-per-slot/.test(page) && /it is not typed, so it cannot disagree with your contract/.test(page),
+    'a typed per-slot figure is a second answer to a question the contract has already settled');
+  check('  …and an undescribed package says so rather than charging a guess',
+    /data-testid="per-slot-unknown"/.test(page) && /no advertising cost is charged at all/.test(page));
+  /**
+   * ── AUTOTRADER IS A PER-CAR COST WITH A KNOWN DENOMINATOR ─────────────────────────────────────
+   * The package is X slots, not a lump sum, so the per-slot figure comes from the contract and a car
+   * carries it for as long as it is in stock. The break-even sentence stood here and has gone with its
+   * premise: it asked how many sales would cover an unallocated overhead, and there is none left.
+   */
+  const pkg = { monthlyPence: 500000, slots: 50, carsInStock: 30 };
+  check('a £5,000 package over 50 slots is £100 a slot', M.perSlotMonthlyPence(pkg) === 10000,
+    `${M.perSlotMonthlyPence(pkg)}p — derived from the contract, never typed`);
+  check('  …and an undescribed package derives NOTHING', M.perSlotMonthlyPence({ monthlyPence: 500000, slots: 0, carsInStock: 0 }) === null
+    && M.perSlotMonthlyPence({ monthlyPence: 0, slots: 50, carsInStock: 0 }) === null,
+    'a per-slot figure from a missing slot count is a division by zero dressed as a cost');
 
-  // AND THE KEY THAT EXISTED FOR A FEW HOURS IS STILL READ. `adContractMonthlyPence` was the field's
-  // name before it became the named Autotrader line; a model saved in that window holds the figure under
-  // the old key, and dropping the fallback would silently zero somebody's subscription. Asserted,
-  // because I wrote that fallback and then removed it in a red-proof with NO clause noticing.
-  check('a model saved under the OLD monthly key keeps its figure',
-    S.normaliseInputs({ adContractMonthlyPence: 150000 }).autotraderMonthlyPence === 150000,
-    '£1,500 typed before the rename still reads £1,500 after it');
-  check('  …and the new key wins when both are present',
-    S.normaliseInputs({ adContractMonthlyPence: 150000, autotraderMonthlyPence: 500000 }).autotraderMonthlyPence === 500000,
-    'the fallback is a fallback, not an override');
+  /** PART THEREOF, NOT PRO-RATA — and the boundary is the actionable number. */
+  // `at` and `held` are both taken earlier in this file — checked, not guessed.
+  const slotAt = (d) => M.slotCharge(10000, d);
+  check('30 days is one month, 31 days is two', slotAt(30).cashPence === 10000 && slotAt(31).cashPence === 20000,
+    `£100 then £200 — pro-rata would say £103.33 where the invoice says £200`);
+  check('  …and the gap at the boundary is £96.67', Math.abs((slotAt(31).cashPence - Math.round(10000 * 31 / 30)) - 9667) <= 1,
+    'the most actionable number in the model, and the reason the step is shown rather than smoothed');
+  check('  …zero days occupies no slot', slotAt(0).monthsCharged === 0 && slotAt(0).cashPence === 0);
+  check('  …and the boundary says how long is covered', slotAt(45).coveredUntilDay === 60 && slotAt(45).daysBeforeNextCharge === 15,
+    'day 45 of a second month: 15 days before a third is charged');
+  check('  …with zero days left meaning the next day costs another month', slotAt(30).daysBeforeNextCharge === 0
+    && slotAt(30).nextChargePence === 10000, 'the sharp case, and the one worth acting on');
+
+  /** IT IS A REAL COST NOW, AND IT MOVES WITH DAYS IN STOCK. */
+  const dIn = { ...M.defaultInputs(), slotCostPerMonthPence: 10000 };
+  const short = M.computeModel({ ...dIn, daysInStock: 30 }, { vatRegistered: true });
+  const long = M.computeModel({ ...dIn, daysInStock: 90 }, { vatRegistered: true });
+  check('the slot is charged to the car', short.slot.cashPence === 10000 && long.slot.cashPence === 30000,
+    'one month against three');
+  check('  …and days in stock now drives TWO costs', long.stockingCostPence > short.stockingCostPence
+    && long.slot.cashPence > short.slot.cashPence,
+    'the money and the slot — which is why its swing grows');
+  check('  …its swing grew accordingly', (() => {
+    const withoutPkg = M.sensitivity(M.defaultInputs(), { vatRegistered: true }).find((x) => x.key === 'daysInStock').swingPence;
+    const withPkg = M.sensitivity(dIn, { vatRegistered: true }).find((x) => x.key === 'daysInStock').swingPence;
+    return withPkg > withoutPkg * 2;
+  })(), 'from one driver to two, on the same slider');
+  check('  …and an undescribed package charges nothing at all', (() => {
+    const none = M.computeModel(M.defaultInputs(), { vatRegistered: true });
+    return none.slot.cashPence === 0 && none.slotCost.costPence === 0;
+  })(), 'no package, no advertising cost — not a guessed one');
+  check('the slot VAT is recoverable by construction, with no supplier flag',
+    M.computeModel({ ...dIn, daysInStock: 30 }, { vatRegistered: true }).slotCost.reclaimablePence === Math.round(10000 / 6)
+    && !M.FLAGGED_COSTS.includes('slotCostPerMonthPence'),
+    'Autotrader is VAT registered — unlike a paint shop, there is nothing to ask');
+
+  /** UTILISATION, WHICH REPLACED THE BREAK-EVEN SENTENCE. */
+  const u = M.slotUtilisation(pkg);
+  check('50 slots and 30 cars is 20 empty, at £2,000 a month', u.emptySlots === 20 && u.wastedMonthlyPence === 200000,
+    'the question the slot count makes available, and nobody is asking it');
+  check('  …more cars than slots is a different problem, and named as one', (() => {
+    const over = M.slotUtilisation({ monthlyPence: 500000, slots: 50, carsInStock: 60 });
+    return over.emptySlots === 0 && over.unadvertisedCars === 10;
+  })(), 'ten cars nobody can see is not waste — it is worse');
+  check('  …and an undescribed package asks nothing', M.slotUtilisation(M.emptyAdvertisingPackage()) === null);
+
+  /** THE TWO UNANSWERED QUESTIONS ARE SAID, NOT GUESSED. */
+  const leafSrc = readSrc('lib/purchase-model.ts', 'utf8');
+  check('the part-exchange slots are named as UNKNOWN in the file', /PART-EXCHANGE SLOTS[\s\S]{0,200}UNKNOWN/.test(leafSrc),
+    'three readings give three different per-slot costs, so guessing is wrong by a knowable amount');
+  check('  …and so is the billing granularity', /BILLING GRANULARITY[\s\S]{0,120}UNKNOWN/.test(leafSrc));
+  check('  …and the screen says so too', /data-testid="package-unanswered"/.test(page)
+    && /Not yet modelled/.test(page) && /neither is guessed/.test(page));
+  check('  …and neither answer will need a migration', /advertising\s+Json\?/.test(readSrc('prisma/schema.prisma', 'utf8')),
+    'the package is JSONB and unrecognised keys are ignored on read');
 
   /** THE RANKING ROW FOLLOWS THE SLIDER, because both read SLIDERS — asserted, not assumed. */
   const rankedLabels = M.sensitivity(M.defaultInputs()).map((x) => x.label);
@@ -517,24 +575,6 @@ try {
   check('  …and the subscription is NOT a row in it', !rankedLabels.some((l) => /Autotrader/i.test(l)),
     'a fixed monthly cost has no range to swing across');
 
-  // THE ARITHMETIC OF THE REFUSAL, as a pure function, with each case named.
-  check('sales-to-cover divides the contract by the gross profit', M.salesToCoverMonthly(50000, 150000) === 3,
-    '£1,500 a month over £500 a car = 3 sales');
-  check('  …and ROUNDS UP, because a part-sale covers nothing', M.salesToCoverMonthly(40000, 150000) === 4,
-    '3.75 → 4');
-  check('  …no contract, no sentence', M.salesToCoverMonthly(50000, 0) === null);
-  check('  …and a gross profit of zero or less has NO answer, not infinity', M.salesToCoverMonthly(0, 150000) === null
-    && M.salesToCoverMonthly(-1, 150000) === null,
-    'no quantity of a car that loses money covers a fixed cost — a rounded-up division would print a confident figure for an impossible question');
-
-  // AND IT IS NOT A COST. The whole point: it must change no figure in the breakdown.
-  const noAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 0 });
-  const bigAd = M.computeModel({ ...M.defaultInputs(), autotraderMonthlyPence: 500000 });
-  check('the monthly contract changes NOTHING in the per-car answer', noAd.grossProfitPence === bigAd.grossProfitPence
-    && noAd.totalCostsPence === bigAd.totalCostsPence && noAd.otherCostsPence === bigAd.otherCostsPence,
-    `£0 and £5,000/month both give ${noAd.grossProfitPence}p — the moment it enters a cost, the page is dividing a fixed cost by a turnover it does not know`);
-  check('  …and it is not in the ranking either', !M.sensitivity(M.defaultInputs()).some((x) => x.key === 'autotraderMonthlyPence'),
-    'the ranking swings sliders across their range; a monthly contract is not one of them');
 
   /**
    * ── WHERE IT CAME FROM, AND WHAT A FEE DOES ABOUT IT ──────────────────────────────────────────
@@ -802,26 +842,30 @@ try {
   await bpage.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([bpage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), bpage.click('button[type="submit"]')]);
   await bpage.goto(`${gateOrigin()}/admin/purchase`, { waitUntil: 'domcontentloaded' });
-  await bpage.waitForSelector('[data-testid="input-autotrader"]', { timeout: 25000 });
+  await bpage.waitForSelector('[data-testid="input-package-monthly"]', { timeout: 25000 });
 
-  // NOTHING TYPED, NOTHING CLAIMED. The default is blank, so there is no sentence to misread.
-  check('with no contract typed there is no break-even sentence',
+  // NOTHING DESCRIBED, NOTHING CHARGED. An undescribed package must not guess a slot cost.
+  check('with no package described, no advertising cost is charged',
+    (await bpage.locator('[data-testid="per-slot-unknown"]').count()) === 1
+    && (await bpage.locator('[data-testid="slot-charge"]').count()) === 0,
+    'no package, no cost — not a guessed one');
+
+  // THE OWNER'S PACKAGE: £5,000 a month, 50 slots, 30 cars in stock. WAIT ON THE CONDITION, never a sleep.
+  await bpage.fill('[data-testid="input-package-monthly"]', '5000');
+  await bpage.fill('[data-testid="input-package-slots"]', '50');
+  await bpage.fill('[data-testid="input-package-stock"]', '30');
+  await bpage.waitForSelector('[data-testid="per-slot"]', { timeout: 15000 });
+  const perSlotLine = ((await bpage.locator('[data-testid="per-slot"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('the per-slot figure is derived on screen', /£100\.00 per slot per month/.test(perSlotLine), JSON.stringify(perSlotLine));
+
+  // UTILISATION, WHICH REPLACED THE BREAK-EVEN SENTENCE.
+  const utilLine = ((await bpage.locator('[data-testid="slot-utilisation"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('  …and the empty slots are named in money', /paying for 50 slots and filling 30/.test(utilLine)
+    && /£2,000\.00 a month/.test(utilLine), JSON.stringify(utilLine));
+  check('  …the break-even sentence is GONE, not sitting beside it',
     (await bpage.locator('[data-testid="break-even"]').count()) === 0
     && (await bpage.locator('[data-testid="break-even-impossible"]').count()) === 0,
-    'blank by default — £1,500 is one dealer\'s quote, not a typical figure');
-
-  // £1,500 a month against the default car. WAIT ON THE CONDITION (the sentence appearing), never a sleep.
-  await bpage.fill('[data-testid="input-autotrader"]', '1500');
-  await bpage.waitForSelector('[data-testid="break-even"]', { timeout: 15000 });
-  const sentence = ((await bpage.locator('[data-testid="break-even"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  // THE NUMBER IS DERIVED HERE TOO, from the same pure function against the shown gross profit — so the
-  // clause compares the screen with the rule, not with a constant I typed and would have to maintain.
-  const shown = ((await bpage.locator('[data-testid="gross-profit"]').textContent()) ?? '').replace(/[£,\s]/g, '');
-  const expect = M.salesToCoverMonthly(Math.round(Number(shown) * 100), 150000);
-  check('the sentence says how many sales cover the contract', /needs \d+ sales? a month/.test(sentence) && sentence.includes('£1,500'),
-    JSON.stringify(sentence));
-  check(`  …and the figure is the rule's own answer (${expect})`, new RegExp(`\\b${expect}\\b`).test(sentence),
-    `gross profit on screen ${shown}, so ${expect} — compared against the function, not against a number I hardcoded`);
+    'its premise died with the denominator; leaving it would answer a question nobody is asking');
 
   /**
    * ── THE TWO CLICKS, DRIVEN ────────────────────────────────────────────────────────────────────
@@ -878,9 +922,13 @@ try {
     `${M.FLAGGED_COSTS.length} rows — five three-state selectors among the sliders would treble the height of the part being dragged`);
   check('  …and the warranty starts at no VAT', (await bpage.locator('[data-testid="supplier-vat-warrantyPence"]').inputValue()) === 'no_vat',
     'insurance-backed cover is the common case');
-  check('  …with nothing reclaimable until something is answered',
-    (await bpage.locator('[data-testid="cost-vat-reclaim"]').count()) === 0,
-    'the feature is a no-op until a question is answered');
+  // NO SUPPLIER ANSWER HAS BEEN GIVEN YET, and that is what this asserts. It used to assert that
+  // NOTHING was reclaimable — true until the slot arrived, whose VAT is recoverable by construction and
+  // needs no supplier answer. The clause now says what it means rather than what happened to be true.
+  check('  …with every supplier still on its non-recovering default', (await Promise.all(
+    M.FLAGGED_COSTS.map((k) => bpage.locator(`[data-testid="supplier-vat-${k}"]`).inputValue()),
+  )).every((v) => v === 'standard_not_recoverable' || v === 'no_vat'),
+    'the supplier feature is a no-op until a question is answered');
 
   // ANSWER ONE, AND WATCH THE FIGURE MOVE.
   const beforeVat = ((await bpage.locator('[data-testid="gross-profit-top"]').textContent()) ?? '').trim();
@@ -1040,16 +1088,31 @@ try {
   // (£1,250 hammer), so "sale 5000" stopped being a loss and this block waited fifteen seconds for a
   // refusal that was never coming. A clause that inherits state from the one above it is a clause whose
   // meaning changes when somebody edits the one above it.
-  await bpage.fill('[data-testid="input-purchase"]', '20000');
-  await bpage.fill('[data-testid="input-sale"]', '5000');
-  await bpage.waitForSelector('[data-testid="break-even-impossible"]', { timeout: 15000 });
-  const refusal = ((await bpage.locator('[data-testid="break-even-impossible"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
-  check('a gross profit that cannot cover it says so, and prints no number of sales', /No number of sales covers/.test(refusal)
-    && !/\d+ sales? a month/.test(refusal),
-    JSON.stringify(refusal));
-  check('  …and the confident sentence is GONE, not sitting beside it',
-    (await bpage.locator('[data-testid="break-even"]').count()) === 0,
-    'a settled refusal replaces the answer; it does not annotate it');
+  /**
+   * ── THE BOUNDARY, WHERE THE BREAK-EVEN REFUSAL USED TO BE ─────────────────────────────────────
+   * The step from one month to two is the most actionable number in the model and the one most likely
+   * to read as a bug, so it is driven: the slider is moved to a day where one more day costs another
+   * month, and the screen must say so in money.
+   *
+   * BOTH FIGURES ARE SET HERE, not inherited. Earlier clauses in this leg type the worked invoice, and
+   * a clause that inherits state from the one above it changes meaning when somebody edits that one.
+   */
+  await bpage.fill('[data-testid="input-purchase"]', '8000');
+  await bpage.fill('[data-testid="input-sale"]', '10000');
+  await bpage.locator('[data-testid="slider-daysInStock"]').focus();
+  await bpage.locator('[data-testid="slider-daysInStock"]').press('Home');   // 0 days, then step up to 30
+  for (let i = 0; i < 6; i += 1) await bpage.locator('[data-testid="slider-daysInStock"]').press('ArrowRight');
+  await bpage.waitForSelector('[data-testid="slot-charge"]', { timeout: 15000 });
+  const slotLine = ((await bpage.locator('[data-testid="slot-charge"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('at exactly 30 days the screen says one more day costs another month',
+    /One more day starts another month/.test(slotLine) && /£100\.00/.test(slotLine),
+    JSON.stringify(slotLine));
+  await bpage.locator('[data-testid="slider-daysInStock"]').press('ArrowRight');
+  await bpage.waitForFunction(() => /2 months/.test(document.querySelector('[data-testid="slot-charge"]')?.textContent ?? ''),
+    undefined, { timeout: 15000 });
+  const crossed = ((await bpage.locator('[data-testid="slot-charge"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('  …and one notch later it is two months and £200', /2 months of a slot/.test(crossed) && /£200\.00/.test(crossed),
+    JSON.stringify(crossed));
 
   // ── 5. IT SAVES, AND IT IS NOT A RECORD ──────────────────────────────────────────────────────
   console.log('\n— it saves, and a model is meant to be changed —');

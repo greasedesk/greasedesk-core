@@ -1,0 +1,20 @@
+-- @migration: additive
+--
+-- THE GARAGE'S ADVERTISING PACKAGE — monthly cost, slot count, and how many cars are in stock — beside
+-- the supplier answers it already keeps. Autotrader is X slots rather than a lump sum, so the per-slot
+-- figure is DERIVED from the contract instead of typed on every car.
+--
+-- ── ADDITIVE: A NULLABLE COLUMN ON A TABLE NOTHING DEPLOYED WRITES ──────────────────────────────
+-- ALTER TABLE ADD COLUMN is scanned rather than waved through, because a constraint hung on a new
+-- column of an EXISTING table can reach production. There is none here: nullable, no default, no CHECK.
+-- Every deployed writer of this table (there is one, and it is one hour old) omits the column and
+-- continues to work.
+--
+-- ── JSONB, SO THE TWO OPEN QUESTIONS NEED NO SECOND MIGRATION ───────────────────────────────────
+-- Neither is answered yet and neither is guessed:
+--   · the two PART-EXCHANGE slots for cars under £1,500 — inside the package, charged separately, or
+--     restricted? The three readings give different per-slot costs.
+--   · BILLING GRANULARITY — calendar months, or 30 days from listing?
+-- A later deploy adds `pxSlots` or `granularity` to this object and an older reader ignores what it
+-- does not recognise, so the answers cost a deploy rather than a schema change.
+ALTER TABLE "PurchaseModelDefaults" ADD COLUMN "advertising" JSONB;

@@ -18,8 +18,8 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  FLAGGED_COSTS, VAT_TREATMENTS, defaultCostVat,
-  type FlaggedCost, type VatTreatment,
+  FLAGGED_COSTS, VAT_TREATMENTS, defaultCostVat, emptyAdvertisingPackage,
+  type AdvertisingPackage, type FlaggedCost, type VatTreatment,
 } from '@/lib/purchase-model';
 
 export type CostVatMap = Record<FlaggedCost, VatTreatment>;
@@ -49,18 +49,55 @@ export async function getCostVatDefaults(groupId: string): Promise<CostVatMap> {
 }
 
 /**
- * REMEMBER THESE. Upsert on the group, which is the primary key — so "which row wins" is not a question
- * this table can be asked. Normalised before writing as well as after reading: a value that would be
- * ignored on read is not worth storing, and storing it would make the row lie about what it means.
+ * ── THE ADVERTISING PACKAGE ─────────────────────────────────────────────────────────────────────
+ * Monthly cost, slot count, and how many cars are in stock. The per-slot figure is DERIVED from the
+ * first two and never typed, so a garage cannot hold two different answers for what a slot costs.
+ *
+ * UNRECOGNISED KEYS ARE IGNORED, which is what lets the two unanswered contract questions arrive by
+ * deploy rather than migration: a newer build writing `pxSlots` or `granularity` leaves this reader
+ * unbothered, and it reads them the day it understands them.
+ *
+ * Zeros mean "not described", and nothing is inferred from them — no slot cost is charged at all.
  */
-export async function setCostVatDefaults(args: {
-  groupId: string; userId: string; costVat: unknown;
-}): Promise<CostVatMap> {
-  const clean = normaliseCostVatMap(args.costVat);
+export function normaliseAdvertising(raw: unknown): AdvertisingPackage {
+  const g = (raw ?? {}) as Record<string, unknown>;
+  const n = (v: unknown, cap: number) => {
+    const x = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(x) && x > 0 ? Math.min(cap, Math.round(x)) : 0;
+  };
+  return {
+    monthlyPence: n(g.monthlyPence, 100000000),
+    slots: n(g.slots, 5000),
+    carsInStock: n(g.carsInStock, 5000),
+  };
+}
+
+/** The garage's package, or an empty one. Never throws on bad JSON. */
+export async function getAdvertisingPackage(groupId: string): Promise<AdvertisingPackage> {
+  const row = await prisma.purchaseModelDefaults.findUnique({
+    where: { group_id: groupId }, select: { advertising: true },
+  });
+  return row?.advertising ? normaliseAdvertising(row.advertising) : emptyAdvertisingPackage();
+}
+
+/**
+ * BOTH STANDING ANSWERS IN ONE WRITE, because they live in one row and a second upsert would be a
+ * second way for the row to be half-written. Either half may be omitted and keeps what is stored.
+ */
+export async function setPurchaseDefaults(args: {
+  groupId: string; userId: string; costVat?: unknown; advertising?: unknown;
+}): Promise<{ costVat: CostVatMap; advertising: AdvertisingPackage }> {
+  const existing = await prisma.purchaseModelDefaults.findUnique({
+    where: { group_id: args.groupId }, select: { cost_vat: true, advertising: true },
+  });
+  const costVat = normaliseCostVatMap(args.costVat === undefined ? existing?.cost_vat ?? null : args.costVat);
+  const advertising = normaliseAdvertising(
+    args.advertising === undefined ? existing?.advertising ?? null : args.advertising,
+  );
   await prisma.purchaseModelDefaults.upsert({
     where: { group_id: args.groupId },
-    create: { group_id: args.groupId, cost_vat: clean, updated_by_user_id: args.userId },
-    update: { cost_vat: clean, updated_by_user_id: args.userId },
+    create: { group_id: args.groupId, cost_vat: costVat, advertising, updated_by_user_id: args.userId },
+    update: { cost_vat: costVat, advertising, updated_by_user_id: args.userId },
   });
-  return clean;
+  return { costVat, advertising };
 }

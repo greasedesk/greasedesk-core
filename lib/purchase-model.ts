@@ -524,6 +524,123 @@ export function costPosition(grossPence: number, treatment: VatTreatment, vatReg
   return { cashPence: cash, vatInsidePence: vatInside, reclaimablePence: reclaimable, costPence: cash - reclaimable };
 }
 
+/**
+ * ── AUTOTRADER IS NOT A FIXED OVERHEAD. IT IS SLOTS ─────────────────────────────────────────────
+ * The package is X slots, not a lump sum: £5,000 for 50 is £100 per slot per month. A car occupies its
+ * slot for as long as it is in stock, so this is a real per-car cost with a KNOWN DENOMINATOR, and it
+ * attaches to DAYS IN STOCK — the same driver as the cost of money.
+ *
+ * That kills the circularity the break-even sentence existed for. "What does advertising cost per car?"
+ * could not be answered without knowing how many cars sell; it can be answered from the contract.
+ *
+ * ── PART THEREOF, NOT PRO-RATA ──────────────────────────────────────────────────────────────────
+ * The contract says "or part thereof", so a car held 31 days occupies its slot for two months and costs
+ * two. Pro-rata would charge £103.33 where the invoice says £200 — and would smooth away the only thing
+ * a dealer can act on this week:
+ *
+ *     30 days  £100   ·   31 days  £200   ·   the gap at the boundary is £96.67
+ *
+ * That step is deliberate and must not read as a bug, so the screen shows the boundary: how long the
+ * current month covers, and what the next one costs.
+ *
+ * ── TWO THINGS ARE NOT ANSWERED, AND ARE NOT GUESSED ────────────────────────────────────────────
+ * 1. THE TWO PART-EXCHANGE SLOTS for cars under £1,500. Whether they sit inside the package (making the
+ *    denominator 52, not 50), are charged separately, or are restricted to cheap cars is UNKNOWN — the
+ *    owner is checking the contract. Nothing here models them, and the three readings give different
+ *    per-slot costs, so guessing would be wrong by a knowable amount.
+ * 2. BILLING GRANULARITY: calendar months, or 30 days from listing. UNKNOWN. This charges in 30-day
+ *    periods from day zero, which is the reading that needs no date — the model has no listing date in
+ *    it, only a number of days held.
+ *
+ * NEITHER ANSWER NEEDS A MIGRATION. The package is JSONB and unrecognised keys are ignored on read, so
+ * `pxSlots` or `granularity` can be added by a later deploy without touching the schema, and an older
+ * reader keeps working while it lands.
+ */
+export type AdvertisingPackage = {
+  /** What the package costs a month, GROSS — the total that leaves the bank. */
+  monthlyPence: number;
+  /** How many cars it advertises at once. The denominator, and it comes from the contract. */
+  slots: number;
+  /** How many cars are in stock right now, for the utilisation question. Not part of any car's cost. */
+  carsInStock: number;
+};
+
+export function emptyAdvertisingPackage(): AdvertisingPackage {
+  return { monthlyPence: 0, slots: 0, carsInStock: 0 };
+}
+
+/**
+ * WHAT ONE SLOT COSTS A MONTH. Null when the package is not described — a per-slot figure derived from
+ * a missing slot count would be a division by zero dressed as a cost.
+ */
+export function perSlotMonthlyPence(pkg: AdvertisingPackage): number | null {
+  if (pkg.monthlyPence <= 0 || pkg.slots <= 0) return null;
+  return Math.round(pkg.monthlyPence / pkg.slots);
+}
+
+export type SlotCharge = {
+  /** Months charged: part of a month is a month. Zero days in stock occupies no slot. */
+  monthsCharged: number;
+  /** What those months cost, GROSS. */
+  cashPence: number;
+  /** The last day the months already charged cover. */
+  coveredUntilDay: number;
+  /** Days left before another month is charged. Zero means the next day costs another month. */
+  daysBeforeNextCharge: number;
+  /** What that next month will cost, so the boundary can be stated in money rather than in days. */
+  nextChargePence: number;
+};
+
+/**
+ * A SLOT, HELD FOR SOME DAYS. Charged in whole 30-day periods because the contract says "or part
+ * thereof" — see the note above on why that is not pro-rata and why the step is shown rather than hidden.
+ */
+export function slotCharge(perSlotPence: number, daysInStock: number): SlotCharge {
+  const per = Math.max(0, Math.round(perSlotPence));
+  const days = Math.max(0, Math.floor(daysInStock));
+  const months = Math.ceil(days / 30);
+  const coveredUntilDay = months * 30;
+  return {
+    monthsCharged: months,
+    cashPence: months * per,
+    coveredUntilDay,
+    daysBeforeNextCharge: Math.max(0, coveredUntilDay - days),
+    nextChargePence: per,
+  };
+}
+
+export type SlotUtilisation = {
+  slots: number;
+  carsInStock: number;
+  /** Slots paid for and not filled. Negative is impossible: more cars than slots is a different problem. */
+  emptySlots: number;
+  /** What those empty slots cost a month. The question nobody is asking. */
+  wastedMonthlyPence: number;
+  /** More cars than slots — not waste, but worth saying, because those cars are not advertised. */
+  unadvertisedCars: number;
+};
+
+/**
+ * ARE THE SLOTS FULL? This replaces the break-even sentence, whose premise died with the denominator.
+ * "How many sales cover the contract?" was the honest question while the contract looked like a lump
+ * sum. It is fully allocated across slots now — so the live question is whether the slots are occupied,
+ * and a garage paying for fifty and stocking thirty is burning £2,000 a month with nothing to show it.
+ *
+ * Null when the package is not described. Nothing is inferred from a blank.
+ */
+export function slotUtilisation(pkg: AdvertisingPackage): SlotUtilisation | null {
+  const per = perSlotMonthlyPence(pkg);
+  if (per == null) return null;
+  const empty = Math.max(0, pkg.slots - pkg.carsInStock);
+  return {
+    slots: pkg.slots,
+    carsInStock: pkg.carsInStock,
+    emptySlots: empty,
+    wastedMonthlyPence: empty * per,
+    unadvertisedCars: Math.max(0, pkg.carsInStock - pkg.slots),
+  };
+}
+
 /** A slider: what it is, where it starts, and what counts as a plausible span for it. */
 /**
  * WHETHER THIS FIELD CAN CARRY VAT AT ALL, and if so on what basis it is typed.
@@ -589,25 +706,18 @@ export const SLIDERS: SliderDef[] = [
 export type ModelInputs = {
   purchasePence: number; salePence: number; vatStatus: VatStatus;
   /**
-   * THE AUTOTRADER SUBSCRIPTION, PER MONTH — its own named line, because it is the industry standard
-   * and every garage knows what it pays for it. Lumping it in with "platform contracts" would hide the
-   * one number a dealer can recite from memory.
+   * WHAT A SLOT COST A MONTH WHEN THIS CAR WAS MODELLED. SEEDED from the garage's package and then
+   * owned by the model — if the arithmetic read the package live, renegotiating the contract would
+   * silently rewrite every car already modelled. Freeze what the document was ABOUT; read live what it
+   * is SUBJECT TO (which is why `vatRegistered` goes the other way, as an option).
    *
-   * IT IS NEVER DIVIDED INTO A CAR. About £1,500 a month for ten cars, £5,000+ for a bigger dealer —
-   * a fixed overhead. Dividing it gives £150 a car at ten sales and £300 at five, so a per-car figure
-   * asks the user for a number that depends on turnover, which is partly what this model exists to
-   * work out. The same circularity as the workshop rate.
+   * Zero when the garage has not described its package, and then no slot cost is charged at all.
    *
-   * So it is NOT a cost here and nothing adds it to one. It drives ONE derived sentence — how many
-   * sales a month would cover it — which turns the circularity into an output instead of an input.
-   *
-   * Everything else a car is advertised on is the `advertisingPence` SLIDER, which is per car because
-   * that spend genuinely is. The split is by PLATFORM, not by cost shape.
-   *
-   * DEFAULT ZERO. £1,500 is one dealer's quote, not a typical figure, and shipping it as a default
-   * would state it as a fact about every garage.
+   * IT REPLACED `autotraderMonthlyPence`, which existed for a few hours between the platform split and
+   * the slot model. That field was the monthly LUMP, typed per model, and its only job was the
+   * break-even sentence — both of which the slot count made unnecessary.
    */
-  autotraderMonthlyPence: number;
+  slotCostPerMonthPence: number;
   /** WHERE IT CAME FROM. Decides what a fee does, and what the VAT toggle is allowed to say. */
   source: PurchaseSource;
   /**
@@ -657,8 +767,8 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, autotraderMonthlyPence: 0, source: 'auction', premiumPence: 0, servicesPence: 0,
-    funding: { kind: 'cash' }, costVat: defaultCostVat(), ...sliders };
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, source: 'auction', premiumPence: 0, servicesPence: 0,
+    funding: { kind: 'cash' }, costVat: defaultCostVat(), slotCostPerMonthPence: 0, ...sliders };
 }
 
 /**
@@ -686,6 +796,10 @@ export type ModelResult = {
   funding: FundingCost;
   /** Each flagged cost, as cash and as cost — they differ wherever the VAT comes back. */
   costs: ({ key: FlaggedCost } & CostPosition)[];
+  /** The advertising slot: months charged, and where the next boundary falls. */
+  slot: SlotCharge;
+  /** That slot as cash and as cost — Autotrader's VAT is recoverable, so the two differ. */
+  slotCost: CostPosition;
   /** VAT recoverable across all the costs. Named separately because it lands on the next return. */
   costVatReclaimablePence: number;
   /** What those costs take out of the bank, before any recovery. */
@@ -733,9 +847,16 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // than it takes out of the bank. With every treatment at its default this is the arithmetic that
   // shipped, to the penny, because nothing was recoverable before.
   const costs = FLAGGED_COSTS.map((k) => ({ key: k, ...costPosition(i[k], i.costVat[k], opts.vatRegistered === true) }));
-  const other = costs.reduce((a, c) => a + c.costPence, 0);
-  const costVatReclaimable = costs.reduce((a, c) => a + c.reclaimablePence, 0);
-  const costCash = costs.reduce((a, c) => a + c.cashPence, 0);
+  /**
+   * THE SLOT, CHARGED ACROSS THE DAYS HELD. Autotrader is VAT registered and its VAT is recoverable by
+   * a registered garage, so this needs no supplier flag — it is settled by construction, unlike a paint
+   * shop that may or may not charge VAT at all.
+   */
+  const slot = slotCharge(i.slotCostPerMonthPence, i.daysInStock);
+  const slotCost = costPosition(slot.cashPence, 'standard_recoverable', opts.vatRegistered === true);
+  const other = costs.reduce((a, c) => a + c.costPence, 0) + slotCost.costPence;
+  const costVatReclaimable = costs.reduce((a, c) => a + c.reclaimablePence, 0) + slotCost.reclaimablePence;
+  const costCash = costs.reduce((a, c) => a + c.cashPence, 0) + slotCost.cashPence;
   const total = workshop + stocking + other;
   // Revenue net of the VAT charged on the sale, less what the car and the fee actually cost after any
   // reclaim. The fee's VAT is netted HERE when the source makes it separately reclaimable; when the
@@ -743,7 +864,8 @@ export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } =
   // counting it in both places is exactly what the invariant forbids.
   const gross = i.salePence - vat.outputVatPence - vat.netCostPence - fee.netCostPence;
   return {
-    vat, fee, funding, costs, costVatReclaimablePence: costVatReclaimable, costCashPence: costCash,
+    vat, fee, funding, costs, slot, slotCost,
+    costVatReclaimablePence: costVatReclaimable, costCashPence: costCash,
     vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
@@ -782,22 +904,14 @@ export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = 
 }
 
 /**
- * HOW MANY SALES A MONTH COVER A FIXED MONTHLY COST, at this gross profit per car.
+ * ── THE BREAK-EVEN SENTENCE IS GONE, AND SO IS ITS PREMISE ──────────────────────────────────────
+ * `salesToCoverMonthly(grossProfit, monthlyFixed)` asked how many sales would cover the advertising
+ * contract, because the contract looked like a lump sum with no denominator. The contract states its
+ * slot count, so the cost is fully allocated per car and there is no unallocated overhead left to
+ * cover. Keeping the sentence would have been answering a question that had stopped being asked.
  *
- * The honest direction for the question. "What does advertising cost per car?" cannot be answered
- * without knowing how many cars sell, which is the thing being worked out; "how many sales would
- * cover £1,500?" can be answered from one car's gross profit, and the person already knows whether
- * that number is reachable.
- *
- * NULL, not zero and not Infinity, in the three cases where there is no answer: no contract to
- * cover, and a gross profit of zero or less — no quantity of a car that loses money covers anything,
- * and a rounded-up division would print a confident figure for an impossible question.
+ * slotUtilisation replaces it with the question the slot count makes available: are the slots full?
  */
-export function salesToCoverMonthly(grossProfitPence: number, monthlyFixedPence: number): number | null {
-  if (monthlyFixedPence <= 0) return null;
-  if (grossProfitPence <= 0) return null;
-  return Math.ceil(monthlyFixedPence / grossProfitPence);
-}
 
 /** Clamp a slider to its own definition. The form is the prompt; this is the rule. */
 export function clampSlider(key: SliderKey, value: number): number {

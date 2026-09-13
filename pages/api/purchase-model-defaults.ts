@@ -12,7 +12,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantApi } from '@/lib/admin-guard';
-import { setCostVatDefaults } from '@/lib/purchase-model-defaults';
+import { setPurchaseDefaults } from '@/lib/purchase-model-defaults';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope = await requireTenantApi(req, res);
@@ -26,8 +26,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = (req.body || {}) as Record<string, unknown>;
   // The store normalises: anything it does not recognise is dropped rather than stored, so a bad POST
   // cannot leave a row that lies about what it holds.
-  const saved = await setCostVatDefaults({
-    groupId: scope.groupId, userId: scope.userId, costVat: body.costVat,
+  // EITHER HALF, OR BOTH. An omitted half keeps what is stored rather than clearing it — the supplier
+  // answers and the advertising package are saved from different parts of the page.
+  const saved = await setPurchaseDefaults({
+    groupId: scope.groupId, userId: scope.userId,
+    costVat: 'costVat' in body ? body.costVat : undefined,
+    advertising: 'advertising' in body ? body.advertising : undefined,
   });
-  return res.status(200).json({ ok: true, costVat: saved });
+  return res.status(200).json({ ok: true, ...saved });
 }
