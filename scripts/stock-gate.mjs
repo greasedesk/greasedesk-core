@@ -1,6 +1,6 @@
 /**
  * File: scripts/stock-gate.mjs
- * @gate-requires: db
+ * @gate-requires: db, server
  * STOCK RECORDS — the compliance figures, the two sections, and the freeze that makes the book
  * reproducible.
  *
@@ -12,12 +12,15 @@ import './_ts.mjs';
 const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
 const { readFileSync } = await import('node:fs');
+const { gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 
 let prisma;
+let browser = null;
 let made = { items: [], vehicles: [] };
 try {
   prisma = await gatePrisma();
@@ -203,9 +206,186 @@ try {
   check('  …and the Invoice column carries NO foreign key', /ALTER TABLE "Invoice" ADD COLUMN "stock_disposal_id" TEXT;/.test(mig)
     && !/ALTER TABLE "Invoice"[^;]*REFERENCES/i.test(mig),
     'an FK from an existing table is ADD CONSTRAINT — the one thing that would have made this two pushes');
+  /**
+   * ── DAYS IN STOCK, THE FIGURE THE LIST EXISTS FOR ─────────────────────────────────────────────
+   * Counted from the DATE, not a timestamp, and floored — a car bought this morning is day 0, not
+   * "−1 days" because someone typed today and the clock had not caught up. `asOf` is passed in so the
+   * figure is assertable at a fixed instant rather than drifting with the test's own runtime.
+   */
+  console.log('\n— days in stock —');
+  /**
+   * TWENTY-TWO HOURS APART, ON ONE DAY. The first version of this clause used nine hours — and
+   * switching the function to timestamp arithmetic scored 0 failures of 50, because 9/24 rounds to 0
+   * either way. A fixture has to force the branch it is about: at 22 hours the timestamp reading says
+   * 1 and the date reading says 0, which is the whole difference between the two.
+   */
+  check('a car bought today is day 0, however late it is', S.daysInStock(
+    new Date('2026-09-13T01:00:00Z'), new Date('2026-09-13T23:00:00Z')) === 0,
+    'twenty-two hours apart and still the same day — counted from the DATE, not the clock');
+  check('  …109 days is 109', S.daysInStock(new Date('2024-11-25T12:00:00Z'), new Date('2025-03-14T12:00:00Z')) === 109,
+    'YP61LBF, 25/11/2024 to 14/03/2025 — the real car this was checked against');
+  check('  …and a future acquisition floors at zero rather than going negative',
+    S.daysInStock(new Date('2026-10-01'), new Date('2026-09-13')) === 0);
+
+  /**
+   * ── WHAT THE LIST AND THE RESOLVER DO, ASSERTED DIRECTLY ──────────────────────────────────────
+   * Each of these was covered only by a browser clause, and each mutation below scored 0 failures
+   * before they existed: the yard listing disposed cars, a registration matching only exactly, and a
+   * missing acquisition date being defaulted. A clause that reaches a function through three layers
+   * tests the layers.
+   */
+  console.log('\n— the list and the resolver, directly —');
+  const goneVeh = await prisma.vehicle.create({
+    data: { group_id: ZZ_GROUP, registration: `ZZSTK${Math.floor(Math.random() * 900 + 100)}G`, make: 'Gate', model: 'Gone' },
+    select: { id: true, registration: true },
+  });
+  made.vehicles.push(goneVeh.id);
+  const goneItem = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: goneVeh.id, acquiredAt: new Date('2026-03-01'),
+    purchasePence: 90000, vatStatus: 'margin', source: 'trade',
+  });
+  made.items.push(goneItem.id);
+  const listBefore = await ST.stockList(ZZ_GROUP, new Date('2026-09-13'));
+  check('a held car is in the yard', listBefore.some((r) => r.stockItemId === goneItem.id), `${listBefore.length} in stock`);
+  await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: goneItem.id,
+    disposedAt: new Date('2026-04-01'), kind: 'traded_out', salePence: 120000,
+  });
+  const listAfter = await ST.stockList(ZZ_GROUP, new Date('2026-09-13'));
+  check('  …and gone from it once it has left', !listAfter.some((r) => r.stockItemId === goneItem.id),
+    'the yard is what is in stock, not what was ever bought');
+  /**
+   * ORDER NEEDS TWO CARS TO BE AN ORDER. The first version of this asserted `every(prev <= next)` on
+   * whatever the yard happened to hold — which was one car, so reversing the sort scored 0 failures.
+   * A non-vacuity guard is not decoration here: it IS the clause.
+   */
+  const older = await prisma.vehicle.create({
+    data: { group_id: ZZ_GROUP, registration: `ZZSTK${Math.floor(Math.random() * 900 + 100)}O`, make: 'Gate', model: 'Older' },
+    select: { id: true },
+  });
+  made.vehicles.push(older.id);
+  const olderItem = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: older.id, acquiredAt: new Date('2025-01-05'),
+    purchasePence: 70000, vatStatus: 'margin', source: 'private',
+  });
+  made.items.push(olderItem.id);
+  const ordered = await ST.stockList(ZZ_GROUP, new Date('2026-09-13'));
+  check('  …oldest first, so the car costing money is at the top', (() => {
+    if (ordered.length < 2) return false;   // an order over one row is not an order
+    const times = ordered.map((r) => new Date(r.acquiredAt).getTime());
+    return times.every((t, i) => i === 0 || times[i - 1] <= t) && ordered[0].stockItemId === olderItem.id;
+  })(), `${ordered.length} cars, oldest ${ordered[0]?.registration} first — with one row this clause would pass whatever the sort did`);
+
+  // A REGISTRATION IS THE SAME CAR HOWEVER IT IS SPACED. Nothing asserted this, and matching only
+  // exactly would quietly create a second vehicle — and then a second stock record for one car.
+  const spaced = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: goneVeh.registration.replace(/^(.{4})/, '$1 ') });
+  // THE FIXTURE IS DELIBERATELY A LEGACY-SHAPED ROW — created directly, with registration_normalized
+  // left NULL, which is how 35 of the 1,836 vehicles on this database actually are. Matching only on
+  // that column found nothing for them and would have made a second car for one that existed.
+  check('a spaced registration finds the SAME car', spaced.id === goneVeh.id,
+    `"${goneVeh.registration.replace(/^(.{4})/, '$1 ')}" resolved to the car already on file, not a new one`);
+  const lower = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: goneVeh.registration.toLowerCase() });
+  check('  …and so does a lower-case one', lower.id === goneVeh.id,
+    'the garage should not have to know which spelling the database met first');
+
+  /**
+   * ── THE LIST IS THE PAGE ──────────────────────────────────────────────────────────────────────
+   * Driven through the real API and the real page, because a list nobody can read is what this slice
+   * exists to fix.
+   */
+  console.log('\n— the yard, through the real page —');
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
+  browser = await chromium.launch({ channel: 'chrome' });
+  const page = await (await browser.newContext()).newPage();
+  await page.goto(`${gateOrigin()}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await page.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+  await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="add-toggle"]', { timeout: 25000 });
+
+  // BUY A CAR THE WAY A PERSON DOES: a registration and nothing else to start with.
+  const reg = `ZZYARD${Math.floor(Math.random() * 900 + 100)}`;
+  await page.click('[data-testid="add-toggle"]');
+  await page.waitForSelector('[data-testid="add-form"]', { timeout: 15000 });
+  await page.fill('[data-testid="input-reg"]', reg);
+  await page.fill('[data-testid="input-make"]', 'Mini');
+  await page.fill('[data-testid="input-purchase"]', '1250');
+  await page.fill('[data-testid="input-fee-premium"]', '265.20');
+  await page.fill('[data-testid="input-fee-services"]', '81.60');
+  await page.fill('[data-testid="input-acquired"]', '2026-06-01');
+  await page.click('[data-testid="add-submit"]');
+  await page.waitForSelector(`[data-testid="stock-row-${reg}"]`, { timeout: 20000 });
+  check('a car typed in by registration appears in the yard', true, `${reg} is on the list`);
+
+  const created = await prisma.stockItem.findFirst({
+    where: { group_id: ZZ_GROUP, vehicle: { registration: reg } },
+    select: { id: true, vehicle_id: true, purchase_pence: true, premium_pence: true, services_pence: true, vat_status: true },
+  });
+  if (created) { made.items.push(created.id); made.vehicles.push(created.vehicle_id); }
+  check('  …and the vehicle was created for it, not demanded first', !!created?.vehicle_id,
+    'a garage at an auction has a registration and nothing else');
+  check('  …with the fees kept apart, as the invoice has them',
+    created?.purchase_pence === 125000 && created?.premium_pence === 26520 && created?.services_pence === 8160,
+    `${created?.purchase_pence}p + premium ${created?.premium_pence}p + services ${created?.services_pence}p`);
+  check('  …and the VAT treatment captured at purchase', created?.vat_status === 'margin',
+    'recorded against the car as bought, whatever the tenant does later');
+  const daysCell = await page.locator(`[data-testid="days-${reg}"]`).textContent();
+  check('  …and days in stock is on the row', /^\d+$/.test((daysCell ?? '').trim()),
+    `${daysCell?.trim()} days — the figure a garage counts on its fingers today`);
+  check('  …with what is tied up said once, at the top',
+    /tied up/.test((await page.locator('[data-testid="stock-summary"]').textContent()) ?? ''),
+    ((await page.locator('[data-testid="stock-summary"]').textContent()) ?? '').trim());
+
+  // THE SOURCE STILL CONSTRAINS THE TREATMENT, on this page too.
+  await page.click('[data-testid="add-toggle"]');
+  await page.waitForSelector('[data-testid="add-form"]', { timeout: 15000 });
+  await page.selectOption('[data-testid="input-source"]', 'private');
+  await page.waitForSelector('[data-testid="vat-forced"]', { timeout: 15000 });
+  check('a private purchase cannot be recorded as VAT qualifying here either',
+    (await page.locator('[data-testid="vat-qualifying"]').count()) === 0,
+    'one reader for the rule, so the two pages cannot disagree');
+  check('  …and no fee fields, because a private seller invoices none',
+    (await page.locator('[data-testid="fee-fields"]').count()) === 0);
+  check('the form says the treatment is captured at purchase',
+    /whatever your own VAT status does later/.test((await page.locator('[data-testid="vat-captured-note"]').textContent()) ?? ''),
+    'the one answer on this form that cannot be corrected later by changing a setting');
+
+  /**
+   * THE ACQUISITION DATE IS REFUSED, NEVER DEFAULTED. It sets the book's period boundary and every
+   * days-in-stock figure, so defaulting it to today would put a car in the wrong quarter silently.
+   * Driven over HTTP because the refusal is the endpoint's, and nothing else asserted it.
+   */
+  const noDate = await page.evaluate(async (origin) => {
+    const r = await fetch(`${origin}/api/stock`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ registration: 'ZZNODATE1', purchasePence: 100000, vatStatus: 'margin', source: 'trade' }),
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, gateOrigin());
+  check('a purchase with no date is REFUSED, not dated today', noDate.status === 400
+    && /when you bought it/i.test(noDate.body.message ?? ''),
+    `${noDate.status} ${JSON.stringify(noDate.body.message ?? '')}`);
+  check('  …and no car was created by the attempt',
+    (await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: 'ZZNODATE1' } })) === 0,
+    'refused before the vehicle is resolved, so a rejected form leaves nothing behind');
+
+  // A DISPOSED CAR LEAVES THE YARD — the list is "in stock", not "ever bought".
+  await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: created.id,
+    disposedAt: new Date('2026-08-01'), kind: 'sold', salePence: 400000,
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="add-toggle"]', { timeout: 25000 });
+  check('a car that has left no longer appears in the yard',
+    (await page.locator(`[data-testid="stock-row-${reg}"]`).count()) === 0,
+    'the list is what is in stock, not what was ever bought');
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
+  await browser?.close().catch(() => {});
   if (prisma) {
     try {
       // BY THEIR OWN IDS, on ZZ only. Disposals and cost snapshots cascade from the item.
@@ -218,9 +398,18 @@ try {
         // behind — a refusal that stopped refusing created a second row this list never learned about —
         // and the vehicle delete then failed on the RESTRICT, leaving both. Anything still pointing at
         // a fixture vehicle goes, which cannot reach a real car because the ids came from this run.
-        const orphans = await prisma.stockItem.deleteMany({
-          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } },
+        // SCOPED TO THIS GATE'S OWN NAMING, not to what the run remembered making. A red-proof that
+        // breaks a refusal makes rows nothing tracked — a defaulted date once created ZZNODATE1 and
+        // left it behind. Every registration this gate can produce starts with one of these, and no
+        // real car does.
+        const fixtures = await prisma.vehicle.findMany({
+          where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE'].map((x) => ({ registration: { startsWith: x } })) },
+          select: { id: true },
         });
+        const orphans = await prisma.stockItem.deleteMany({
+          where: { group_id: ZZ_GROUP, vehicle_id: { in: [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])] } },
+        });
+        made.vehicles = [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])];
         if (orphans.count) check('  …including a stock row the run did not track', true, `${orphans.count} swept`);
         const v = await prisma.vehicle.deleteMany({ where: { id: { in: made.vehicles }, group_id: ZZ_GROUP } });
         check('  …and the fixture vehicles', v.count === made.vehicles.length, `${v.count} of ${made.vehicles.length}`);

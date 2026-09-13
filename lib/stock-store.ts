@@ -5,7 +5,7 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  DISPOSAL_KINDS, bookRow, hasSalePrice, sectionFor, vatPositionFor,
+  DISPOSAL_KINDS, bookRow, daysInStock, hasSalePrice, sectionFor, vatPositionFor,
   type BookRow, type DisposalKind,
 } from '@/lib/stock';
 import { SOURCES, VAT_STATUSES, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
@@ -115,6 +115,93 @@ export async function recordDisposal(a: {
     return d;
   });
   return { id: created.id };
+}
+
+export type StockListRow = {
+  stockItemId: string;
+  vehicleId: string;
+  registration: string;
+  description: string | null;
+  acquiredAt: Date;
+  daysInStock: number;
+  purchasePence: number;
+  vatStatus: string;
+  source: string;
+};
+
+/**
+ * EVERY CAR CURRENTLY IN STOCK — the default view, not a detail page reached from a vehicle.
+ *
+ * A garage doing a hundred a year opens this to see the yard, so it is a list first and a record
+ * second. Ordered OLDEST FIRST: the car that has been there longest is the one costing money, and
+ * putting it at the bottom of a list of forty would be filing the answer where nobody looks.
+ */
+export async function stockList(groupId: string, asOf: Date): Promise<StockListRow[]> {
+  const rows = await prisma.stockItem.findMany({
+    where: { group_id: groupId, disposal: { is: null } },
+    select: {
+      id: true, vehicle_id: true, acquired_at: true, purchase_pence: true, vat_status: true, source: true,
+      vehicle: { select: { registration: true, make: true, model: true } },
+    },
+    orderBy: { acquired_at: 'asc' },
+  });
+  return rows.map((r) => ({
+    stockItemId: r.id,
+    vehicleId: r.vehicle_id,
+    registration: r.vehicle?.registration ?? '—',
+    description: [r.vehicle?.make, r.vehicle?.model].filter(Boolean).join(' ') || null,
+    acquiredAt: r.acquired_at,
+    daysInStock: daysInStock(r.acquired_at, asOf),
+    purchasePence: r.purchase_pence,
+    vatStatus: r.vat_status,
+    source: r.source,
+  }));
+}
+
+/**
+ * FIND OR CREATE THE CAR, BY REGISTRATION. A garage buying at auction has a registration and nothing
+ * else; requiring the car to exist first would mean creating it somewhere else and coming back.
+ *
+ * NORMALISED FOR THE MATCH, stored as typed. "YP61 LBF" and "yp61lbf" are the same car, and the
+ * garage should not have to know which spelling the database met first.
+ */
+export async function findOrCreateVehicle(a: {
+  groupId: string; registration: string; make?: string | null; model?: string | null;
+}): Promise<{ id: string } | { refused: string }> {
+  const reg = a.registration.trim().toUpperCase();
+  if (reg.length < 2) return { refused: 'Type the registration.' };
+  const normalised = reg.replace(/[^A-Z0-9]/g, '');
+  // THE INDEXED MATCH FIRST — it covers all but the legacy rows and costs one indexed lookup.
+  const found = await prisma.vehicle.findFirst({
+    where: { group_id: a.groupId, OR: [{ registration: reg }, { registration_normalized: normalised }] },
+    select: { id: true },
+  });
+  if (found) return found;
+
+  /**
+   * ── AND A FALLBACK THAT DOES NOT TRUST THE COLUMN ───────────────────────────────────────────
+   * 35 of 1,836 vehicles on this database have registration_normalized NULL — legacy rows written
+   * before that column was populated on every path. Matching only on it would have found nothing for
+   * those cars, created a SECOND vehicle for one that already existed, and hung a stock record off
+   * the wrong id. Found by a gate clause, not by reading the code.
+   *
+   * So the last resort normalises the STORED registration in the query instead of trusting a stored
+   * normalisation. Slower and unindexed, which is why it runs only after the indexed match misses.
+   */
+  const legacy = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Vehicle"
+     WHERE "group_id" = ${a.groupId}
+       AND regexp_replace(upper("registration"), '[^A-Z0-9]', '', 'g') = ${normalised}
+     LIMIT 1`;
+  if (legacy.length) return { id: legacy[0].id };
+  const made = await prisma.vehicle.create({
+    data: {
+      group_id: a.groupId, registration: reg, registration_normalized: normalised,
+      make: a.make?.trim() || null, model: a.model?.trim() || null,
+    },
+    select: { id: true },
+  });
+  return made;
 }
 
 export type BookEntry = {

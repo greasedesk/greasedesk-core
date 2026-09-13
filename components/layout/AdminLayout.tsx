@@ -56,6 +56,9 @@ const navItems: NavItemDef[] = [
   // out before anything comes in. NOT adminOnly — deciding what to pay for a car is the job of
   // whoever is at the auction, and the page contains no figure from the garage's own accounts.
   { key: 'purchase', href: '/admin/purchase', icon: '🚗', ready: true },
+  // Stock sits next to Buying because it is the same money one step later: what was bought, what is
+  // still here, and how long it has been. NOT adminOnly, for the same reason Buying is not.
+  { key: 'stock', href: '/admin/stock', icon: '🅿️', ready: true },
   { key: 'products', href: '/admin/products', icon: '📦', ready: true },
   { key: 'roster', href: '/admin/roster', icon: '📅', ready: true },
   { key: 'hr', href: '/admin/hr', icon: '🗂️', ready: true, adminOnly: true }, // wages live here — page + APIs re-check server-side

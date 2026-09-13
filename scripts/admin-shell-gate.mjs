@@ -41,8 +41,19 @@ const appSrc = readFileSync('pages/_app.tsx', 'utf8');
 check('_app wraps every /admin route except login',
   /useAdminShell\s*\?\s*<AdminLayout[\s>][\s\S]{0,200}?<\/AdminLayout>\s*:\s*page/.test(appSrc));
 
-// The RENDER, not the import: a page may legitimately mention the name in a comment saying not to.
-const wrappers = pages.filter((p) => /<AdminLayout[\s>]/.test(readFileSync(p, 'utf8')));
+/**
+ * The RENDER, not the import: a page may legitimately mention the name in a comment saying not to.
+ *
+ * COMMENTS STRIPPED FIRST, which this used to say and not do. On 2026-09-13 a new page carried
+ * `// NO <AdminLayout> HERE` — a comment whose entire purpose was to record this rule — and the scan
+ * flagged it as a violation. A guard that cannot tell prose from code turns its own documentation into
+ * a false positive, and the fix is the same one prisma-any-gate and purchase-model-gate needed.
+ */
+const stripComments = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
+const wrappers = pages.filter((p) => /<AdminLayout[\s>]/.test(stripComments(readFileSync(p, 'utf8'))));
 check('no admin page renders it again', wrappers.length === 0,
   wrappers.join(', ') || `${pages.length} pages checked`);
 

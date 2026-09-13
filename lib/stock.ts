@@ -131,6 +131,22 @@ export function sectionFor(args: {
  * today would be understated by exactly the people who turn spanners. A typed rate would be a number
  * that looks measured. The book says this out loud; it is not a footnote in the source.
  */
+/**
+ * HOW LONG A CAR HAS BEEN HELD, in whole days. The single most useful number on a stock list, and the
+ * one a garage counts on its fingers today.
+ *
+ * FLOORED AT ZERO, and counted from the acquisition DATE rather than a timestamp: a car bought this
+ * morning is day 0, not "-1 days" because someone typed today's date and the clock had not caught up.
+ * `asOf` is passed in rather than read from the clock so the figure is testable at a fixed instant —
+ * a list that cannot be asserted is a list that drifts.
+ */
+export function daysInStock(acquiredAt: Date, asOf: Date): number {
+  const day = 24 * 60 * 60 * 1000;
+  const from = Date.UTC(acquiredAt.getUTCFullYear(), acquiredAt.getUTCMonth(), acquiredAt.getUTCDate());
+  const to = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
+  return Math.max(0, Math.round((to - from) / day));
+}
+
 export const LABOUR_AT_ZERO_NOTE =
   'Prep labour is not costed. There is no measured workshop rate yet, and a typed one would look like a measurement.';
 

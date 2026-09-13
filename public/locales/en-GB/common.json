@@ -19,7 +19,8 @@
     "invoices": "Invoices",
     "messages": "Messages",
     "payments": "Payments",
-    "marketing": "Marketing"
+    "marketing": "Marketing",
+    "stock": "Stock"
   },
   "dashboard": {
     "welcome": "Welcome Back!",
