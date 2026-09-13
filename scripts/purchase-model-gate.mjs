@@ -289,6 +289,95 @@ try {
   check('  …and the page says what that means', /data-testid="gross-profit-means"/.test(page)
     && /Before your fixed monthly costs and tax/.test(page));
   /**
+   * ── ONE CONVENTION, AND EVERY MONEY FIELD SAYS IT ─────────────────────────────────────────────
+   * A page mixing net and gross figures is wrong by a fifth in places nobody can see, because both
+   * readings look like a plausible amount. Every money field now states its basis — by declaring it, or
+   * by ASKING, which is what the purchase toggle does.
+   */
+  console.log('\n— what leaves the bank, said on every money field —');
+
+  /**
+   * THE SALE PRICE FIRST, because it is the largest silent one on the page. `sale × 1/6` extracts VAT
+   * from a VAT-inclusive amount, so the field has been gross by construction since the qualifying toggle
+   * shipped and the label said nothing. An ex-VAT figure typed here understates the VAT owed by a sixth
+   * of the WHOLE SALE — £1,666.67 on a £10,000 car, against £2,000 for the largest slider swing.
+   */
+  check('the sale price states that it is VAT-inclusive', /data-testid="sale-basis"/.test(page)
+    && /\{SALE_BASIS_NOTE\}/.test(page) && /VAT included/.test(M.SALE_BASIS_NOTE),
+    `renders SALE_BASIS_NOTE, which reads ${JSON.stringify(M.SALE_BASIS_NOTE)} — gross by construction since the qualifying toggle, and never said until now`);
+  check('  …and that is what the arithmetic does', (() => {
+    // £10,000 qualifying: output VAT is a SIXTH of the sale, which is only right if the sale is gross.
+    const v = M.vatPosition(800000, 1000000, 'qualifying', true);
+    return v.outputVatPence === Math.round(1000000 / 6);
+  })(), 'sale × 1/6 EXTRACTS the VAT — the clause and the code agree about which figure this is');
+  check('  …and typing it net would cost a sixth of the sale', (() => {
+    const gross = M.vatPosition(800000, 1000000, 'qualifying', true).outputVatPence;
+    const asNet = M.vatPosition(800000, 833333, 'qualifying', true).outputVatPence;   // £10,000 ex-VAT
+    return gross - asNet >= 16000;   // ~£166 of VAT understated on this car alone
+  })(), 'the size of the error the label now prevents');
+
+  /** EVERY MONEY SLIDER DECLARES ITS BASIS, and the declaration is what the screen renders. */
+  for (const sl of M.SLIDERS) {
+    const expected = sl.unit !== 'money' ? 'n/a' : sl.key === 'workshopCostPerHourPence' ? 'no_vat' : 'gross';
+    check(`  …${sl.key} declares basis ${expected}`, sl.basis === expected, `declared ${sl.basis}`);
+  }
+  check('every GROSS slider says so on screen', M.SLIDERS.filter((x) => x.basis === 'gross')
+    .every((x) => new RegExp(`data-testid=\`basis-\\$\{s\\.key\}\``).test(page) || /basis-\$\{s\.key\}/.test(page)),
+    'rendered from the slider’s own declaration, so a new money slider cannot omit it');
+  check('  …and the wording comes from ONE constant', /GROSS_BASIS_NOTE/.test(page)
+    && /Type the total you pay, VAT included/.test(M.GROSS_BASIS_NOTE),
+    JSON.stringify(M.GROSS_BASIS_NOTE));
+  check('the two fields that cannot carry input VAT are marked, not labelled',
+    M.SLIDERS.find((x) => x.key === 'workshopCostPerHourPence').basis === 'no_vat'
+    && M.SLIDERS.find((x) => x.key === 'costOfMoneyAnnualPct').basis === 'n/a',
+    'wages carry no input VAT and interest is exempt — a "VAT included" note there would be a lie');
+  check('the subscription says which figure it wants', /data-testid="autotrader-note"/.test(page)
+    && /GROSS_BASIS_NOTE/.test(page),
+    'and it feeds every car through days in stock, so an error here is not confined to one model');
+
+  /**
+   * ── THE INDEMNITIES MOVE FROM NET TO GROSS, AND THE ANSWER DOES NOT MOVE ──────────────────────
+   * This was the only field asking for a different kind of number. The owner's invoice is now typed
+   * £81.60 rather than £68.00 — and produces the identical margin base, reclaim and cash out.
+   */
+  const grossFees = M.feePosition('auction', { premiumPence: 26520, servicesPence: 8160 }, true);
+  check('typed GROSS, the invoice gives the same three answers', grossFees.inMarginBasePence === 26520
+    && grossFees.reclaimablePence === 1360 && 125000 + grossFees.cashOutPence === 159680,
+    '£81.60 typed instead of £68.00: margin base £1,515.20, reclaim £13.60, cash out £1,596.80 — unchanged');
+  check('  …the VAT is EXTRACTED, not added', grossFees.servicesVatPence === Math.round(8160 / 6)
+    && grossFees.servicesPence === 8160 - grossFees.servicesVatPence,
+    'one direction of arithmetic on the whole page');
+  check('  …and the note asks for the total, not the net figure',
+    /Type the total including VAT/.test(M.SOURCE_RULES.auction.fees[1].note)
+    && !/NET figure/.test(M.SOURCE_RULES.auction.fees[1].note),
+    JSON.stringify(M.SOURCE_RULES.auction.fees[1].note));
+
+  /**
+   * AND A STORED MODEL'S ANSWER DOES NOT MOVE. £68 net and £68 gross are the same NUMBER, so a document
+   * has to say which it holds; one that does not say predates the change and is net. There are zero such
+   * documents today — no PurchaseModel row has ever been written — so this protects nothing yet, and it
+   * exists because the page is live and a save is one click away.
+   */
+  const preSplit = S.normaliseInputs({ source: 'auction', servicesPence: 6800, purchasePence: 125000, salePence: 200000 });
+  check('a model saved on the NET basis is read as the same money', preSplit.servicesPence === 8160,
+    `£68.00 net becomes £81.60 gross — the box changes, the answer does not`);
+  check('  …and its fee position is what it always was', (() => {
+    const f = M.feePosition('auction', { premiumPence: 0, servicesPence: preSplit.servicesPence }, true);
+    return f.servicesPence === 6800 && f.servicesVatPence === 1360 && f.cashOutPence === 8160;
+  })(), 'net £68.00, VAT £13.60, £81.60 out of the bank — identical either side of the change');
+  check('  …and a document already stamped gross is NOT inflated again', (() => {
+    const twice = S.normaliseInputs({ source: 'auction', servicesPence: 8160, feeEntryBasis: 'gross' });
+    return twice.servicesPence === 8160;
+  })(), 'idempotent — re-reading cannot add 20% a second time');
+  check('  …and every save stamps the basis, so absence stays meaningful',
+    S.normaliseInputs({ source: 'auction', servicesPence: 8160 }).feeEntryBasis === 'gross',
+    'a marker that is sometimes omitted is a marker that cannot be trusted');
+
+  /** THE PURCHASE TOGGLE SURVIVES, and the reason is the rule itself. */
+  check('the purchase price states its basis by ASKING', /data-testid="inc-vat-question"/.test(page),
+    'the rule forbids a field the reader must INFER; asking and recording is a stronger answer than declaring');
+
+  /**
    * ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE ───────────────────────────────────────────────
    * Autotrader has its own named monthly line because it is the industry standard and the one
    * advertising figure a dealer can recite. The slider is EVERYTHING ELSE, and its note names the
@@ -369,7 +458,9 @@ try {
    * numbers printed on the invoice, and a tolerance here would be a tolerance on arithmetic that has
    * only one right answer.
    */
-  const HAMMER = 125000, PREMIUM = 26520, INDEMNITIES = 6800, INDEMNITY_VAT = 1360;
+  // TYPED AS THE INVOICE TOTALS, gross throughout: the premium has its VAT inside it by definition, and
+  // the indemnities are now typed the same way — £68.00 net + £13.60 VAT is £81.60 out of the bank.
+  const HAMMER = 125000, PREMIUM = 26520, INDEMNITIES = 8160, INDEMNITY_NET = 6800, INDEMNITY_VAT = 1360;
   const invoiceCase = {
     ...M.defaultInputs(), source: 'auction', vatStatus: 'margin',
     purchasePence: HAMMER, salePence: 200000, premiumPence: PREMIUM, servicesPence: INDEMNITIES,
@@ -390,8 +481,9 @@ try {
     return premiumOnly.cashOutPence === PREMIUM;
   })(), 'typed exactly as the invoice prints it — £265.20 leaves the bank, not £318.24');
 
-  check('the indemnities are standard rated, VAT worked out', fees.servicesVatPence === INDEMNITY_VAT,
-    `£68.00 net → ${fees.servicesVatPence}p VAT, and the invoice shows £13.60`);
+  check('the indemnities are standard rated, VAT extracted', fees.servicesVatPence === INDEMNITY_VAT
+    && fees.servicesPence === INDEMNITY_NET,
+    `£81.60 typed → ${fees.servicesVatPence}p VAT and ${fees.servicesPence}p of cost, and the invoice shows £13.60 and £68.00`);
   check('  …reclaimable input VAT is £13.60', fees.reclaimablePence === INDEMNITY_VAT, `${fees.reclaimablePence}p`);
   check('  …and they are NOT in the margin base', (() => {
     const servicesOnly = M.feePosition('auction', { premiumPence: 0, servicesPence: INDEMNITIES }, true);
@@ -400,7 +492,7 @@ try {
 
   const whole = M.computeModel(invoiceCase, { vatRegistered: true });
   check('cash out is £1,596.80', whole.vat.cashOutPence + whole.fee.cashOutPence === 159680,
-    `${whole.vat.cashOutPence + whole.fee.cashOutPence}p = £1,250.00 + £265.20 + £68.00 + £13.60`);
+    `${whole.vat.cashOutPence + whole.fee.cashOutPence}p = £1,250.00 + £265.20 + £81.60`);
   check('  …and the VAT on the sale is worked out from the £1,515.20 base', (() => {
     // margin = 2000.00 − 1515.20 = 484.80; VAT at 1/6 = 80.80
     const noPremium = M.computeModel({ ...invoiceCase, premiumPence: 0 }, { vatRegistered: true });
@@ -428,9 +520,9 @@ try {
     M.hasFeeSlot('trade', 'services') === true && M.hasFeeSlot('trade', 'premium') === false,
     'an admin fee is mechanically an indemnity; there is no premium on a trade invoice');
   check('an unregistered garage reclaims nothing and carries the VAT as cost', (() => {
-    const u = M.feePosition('trade', { premiumPence: 0, servicesPence: 30000 }, false);
-    return u.reclaimablePence === 0 && u.netCostPence === 36000;
-  })(), '£300 + VAT is a £360 cost when there is nothing to reclaim it against');
+    const u = M.feePosition('trade', { premiumPence: 0, servicesPence: 36000 }, false);
+    return u.reclaimablePence === 0 && u.netCostPence === 36000 && u.servicesVatPence === 6000;
+  })(), '£360 paid is £360 of cost when there is nothing to reclaim it against — the VAT inside it stays');
 
   /** THE LABELS ARE THE INVOICE'S OWN WORDS, because that is what the garage is reading while they type. */
   const auctionFees = M.SOURCE_RULES.auction.fees.map((f) => f.label);
@@ -439,8 +531,9 @@ try {
     JSON.stringify(auctionFees));
   check('  …and the premium’s note says the VAT is inside it',
     /VAT is inside this figure and not shown separately/.test(M.SOURCE_RULES.auction.fees[0].note));
-  check('  …and the indemnities’ note asks for the NET figure',
-    /Type the NET figure/.test(M.SOURCE_RULES.auction.fees[1].note));
+  check('  …and the indemnities’ note asks for the TOTAL, like every other field',
+    /Type the total including VAT/.test(M.SOURCE_RULES.auction.fees[1].note),
+    JSON.stringify(M.SOURCE_RULES.auction.fees[1].note));
 
   /**
    * AND THE ONE-FIELD MODELS STILL READ THE SAME. `buyerFeePence` MEANT different things by source, so it
@@ -451,10 +544,12 @@ try {
   const legacyTrade = S.normaliseInputs({ source: 'trade', buyerFeePence: 30000, purchasePence: HAMMER, salePence: 200000 });
   check('an old AUCTION fee becomes the premium', legacyAuction.premiumPence === 26520 && legacyAuction.servicesPence === 0,
     'the old rules folded it into the margin base with its VAT inside — that is a premium');
-  check('  …and an old TRADE fee becomes the service', legacyTrade.servicesPence === 30000 && legacyTrade.premiumPence === 0,
-    'the old rules treated it as a net standard-rated service');
+  check('  …and an old TRADE fee becomes the service, converted to gross', legacyTrade.servicesPence === 36000
+    && legacyTrade.premiumPence === 0,
+    '£300 typed under the old NET rules is £360 out of the bank — the same money, said the new way');
   check('  …and neither is counted twice', legacyAuction.premiumPence + legacyAuction.servicesPence === 26520
-    && legacyTrade.premiumPence + legacyTrade.servicesPence === 30000);
+    && legacyTrade.premiumPence + legacyTrade.servicesPence === 36000,
+    'the premium is already gross by definition, so only the services figure converts');
 
   /**
    * ── THE WRONG ANSWER THAT WAS TWO CLICKS AWAY ─────────────────────────────────────────────────
@@ -716,7 +811,7 @@ try {
   // THE REAL INVOICE, TYPED IN: £1,250 hammer, £265.20 premium, £68 indemnities.
   await bpage.fill('[data-testid="input-purchase"]', '1250');
   await bpage.fill('[data-testid="input-premium"]', '265.20');
-  await bpage.fill('[data-testid="input-services"]', '68');
+  await bpage.fill('[data-testid="input-services"]', '81.60');
   await bpage.waitForSelector('[data-testid="fee-effect-premium"]', { timeout: 15000 });
   const prem = ((await bpage.locator('[data-testid="fee-effect-premium"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
   const serv = ((await bpage.locator('[data-testid="fee-effect-services"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();

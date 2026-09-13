@@ -24,6 +24,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
+  GROSS_BASIS_NOTE, SALE_BASIS_NOTE,
   SOURCES, SOURCE_RULES, availableVatStatuses, hasFeeSlot,
   FUNDING_KINDS, blankFacility, fundingCost,
   type ModelInputs, type SliderKey, type VatStatus,
@@ -163,10 +164,16 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               data-testid="input-purchase"
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
           </label>
+          {/* ── THE FIGURE THAT NEVER SAID WHAT IT WAS ─────────────────────────────────────────────
+              `outputVat = sale × 1/6` EXTRACTS VAT from a VAT-inclusive amount, so this field has been
+              gross by construction since the qualifying toggle shipped — and the label said nothing at
+              all. Type an ex-VAT sale price on a qualifying car and the VAT owed is understated by a
+              sixth OF THE WHOLE SALE: £1,667 on a £10,000 car, an order of magnitude past any slider. */}
           <label className="text-sm text-muted">Expected sale price
             <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.salePence / 100)} onChange={setMoney('salePence')}
               data-testid="input-sale"
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
+            <span className="mt-1 block text-xs text-muted" data-testid="sale-basis">{SALE_BASIS_NOTE}</span>
           </label>
         </section>
 
@@ -183,7 +190,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
               className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
           </label>
           <p className="mt-1 text-xs text-muted" data-testid="autotrader-note">
-            Your Autotrader subscription, as you actually pay for it. This is <strong>not</strong> divided into this car —
+            Your Autotrader subscription, as you actually pay for it — {GROSS_BASIS_NOTE.toLowerCase()} This is <strong>not</strong> divided into this car —
             what each car would have to carry depends on how many you sell, which is what you are working out.
             Everything else you advertise on is the <strong>Additional advertising</strong> slider.
           </p>
@@ -416,6 +423,11 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
                   not know whether four is normal, and a bare number implies somebody knows. */}
               <p className="text-xs text-muted">
                 {s.note} <span className="whitespace-nowrap">Range {showSlider(s.key, s.min)}–{showSlider(s.key, s.max)}.</span>
+                {/* THE BASIS COMES FROM THE SLIDER'S OWN DECLARATION, not from a note somebody remembered
+                    to write — so a money slider cannot be added later without saying which figure it wants. */}
+                {s.basis === 'gross' && (
+                  <span className="block text-ink" data-testid={`basis-${s.key}`}>{GROSS_BASIS_NOTE}</span>
+                )}
               </p>
             </div>
           ))}

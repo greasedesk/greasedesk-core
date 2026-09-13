@@ -38,6 +38,32 @@ export type ModelStatus = (typeof MODEL_STATUSES)[number];
 export const VAT_STATUSES = ['margin', 'qualifying'] as const;
 export type VatStatus = (typeof VAT_STATUSES)[number];
 
+/**
+ * ── ONE CONVENTION FOR EVERY MONEY FIELD: WHAT LEAVES THE BANK ──────────────────────────────────
+ * Every amount typed into this model is the GROSS figure — the total paid, VAT included. It is the
+ * number on the document in front of the person, it needs no arithmetic at entry, and for a supplier
+ * who is not VAT registered it is the same number either way.
+ *
+ * The alternative was to let each field follow its own document's convention, which is how the page
+ * came to mix the two: the indemnities asked for NET while five sliders said nothing at all and were
+ * silently treated as final cost. A page mixing net and gross is wrong by a fifth in places nobody can
+ * see, and the error is invisible precisely because both readings look like a plausible amount.
+ *
+ * ── WHAT "STATES ITS BASIS" MEANS ───────────────────────────────────────────────────────────────
+ * Not that every field says "gross". A field may state its basis by ASKING — the purchase price does,
+ * because the trade genuinely quotes qualifying cars "plus VAT" and the answer is recorded rather than
+ * assumed. What is forbidden is a money field that leaves the reader to infer.
+ */
+export const GROSS_BASIS_NOTE = 'Type the total you pay, VAT included.';
+
+/**
+ * WHAT THE SALE FIGURE IS, and it was never said. `outputVat = sale × 1/6` EXTRACTS VAT from a
+ * VAT-inclusive amount, so this field has always been gross by construction — and the label said
+ * nothing. A garage typing an ex-VAT sale price on a qualifying car understates the VAT it owes by a
+ * sixth OF THE WHOLE SALE PRICE: £1,667 on a £10,000 car, an order of magnitude past any cost slider.
+ */
+export const SALE_BASIS_NOTE = 'What the customer pays, VAT included.';
+
 export const SOURCES = ['auction', 'trade', 'private', 'part_exchange'] as const;
 export type PurchaseSource = (typeof SOURCES)[number];
 
@@ -77,8 +103,12 @@ export type PurchaseSource = (typeof SOURCES)[number];
  *   as printed: this model neither adds VAT to that figure nor recovers any from it.
  *
  *   INDEMNITIES — Simulcast, SureCheck and the like. Standard rated with the VAT shown SEPARATELY,
- *   reclaimable if registered, and never part of the margin base. The garage types the NET figure and
- *   the model works the VAT out.
+ *   reclaimable if registered, and never part of the margin base. The garage types the TOTAL INCLUDING
+ *   VAT — the same convention as every other money field — and the model takes the VAT back out.
+ *
+ * Both fees are therefore typed the same way, as the total paid, and differ ONLY in relief route:
+ * the premium through the margin, the indemnities through recovery. Which is the invariant, restated
+ * as a data-entry rule.
  *
  * A dealer's admin fee is mechanically the same as an indemnity — a separate standard-rated service —
  * so it uses the same slot under its own label. The LABELS are the words on the invoice, deliberately:
@@ -111,7 +141,7 @@ export const SOURCE_RULES: Record<PurchaseSource, SourceRule> = {
       { slot: 'premium', label: 'Buyer’s premium',
         note: 'VAT is inside this figure and not shown separately, so type it exactly as the invoice has it. It forms part of the car’s price, so your margin is measured from it — and nothing is reclaimable from it.' },
       { slot: 'services', label: 'Indemnities',
-        note: 'Simulcast, SureCheck and the like — standard rated with the VAT shown separately. Type the NET figure; the VAT is reclaimable and it never touches your margin.' },
+        note: 'Simulcast, SureCheck and the like — standard rated. Type the total including VAT, as with everything else; the VAT is reclaimable and it never touches your margin.' },
     ],
     note: 'The buyer’s premium is invoiced as part of the price of the car; the indemnities are separate services. They behave differently, so they are asked for separately.',
   },
@@ -120,7 +150,7 @@ export const SOURCE_RULES: Record<PurchaseSource, SourceRule> = {
     vatStatuses: VAT_STATUSES,
     fees: [
       { slot: 'services', label: 'Admin or delivery fee',
-        note: 'A separate standard-rated service. Type the net figure — the VAT is reclaimable and it never changes your margin.' },
+        note: 'A separate standard-rated service. Type the total including VAT — the VAT is reclaimable and it never changes your margin.' },
     ],
     note: 'An admin or delivery fee from a dealer is a separate service, not part of the car’s price. It never changes your margin; it is a straight cost.',
   },
@@ -177,18 +207,22 @@ export function feePosition(
   // A FIGURE FOR A FEE THIS INVOICE CANNOT CARRY IS NOT A COST. It is a stale field from a changed
   // answer — a private seller invoices no premium — and reading it would be inventing money.
   const premium = hasFeeSlot(source, 'premium') ? Math.max(0, Math.round(fees.premiumPence)) : 0;
-  const services = hasFeeSlot(source, 'services') ? Math.max(0, Math.round(fees.servicesPence)) : 0;
-  const servicesVat = Math.round(services * 0.2);
+  // GROSS, like every other money field. It was typed NET until 2026-09-13, which made this the one
+  // field on the page asking for a different kind of number — so the VAT is now EXTRACTED (÷ 6) rather
+  // than ADDED (× 0.2). One direction of arithmetic everywhere.
+  const servicesGross = hasFeeSlot(source, 'services') ? Math.max(0, Math.round(fees.servicesPence)) : 0;
+  const servicesVat = Math.round(servicesGross * VAT_FRACTION);
   const reclaimable = vatRegistered ? servicesVat : 0;
   return {
     premiumPence: premium,
-    servicesPence: services,
+    // NET of its own VAT, so a reader of this field gets the cost rather than the payment.
+    servicesPence: servicesGross - servicesVat,
     servicesVatPence: servicesVat,
     // THE PREMIUM ONLY. Its VAT is already inside it, which is precisely why it cannot also be reclaimed.
     inMarginBasePence: premium,
-    cashOutPence: premium + services + servicesVat,
+    cashOutPence: premium + servicesGross,
     reclaimablePence: reclaimable,
-    netCostPence: premium + services + servicesVat - reclaimable,
+    netCostPence: premium + servicesGross - reclaimable,
   };
 }
 
@@ -419,8 +453,18 @@ export function blankFacility(): FundingPlan {
 }
 
 /** A slider: what it is, where it starts, and what counts as a plausible span for it. */
+/**
+ * WHETHER THIS FIELD CAN CARRY VAT AT ALL, and if so on what basis it is typed.
+ *   gross  — a money field carrying VAT: type the total paid. Slice 3 decides whether it comes back.
+ *   no_vat — a money field that cannot carry input VAT (wages; exempt interest). Nothing to state.
+ *   n/a    — not money. Hours, days, a percentage.
+ */
+export type FieldBasis = 'gross' | 'no_vat' | 'n/a';
+
 export type SliderDef = {
   key: SliderKey; label: string; unit: 'money' | 'hours' | 'days' | 'percent';
+  /** Declared per slider so the note and the arithmetic cannot drift apart. */
+  basis: FieldBasis;
   min: number; max: number; step: number; def: number;
   /** Said on screen beside the control, because a range with no reason is another invented number. */
   note: string;
@@ -438,13 +482,13 @@ export type SliderKey =
  * platforms" is a number pretending to be a definition.
  */
 export const SLIDERS: SliderDef[] = [
-  { key: 'prepHours', label: 'Prep hours', unit: 'hours', min: 0, max: 20, step: 0.5, def: 4,
+  { key: 'prepHours', basis: 'n/a', label: 'Prep hours', unit: 'hours', min: 0, max: 20, step: 0.5, def: 4,
     note: 'Workshop time before it goes on sale — valet, MOT, service, the small jobs.' },
-  { key: 'partsPence', label: 'Parts', unit: 'money', min: 0, max: 200000, step: 2500, def: 25000,
+  { key: 'partsPence', basis: 'gross', label: 'Parts', unit: 'money', min: 0, max: 200000, step: 2500, def: 25000,
     note: 'Parts and consumables fitted during prep, at cost.' },
-  { key: 'daysInStock', label: 'Days in stock', unit: 'days', min: 0, max: 180, step: 5, def: 45,
+  { key: 'daysInStock', basis: 'n/a', label: 'Days in stock', unit: 'days', min: 0, max: 180, step: 5, def: 45,
     note: 'Bought to sold. This is what the cost of money is charged over.' },
-  { key: 'advertisingPence', label: 'Additional advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
+  { key: 'advertisingPence', basis: 'gross', label: 'Additional advertising', unit: 'money', min: 0, max: 30000, step: 500, def: 6000,
     // ── THE SPLIT IS BY PLATFORM, NOT BY COST SHAPE (owner, 2026-09-13) ─────────────────────────
     // Autotrader is the industry standard and carries its own named monthly line; this slider is
     // EVERYTHING ELSE, and it is per car because that spend genuinely is. The note names the examples
@@ -455,15 +499,15 @@ export const SLIDERS: SliderDef[] = [
     // product cannot deliver, because the dominant platform is a subscription and no per-car figure for
     // a fixed cost has a denominator this page knows.
     note: 'eBay, Gumtree, Facebook Marketplace, a paid boost, photography — anything beyond the Autotrader subscription.' },
-  { key: 'warrantyPence', label: 'Warranty', unit: 'money', min: 0, max: 100000, step: 2500, def: 15000,
+  { key: 'warrantyPence', basis: 'gross', label: 'Warranty', unit: 'money', min: 0, max: 100000, step: 2500, def: 15000,
     note: 'What you expect this car to cost you after it leaves — provision, not a policy price.' },
-  { key: 'deliveryInPence', label: 'Delivery in', unit: 'money', min: 0, max: 50000, step: 1000, def: 12000,
+  { key: 'deliveryInPence', basis: 'gross', label: 'Delivery in', unit: 'money', min: 0, max: 50000, step: 1000, def: 12000,
     note: 'Getting it from the auction or the seller to you.' },
-  { key: 'deliveryOutPence', label: 'Delivery out', unit: 'money', min: 0, max: 50000, step: 1000, def: 0,
+  { key: 'deliveryOutPence', basis: 'gross', label: 'Delivery out', unit: 'money', min: 0, max: 50000, step: 1000, def: 0,
     note: 'Getting it to the buyer, if you are paying for that.' },
-  { key: 'workshopCostPerHourPence', label: 'Workshop cost per hour', unit: 'money', min: 2000, max: 9000, step: 250, def: 4500,
+  { key: 'workshopCostPerHourPence', basis: 'no_vat', label: 'Workshop cost per hour', unit: 'money', min: 2000, max: 9000, step: 250, def: 4500,
     note: 'What an hour in your workshop COSTS you — not what you charge. A slider until the standing-still rate exists.' },
-  { key: 'costOfMoneyAnnualPct', label: 'Cost of money', unit: 'percent', min: 0, max: 20, step: 0.5, def: 9,
+  { key: 'costOfMoneyAnnualPct', basis: 'n/a', label: 'Cost of money', unit: 'percent', min: 0, max: 20, step: 0.5, def: 9,
     // WAS: "stocking finance, an overdraft, or what the cash would otherwise earn" — three things with
     // different shapes behind one annual rate. A facility is a repayment schedule and now has its own
     // model, so this rate is the one that applies to the two that genuinely ARE rates.
@@ -505,11 +549,18 @@ export type ModelInputs = {
    */
   premiumPence: number;
   /**
-   * STANDARD-RATED SERVICES on the purchase invoice, NET: an auction's indemnities, a dealer's admin
-   * fee. One field because the mechanism is identical; the LABEL differs by source because the words on
-   * the invoice differ, and those are the words the garage is reading.
+   * STANDARD-RATED SERVICES on the purchase invoice: an auction's indemnities, a dealer's admin fee.
+   * TYPED GROSS, like every other money field — the total paid, VAT included. One field because the
+   * mechanism is identical; the LABEL differs by source because the words on the invoice differ, and
+   * those are the words the garage is reading.
    */
   servicesPence: number;
+  /**
+   * WHICH CONVENTION `servicesPence` WAS TYPED ON. 'gross' from 2026-09-13; ABSENT means a document
+   * written before that, when this field alone asked for the NET figure. £68 net and £68 gross are the
+   * same number, so the document must say which — see toGross in lib/purchase-model-store.
+   */
+  feeEntryBasis?: 'gross';
   /**
    * DOES THE TYPED PURCHASE PRICE INCLUDE VAT? Only meaningful when the car is VAT qualifying — on
    * the margin scheme nothing is recoverable and the typed figure is simply what you paid.

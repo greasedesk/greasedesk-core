@@ -60,6 +60,21 @@ function legacyFee(b: Record<string, unknown>, source: PurchaseSource, slot: 'pr
   return 0;
 }
 
+/**
+ * A SERVICES FIGURE TYPED BEFORE THE CONVENTION CHANGED. Net becomes gross by adding the VAT that was
+ * previously worked out on top of it, so the ANSWER a stored model gives is identical either side of
+ * the change — the number in the box moves, nothing it produces does. Idempotent: a document already
+ * stamped `gross` is returned untouched, so re-reading cannot inflate it by 20% a second time.
+ *
+ * There are no such documents today (zero PurchaseModel rows exist at the time of writing), so this
+ * protects nothing yet. The page is live and a save is one click away, which is the whole reason it is
+ * here rather than in a note saying it would be easy to add.
+ */
+function toGross(value: number, basis: unknown): number {
+  if (basis === 'gross') return value;
+  return Math.round(value * 1.2);
+}
+
 export function normaliseInputs(raw: unknown): ModelInputs {
   const b = (raw ?? {}) as Record<string, unknown>;
   const num = (v: unknown, fallback: number) => {
@@ -89,9 +104,16 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     premiumPence: hasFeeSlot(source, 'premium')
       ? Math.min(5000000, Math.max(0, Math.round(num(b.premiumPence, legacyFee(b, source, 'premium')))))
       : 0,
+    // ── AND THE BASIS IT WAS TYPED ON ───────────────────────────────────────────────────────────
+    // This field asked for the NET figure until 2026-09-13, when every money field became gross. The
+    // two are indistinguishable as numbers — £68 net and £68 gross are both "68" — so the document has
+    // to SAY which, and a document that does not say is old and therefore net.
     servicesPence: hasFeeSlot(source, 'services')
-      ? Math.min(5000000, Math.max(0, Math.round(num(b.servicesPence, legacyFee(b, source, 'services')))))
+      ? Math.min(5000000, Math.max(0, Math.round(
+          toGross(num(b.servicesPence, legacyFee(b, source, 'services')), b.feeEntryBasis))))
       : 0,
+    // Stamped on every save from now on. Its ABSENCE is the migration signal, so it is never omitted.
+    feeEntryBasis: 'gross',
     // ── THE CONSTRAINT LIVES HERE, NOT ONLY IN THE FORM ─────────────────────────────────────────
     // A car bought privately cannot be VAT qualifying: there is no VAT invoice to reclaim against. The
     // page hides the toggle, but a hidden control is not a rule — this is the WRITER, and it is what
