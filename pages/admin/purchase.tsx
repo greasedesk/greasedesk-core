@@ -24,6 +24,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import {
   SLIDERS, computeModel, defaultInputs, sensitivity, clampSlider, salesToCoverMonthly,
+  SOURCES, SOURCE_RULES, availableVatStatuses,
   type ModelInputs, type SliderKey, type VatStatus,
 } from '@/lib/purchase-model';
 
@@ -54,8 +55,11 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
 
   // PURE, AND RECOMPUTED EVERY RENDER. No effect, no debounce, no stale answer: the model is
   // arithmetic over the inputs, so the screen cannot lag behind the thumb.
-  const r = useMemo(() => computeModel(inputs), [inputs]);
-  const ranked = useMemo(() => sensitivity(inputs), [inputs]);
+  // THE TENANT'S REGISTRATION IS A PROP, NEVER A SAVED FIELD: it is read from the tax profile on every
+  // render, so a garage that registers tomorrow gets the right answer on a model saved today.
+  const modelOpts = useMemo(() => ({ vatRegistered }), [vatRegistered]);
+  const r = useMemo(() => computeModel(inputs, modelOpts), [inputs, modelOpts]);
+  const ranked = useMemo(() => sensitivity(inputs, modelOpts), [inputs, modelOpts]);
 
   const load = useCallback(async () => {
     try {
@@ -67,7 +71,7 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
 
   const set = (k: SliderKey) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: clampSlider(k, Number(e.target.value)) }));
-  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence') => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const setMoney = (k: 'purchasePence' | 'salePence' | 'adContractMonthlyPence' | 'buyerFeePence') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setInputs((p) => ({ ...p, [k]: Math.max(0, Math.round(Number(e.target.value || 0) * 100)) }));
 
   async function save() {
@@ -135,13 +139,70 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
           </p>
         </section>
 
+        {/* ── WHERE DID IT COME FROM? ──────────────────────────────────────────────────────────────
+            Asked before the VAT treatment because it DECIDES the VAT treatment: a car bought privately
+            or taken in part-exchange cannot be VAT qualifying — there is no VAT invoice to reclaim
+            against. The toggle used to be free, so "private" plus "qualifying" gave a £1,667 answer
+            that cannot happen. And the answer decides what a buyer's fee does: folded into the price
+            of the goods at auction, a separate service from a dealer. */}
+        <fieldset className="mt-6 border-t border-line pt-4" data-testid="source-question">
+          <legend className="text-sm text-muted">Where did you buy it?</legend>
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            {SOURCES.map((v) => (
+              <button key={v} type="button" data-testid={`source-${v}`}
+                onClick={() => setInputs((p) => {
+                  // THE ANSWER CARRIES ITS CONSEQUENCES. Changing to a source that cannot be qualifying
+                  // moves the treatment back to margin HERE, so the screen never shows an impossible
+                  // pair even for a render — and the writer enforces the same rule independently.
+                  const allowed = availableVatStatuses(v);
+                  return {
+                    ...p, source: v,
+                    vatStatus: allowed.includes(p.vatStatus) ? p.vatStatus : allowed[0],
+                    buyerFeePence: SOURCE_RULES[v].hasFee ? p.buyerFeePence : 0,
+                  };
+                })}
+                className={`min-h-[44px] rounded-lg border text-sm font-medium ${
+                  inputs.source === v ? 'bg-accent text-white border-accent' : 'bg-surface text-ink border-line'}`}>
+                {SOURCE_RULES[v].label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-muted" data-testid="source-note">{SOURCE_RULES[inputs.source].note}</p>
+
+          {/* THE FEE, ONLY WHERE ONE EXISTS. A private seller does not invoice a premium, so the field
+              is absent rather than zeroed — an empty box invites a number that means nothing. */}
+          {SOURCE_RULES[inputs.source].hasFee && (
+            <label className="mt-3 block text-sm text-muted" data-testid="fee-field">
+              {inputs.source === 'auction' ? 'Buyer’s fee' : 'Admin or delivery fee'}
+              <input type="number" inputMode="decimal" min={0} value={Math.round(inputs.buyerFeePence / 100) || ''}
+                onChange={setMoney('buyerFeePence')} data-testid="input-fee" placeholder="0"
+                className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
+            </label>
+          )}
+          {/* WHAT IT ACTUALLY DID — said in pounds, because the two answers differ and the difference
+              is the point. Only once a fee is typed: a sentence about £0 teaches nothing. */}
+          {inputs.buyerFeePence > 0 && (
+            <p className="mt-1 text-xs text-ink" data-testid="fee-effect">
+              {r.fee.inMarginBasePence > 0
+                ? `Invoiced as part of the car, so your margin is measured from ${money(inputs.purchasePence + r.fee.inMarginBasePence)} — the fee costs you ${moneyExact(r.fee.netCostPence - (inputs.vatStatus === 'margin' ? Math.round(r.fee.inMarginBasePence / 6) : 0))} after the VAT it saves.`
+                : r.fee.reclaimablePence > 0
+                  ? `A separate service: ${moneyExact(r.fee.cashOutPence)} leaves the bank, ${moneyExact(r.fee.reclaimablePence)} of VAT comes back, and it does not change your margin.`
+                  : `A straight cost of ${moneyExact(r.fee.netCostPence)}. It does not change your margin.`}
+            </p>
+          )}
+        </fieldset>
+
         {/* THE TOGGLE, NOT AN ASSUMPTION. £8,000 in and £10,000 out is £333 on the margin scheme and
             £1,667 if the car is VAT qualifying — four figures apart on one car, so it is asked. */}
         {qualifyingAvailable ? (
           <fieldset className="mt-4" data-testid="vat-toggle">
             <legend className="text-sm text-muted">VAT treatment</legend>
             <div className="mt-1 flex gap-2">
-              {([['margin', 'Margin scheme'], ['qualifying', 'VAT qualifying']] as [VatStatus, string][]).map(([v, l]) => (
+              {([['margin', 'Margin scheme'], ['qualifying', 'VAT qualifying']] as [VatStatus, string][])
+                // ONLY WHAT THIS SOURCE CAN PRODUCE. Filtered rather than disabled: a greyed-out
+                // control invites "why not?", and the source note above already answers it.
+                .filter(([v]) => availableVatStatuses(inputs.source).includes(v))
+                .map(([v, l]) => (
                 <button key={v} type="button" onClick={() => setInputs((p) => ({ ...p, vatStatus: v }))}
                   data-testid={`vat-${v}`}
                   className={`flex-1 min-h-[44px] rounded-lg border text-sm font-medium ${
@@ -153,6 +214,11 @@ export default function PurchaseModelPage({ vatRegistered }: { vatRegistered: bo
             <p className="mt-1 text-xs text-muted">
               {inputs.vatStatus === 'margin' ? 'VAT on the margin only, and none if it sells at or below cost.' : 'VAT on the full sale price, less the VAT you reclaim on the purchase.'}
             </p>
+            {availableVatStatuses(inputs.source).length === 1 && (
+              <p className="mt-1 text-xs text-muted" data-testid="vat-forced">
+                {SOURCE_RULES[inputs.source].label} means there is no VAT invoice to reclaim against, so the margin scheme is the only route.
+              </p>
+            )}
 
             {/* THE QUESTION THE WHOLE DEFECT CAME FROM. Asked as the invoice in front of them, not as
                 tax, and only where it means anything. Neither reading announced itself before. */}

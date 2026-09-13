@@ -8,8 +8,7 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs,
-  type ModelInputs, type SliderKey, type VatStatus,
+  SLIDERS, VAT_STATUSES, MODEL_STATUSES, clampSlider, computeModel, defaultInputs, type ModelInputs, type SliderKey, type VatStatus, SOURCES, SOURCE_RULES, availableVatStatuses, type PurchaseSource,
 } from '@/lib/purchase-model';
 
 /** Whatever arrived over the wire, made safe: every slider clamped to its own definition. */
@@ -20,10 +19,27 @@ export function normaliseInputs(raw: unknown): ModelInputs {
     return Number.isFinite(n) ? n : fallback;
   };
   const d = defaultInputs();
+  // SOURCE FIRST: the fee and the VAT status are both read through it, so it has to be settled before
+  // either. An unrecognised source is the default rather than a refusal — this normalises a document.
+  const source: PurchaseSource = (SOURCES as readonly string[]).includes(String(b.source))
+    ? (b.source as PurchaseSource) : d.source;
   const out: ModelInputs = {
     purchasePence: Math.max(0, Math.round(num(b.purchasePence, d.purchasePence))),
     salePence: Math.max(0, Math.round(num(b.salePence, d.salePence))),
-    vatStatus: (VAT_STATUSES as readonly string[]).includes(String(b.vatStatus)) ? (b.vatStatus as VatStatus) : d.vatStatus,
+    source,
+    // THE FEE IS ZERO FOR A SOURCE THAT CANNOT CHARGE ONE. A private seller does not invoice a premium,
+    // so a fee arriving with source 'private' is a stale field from a changed answer, not a cost.
+    buyerFeePence: SOURCE_RULES[source].hasFee
+      ? Math.min(5000000, Math.max(0, Math.round(num(b.buyerFeePence, 0))))
+      : 0,
+    // ── THE CONSTRAINT LIVES HERE, NOT ONLY IN THE FORM ─────────────────────────────────────────
+    // A car bought privately cannot be VAT qualifying: there is no VAT invoice to reclaim against. The
+    // page hides the toggle, but a hidden control is not a rule — this is the WRITER, and it is what
+    // stops a hand-made POST, or a model saved before the source question existed, producing a £1,667
+    // answer that cannot happen. Falls back to the source's FIRST permitted status, which is margin.
+    vatStatus: availableVatStatuses(source).includes(String(b.vatStatus) as VatStatus)
+      ? (b.vatStatus as VatStatus)
+      : availableVatStatuses(source)[0],
     // DEFAULTS TO PLUS VAT (false): it preserves the behaviour that shipped and is the conservative
     // reading — it produces the lower profit. An absent field is therefore never the generous answer.
     purchaseIncludesVat: b.purchaseIncludesVat === true,

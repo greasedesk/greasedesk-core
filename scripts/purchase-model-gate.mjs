@@ -286,6 +286,96 @@ try {
     'the ranking swings sliders across their range; a monthly contract is not one of them');
 
   /**
+   * ── WHERE IT CAME FROM, AND WHAT A FEE DOES ABOUT IT ──────────────────────────────────────────
+   * On a margin car an auction's buyer fee is invoiced as part of the price of the GOODS, so it raises
+   * the figure the margin is measured from: a £300 fee costs £250, because the margin falls £300 and
+   * the VAT on it £50. The same £300 from a dealer is a separate standard-rated service — a flat cost
+   * that never touches the margin. Same money typed, two answers £50 apart.
+   */
+  console.log('\n— the source decides what a fee is —');
+  // A BARE CAR: every cost zeroed so the only thing moving is the fee. Named feeBase because `base`
+  // is already taken in this file by the worked £8,000/£10,000 case.
+  const feeBase = { ...M.defaultInputs(), purchasePence: 800000, salePence: 1000000, vatStatus: 'margin',
+    prepHours: 0, partsPence: 0, advertisingPence: 0, warrantyPence: 0, deliveryInPence: 0,
+    deliveryOutPence: 0, daysInStock: 0, buyerFeePence: 30000 };
+  const atAuction = M.computeModel({ ...feeBase, source: 'auction' });
+  const fromTrade = M.computeModel({ ...feeBase, source: 'trade' }, { vatRegistered: true });
+  check('an auction fee raises the price the MARGIN is measured from', atAuction.fee.inMarginBasePence === 30000,
+    'invoiced as part of the goods, so the relief comes through the margin');
+  check('  …and the VAT due falls by a sixth of it', (() => {
+    const noFee = M.computeModel({ ...feeBase, source: 'auction', buyerFeePence: 0 });
+    return Math.abs((noFee.vatDuePence - atAuction.vatDuePence) - 5000) <= 1;   // £300/6 = £50, ±1p for rounding
+  })(), '£300 of fee = £50 less VAT, so the fee costs £250 not £300');
+  check('a dealer fee does NOT touch the margin', fromTrade.fee.inMarginBasePence === 0
+    && M.computeModel({ ...feeBase, source: 'trade', buyerFeePence: 0 }, { vatRegistered: true }).vatDuePence === fromTrade.vatDuePence,
+    'a separate service: the VAT due is identical with and without it');
+  check('  …and the SAME £300 leaves the two garages differently off',
+    atAuction.contributionPence !== fromTrade.contributionPence,
+    `auction ${atAuction.contributionPence}p vs trade ${fromTrade.contributionPence}p — one number typed, two answers, which is why this is a question and not a slider`);
+
+  /**
+   * THE INVARIANT, FOR EVERY SOURCE. A fee is EITHER inside the margin base OR reclaimable, never
+   * both. Asserted across the whole table rather than on the two rows I happened to write, because the
+   * next row added is the one that will get it wrong.
+   */
+  for (const src of M.SOURCES) {
+    const f = M.feePosition(src, 30000, true);
+    check(`  …${src}: the fee is in the margin base OR reclaimable, never both`,
+      !(f.inMarginBasePence > 0 && f.reclaimablePence > 0),
+      `base +${f.inMarginBasePence}p, reclaim ${f.reclaimablePence}p — counting it twice is the failure mode`);
+  }
+  check('a private sale and a part-exchange carry NO fee at all', M.feePosition('private', 30000, true).cashOutPence === 0
+    && M.feePosition('part_exchange', 30000, true).cashOutPence === 0,
+    'a typed fee on a source that cannot invoice one is a stale field, not a cost');
+  check('an unregistered garage does not reclaim the dealer fee’s VAT',
+    M.feePosition('trade', 30000, false).reclaimablePence === 0
+    && M.feePosition('trade', 30000, false).netCostPence === 36000,
+    '£300 + VAT is a £360 cost when there is nothing to reclaim it against');
+
+  /**
+   * ── THE WRONG ANSWER THAT WAS TWO CLICKS AWAY ─────────────────────────────────────────────────
+   * A car bought privately cannot be VAT qualifying — there is no VAT invoice to reclaim against — and
+   * the toggle was free. The rule is enforced in the WRITER, not only in the form: a hidden control is
+   * not a rule, and a model saved before the source question existed comes back through the same door.
+   */
+  check('private and part-exchange can only be margin', M.availableVatStatuses('private').join() === 'margin'
+    && M.availableVatStatuses('part_exchange').join() === 'margin');
+  check('  …while auction and trade can be either', M.availableVatStatuses('auction').length === 2
+    && M.availableVatStatuses('trade').length === 2);
+  const forced = S.normaliseInputs({ source: 'private', vatStatus: 'qualifying', buyerFeePence: 30000 });
+  check('the WRITER refuses an impossible pair, not just the form', forced.vatStatus === 'margin',
+    'posted source=private + vatStatus=qualifying, stored as margin — this is what a hand-made POST meets');
+  check('  …and drops a fee the source cannot charge', forced.buyerFeePence === 0, `${forced.buyerFeePence}p`);
+  check('  …and an unknown source falls back rather than throwing', S.normaliseInputs({ source: 'ebay' }).source === 'auction',
+    'normalising a document, not validating a form');
+
+  /**
+   * AND NOTHING MOVED FOR A MODEL WITHOUT A FEE. The margin base defaults to the purchase price, so
+   * every answer that predates the source question is identical — asserted rather than assumed,
+   * because "it defaults to the old behaviour" is the claim most often made and least often checked.
+   */
+  const legacy = { ...M.defaultInputs(), buyerFeePence: 0 };
+  const viaDefault = M.vatPosition(800000, 1000000, 'margin', false);
+  const viaBase = M.vatPosition(800000, 1000000, 'margin', false, 800000);
+  check('vatPosition with no margin base given == the base being the purchase price',
+    JSON.stringify(viaDefault) === JSON.stringify(viaBase), 'the new parameter changes nothing when nobody passes it');
+  check('  …and a fee of zero leaves the whole answer untouched',
+    M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'trade' }).contributionPence
+    && M.computeModel(legacy).contributionPence === M.computeModel({ ...legacy, source: 'private' }).contributionPence,
+    'the source alone moves no money; only a fee does');
+
+  /**
+   * ── EVERY BROWSER CLAUSE RUNS LAST, AND THAT IS DELIBERATE ────────────────────────────────────
+   * A waitForSelector that times out THROWS, and the catch ends the run — so every clause after it is
+   * never reached and reports nothing. On 2026-09-13 a mutation letting a private purchase be VAT
+   * qualifying was red-proved and produced ONE failure: "run completed — Timeout". The pure clause
+   * written to name that exact defect sat below the browser leg and never ran; 78 of 121 clauses
+   * executed and the gate said nothing about why.
+   *
+   * So the cheap, pure, always-available assertions come first, and anything driving a real browser
+   * comes last. A gate that dies tells you nothing about the clauses it never reached.
+   */
+  /**
    * ── THE BREAK-EVEN SENTENCE, DRIVEN ───────────────────────────────────────────────────────────
    * It only exists once a contract is typed, and the contract lives in React state — so the served
    * HTML with default inputs cannot show it and a source scan would be the only other option. That
@@ -322,6 +412,42 @@ try {
     JSON.stringify(sentence));
   check(`  …and the figure is the rule's own answer (${expect})`, new RegExp(`\\b${expect}\\b`).test(sentence),
     `contribution on screen ${shown}, so ${expect} — compared against the function, not against a number I hardcoded`);
+
+  /**
+   * ── THE TWO CLICKS, DRIVEN ────────────────────────────────────────────────────────────────────
+   * "Private" plus "VAT qualifying" gave a £1,667 answer that cannot happen, and it was two taps away.
+   * The writer refuses the pair (asserted above, as a pure function); this asserts the SCREEN never
+   * offers it — which is a different claim, and the one a person actually meets.
+   */
+  await bpage.click('[data-testid="source-private"]');
+  await bpage.waitForSelector('[data-testid="vat-forced"]', { timeout: 15000 });
+  check('a private purchase does not OFFER VAT qualifying',
+    (await bpage.locator('[data-testid="vat-qualifying"]').count()) === 0
+    && (await bpage.locator('[data-testid="vat-margin"]').count()) === 1,
+    'filtered, not disabled — a greyed control invites "why not?", and the source note answers it already');
+  check('  …and says why, where the choice used to be',
+    /no VAT invoice to reclaim against/.test((await bpage.locator('[data-testid="vat-forced"]').textContent()) ?? ''));
+  check('  …and asks for no fee a private seller would never charge',
+    (await bpage.locator('[data-testid="fee-field"]').count()) === 0,
+    'absent rather than zeroed: an empty box invites a number that means nothing');
+
+  // SWITCHING BACK RESTORES THE CHOICE, and a typed fee then says what it did in pounds.
+  await bpage.click('[data-testid="source-auction"]');
+  await bpage.waitForSelector('[data-testid="input-fee"]', { timeout: 15000 });
+  check('an auction purchase offers both treatments again',
+    (await bpage.locator('[data-testid="vat-qualifying"]').count()) === 1);
+  await bpage.fill('[data-testid="input-fee"]', '300');
+  await bpage.waitForSelector('[data-testid="fee-effect"]', { timeout: 15000 });
+  const feeSaid = ((await bpage.locator('[data-testid="fee-effect"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('the page says what the auction fee DID, in pounds', /margin is measured from/.test(feeSaid),
+    JSON.stringify(feeSaid));
+  // AND THE DISCRIMINATOR: the same £300 from a dealer says something different.
+  await bpage.click('[data-testid="source-trade"]');
+  await bpage.waitForSelector('[data-testid="fee-effect"]', { timeout: 15000 });
+  const tradeSaid = ((await bpage.locator('[data-testid="fee-effect"]').textContent()) ?? '').replace(/\s+/g, ' ').trim();
+  check('  …and the same fee from a dealer says something DIFFERENT', tradeSaid !== feeSaid
+    && /does not change your margin/.test(tradeSaid),
+    JSON.stringify(tradeSaid));
 
   // AND THE IMPOSSIBLE CASE IS A REFUSAL, NOT INFINITY. Sale below purchase: the contribution goes
   // negative and no quantity of sales covers anything.

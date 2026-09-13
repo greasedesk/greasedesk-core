@@ -38,6 +38,121 @@ export type ModelStatus = (typeof MODEL_STATUSES)[number];
 export const VAT_STATUSES = ['margin', 'qualifying'] as const;
 export type VatStatus = (typeof VAT_STATUSES)[number];
 
+export const SOURCES = ['auction', 'trade', 'private', 'part_exchange'] as const;
+export type PurchaseSource = (typeof SOURCES)[number];
+
+/**
+ * ── WHERE THE CAR CAME FROM, AND WHY IT IS A QUESTION RATHER THAN A SLIDER ───────────────────────
+ * A buyer's fee is not a cost line. At auction the auctioneer invoices the hammer price and the
+ * buyer's premium as the price of the GOODS, so on a margin car the fee raises the purchase price the
+ * margin is measured from — and a £300 fee therefore costs £250, because the margin falls by £300 and
+ * the VAT on it by £50. Bought from another dealer, the same £300 "admin fee" is a separate
+ * standard-rated SERVICE: it never touches the margin and it is a flat cost.
+ *
+ * Same money typed, two answers £50 apart. A "Fees" slider would add it to other costs and be wrong
+ * in both directions at once — which is why the missing thing was a QUESTION, not a control.
+ *
+ * ── AND THE INVARIANT, WHICH IS THE WHOLE THING ─────────────────────────────────────────────────
+ * A fee is EITHER inside the margin base OR reclaimable. NEVER BOTH. Counting it twice is the
+ * failure mode this table exists to prevent, and purchase-model-gate asserts it for every source
+ * rather than trusting the rows below to stay consistent.
+ *
+ * ── SOURCE ALSO DECIDES WHAT THE VAT TOGGLE MAY SAY ─────────────────────────────────────────────
+ * A car bought privately cannot be VAT qualifying: there is no VAT invoice to reclaim against. Nor
+ * can one taken in part-exchange from a private customer. Before this, the toggle was free, so
+ * "private" plus "qualifying" produced a £1,667 answer that cannot happen — a wrong answer reachable
+ * in two clicks, and worse than the missing fee.
+ *
+ * WHAT THIS DOES NOT CLAIM: whether a particular auction invoice is drawn under the Auctioneers'
+ * Scheme, or whether a given dealer's fee carries VAT. Those belong to the garage's accountant; what
+ * is modelled here is the SHAPE each answer implies, and the source is the person's own statement.
+ */
+export type SourceRule = {
+  label: string;
+  /** Does a buyer's fee form part of the price the MARGIN is measured from? */
+  feeInMarginBase: boolean;
+  /** What becomes of VAT on the fee itself. `in_goods_price` = inside the purchase, nothing separate. */
+  feeVat: 'in_goods_price' | 'reclaimable' | 'none';
+  /** Whether this source can produce a fee at all — private sellers do not invoice one. */
+  hasFee: boolean;
+  /** The VAT treatments this source can actually produce. */
+  vatStatuses: readonly VatStatus[];
+  note: string;
+};
+
+export const SOURCE_RULES: Record<PurchaseSource, SourceRule> = {
+  auction: {
+    label: 'Auction', feeInMarginBase: true, feeVat: 'in_goods_price', hasFee: true,
+    vatStatuses: VAT_STATUSES,
+    note: 'The buyer’s fee is invoiced as part of the price of the car, so on a margin car it raises the figure your margin is measured from — and costs you less than it looks.',
+  },
+  trade: {
+    label: 'Another dealer', feeInMarginBase: false, feeVat: 'reclaimable', hasFee: true,
+    vatStatuses: VAT_STATUSES,
+    note: 'An admin or delivery fee from a dealer is a separate service, not part of the car’s price. It never changes your margin; it is a straight cost.',
+  },
+  private: {
+    label: 'Private seller', feeInMarginBase: false, feeVat: 'none', hasFee: false,
+    vatStatuses: ['margin'],
+    note: 'No fee and no VAT invoice, so there is nothing to reclaim — this car can only be sold on the margin scheme.',
+  },
+  part_exchange: {
+    label: 'Part-exchange', feeInMarginBase: false, feeVat: 'none', hasFee: false,
+    vatStatuses: ['margin'],
+    note: 'The purchase price IS the allowance you gave against the other car. No fee, no VAT invoice, margin scheme only.',
+  },
+};
+
+/** What the toggle may offer for this source. One reader, so the page and the writer cannot disagree. */
+export function availableVatStatuses(source: PurchaseSource): readonly VatStatus[] {
+  return SOURCE_RULES[source].vatStatuses;
+}
+
+export type FeePosition = {
+  /** Added to the price the margin is measured from. Zero unless the source folds it in. */
+  inMarginBasePence: number;
+  /** What the fee takes out of the bank, VAT on the fee included. */
+  cashOutPence: number;
+  /** VAT on the fee that comes back. Zero unless the source makes it separately reclaimable. */
+  reclaimablePence: number;
+  /** The fee as a COST, after anything reclaimed. */
+  netCostPence: number;
+};
+
+/**
+ * THE FEE, BY SOURCE. Four numbers for the same reason the VAT position is four: what leaves the
+ * bank, what comes back, what it costs, and what it does to the margin are different questions.
+ *
+ * `vatRegistered` is passed in rather than stored. It is the TENANT's registration, read from the tax
+ * profile on every render — persisting it into a saved model's inputs would freeze a fact about the
+ * business inside a document about a car, and it would be wrong the day they registered.
+ */
+export function feePosition(
+  source: PurchaseSource, feePence: number, vatRegistered: boolean,
+): FeePosition {
+  const rule = SOURCE_RULES[source];
+  const fee = rule.hasFee ? Math.max(0, Math.round(feePence)) : 0;
+  if (fee === 0) return { inMarginBasePence: 0, cashOutPence: 0, reclaimablePence: 0, netCostPence: 0 };
+
+  if (rule.feeInMarginBase) {
+    // IN THE GOODS PRICE. The relief comes through the margin, so there is nothing to reclaim — and
+    // claiming both would be the double count the invariant forbids.
+    return { inMarginBasePence: fee, cashOutPence: fee, reclaimablePence: 0, netCostPence: fee };
+  }
+  if (rule.feeVat === 'reclaimable') {
+    // A SERVICE, STANDARD RATED ON TOP. The typed fee is the net amount — that is how a dealer quotes
+    // an admin fee — so VAT is added to what leaves the bank and comes back only if registered.
+    const vat = Math.round(fee * 0.2);
+    return {
+      inMarginBasePence: 0,
+      cashOutPence: fee + vat,
+      reclaimablePence: vatRegistered ? vat : 0,
+      netCostPence: fee + (vatRegistered ? 0 : vat),
+    };
+  }
+  return { inMarginBasePence: 0, cashOutPence: fee, reclaimablePence: 0, netCostPence: fee };
+}
+
 /** The UK VAT fraction on a VAT-inclusive amount at 20%: 20/120. */
 const VAT_FRACTION = 1 / 6;
 
@@ -101,9 +216,18 @@ export type VatPosition = {
  * that. Not modelled — named on screen, and on the accountant list. Nor is the TIMING: the reclaim
  * arrives on the next return, so the VAT is out for up to about four months. Named, not modelled.
  */
-export function vatPosition(purchasePence: number, salePence: number, status: VatStatus, purchaseIncludesVat: boolean): VatPosition {
+export function vatPosition(
+  purchasePence: number, salePence: number, status: VatStatus, purchaseIncludesVat: boolean,
+  /**
+   * THE PRICE THE MARGIN IS MEASURED FROM, when it is not simply what you paid for the car — an
+   * auction's buyer fee is invoiced as part of the goods. DEFAULTS TO purchasePence, so every caller
+   * that predates the source question gets the identical answer it got before; purchase-model-gate
+   * asserts that equality rather than leaving it to be assumed.
+   */
+  marginBasePence: number = purchasePence,
+): VatPosition {
   if (status === 'margin') {
-    const outputVat = vatDuePence(purchasePence, salePence, 'margin');
+    const outputVat = vatDuePence(marginBasePence, salePence, 'margin');
     // NOTHING IS RECLAIMABLE on the margin scheme; the typed price is simply what you paid.
     return { outputVatPence: outputVat, inputVatPence: 0, vatToHmrcPence: outputVat, cashOutPence: purchasePence, netCostPence: purchasePence };
   }
@@ -178,6 +302,13 @@ export type ModelInputs = {
    * would state one dealer's contract as a fact about every garage.
    */
   adContractMonthlyPence: number;
+  /** WHERE IT CAME FROM. Decides what a fee does, and what the VAT toggle is allowed to say. */
+  source: PurchaseSource;
+  /**
+   * THE BUYER'S FEE — the auction's premium, or a dealer's admin fee. Typed NET: that is how both are
+   * quoted. What it does to the answer is SOURCE_RULES' business, not this field's.
+   */
+  buyerFeePence: number;
   /**
    * DOES THE TYPED PURCHASE PRICE INCLUDE VAT? Only meaningful when the car is VAT qualifying — on
    * the margin scheme nothing is recoverable and the typed figure is simply what you paid.
@@ -197,7 +328,7 @@ export type ModelInputs = {
 /** Every slider at its default, so a fresh model opens on something rather than on zeroes. */
 export function defaultInputs(): ModelInputs {
   const sliders = Object.fromEntries(SLIDERS.map((s) => [s.key, s.def])) as Record<SliderKey, number>;
-  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, ...sliders };
+  return { purchasePence: 800000, salePence: 1000000, vatStatus: 'margin', purchaseIncludesVat: false, adContractMonthlyPence: 0, source: 'auction', buyerFeePence: 0, ...sliders };
 }
 
 /**
@@ -213,6 +344,8 @@ export function defaultInputs(): ModelInputs {
  */
 export type ModelResult = {
   vat: VatPosition;
+  /** What the buyer's fee did — to the bank, to the margin, and to the cost. */
+  fee: FeePosition;
   vatDuePence: number;
   workshopCostPence: number;
   stockingCostPence: number;
@@ -231,18 +364,28 @@ export type ModelResult = {
  * distribution across reporting periods — lib/costs' spread/falls machinery answers a different
  * question, about real dated costs landing in real months, and this model owns no such thing.
  */
-export function computeModel(i: ModelInputs): ModelResult {
-  const vat = vatPosition(i.purchasePence, i.salePence, i.vatStatus, i.purchaseIncludesVat);
+export function computeModel(i: ModelInputs, opts: { vatRegistered?: boolean } = {}): ModelResult {
+  // THE FEE FIRST, because on a margin car it changes the figure the VAT is worked out from. A fee
+  // added afterwards as a cost would give the right total and the wrong VAT, which is the error this
+  // whole slice exists to prevent.
+  const fee = feePosition(i.source, i.buyerFeePence, opts.vatRegistered === true);
+  const vat = vatPosition(i.purchasePence, i.salePence, i.vatStatus, i.purchaseIncludesVat,
+    i.purchasePence + fee.inMarginBasePence);
   const workshop = Math.round(i.prepHours * i.workshopCostPerHourPence);
   // ON THE CASH, NOT THE COST. The VAT on a plus-VAT purchase is out of the bank until the next
   // return; interest is paid on money that has gone, not on money that will come back.
-  const stocking = Math.round(vat.cashOutPence * (i.costOfMoneyAnnualPct / 100) * (i.daysInStock / 365));
+  // ON THE CASH, FEE INCLUDED. The fee leaves the bank with the car and is tied up just as long.
+  const cashOut = vat.cashOutPence + fee.cashOutPence;
+  const stocking = Math.round(cashOut * (i.costOfMoneyAnnualPct / 100) * (i.daysInStock / 365));
   const other = i.partsPence + i.advertisingPence + i.warrantyPence + i.deliveryInPence + i.deliveryOutPence;
   const total = workshop + stocking + other;
-  // Revenue net of the VAT charged on the sale, less what the car actually cost after any reclaim.
-  const gross = i.salePence - vat.outputVatPence - vat.netCostPence;
+  // Revenue net of the VAT charged on the sale, less what the car and the fee actually cost after any
+  // reclaim. The fee's VAT is netted HERE when the source makes it separately reclaimable; when the
+  // source folds the fee into the goods price it is already relieved through the margin above, and
+  // counting it in both places is exactly what the invariant forbids.
+  const gross = i.salePence - vat.outputVatPence - vat.netCostPence - fee.netCostPence;
   return {
-    vat, vatDuePence: vat.vatToHmrcPence,
+    vat, fee, vatDuePence: vat.vatToHmrcPence,
     workshopCostPence: workshop, stockingCostPence: stocking,
     otherCostsPence: other, totalCostsPence: total,
     contributionPence: gross - total,
@@ -266,10 +409,12 @@ export type Sensitivity = { key: SliderKey; label: string; swingPence: number };
  * like a choice somebody made, while a ranking READS AS ANALYSIS — it arrives sorted, which is the
  * shape of a finding. Nothing in it was measured.
  */
-export function sensitivity(i: ModelInputs): Sensitivity[] {
+export function sensitivity(i: ModelInputs, opts: { vatRegistered?: boolean } = {}): Sensitivity[] {
   const rows = SLIDERS.map((s) => {
-    const low = computeModel({ ...i, [s.key]: s.min }).contributionPence;
-    const high = computeModel({ ...i, [s.key]: s.max }).contributionPence;
+    // THE SAME OPTIONS AS THE ANSWER. A ranking computed against a different model from the figure
+    // above it would be a list of swings in a world the person is not looking at.
+    const low = computeModel({ ...i, [s.key]: s.min }, opts).contributionPence;
+    const high = computeModel({ ...i, [s.key]: s.max }, opts).contributionPence;
     return { key: s.key, label: s.label, swingPence: Math.abs(high - low) };
   });
   // Descending by swing; ties by the slider's own order, so the list never jitters between equal rows.
