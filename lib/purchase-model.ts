@@ -64,7 +64,7 @@ export const GROSS_BASIS_NOTE = 'Type the total you pay, VAT included.';
  */
 export const SALE_BASIS_NOTE = 'What the customer pays, VAT included.';
 
-export const SOURCES = ['auction', 'trade', 'private', 'part_exchange'] as const;
+export const SOURCES = ['auction', 'trade', 'private', 'part_exchange', 'return', 'buyback'] as const;
 export type PurchaseSource = (typeof SOURCES)[number];
 
 /**
@@ -161,6 +161,22 @@ export const SOURCE_RULES: Record<PurchaseSource, SourceRule> = {
   part_exchange: {
     label: 'Part-exchange', fees: [], vatStatuses: ['margin'],
     note: 'The purchase price IS the allowance you gave against the other car. No fee, no VAT invoice, margin scheme only.',
+  },
+
+  /**
+   * ── TWO WAYS A CAR YOU SOLD COMES BACK, AND THEY ARE NOT THE SAME TRANSACTION ─────────────────
+   *
+   * They are separate sources because they have separate VAT consequences, and because NOTHING can
+   * tell them apart by looking. Finding an old invoice for the registration is true of both — so the
+   * match may show what it found and must never choose. See lib/stock-reacquisition.
+   */
+  return: {
+    label: 'Return — the sale is being reversed', fees: [], vatStatuses: VAT_STATUSES,
+    note: 'The sale did not stand: the car comes back and the customer is credited. Its original purchase price and VAT status are restored, because that cost base never stopped being yours. A credit note reverses the output VAT you declared on the sale.',
+  },
+  buyback: {
+    label: 'Buyback — you bought it back', fees: [], vatStatuses: VAT_STATUSES,
+    note: 'The original sale stands. This is a fresh purchase at what you have just paid, and the margin on the next sale is measured from that — not from what the car cost you the first time. No credit note: the VAT on the original sale was correctly due.',
   },
 };
 

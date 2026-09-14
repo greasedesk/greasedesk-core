@@ -15,6 +15,9 @@ import {
 } from '@/lib/stock-intake';
 import { recordOdometerReadings } from '@/lib/odometer';
 import { prepCost, type PrepCost } from '@/lib/stock-prep';
+import {
+  MUST_CHOOSE_REFUSAL, isReacquisition, reacquisitionCostBase, type PriorSale,
+} from '@/lib/stock-reacquisition';
 
 const asMoney = (v: unknown, cap = 100000000): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -28,7 +31,9 @@ export async function takeIntoStock(a: {
   premiumPence?: unknown; servicesPence?: unknown;
   /** The reading off the purchase invoice, and whether the seller stood behind it. */
   mileageMiles?: unknown; mileageWarranted?: unknown;
-}): Promise<{ id: string } | { refused: string }> {
+  /** Set ONLY when the person said this is a return or a buyback — never inferred from a match. */
+  reacquiredFromDisposalId?: string | null;
+}): Promise<{ id: string; creditableInvoiceId?: string | null } | { refused: string }> {
   // THE CAR MUST BE THIS TENANT'S. Checked here because this is the door, not in each caller.
   const vehicle = await prisma.vehicle.findFirst({
     where: { id: a.vehicleId, group_id: a.groupId }, select: { id: true },
@@ -51,13 +56,47 @@ export async function takeIntoStock(a: {
     ? (a.source as PurchaseSource) : null;
   if (!source) return { refused: 'Say where the car came from.' };
 
+  /**
+   * ── A CAR THAT HAS BEEN HERE BEFORE ───────────────────────────────────────────────────────────
+   *
+   * The cost base is decided by lib/stock-reacquisition and nowhere else. Note what this does NOT do:
+   * it never looks up a prior sale in order to CHOOSE the source. The source arrives already chosen by
+   * a person, and the prior sale is fetched only to obey the choice they made.
+   */
+  let purchasePence = asMoney(a.purchasePence);
+  let vatStatusFinal: string = vatStatus;
+  let creditableInvoiceId: string | null = null;
+
+  if (isReacquisition(source)) {
+    const prior = a.reacquiredFromDisposalId
+      ? await priorSaleByDisposal(a.groupId, a.reacquiredFromDisposalId)
+      : null;
+    if (a.reacquiredFromDisposalId && !prior) {
+      return { refused: 'That earlier sale is not on this account.' };
+    }
+    const base = reacquisitionCostBase({
+      source, prior, enteredPence: purchasePence, enteredVatStatus: vatStatus,
+    });
+    if ('refused' in base) return base;
+    purchasePence = base.purchasePence;
+    vatStatusFinal = base.vatStatus;
+    // The invoice the surface may OFFER to credit. Offered, never minted here: a credit note picks a
+    // VAT tax point, and that date is confirmed by a person (lib/credit-note, the two clocks).
+    if (source === 'return') creditableInvoiceId = prior?.invoiceId ?? null;
+  } else if (a.reacquiredFromDisposalId) {
+    // A LINK WITHOUT A SOURCE TO MATCH IT. Refused rather than dropped: somebody has said this car
+    // came back AND said it came from an auction, and one of those is wrong.
+    return { refused: MUST_CHOOSE_REFUSAL };
+  }
+
   const row = await prisma.stockItem.create({
     data: {
       group_id: a.groupId, vehicle_id: a.vehicleId, created_by_user_id: a.userId,
       acquired_at: a.acquiredAt,
-      purchase_pence: asMoney(a.purchasePence),
+      purchase_pence: purchasePence,
       // CAPTURED AT PURCHASE. Never re-read from the tenant's profile: a margin car stays a margin car.
-      vat_status: vatStatus, source,
+      vat_status: vatStatusFinal, source,
+      reacquired_from_disposal_id: a.reacquiredFromDisposalId ?? null,
       premium_pence: asMoney(a.premiumPence), services_pence: asMoney(a.servicesPence),
       // A TERM OF THIS SALE, not a fact about the car — see the schema comment for why it lives here.
       mileage_warranted: parseWarranted(a.mileageWarranted),
@@ -82,7 +121,7 @@ export async function takeIntoStock(a: {
       readings: [{ date: a.acquiredAt, miles: miles.miles }],
     });
   }
-  return { id: row.id };
+  return { id: row.id, creditableInvoiceId };
 }
 
 /**
@@ -183,6 +222,58 @@ export async function recordDisposal(a: {
   return { id: created.id };
 }
 
+/**
+ * THE EARLIER SALE OF THIS CAR, if there is one — for the surface to SHOW, never to act on.
+ *
+ * Most recent disposal-with-a-sale on any stock record for this vehicle. It carries the original cost
+ * base because that is what a RETURN restores; a buyback reads the same row and uses none of it.
+ */
+export async function findPriorSale(groupId: string, vehicleId: string): Promise<PriorSale | null> {
+  const d = await prisma.stockDisposal.findFirst({
+    where: { group_id: groupId, kind: 'sold', stock_item: { vehicle_id: vehicleId } },
+    orderBy: { disposed_at: 'desc' },
+    select: {
+      id: true, disposed_at: true, sale_pence: true,
+      stock_item: { select: { purchase_pence: true, vat_status: true } },
+    },
+  });
+  return d ? withInvoice(groupId, d) : null;
+}
+
+/** The same shape, addressed by the disposal the person actually pointed at. */
+async function priorSaleByDisposal(groupId: string, disposalId: string): Promise<PriorSale | null> {
+  const d = await prisma.stockDisposal.findFirst({
+    where: { id: disposalId, group_id: groupId },
+    select: {
+      id: true, disposed_at: true, sale_pence: true,
+      stock_item: { select: { purchase_pence: true, vat_status: true } },
+    },
+  });
+  return d ? withInvoice(groupId, d) : null;
+}
+
+type DisposalRow = {
+  id: string; disposed_at: Date; sale_pence: number | null;
+  stock_item: { purchase_pence: number; vat_status: string };
+};
+
+/** ONE shape for both lookups, so the two cannot describe the same sale differently. */
+async function withInvoice(groupId: string, d: DisposalRow): Promise<PriorSale> {
+  const inv = await prisma.invoice.findFirst({
+    where: { group_id: groupId, stock_disposal_id: d.id },
+    select: { id: true, invoice_number: true },
+  });
+  return {
+    disposalId: d.id,
+    invoiceId: inv?.id ?? null,
+    invoiceNumber: inv?.invoice_number ?? null,
+    soldAt: d.disposed_at,
+    salePence: d.sale_pence,
+    originalPurchasePence: d.stock_item.purchase_pence,
+    originalVatStatus: d.stock_item.vat_status,
+  };
+}
+
 export type StockListRow = {
   stockItemId: string;
   vehicleId: string;
@@ -275,34 +366,8 @@ export async function findOrCreateVehicle(a: {
   const reg = a.registration.trim().toUpperCase();
   if (reg.length < 2) return { refused: 'Type the registration.' };
   const normalised = reg.replace(/[^A-Z0-9]/g, '');
-  // THE INDEXED MATCH FIRST — it covers all but the legacy rows and costs one indexed lookup.
-  const found = await prisma.vehicle.findFirst({
-    where: { group_id: a.groupId, OR: [{ registration: reg }, { registration_normalized: normalised }] },
-    select: VEHICLE_INTAKE_FIELDS,
-  });
+  const found = await resolveVehicleByReg(a.groupId, reg, normalised);
   if (found) return applyIntakeAttributes(found, a);
-
-  /**
-   * ── AND A FALLBACK THAT DOES NOT TRUST THE COLUMN ───────────────────────────────────────────
-   * 35 of 1,836 vehicles on this database have registration_normalized NULL — legacy rows written
-   * before that column was populated on every path. Matching only on it would have found nothing for
-   * those cars, created a SECOND vehicle for one that already existed, and hung a stock record off
-   * the wrong id. Found by a gate clause, not by reading the code.
-   *
-   * So the last resort normalises the STORED registration in the query instead of trusting a stored
-   * normalisation. Slower and unindexed, which is why it runs only after the indexed match misses.
-   */
-  const legacy = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Vehicle"
-     WHERE "group_id" = ${a.groupId}
-       AND regexp_replace(upper("registration"), '[^A-Z0-9]', '', 'g') = ${normalised}
-     LIMIT 1`;
-  if (legacy.length) {
-    const row = await prisma.vehicle.findUnique({
-      where: { id: legacy[0].id }, select: VEHICLE_INTAKE_FIELDS,
-    });
-    if (row) return applyIntakeAttributes(row, a);
-  }
 
   /**
    * A NEW CAR STILL HAS TO PASS THE SAME CHECKS. Validating only the update path would mean the very
@@ -326,6 +391,46 @@ export async function findOrCreateVehicle(a: {
     select: { id: true },
   });
   return made;
+}
+
+/**
+ * ── IS THIS CAR ALREADY ON FILE? ONE MATCHER, TWO CALLERS ───────────────────────────────────────
+ *
+ * find-or-create uses it before creating; the prior-sale lookup uses it and creates nothing. Written
+ * once because two reg resolvers WILL diverge, and the way they diverge is that one of them finds the
+ * legacy rows and the other quietly does not.
+ *
+ * THE FALLBACK IS NOT OPTIONAL. 35 of 1,836 vehicles on this database have registration_normalized
+ * NULL — legacy rows written before that column was populated on every path. Matching only on it
+ * found nothing for those cars, which in find-or-create meant creating a SECOND vehicle for one that
+ * already existed. Found by a gate clause, not by reading the code.
+ *
+ * So the last resort normalises the STORED registration in the query rather than trusting a stored
+ * normalisation. Unindexed, which is why it runs only after the indexed match misses.
+ */
+async function resolveVehicleByReg(
+  groupId: string, reg: string, normalised: string,
+): Promise<(VehicleIntakeRow & { id: string }) | null> {
+  const found = await prisma.vehicle.findFirst({
+    where: { group_id: groupId, OR: [{ registration: reg }, { registration_normalized: normalised }] },
+    select: VEHICLE_INTAKE_FIELDS,
+  });
+  if (found) return found;
+
+  const legacy = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Vehicle"
+     WHERE "group_id" = ${groupId}
+       AND regexp_replace(upper("registration"), '[^A-Z0-9]', '', 'g') = ${normalised}
+     LIMIT 1`;
+  if (!legacy.length) return null;
+  return prisma.vehicle.findUnique({ where: { id: legacy[0].id }, select: VEHICLE_INTAKE_FIELDS });
+}
+
+/** FINDS ONLY. Creates nothing — the prior-sale lookup must not mint a car as a side effect of asking. */
+export async function findVehicleByReg(groupId: string, registration: string): Promise<{ id: string } | null> {
+  const reg = (registration || '').trim().toUpperCase();
+  if (reg.length < 2) return null;
+  return resolveVehicleByReg(groupId, reg, reg.replace(/[^A-Z0-9]/g, ''));
 }
 
 /** What intake needs to know about a car that is already on file, and nothing more. */

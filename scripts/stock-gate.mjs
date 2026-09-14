@@ -13,6 +13,7 @@ const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
 const SI = await import('../lib/stock-intake.ts');
 const SP = await import('../lib/stock-prep.ts');
+const RA = await import('../lib/stock-reacquisition.ts');
 const { hasKey } = await import('../lib/anchored-match.ts');
 const DV = await import('../lib/dvsa.ts');
 const OD = await import('../lib/odometer.ts');
@@ -667,6 +668,158 @@ try {
     snaps[0].job_card_id === prepCard.id,
     'a book entry saying "£91 of parts" cannot be checked against anything');
 
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  A CAR THAT CAME BACK — and the one thing that makes this dangerous
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— return and buyback are different transactions —');
+  const priorFixture = {
+    disposalId: 'd1', invoiceId: 'i1', invoiceNumber: 'INV-1', soldAt: new Date('2026-03-12T12:00:00Z'),
+    salePence: 899500, originalPurchasePence: 620000, originalVatStatus: 'margin',
+  };
+  const asReturn = RA.reacquisitionCostBase({
+    source: 'return', prior: priorFixture, enteredPence: 750000, enteredVatStatus: 'qualifying',
+  });
+  check('a RETURN restores the ORIGINAL cost base, not the price typed',
+    asReturn.purchasePence === 620000 && asReturn.basis === 'restored',
+    `got ${asReturn.purchasePence}p against an entered 750000p`);
+  check('  …and the ORIGINAL VAT status with it', asReturn.vatStatus === 'margin',
+    'a margin car returning does not become VAT qualifying because the box said so');
+  const asBuyback = RA.reacquisitionCostBase({
+    source: 'buyback', prior: priorFixture, enteredPence: 750000, enteredVatStatus: 'qualifying',
+  });
+  check('a BUYBACK uses what was just paid, and ignores the old cost base entirely',
+    asBuyback.purchasePence === 750000 && asBuyback.basis === 'as_paid',
+    'the margin on the next sale is measured from this figure, not from 2024');
+  check('  …and takes the VAT status chosen now', asBuyback.vatStatus === 'qualifying');
+  check('THE TWO GIVE DIFFERENT ANSWERS FROM IDENTICAL INPUTS',
+    asReturn.purchasePence !== asBuyback.purchasePence,
+    'if these ever agree, one branch has stopped being a branch');
+  check('a RETURN with no sale to reverse is REFUSED, not quietly turned into a buyback',
+    'refused' in RA.reacquisitionCostBase({ source: 'return', prior: null, enteredPence: 750000, enteredVatStatus: 'margin' }),
+    'that substitution is the one that credits VAT which was properly owed');
+  check('a BUYBACK with no price is refused',
+    'refused' in RA.reacquisitionCostBase({ source: 'buyback', prior: null, enteredPence: 0, enteredVatStatus: 'margin' }));
+  check('a BUYBACK does NOT need a prior sale — you can buy back a car you never sold',
+    RA.reacquisitionCostBase({ source: 'buyback', prior: null, enteredPence: 750000, enteredVatStatus: 'margin' }).purchasePence === 750000);
+  check('only the RETURN raises a credit note',
+    RA.raisesCreditNote('return') === true && RA.raisesCreditNote('buyback') === false
+      && RA.raisesCreditNote('auction') === false);
+
+  console.log('\n— THE MATCH FINDS, AND NEVER CHOOSES —');
+  /**
+   * THE CLAUSE THE OWNER NAMED. Everything else here can be satisfied by a form that helpfully
+   * preselects; this cannot. The comparison is against the source a car with NO prior sale leaves
+   * behind, so "unchanged" is measured rather than assumed.
+   */
+  check('the PriorSale shape cannot express a preference at all',
+    !/suggested|recommend|likely|default|probable/i.test(
+      readFileSync('lib/stock-reacquisition.ts', 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')),
+    'a caller wanting to preselect would have to invent the field, which is a visible act');
+  check('the page never writes source from the prior-sale lookup',
+    (() => {
+      const src = readFileSync('pages/admin/stock.tsx', 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '').replace(/^\s*\/\/.*$/gm, '');
+      const lookup = src.split('priorSaleFor')[1]?.split('}\n')[0] ?? '';
+      return lookup.length > 0 && !/source/.test(lookup);
+    })(),
+    'the whole discipline of this feature in one assertion');
+
+  // A REAL CAR WITH A REAL PRIOR SALE, driven through the real form.
+  const regR = `ZZYARD${Math.floor(Math.random() * 900 + 100)}R`;
+  const vR = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regR, acquiredAt: bought });
+  if ('refused' in vR) throw new Error(vR.refused);
+  made.vehicles.push(vR.id);
+  const oldItem = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vR.id, acquiredAt: new Date('2026-01-10T12:00:00Z'),
+    purchasePence: 620000, vatStatus: 'margin', source: 'auction',
+  });
+  if ('refused' in oldItem) throw new Error(oldItem.refused);
+  made.items.push(oldItem.id);
+  const oldSale = await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: oldItem.id,
+    disposedAt: new Date('2026-03-12T12:00:00Z'), kind: 'sold', salePence: 899500, costs: [],
+  });
+  if ('refused' in oldSale) throw new Error(oldSale.refused);
+
+  const foundPrior = await ST.findPriorSale(ZZ_GROUP, vR.id);
+  check('the lookup finds the earlier sale', foundPrior?.originalPurchasePence === 620000
+    && foundPrior?.salePence === 899500, `${foundPrior ? 'found' : 'NOT FOUND'}`);
+  check('  …and a car with NO history returns null, so the finder can tell them apart',
+    (await ST.findPriorSale(ZZ_GROUP, vA.id)) === null,
+    'a finder that never returns null cannot report an absence');
+  check('asking whether a car has been here before CREATES NOTHING',
+    (await ST.findVehicleByReg(ZZ_GROUP, 'ZZNOSUCHREG9')) === null
+      && (await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: 'ZZNOSUCHREG9' } })) === 0,
+    'a lookup with a side effect is how a typo becomes a vehicle record');
+
+  // ── THROUGH THE PAGE, both cars, and the source compared ────────────────────────────────────
+  const sourceAfterTyping = async (plate) => {
+    await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid="add-toggle"]', { timeout: 25000 });
+    await page.click('[data-testid="add-toggle"]');
+    await page.waitForSelector('[data-testid="input-source"]', { timeout: 15000 });
+    const before = await page.inputValue('[data-testid="input-source"]');
+    await page.fill('[data-testid="input-reg"]', plate);
+    await page.click('[data-testid="input-make"]');            // blur → both lookups fire
+    /**
+     * WAIT ON THE STATE THE COMPONENT READS, not on a guess about how long two fetches take. The
+     * prior-sale answer is three-state precisely so this is possible: 'done' means asked-and-answered,
+     * which `priorSale === null` cannot distinguish from never-asked. Checking for the panel before
+     * this settles is how the first version of this clause reported "no match" on a matched car.
+     */
+    await page.waitForSelector('[data-testid="add-form"][data-prior-state="done"]', { timeout: 25000 });
+    const matched = await page.$('[data-testid="prior-sale"]');
+    return { before, after: await page.inputValue('[data-testid="input-source"]'), matched: !!matched };
+  };
+  const withMatch = await sourceAfterTyping(regR);
+  const noMatch = await sourceAfterTyping(regA);
+  check('the page really DID match the car that has been sold before', withMatch.matched === true,
+    'without this, every clause below passes because nothing was found to nudge with');
+  check('  …and did NOT match the one that has not', noMatch.matched === false);
+  check('THE MATCH DID NOT MOVE THE SOURCE', withMatch.after === withMatch.before,
+    `before ${withMatch.before}, after ${withMatch.after}`);
+  check('  …and it sits exactly where it sits for a car with no history',
+    withMatch.after === noMatch.after,
+    'measured against the unmatched car rather than against an assumption about the default');
+  check('  …and neither return nor buyback is selected by the match',
+    withMatch.after !== 'return' && withMatch.after !== 'buyback',
+    'the two options exist in the list; being IN the list is not being chosen');
+
+  console.log('\n— and the writer refuses to guess —');
+  const guessed = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vR.id, acquiredAt: new Date('2026-08-01T12:00:00Z'),
+    purchasePence: 750000, vatStatus: 'margin', source: 'auction',
+    reacquiredFromDisposalId: foundPrior.disposalId,
+  });
+  check('a reacquisition link with a NON-reacquisition source is refused', 'refused' in guessed,
+    'somebody has said this car came back AND said it came from an auction');
+
+  const backAsReturn = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vR.id, acquiredAt: new Date('2026-08-01T12:00:00Z'),
+    purchasePence: 750000, vatStatus: 'qualifying', source: 'return',
+    reacquiredFromDisposalId: foundPrior.disposalId,
+  });
+  if ('refused' in backAsReturn) throw new Error(backAsReturn.refused);
+  made.items.push(backAsReturn.id);
+  const backRow = await prisma.stockItem.findUnique({
+    where: { id: backAsReturn.id },
+    select: { purchase_pence: true, vat_status: true, reacquired_from_disposal_id: true },
+  });
+  check('a RETURN stored through the real writer restores the original figures',
+    backRow.purchase_pence === 620000 && backRow.vat_status === 'margin',
+    `${backRow.purchase_pence}p / ${backRow.vat_status} — the 750000p qualifying entry was not used`);
+  check('  …and it points at the sale it came back from', backRow.reacquired_from_disposal_id === foundPrior.disposalId);
+  check('  …and names the invoice the surface may offer to credit',
+    'creditableInvoiceId' in backAsReturn,
+    'offered, never minted here — a credit note picks a tax point and a person confirms that date');
+
+  check('THE EARLIER DISPOSAL IS UNTOUCHED — the quarter that reported the sale still reports it',
+    (await prisma.stockDisposal.count({ where: { id: foundPrior.disposalId } })) === 1
+      && (await prisma.stockDisposal.findUnique({ where: { id: foundPrior.disposalId }, select: { sale_pence: true } })).sale_pence === 899500,
+    'a re-acquisition is a new row, never an undo');
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
@@ -694,7 +847,15 @@ try {
         // left it behind. Every registration this gate can produce starts with one of these, and no
         // real car does.
         const fixtures = await prisma.vehicle.findMany({
-          where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE'].map((x) => ({ registration: { startsWith: x } })) },
+          /**
+           * THE PREFIXES THIS RUN CAN PRODUCE — including one it produces only when something is
+           * BROKEN. 'ZZNOSUCH' is the plate the find-only clause asks about and expects not to exist;
+           * a lookup that wrongly creates it leaves a car this teardown never learned about, which is
+           * exactly what happened when that clause was first red-proved. A backstop scoped to what the
+           * run REMEMBERED cannot remove what a broken path created — so it is scoped to the shapes
+           * the run can produce instead.
+           */
+          where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE', 'ZZNOSUCH'].map((x) => ({ registration: { startsWith: x } })) },
           select: { id: true },
         });
         const orphans = await prisma.stockItem.deleteMany({

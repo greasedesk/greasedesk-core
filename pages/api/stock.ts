@@ -15,7 +15,8 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantApi } from '@/lib/admin-guard';
-import { findOrCreateVehicle, recordDisposal, stockList, takeIntoStock } from '@/lib/stock-store';
+import { findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal, stockList, takeIntoStock } from '@/lib/stock-store';
+import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -23,6 +24,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!scope) return; // it has already answered 401
 
   if (req.method === 'GET') {
+    /**
+     * ── HAS THIS CAR BEEN HERE BEFORE? EVIDENCE, NOT A DECISION ────────────────────────────────
+     *
+     * Returns what it found and NOTHING resembling a recommendation — no suggested source, no
+     * `likely`, no default. A match is equally true of a return and of a buyback, which are taxed
+     * differently, so anything here that leaned either way would be wrong half the time and silent
+     * about it. The person says which; see lib/stock-reacquisition.
+     */
+    if (typeof req.query.priorSaleFor === 'string' && req.query.priorSaleFor.trim()) {
+      // findVehicleByReg, NOT find-or-create: asking whether a car has been here before must not
+      // create it. A lookup with a side effect is how a typo becomes a vehicle record.
+      const veh = await findVehicleByReg(scope.groupId, req.query.priorSaleFor);
+      return res.status(200).json({ priorSale: veh ? await findPriorSale(scope.groupId, veh.id) : null });
+    }
     // `asOf` is the server's clock, once, so every row's days-in-stock is counted from one instant.
     return res.status(200).json({ stock: await stockList(scope.groupId, new Date()) });
   }
@@ -45,6 +60,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const acquiredAt = parseDate(b.acquiredAt);
     if (!acquiredAt) return res.status(400).json({ message: 'Say when you bought it.' });
+
+    /**
+     * NO DEFAULT, EVER. If the body arrives naming neither source, this route does not pick one from
+     * the fact that a match exists — it refuses. A default here would be right about half the time
+     * and wrong silently the rest, on precisely the half that reduces a VAT bill.
+     */
+    if (b.reacquiredFromDisposalId && !isReacquisition(b.source)) {
+      return res.status(400).json({ message: MUST_CHOOSE_REFUSAL });
+    }
     // THE CAR FIRST. A garage at an auction has a registration and nothing else; making them create
     // the vehicle elsewhere and come back is how a feature gets worked around with a spreadsheet.
     //
@@ -69,6 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       purchasePence: b.purchasePence, vatStatus: b.vatStatus, source: b.source,
       premiumPence: b.premiumPence, servicesPence: b.servicesPence,
       mileageMiles: b.mileageMiles, mileageWarranted: b.mileageWarranted,
+      reacquiredFromDisposalId: typeof b.reacquiredFromDisposalId === 'string' ? b.reacquiredFromDisposalId : null,
     });
     if ('refused' in out) return res.status(409).json({ message: out.refused });
     return res.status(200).json({ ok: true, id: out.id });

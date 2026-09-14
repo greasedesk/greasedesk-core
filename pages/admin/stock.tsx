@@ -19,6 +19,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCES, SOURCE_RULES, VAT_STATUSES, availableVatStatuses, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
 // LEAF import — lib/stock reaches no database, so this cannot ship Prisma to the browser.
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
+import { isReacquisition, priorSaleNotice, raisesCreditNote } from '@/lib/stock-reacquisition';
 
 type Row = {
   stockItemId: string; vehicleId: string; registration: string; description: string | null;
@@ -49,6 +50,24 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
    */
   const [dvsaMot, setDvsaMot] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
+  /**
+   * THE EARLIER SALE, IF THERE IS ONE. Held separately from `form` on purpose: nothing in this state
+   * may reach form.source. A match says the car has been here before and says NOTHING about which of
+   * the two transactions is happening — the person chooses, and the gate asserts that the choice is
+   * theirs. See lib/stock-reacquisition.
+   */
+  const [priorSale, setPriorSale] = useState<{
+    disposalId: string; invoiceId: string | null; invoiceNumber: string | null;
+    soldAt: string; salePence: number | null;
+    originalPurchasePence: number; originalVatStatus: string;
+  } | null>(null);
+  /**
+   * HAS THE PRIOR-SALE QUESTION BEEN ANSWERED YET? Three states, and the third is why this exists:
+   * 'idle' (not asked), 'asking', 'done'. `priorSale === null` means BOTH "we did not ask" and "we
+   * asked and there is nothing", which a reader cannot tell apart — including a gate, which would
+   * otherwise check for the panel before the answer arrived and conclude there was no match.
+   */
+  const [priorState, setPriorState] = useState<'idle' | 'asking' | 'done'>('idle');
 
   const load = useCallback(async () => {
     const res = await fetch('/api/stock');
@@ -93,6 +112,24 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
     } finally {
       setLooking(false);
     }
+
+    /**
+     * AND ASK WHETHER WE HAVE SOLD THIS CAR BEFORE — a second, independent question.
+     *
+     * NOTHING HERE TOUCHES form.source. That is the whole discipline of this feature: the match is
+     * shown, and the person says what happened. Writing a source from a match would be right about
+     * half the time and wrong silently the rest, on the half that reduces a VAT bill.
+     */
+    setPriorState('asking');
+    try {
+      const r = await fetch(`/api/stock?priorSaleFor=${encodeURIComponent(plate)}`);
+      const b = await r.json().catch(() => ({}));
+      setPriorSale(b?.priorSale ?? null);
+    } catch {
+      setPriorSale(null);
+    } finally {
+      setPriorState('done');   // cleared in finally, per the standing rule
+    }
   }
 
   async function add() {
@@ -108,6 +145,8 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
           servicesPence: Math.round(Number(form.services || 0) * 100),
           source: form.source, vatStatus: form.vatStatus,
           vin: form.vin, firstRegistered: form.firstRegistered, motExpiry: form.motExpiry,
+          // Sent ONLY when the person picked one of the two — never because a match exists.
+          reacquiredFromDisposalId: isReacquisition(form.source) ? priorSale?.disposalId ?? null : null,
           v5cReference: form.v5cReference, isImport: form.isImport,
           mileageMiles: form.mileage === '' ? null : Number(form.mileage),
           mileageWarranted: form.mileageWarranted,
@@ -122,6 +161,8 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
           isImport: 'unknown', mileage: '', mileageWarranted: 'unknown',
         });
         setDvsaMot(null);
+        setPriorSale(null);
+        setPriorState('idle');
         setAdding(false);
         await load();
       } else {
@@ -166,7 +207,8 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
         {msg && <p className="mt-2 text-sm text-ink" data-testid="stock-msg">{msg}</p>}
 
         {adding && (
-          <section className="mt-4 rounded-xl border border-line bg-surface p-3 sm:p-4" data-testid="add-form">
+          <section className="mt-4 rounded-xl border border-line bg-surface p-3 sm:p-4" data-testid="add-form"
+            data-prior-state={priorState}>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <label className="text-sm text-muted">Registration
                 <input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })}
@@ -248,6 +290,20 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                   onChange={(e) => setForm({ ...form, purchase: e.target.value })} data-testid="input-purchase"
                   className="mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink text-lg" />
               </label>
+              {/* ── WE HAVE SOLD THIS CAR BEFORE ──────────────────────────────────────────────
+                  A statement of fact and a question. No option is preselected, none is named as the
+                  likely one, and this panel writes nothing to the form — it only says what was found.
+                  A match is equally true of a return and of a buyback and they are taxed differently,
+                  so the person chooses in the same control they would have used anyway. */}
+              {priorSale && (
+                <div className="col-span-2 sm:col-span-3 rounded-xl border border-line bg-accent-soft p-3 text-sm text-ink"
+                  data-testid="prior-sale">
+                  {priorSaleNotice(
+                    { ...priorSale, soldAt: new Date(priorSale.soldAt) } as never,
+                    money,
+                  )}
+                </div>
+              )}
               <label className="text-sm text-muted">Where from
                 <select value={form.source} data-testid="input-source"
                   onChange={(e) => {
@@ -262,6 +318,34 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                   {SOURCES.map((s) => <option key={s} value={s}>{SOURCE_RULES[s].label}</option>)}
                 </select>
               </label>
+              {/* WHAT THE CHOICE MEANS FOR THE MONEY, shown only once it has been made. Before that
+                  there is nothing honest to show: the two answers differ, and picking one to preview
+                  would be the nudge this whole feature exists to avoid. */}
+              {isReacquisition(form.source) && (
+                <div className="col-span-2 sm:col-span-3 rounded-xl border border-line bg-surface p-3 text-sm"
+                  data-testid="reacquisition-consequence">
+                  <p className="text-ink">{SOURCE_RULES[form.source].note}</p>
+                  {form.source === 'return' && priorSale && (
+                    <p className="mt-2 text-muted" data-testid="return-cost-base">
+                      Goes back on the books at {money(priorSale.originalPurchasePence)} — what it originally
+                      cost you — on the {priorSale.originalVatStatus === 'margin' ? 'margin scheme' : 'VAT qualifying'} status
+                      it had then. The price you type above is not used.
+                    </p>
+                  )}
+                  {form.source === 'return' && !priorSale && (
+                    <p className="mt-2 text-danger" data-testid="return-no-sale">
+                      No sale for this car on this account, so there is nothing to reverse and nothing to credit.
+                      If you are buying back a car you did not sell, that is a buyback.
+                    </p>
+                  )}
+                  {raisesCreditNote(form.source) && priorSale?.invoiceNumber && (
+                    <p className="mt-2 text-muted" data-testid="credit-note-offer">
+                      Invoice {priorSale.invoiceNumber} will need a credit note to reverse the VAT. You raise it
+                      from the invoice, and you choose its date — that date is the VAT period the correction lands in.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* THE FEES, ONLY WHERE THE INVOICE CARRIES THEM — the same rule and the same reader as

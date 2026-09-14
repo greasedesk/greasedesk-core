@@ -5255,6 +5255,22 @@ model StockItem {
   /// inherit it, which is why it lives on the stock item and the reading itself lives on the vehicle.
   /// TRI-STATE: NULL = not stated (a private purchase has no such term), TRUE/FALSE = the sale said.
   mileage_warranted Boolean?
+  /// ── THIS CAR HAS BEEN HERE BEFORE ─────────────────────────────────────────────────────────────
+  /// The StockDisposal of the EARLIER sale, when this acquisition is a return or a buyback of a car
+  /// we sold. NULL = an ordinary acquisition, which is nearly all of them.
+  ///
+  /// A RE-ACQUISITION IS A NEW ROW, NEVER AN UNDO. The earlier disposal STAYS — it happened, and the
+  /// quarter that reported it must keep reporting it. So the car comes back as a new StockItem
+  /// pointing at the sale it came back from, and the book shows a disposal then a re-acquisition
+  /// rather than a hole where a disposal used to be.
+  ///
+  /// WHAT DIFFERS between the two is `source`, and it changes the money: 'return' restores the
+  /// ORIGINAL purchase price and VAT status (the sale is being reversed, so the old cost base is
+  /// still ours), 'buyback' takes the price actually paid now (a new acquisition; the original sale
+  /// stands). See lib/stock-reacquisition — that one distinction is the whole of this feature.
+  ///
+  /// NO FOREIGN KEY: StockItem is a live table, so ADD CONSTRAINT would be a two-push migration.
+  reacquired_from_disposal_id String?
   created_by_user_id String
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
