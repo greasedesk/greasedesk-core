@@ -19,6 +19,9 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCES, SOURCE_RULES, VAT_STATUSES, availableVatStatuses, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
 // LEAF import — lib/stock reaches no database, so this cannot ship Prisma to the browser.
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
+import {
+  DEFAULT_SORT, matchStock, sortStock, stockTotals, type SortDir, type SortKey,
+} from '@/lib/stock-list';
 import { isReacquisition, priorSaleNotice, raisesCreditNote } from '@/lib/stock-reacquisition';
 
 type Row = {
@@ -69,6 +72,8 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
    * otherwise check for the panel before the answer arrived and conclude there was no match.
    */
   const [priorState, setPriorState] = useState<'idle' | 'asking' | 'done'>('idle');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(DEFAULT_SORT);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/stock');
@@ -176,7 +181,40 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
     }
   }
 
-  const total = rows?.reduce((a, r) => a + r.purchasePence, 0) ?? 0;
+  /**
+   * ONE SOURCE FOR THE TILES AND THE TABLE. The totals are computed from the SAME filtered rows the
+   * table renders, so a tile can never describe a set the reader is not looking at — searching for
+   * one car retotals to that car. lib/stock-list decides what a missing projection does to each.
+   */
+  const shown = useMemo(
+    () => sortStock((rows ?? []).filter((r) => matchStock(r, query)), sort.key, sort.dir),
+    [rows, query, sort],
+  );
+  const totals = useMemo(() => stockTotals(shown), [shown]);
+
+  /**
+   * A SORTABLE HEADER. Clicking a column sorts by it; clicking the same one again reverses. A new
+   * column starts DESCENDING for money and days — "the biggest" is what a person wants first from
+   * those — and ASCENDING for the text ones, where A-Z is what "sorted" means.
+   *
+   * The arrow is drawn only on the active column, so the header row says which one is in charge
+   * rather than offering nine identical hints.
+   */
+  const Th = ({ k, children, align = 'right', pad }: { k: SortKey; children: React.ReactNode; align?: 'left' | 'right'; pad?: boolean }) => {
+    const active = sort.key === k;
+    const textFirst = k === 'registration' || k === 'acquiredAt' || k === 'vatStatus';
+    return (
+      <th className={`py-1 ${align === 'left' ? 'text-left' : 'text-right'} ${pad ? 'pl-3' : ''}`}>
+        <button type="button" data-testid={`sort-${k}`} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+          className={`uppercase tracking-wide ${active ? 'text-ink font-semibold' : 'text-muted'}`}
+          onClick={() => setSort((p) => p.key === k
+            ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' }
+            : { key: k, dir: textFirst ? 'asc' : 'desc' })}>
+          {children}{active && <span aria-hidden> {sort.dir === 'asc' ? '↑' : '↓'}</span>}
+        </button>
+      </th>
+    );
+  };
 
   // NO <AdminLayout> HERE. pages/_app.tsx wraps every /admin route already, and rendering it again
   // nests the shell inside itself — admin-shell-gate catches exactly this, and caught it here.
@@ -193,8 +231,59 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
         </div>
         {rows && rows.length > 0 && (
           <p className="mt-1 text-sm text-muted" data-testid="stock-summary">
-            {rows.length} {rows.length === 1 ? 'car' : 'cars'} in stock, {money(total)} tied up.
+            {shown.length} of {rows.length} {rows.length === 1 ? 'car' : 'cars'} in stock.
           </p>
+        )}
+
+        {/* ── SEARCH ───────────────────────────────────────────────────────────────────────── */}
+        {rows && rows.length > 0 && (
+          <input value={query} onChange={(e) => setQuery(e.target.value)} data-testid="stock-search"
+            placeholder="Find a car — registration or model"
+            className="mt-3 w-full sm:max-w-sm min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
+        )}
+
+        {/* ── THE FOUR TILES ───────────────────────────────────────────────────────────────────
+            Capital is a FACT and covers every car. The two expectation tiles cover only the cars
+            somebody has priced, and the fourth tile is what makes that legible: a figure resting on
+            estimates that does not say how many cars have none will be read as covering the yard. */}
+        {rows && rows.length > 0 && (
+          <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="stock-tiles">
+            <div className="rounded-xl border border-line bg-surface p-3" data-testid="tile-capital">
+              <p className="text-xs text-muted">Capital invested</p>
+              <p className="text-xl font-bold text-ink tabular-nums">{money(totals.capitalPence)}</p>
+              <p className="text-[11px] text-muted">Paid for the cars, plus parts fitted. All {totals.cars}.</p>
+            </div>
+            <div className="rounded-xl border border-line bg-surface p-3" data-testid="tile-revenue">
+              <p className="text-xs text-muted">Expected back when sold</p>
+              <p className="text-xl font-bold text-ink tabular-nums">
+                {totals.projected === 0 ? <span className="text-muted">—</span> : money(totals.expectedRevenuePence)}
+              </p>
+              <p className="text-[11px] text-muted">
+                {totals.projected === 0 ? 'No car has an expected price yet.' : `Across ${totals.projected} priced ${totals.projected === 1 ? 'car' : 'cars'}.`}
+              </p>
+            </div>
+            <div className="rounded-xl border border-line bg-surface p-3" data-testid="tile-profit">
+              <p className="text-xs text-muted">Expected profit</p>
+              <p className={`text-xl font-bold tabular-nums ${totals.expectedProfitPence < 0 ? 'text-danger' : 'text-ink'}`}>
+                {totals.projected === 0 ? <span className="text-muted">—</span> : money(totals.expectedProfitPence)}
+              </p>
+              <p className="text-[11px] text-muted">Before fixed monthly costs and tax.</p>
+            </div>
+            {/* THE TILE THAT QUALIFIES THE OTHER TWO. Emphasised when it is not zero, because that is
+                exactly when the two figures above stop describing the whole yard. */}
+            <div className={`rounded-xl border p-3 ${totals.unprojected > 0 ? 'border-danger' : 'border-line'} bg-surface`}
+              data-testid="tile-unprojected">
+              <p className="text-xs text-muted">No expected price</p>
+              <p className={`text-xl font-bold tabular-nums ${totals.unprojected > 0 ? 'text-danger' : 'text-ink'}`}>
+                {totals.unprojected}
+              </p>
+              <p className="text-[11px] text-muted">
+                {totals.unprojected === 0
+                  ? 'Every car is priced, so the two figures beside this cover all of them.'
+                  : `${totals.unprojected === 1 ? 'This car is' : 'These cars are'} not in the two figures beside this.`}
+              </p>
+            </div>
+          </div>
         )}
         {/* THE NOTE, ONCE, UNDER THE FIGURE IT QUALIFIES — not on every row, where it would become
             furniture and stop being read. Labour absent is a STATED omission, not a zero. */}
@@ -409,18 +498,19 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
             <table className="w-full text-sm" data-testid="stock-list">
               <thead>
                 <tr className="text-[11px] uppercase tracking-wide text-muted border-b border-line">
-                  <th className="text-left py-1">Car</th>
-                  <th className="text-left py-1">Bought</th>
-                  <th className="text-right py-1">Days in stock</th>
-                  <th className="text-right py-1">Paid</th>
-                  <th className="text-right py-1">Prep</th>
-                  <th className="text-right py-1">In it</th>
-                  <th className="text-right py-1">Projected</th>
-                  <th className="text-left py-1 pl-3">VAT</th>
+                  <Th k="registration" align="left">Car</Th>
+                  <Th k="acquiredAt" align="left">Bought</Th>
+                  <Th k="daysInStock">Days in stock</Th>
+                  <Th k="purchasePence">Paid</Th>
+                  <Th k="prepPence">Prep</Th>
+                  <Th k="investedPence">In it</Th>
+                  <Th k="projectedSalePence">Back when sold</Th>
+                  <Th k="projectedProfitPence">Projected profit</Th>
+                  <Th k="vatStatus" align="left" pad>VAT</Th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {shown.map((r) => (
                   <tr key={r.stockItemId} className="border-b border-line/50" data-testid={`stock-row-${r.registration}`}>
                     <td className="py-2">
                       {/* THE ROW IS THE WAY IN. A yard list whose rows go nowhere makes the detail
@@ -450,6 +540,10 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                         at a yard: what has to come back before this one has made anything. */}
                     <td className="py-2 text-right text-ink font-medium tabular-nums" data-testid={`inv-${r.registration}`}>
                       {money(r.purchasePence + r.prepPence)}
+                    </td>
+                    {/* WHAT COMES BACK. Blank, not £0 — a zero would say "we expect nothing for this car". */}
+                    <td className="py-2 text-right tabular-nums text-muted" data-testid={`back-${r.registration}`}>
+                      {r.projectedSalePence === null ? '—' : money(r.projectedSalePence)}
                     </td>
                     {/* GROSS PROFIT if it sells for what you expect. Blank — not £0 — when nobody has
                         estimated: a zero here would read as "this car makes nothing", which is a claim. */}

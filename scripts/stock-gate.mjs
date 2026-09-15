@@ -17,6 +17,7 @@ const { STOCK_NO_CUSTOMER: SP_LABEL } = SP;
 const RA = await import('../lib/stock-reacquisition.ts');
 const PJ = await import('../lib/stock-projection.ts');
 const SCST = await import('../lib/stock-cost.ts');
+const SL = await import('../lib/stock-list.ts');
 const PM = await import('../lib/purchase-model.ts');
 const DC = await import('../lib/diary-colours.ts');
 const SC = await import('../lib/status-colours.ts');
@@ -381,9 +382,17 @@ try {
   const daysCell = await page.locator(`[data-testid="days-${reg}"]`).textContent();
   check('  …and days in stock is on the row', /^\d+$/.test((daysCell ?? '').trim()),
     `${daysCell?.trim()} days — the figure a garage counts on its fingers today`);
-  check('  …with what is tied up said once, at the top',
-    /tied up/.test((await page.locator('[data-testid="stock-summary"]').textContent()) ?? ''),
-    ((await page.locator('[data-testid="stock-summary"]').textContent()) ?? '').trim());
+  /**
+   * WHAT IS TIED UP, SAID ONCE — now in the capital TILE rather than the summary line, which says how
+   * many cars are shown. Rewritten with that move (2026-09-15) rather than deleted: the rule it pins
+   * is that the figure exists and is stated in one place, not which element holds it.
+   */
+  const capitalTile = (await page.locator('[data-testid="tile-capital"]').textContent()) ?? '';
+  check('  …with what is tied up said once, in the capital tile',
+    /£[\d,]+(\.\d\d)?/.test(capitalTile) && /invested/i.test(capitalTile), capitalTile.trim().slice(0, 90));
+  check('  …covering EVERY car, not only the priced ones',
+    new RegExp(`All ${(await page.$$('[data-testid^="stock-row-"]')).length}\\.`).test(capitalTile),
+    'capital is money that has gone out and is known for all of them');
 
   // THE SOURCE STILL CONSTRAINS THE TREATMENT, on this page too.
   await page.click('[data-testid="add-toggle"]');
@@ -1347,6 +1356,97 @@ try {
   check('  …and so is a credit, WITH somewhere else to put it',
     'refused' in lateCredit && /purchase ledger/i.test(lateCredit.refused),
     'the car did cost that when it was sold; a later credit belongs to the period it arrived in');
+
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  THE YARD AS A LIST — tiles, sort, search, and the null that stays a null
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the tiles, and the one that qualifies the others —');
+  const mk = (reg, o = {}) => ({
+    registration: reg, description: o.description ?? 'Mini Clubman', acquiredAt: o.acquiredAt ?? '2026-06-01',
+    daysInStock: o.daysInStock ?? 10, purchasePence: o.purchasePence ?? 200000, prepPence: o.prepPence ?? 50000,
+    vatStatus: o.vatStatus ?? 'margin',
+    projectedSalePence: o.projectedSalePence === undefined ? 400000 : o.projectedSalePence,
+    projectedProfitPence: o.projectedProfitPence === undefined ? 90000 : o.projectedProfitPence,
+  });
+  const five = [
+    mk('AA11AAA'), mk('BB22BBB'),
+    mk('CC33CCC', { projectedSalePence: null, projectedProfitPence: null }),
+    mk('DD44DDD', { projectedSalePence: null, projectedProfitPence: null }),
+    mk('EE55EEE'),
+  ];
+  const tot = SL.stockTotals(five);
+  check('CAPITAL counts every car, priced or not',
+    tot.capitalPence === 5 * 250000,
+    `${tot.capitalPence}p — money that has gone out is known for all of them, so a missing estimate must not reduce it`);
+  check('EXPECTED REVENUE counts only the priced ones', tot.expectedRevenuePence === 3 * 400000);
+  check('EXPECTED PROFIT likewise', tot.expectedProfitPence === 3 * 90000);
+  check('AND THE COUNT OF CARS WITH NO PROJECTION IS PUBLISHED', tot.unprojected === 2 && tot.projected === 3,
+    'two of five would otherwise be absent from the profit figure with nothing saying so');
+  check('an unpriced car contributes NOTHING rather than zero',
+    SL.stockTotals([mk('ZZ99ZZZ', { projectedSalePence: null, projectedProfitPence: null })]).expectedRevenuePence === 0
+      && SL.stockTotals([mk('ZZ99ZZZ', { projectedSalePence: null, projectedProfitPence: null })]).projected === 0,
+    'the figure is £0 because it covers no cars — which is what `projected: 0` lets the tile say');
+  check('an empty yard totals to zero without dividing by anything', SL.stockTotals([]).cars === 0);
+
+  console.log('\n— sorted, with nulls last in BOTH directions —');
+  const desc = SL.sortStock(five, 'projectedProfitPence', 'desc').map((r) => r.registration);
+  const asc = SL.sortStock(five, 'projectedProfitPence', 'asc').map((r) => r.registration);
+  check('descending puts the unpriced cars last', desc.slice(-2).sort().join() === 'CC33CCC,DD44DDD', desc.join(' '));
+  check('  …and so does ASCENDING — they are not the worst cars, they are cars with no answer',
+    asc.slice(-2).sort().join() === 'CC33CCC,DD44DDD', asc.join(' '));
+  check('  …which is different from treating them as £0', (() => {
+    const asZero = [...five].sort((a, b) => (a.projectedProfitPence ?? 0) - (b.projectedProfitPence ?? 0));
+    return asZero[0].projectedProfitPence === null;
+  })(), 'sorted as zero they file FIRST on an ascending profit sort, among the worst cars in the yard');
+  const days = SL.sortStock([mk('AA11AAA', { daysInStock: 5 }), mk('BB22BBB', { daysInStock: 120 })], 'daysInStock', 'desc');
+  check('days in stock descending puts the oldest car first — the default',
+    days[0].registration === 'BB22BBB' && SL.DEFAULT_SORT.key === 'daysInStock' && SL.DEFAULT_SORT.dir === 'desc');
+  check('ties break on registration, so the table never jitters', (() => {
+    const t = SL.sortStock([mk('ZZ99ZZZ'), mk('AA11AAA')], 'daysInStock', 'desc');
+    return t[0].registration === 'AA11AAA';
+  })());
+  check('every column the header offers is sortable',
+    SL.SORT_KEYS.length === 9 && SL.SORT_KEYS.includes('investedPence'),
+    `${SL.SORT_KEYS.join(', ')}`);
+
+  console.log('\n— search finds a plate typed the way a plate is typed —');
+  const car = mk('WT16GMV', { description: 'MINI CLUBMAN' });
+  check('an exact plate matches', SL.matchStock(car, 'WT16GMV'));
+  check('  …with the space in it, which is how a person types one', SL.matchStock(car, 'wt16 gmv'),
+    'a search that fails on a spaced plate reads as "we do not have that car"');
+  check('  …and part of one', SL.matchStock(car, 'gmv'));
+  check('the model matches, case-insensitively', SL.matchStock(car, 'clubman'));
+  check('a car that does not match is EXCLUDED, so the filter is not a no-op',
+    !SL.matchStock(car, 'FORD') && !SL.matchStock(car, 'XY99XYZ'));
+  check('an empty search shows everything', SL.matchStock(car, '') && SL.matchStock(car, '   '));
+
+  console.log('\n— and on the real page —');
+  await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stock-tiles"]', { timeout: 25000 });
+  for (const t of ['tile-capital', 'tile-revenue', 'tile-profit', 'tile-unprojected']) {
+    check(`the ${t.replace('tile-', '')} tile is on the page`, !!(await page.$(`[data-testid="${t}"]`)));
+  }
+  check('the labour note is still there, under the figures it qualifies',
+    /not costed/i.test((await page.textContent('[data-testid="prep-note"]')) ?? ''),
+    'tiles are exactly where a stated omission gets dropped');
+  const before = (await page.$$('[data-testid^="stock-row-"]')).length;
+  await page.fill('[data-testid="stock-search"]', regS);
+  await page.waitForFunction((n) => document.querySelectorAll('[data-testid^="stock-row-"]').length < n,
+    before, { timeout: 15000 });
+  const after = (await page.$$('[data-testid^="stock-row-"]')).length;
+  check('searching narrows the table', after >= 1 && after < before, `${before} → ${after}`);
+  /**
+   * THE TILE, not the summary line beside it. The first version of this clause read the summary —
+   * which is computed from the filtered rows anyway — so a mutation pointing the TILES at the whole
+   * yard changed nothing it could see. Measured at 0 failures. The capital tile states the car count
+   * it covers, so that sentence is the one that has to move when the search does.
+   */
+  const narrowedTile = (await page.textContent('[data-testid="tile-capital"]')) ?? '';
+  check('  …and the TILES retotal to what is on screen, not to the whole yard',
+    new RegExp(`All ${after}\\.`).test(narrowedTile) && after < before,
+    `${narrowedTile.trim().slice(-24)} with ${after} of ${before} rows shown — a tile describing a set `
+    + 'the reader is not looking at is worse than no tile');
 
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
