@@ -84,5 +84,12 @@
   "deleteBlocked": "In use — retire instead",
   "deleted": "Item deleted.",
   "deleteFailed": "Could not delete that item.",
-  "showArchivedCount": "Show retired services ({{count}})"
+  "showArchivedCount": "Show retired services ({{count}})",
+  "required": {
+    "code": "A code is required — it is what you type on a job-card line to pull this in.",
+    "name": "A description is required — this is the text that prints on the customer’s invoice.",
+    "basePrice": "A base price is required for a fixed-price service.",
+    "price": "A price is required.",
+    "cost": "A cost is required. Enter 0 if it genuinely costs you nothing."
+  }
 }

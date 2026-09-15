@@ -131,8 +131,34 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
 
   const isFixed = form?.itemType === 'fixed';
   const compCost = useMemo(() => (form?.components || []).reduce((s, c) => s + (Number(c.qty) || 0) * (Number(c.cost) || 0), 0), [form?.components]);
-  const canSave = !!form && form.code.trim() !== '' && form.name.trim() !== ''
-    && (isFixed ? form.basePrice !== '' && Number(form.basePrice) >= 0 : (form.price !== '' && form.cost !== '' && Number(form.cost) >= 0));
+  /**
+   * ── WHAT IS MISSING, NAMED ON THE FIELD THAT IS MISSING IT ────────────────────────────────────
+   *
+   * `canSave` used to be a bare boolean and Save was simply `disabled`. No asterisk, no message, no
+   * hint — the button took no focus, said nothing, and did nothing, which is indistinguishable from
+   * a broken button. Reported as a bug on 2026-09-15 by somebody who had typed everything they could
+   * see and had no way to learn that the Description was required.
+   *
+   * So the rule now yields the REASONS, keyed by field, and each field renders its own. `canSave`
+   * stays derived from that same list, so the button and the hints cannot disagree about why: there
+   * is one rule, and the hint is not a second copy of it written in prose.
+   */
+  const missing: Partial<Record<'code' | 'name' | 'basePrice' | 'price' | 'cost', string>> = {};
+  if (form) {
+    if (form.code.trim() === '') missing.code = t('required.code');
+    if (form.name.trim() === '') missing.name = t('required.name');
+    if (isFixed) {
+      if (form.basePrice === '' || !(Number(form.basePrice) >= 0)) missing.basePrice = t('required.basePrice');
+    } else {
+      if (form.price === '') missing.price = t('required.price');
+      if (form.cost === '' || !(Number(form.cost) >= 0)) missing.cost = t('required.cost');
+    }
+  }
+  const canSave = !!form && Object.keys(missing).length === 0;
+  /** The hint under a field. Rendered only when that field is the one holding Save back. */
+  const hint = (k: keyof typeof missing) => missing[k]
+    ? <span className="block mt-1 text-xs text-warn" data-testid={`required-${k}`}>{missing[k]}</span>
+    : null;
 
   const setComp = (idx: number, patch: Partial<FormComp>) => setForm((f) => f && ({ ...f, components: f.components.map((c, i) => i === idx ? { ...c, ...patch } : c) }));
   const addComp = () => setForm((f) => f && ({ ...f, components: [...f.components, { description: '', qty: '1', cost: '' }] }));
@@ -223,6 +249,120 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
   const shown = items.filter((i) => (showArchived || i.active) && (!showUncostedOnly || isUncosted(i)));
   const rate = form ? Number(form.vatRate || 0) : Number(defaultVatRate);
 
+  /**
+   * THE EDITOR BODY, DEFINED ONCE. An element, NOT a component defined in render — a component
+   * declared inside this function is a new type on every render, so React would unmount and
+   * remount the whole form on each keystroke and the field being typed into would lose focus.
+   * One element, rendered in whichever of the two places is currently open.
+   */
+  const editorBody = form ? (
+    <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block"><span className={labelCls}>{t('code')}</span>
+                  <input value={form.code} placeholder={t('codePlaceholder')} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} />{hint('code')}</label>
+                <label className="block"><span className={labelCls}>{t('type')}</span>
+                  <select value={form.itemType} onChange={(e) => setForm({ ...form, itemType: e.target.value as ItemType })} className={inputCls}>
+                    <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="fixed">{t('fixed')}</option><option value="misc">{t('misc')}</option>
+                  </select></label>
+                <label className="block sm:col-span-2"><span className={labelCls}>{t('titleLabel')}</span>
+                  <input value={form.title} placeholder={t('titlePlaceholder')} onChange={(e) => setForm({ ...form, title: e.target.value })} className={inputCls} /></label>
+                <label className="block sm:col-span-2"><span className={labelCls}>{t('name')}</span>
+                  <textarea value={form.name} placeholder={t('namePlaceholder')} rows={2} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${inputCls} resize-y`} />{hint('name')}</label>
+
+                {!isFixed && (<>
+                  <label className="block"><span className={labelCls}>{t('cost')} {t('exVat')}</span>
+                    <input type="number" inputMode="decimal" step="0.01" min={0} value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} className={inputCls} />{hint('cost')}
+                    <ExInc ex={Number(form.cost || 0)} rate={rate} /></label>
+                  <label className="block"><span className={labelCls}>{t('price')} {t('exVat')}</span>
+                    <input type="number" inputMode="decimal" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className={inputCls} />{hint('price')}
+                    <ExInc ex={Number(form.price || 0)} rate={rate} /></label>
+                </>)}
+
+                <label className="block"><span className={labelCls}>{t('vatRate')}</span>
+                  <input type="number" inputMode="decimal" step="0.01" min={0} max={100} value={form.vatRate} onChange={(e) => setForm({ ...form, vatRate: e.target.value })} className={inputCls} /></label>
+                <label className="flex items-center gap-2 pt-6"><input type="checkbox" className="w-5 h-5" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /><span className={labelCls}>{t('active')}</span></label>
+              </div>
+
+              {isFixed && (
+                <div className="mt-4 space-y-4">
+                  {/* Components */}
+                  <div className="border-t border-line pt-3">
+                    <div className="flex items-center justify-between"><span className={labelCls}>{t('components')}</span><span className="text-xs text-muted">{t('componentsTotal')}: {money(compCost)} {t('exVat')}</span></div>
+                    <p className="text-xs text-muted">{t('componentsHint')}</p>
+                    <div className="mt-2 space-y-2">
+                      {form.components.map((c, i) => (
+                        <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                          <textarea value={c.description} rows={2} onChange={(e) => setComp(i, { description: e.target.value })} placeholder={t('componentDesc')} className="col-span-12 sm:col-span-6 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink resize-y" />
+                          <input type="number" inputMode="decimal" step="0.01" min={0} value={c.qty} onChange={(e) => setComp(i, { qty: e.target.value })} aria-label={t('componentQty')} className="col-span-3 sm:col-span-2 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" />
+                          <input type="number" inputMode="decimal" step="0.01" min={0} value={c.cost} onChange={(e) => setComp(i, { cost: e.target.value })} aria-label={t('componentCost')} className="col-span-6 sm:col-span-3 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" placeholder={t('componentCost')} />
+                          <button onClick={() => rmComp(i)} className="col-span-3 sm:col-span-1 text-xs text-danger hover:underline">{t('remove')}</button>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={addComp} className="mt-2 text-sm text-accent hover:underline">+ {t('addComponent')}</button>
+                  </div>
+
+                  {/* Base price */}
+                  <div className="border-t border-line pt-3">
+                    <label className="block sm:w-64"><span className={labelCls}>{t('basePrice')} {t('exVat')}</span>
+                      <input type="number" inputMode="decimal" step="0.01" min={0} value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: e.target.value })} className={inputCls} />{hint('basePrice')}
+                      <ExInc ex={Number(form.basePrice || 0)} rate={rate} /></label>
+                    <p className="text-xs text-muted mt-1">{t('margin')}: <span className="text-ink font-medium">{money(Number(form.basePrice || 0) - compCost)}</span> {t('exVat')} · <span className="text-ink font-medium">{pctLabel(Number(form.basePrice || 0), compCost)}</span></p>
+                    <label className="block sm:w-64 mt-3"><span className={labelCls}>{t('labourHours')}</span>
+                      <input type="number" inputMode="decimal" step="0.25" min={0} value={form.labourHours} onChange={(e) => setForm({ ...form, labourHours: e.target.value })} className={inputCls} />
+                      <span className="text-xs text-muted mt-0.5 block">{form.labourOutsourced ? t('labourHoursHintOutsourced') : t('labourHoursHint')}</span></label>
+                    {/* Outsourced / bought-in: cost of sale, invisible to utilisation. The word the
+                        owner must see without reading docs — prominent, with a plain-English hint. */}
+                    <label className="flex items-start gap-2 mt-3 text-sm text-ink">
+                      <input type="checkbox" checked={form.labourOutsourced} onChange={(e) => setForm({ ...form, labourOutsourced: e.target.checked })} className="mt-0.5" />
+                      <span className="font-medium">{t('outsourced')}<span className="block text-xs text-muted font-normal">{t('outsourcedHint')}</span></span>
+                    </label>
+                  </div>
+
+                  {/* Tier grid */}
+                  {activeTiers.length > 0 && (
+                    <div className="border-t border-line pt-3">
+                      <span className={labelCls}>{t('tierGrid.heading')}</span>
+                      <p className="text-xs text-muted">{t('tierGrid.hint')}</p>
+                      <div className="mt-2 space-y-2">
+                        {activeTiers.map((tt) => {
+                          const cell = form.tierCells[tt.id] || { price: '', manual: false };
+                          const eff = cell.manual ? null : (cell.price !== '' ? Number(cell.price) : Number(form.basePrice || 0));
+                          return (
+                            <div key={tt.id} className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm text-ink w-28 shrink-0">{tt.name}</span>
+                              <input type="number" inputMode="decimal" step="0.01" min={0} disabled={cell.manual}
+                                value={cell.price} placeholder={t('tierGrid.inherit')}
+                                onChange={(e) => setCell(tt.id, { price: e.target.value })}
+                                className="w-28 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right disabled:opacity-50" />
+                              <label className="flex items-center gap-1 text-xs text-muted"><input type="checkbox" checked={cell.manual} onChange={(e) => setCell(tt.id, { manual: e.target.checked })} />{t('tierGrid.manual')}</label>
+                              <span className="text-xs text-muted">
+                                {cell.manual ? t('tierGrid.perJob') : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)} · {pctLabel(eff ?? 0, compCost)}</>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-5 flex items-center gap-2">
+                <button onClick={save} disabled={busy || !canSave} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? t('saving') : t('save')}</button>
+                <button onClick={close} className="text-muted hover:text-ink rounded-lg px-4 py-2 text-sm">{t('cancel')}</button>
+                {form.id && (() => {
+                  const it = items.find((x) => x.id === form.id);
+                  if (!it) return null;
+                  // Same predicate as the row and the endpoint — three readers, one rule.
+                  return isCatalogueUsed(it.usage ?? { jobLines: 0, promoTargets: 0 })
+                    ? <span className="ml-auto text-xs text-muted max-w-sm text-right">{usageReason(it)}</span>
+                    : <button onClick={() => hardDelete(it)} disabled={busy} className="ml-auto text-danger hover:bg-danger-soft rounded-lg px-3 py-2 text-sm">{t('delete')}</button>;
+                })()}
+              </div>
+    </>
+  ) : null;
+
   return (
     <>
       <Head><title>Products - GreaseDesk</title></Head>
@@ -281,112 +421,26 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
 
         {msg && <div className={`p-2 rounded mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
-        {form && (
-          <div className="bg-surface border border-line rounded-xl p-4 sm:p-6 mb-5">
-            <h2 className="font-semibold text-ink mb-3">{form.id ? t('edit') : t('add')}</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block"><span className={labelCls}>{t('code')}</span>
-                <input value={form.code} placeholder={t('codePlaceholder')} onChange={(e) => setForm({ ...form, code: e.target.value })} className={inputCls} /></label>
-              <label className="block"><span className={labelCls}>{t('type')}</span>
-                <select value={form.itemType} onChange={(e) => setForm({ ...form, itemType: e.target.value as ItemType })} className={inputCls}>
-                  <option value="part">{t('part')}</option><option value="labour">{t('labour')}</option><option value="fixed">{t('fixed')}</option><option value="misc">{t('misc')}</option>
-                </select></label>
-              <label className="block sm:col-span-2"><span className={labelCls}>{t('titleLabel')}</span>
-                <input value={form.title} placeholder={t('titlePlaceholder')} onChange={(e) => setForm({ ...form, title: e.target.value })} className={inputCls} /></label>
-              <label className="block sm:col-span-2"><span className={labelCls}>{t('name')}</span>
-                <textarea value={form.name} placeholder={t('namePlaceholder')} rows={2} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${inputCls} resize-y`} /></label>
+        {/*
+          ── THE EDITOR OPENS WHERE YOU CLICKED ────────────────────────────────────────────────
+          ONE definition, two mount points: ADD renders here at the top, because there is no row to
+          attach it to; EDIT renders inside its own row, below.
 
-              {!isFixed && (<>
-                <label className="block"><span className={labelCls}>{t('cost')} {t('exVat')}</span>
-                  <input type="number" inputMode="decimal" step="0.01" min={0} value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} className={inputCls} />
-                  <ExInc ex={Number(form.cost || 0)} rate={rate} /></label>
-                <label className="block"><span className={labelCls}>{t('price')} {t('exVat')}</span>
-                  <input type="number" inputMode="decimal" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className={inputCls} />
-                  <ExInc ex={Number(form.price || 0)} rate={rate} /></label>
-              </>)}
+          It used to render here for both, above a list that grew past a screenful — so clicking Edit
+          on a product low in the list opened the form several hundred pixels ABOVE the viewport and
+          nothing appeared to happen. Measured on 2026-09-15: the last of eleven products opened its
+          editor at y = -615. It mounted every time; it was simply never where the person was looking.
 
-              <label className="block"><span className={labelCls}>{t('vatRate')}</span>
-                <input type="number" inputMode="decimal" step="0.01" min={0} max={100} value={form.vatRate} onChange={(e) => setForm({ ...form, vatRate: e.target.value })} className={inputCls} /></label>
-              <label className="flex items-center gap-2 pt-6"><input type="checkbox" className="w-5 h-5" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /><span className={labelCls}>{t('active')}</span></label>
-            </div>
-
-            {isFixed && (
-              <div className="mt-4 space-y-4">
-                {/* Components */}
-                <div className="border-t border-line pt-3">
-                  <div className="flex items-center justify-between"><span className={labelCls}>{t('components')}</span><span className="text-xs text-muted">{t('componentsTotal')}: {money(compCost)} {t('exVat')}</span></div>
-                  <p className="text-xs text-muted">{t('componentsHint')}</p>
-                  <div className="mt-2 space-y-2">
-                    {form.components.map((c, i) => (
-                      <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                        <textarea value={c.description} rows={2} onChange={(e) => setComp(i, { description: e.target.value })} placeholder={t('componentDesc')} className="col-span-12 sm:col-span-6 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink resize-y" />
-                        <input type="number" inputMode="decimal" step="0.01" min={0} value={c.qty} onChange={(e) => setComp(i, { qty: e.target.value })} aria-label={t('componentQty')} className="col-span-3 sm:col-span-2 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" />
-                        <input type="number" inputMode="decimal" step="0.01" min={0} value={c.cost} onChange={(e) => setComp(i, { cost: e.target.value })} aria-label={t('componentCost')} className="col-span-6 sm:col-span-3 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right" placeholder={t('componentCost')} />
-                        <button onClick={() => rmComp(i)} className="col-span-3 sm:col-span-1 text-xs text-danger hover:underline">{t('remove')}</button>
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={addComp} className="mt-2 text-sm text-accent hover:underline">+ {t('addComponent')}</button>
-                </div>
-
-                {/* Base price */}
-                <div className="border-t border-line pt-3">
-                  <label className="block sm:w-64"><span className={labelCls}>{t('basePrice')} {t('exVat')}</span>
-                    <input type="number" inputMode="decimal" step="0.01" min={0} value={form.basePrice} onChange={(e) => setForm({ ...form, basePrice: e.target.value })} className={inputCls} />
-                    <ExInc ex={Number(form.basePrice || 0)} rate={rate} /></label>
-                  <p className="text-xs text-muted mt-1">{t('margin')}: <span className="text-ink font-medium">{money(Number(form.basePrice || 0) - compCost)}</span> {t('exVat')} · <span className="text-ink font-medium">{pctLabel(Number(form.basePrice || 0), compCost)}</span></p>
-                  <label className="block sm:w-64 mt-3"><span className={labelCls}>{t('labourHours')}</span>
-                    <input type="number" inputMode="decimal" step="0.25" min={0} value={form.labourHours} onChange={(e) => setForm({ ...form, labourHours: e.target.value })} className={inputCls} />
-                    <span className="text-xs text-muted mt-0.5 block">{form.labourOutsourced ? t('labourHoursHintOutsourced') : t('labourHoursHint')}</span></label>
-                  {/* Outsourced / bought-in: cost of sale, invisible to utilisation. The word the
-                      owner must see without reading docs — prominent, with a plain-English hint. */}
-                  <label className="flex items-start gap-2 mt-3 text-sm text-ink">
-                    <input type="checkbox" checked={form.labourOutsourced} onChange={(e) => setForm({ ...form, labourOutsourced: e.target.checked })} className="mt-0.5" />
-                    <span className="font-medium">{t('outsourced')}<span className="block text-xs text-muted font-normal">{t('outsourcedHint')}</span></span>
-                  </label>
-                </div>
-
-                {/* Tier grid */}
-                {activeTiers.length > 0 && (
-                  <div className="border-t border-line pt-3">
-                    <span className={labelCls}>{t('tierGrid.heading')}</span>
-                    <p className="text-xs text-muted">{t('tierGrid.hint')}</p>
-                    <div className="mt-2 space-y-2">
-                      {activeTiers.map((tt) => {
-                        const cell = form.tierCells[tt.id] || { price: '', manual: false };
-                        const eff = cell.manual ? null : (cell.price !== '' ? Number(cell.price) : Number(form.basePrice || 0));
-                        return (
-                          <div key={tt.id} className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm text-ink w-28 shrink-0">{tt.name}</span>
-                            <input type="number" inputMode="decimal" step="0.01" min={0} disabled={cell.manual}
-                              value={cell.price} placeholder={t('tierGrid.inherit')}
-                              onChange={(e) => setCell(tt.id, { price: e.target.value })}
-                              className="w-28 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right disabled:opacity-50" />
-                            <label className="flex items-center gap-1 text-xs text-muted"><input type="checkbox" checked={cell.manual} onChange={(e) => setCell(tt.id, { manual: e.target.checked })} />{t('tierGrid.manual')}</label>
-                            <span className="text-xs text-muted">
-                              {cell.manual ? t('tierGrid.perJob') : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)} · {pctLabel(eff ?? 0, compCost)}</>}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="mt-5 flex items-center gap-2">
-              <button onClick={save} disabled={busy || !canSave} className="bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-2 text-sm disabled:opacity-50">{busy ? t('saving') : t('save')}</button>
-              <button onClick={close} className="text-muted hover:text-ink rounded-lg px-4 py-2 text-sm">{t('cancel')}</button>
-              {form.id && (() => {
-                const it = items.find((x) => x.id === form.id);
-                if (!it) return null;
-                // Same predicate as the row and the endpoint — three readers, one rule.
-                return isCatalogueUsed(it.usage ?? { jobLines: 0, promoTargets: 0 })
-                  ? <span className="ml-auto text-xs text-muted max-w-sm text-right">{usageReason(it)}</span>
-                  : <button onClick={() => hardDelete(it)} disabled={busy} className="ml-auto text-danger hover:bg-danger-soft rounded-lg px-3 py-2 text-sm">{t('delete')}</button>;
-              })()}
-            </div>
+          IN PLACE RATHER THAN SCROLL-INTO-VIEW, deliberately. A scroll is logic that has to stay
+          right — which element, what offset, does a sticky header cover it, does it re-run on the
+          next render — and it has to keep being right as the page changes. An editor rendered in the
+          row cannot drift out of view, because there is nothing to drift. The service-tier rename a
+          few lines above this already edits in place; Edit-product was the odd one out.
+        */}
+        {form && !form.id && (
+          <div className="bg-surface border border-line rounded-xl p-4 sm:p-6 mb-5" data-testid="product-editor">
+            <h2 className="font-semibold text-ink mb-3">{t('add')}</h2>
+            {editorBody}
           </div>
         )}
 
@@ -414,6 +468,21 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
               const price = isFx ? base : i.unitPrice;
               const uncosted = isUncosted(i);
               const cost = i.unitCost; // number | null (fixed: mirror of Σ components; null = none recorded)
+              /**
+               * EDITING THIS ONE? The row BECOMES the editor, in place. Nothing scrolls, nothing is
+               * measured, and the form cannot open off-screen because it opens exactly where the
+               * button that summoned it was. See the note by the Add panel for what this replaced.
+               */
+              if (form && form.id === i.id) {
+                return (
+                  <li key={i.id} className="block p-3 sm:p-4 bg-surface" data-testid={`editor-row-${i.code}`}>
+                    <div data-testid="product-editor">
+                      <h2 className="font-semibold text-ink mb-3">{t('edit')} — <span className="font-mono text-xs">{i.code}</span></h2>
+                      {editorBody}
+                    </div>
+                  </li>
+                );
+              }
               return (
                 <li key={i.id} className={`flex flex-wrap items-center gap-3 p-3 bg-surface ${i.active ? '' : 'opacity-60'} ${uncosted ? 'ring-1 ring-inset ring-warn/40' : ''}`}>
                   <div className="min-w-0 flex-1">
