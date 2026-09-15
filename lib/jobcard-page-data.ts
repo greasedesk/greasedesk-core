@@ -9,6 +9,7 @@
  * cost of a card open, so depth matters: wave 1 = everything keyed on the params alone,
  * wave 2 = the card row (needs the visibility filter), wave 3 = everything keyed on the row.
  */
+import { liveStockCosts } from '@/lib/stock-store';
 import { latestTyres, latestBattery } from '@/lib/vehicle-condition';
 import { SCHEDULE_KEYS } from '@/lib/service-schedule';
 import { INTAKE_PROMPT_SELECT, promptSwitches, anyPromptEnabled, shouldOfferIntakePrompts, intakeItemStates } from '@/lib/intake-items';
@@ -141,6 +142,11 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       select: { id: true },
     }) as Promise<{ id: string } | null>,
   ]);
+
+  // The live cost base, only for a card that has SAID it is prep for this car.
+  const stockPrepCosts = row.stock_item_id
+    ? await liveStockCosts(groupId, row.stock_item_id as string)
+    : null;
   // No live customer link: the latest version is superseded (clears the moment a fresh quote is sent,
   // as the new `sent` version becomes the latest).
   const quoteSupersededNoLink = latestQuote?.status === 'superseded';
@@ -492,6 +498,8 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     stages,
     skipped,
     hasOwner: !!edgeOwnerId || !!row.customer,
+    // A car WE OWN has no customer by design — see detailsMinDataMet.
+    isStockPrep: !!row.stock_item_id,
     hasRegistration: !!(row.vehicle?.registration && String(row.vehicle.registration).trim()),
   });
 
@@ -676,6 +684,19 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     stockPrep: {
       linkedTo: row.stock_item_id ?? null,
       openStockItemId: openStockItem?.id ?? null,
+      /**
+       * WHAT THIS CAR HAS COST SO FAR, reachable from the card rather than only from the yard list.
+       * The person fitting the second turbo is on this screen, not on /admin/stock.
+       *
+       * Computed only when the card IS linked: on an unlinked card the figure would be about a car the
+       * reader has not yet said this work belongs to, which is a number offered before its question.
+       */
+      prepPence: stockPrepCosts ? stockPrepCosts.partsPence : null,
+      prepLabel: stockPrepCosts
+        ? `£${(stockPrepCosts.partsPence / 100).toFixed(2)} of parts on this car so far`
+          + (stockPrepCosts.cards > 1 ? ` across ${stockPrepCosts.cards} cards` : '')
+          + (stockPrepCosts.unknownCostLines ? ` · ${stockPrepCosts.unknownCostLines} line(s) with no trade cost, not included` : '')
+        : '',
     },
     duplicatedFrom, costsInherited,
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,

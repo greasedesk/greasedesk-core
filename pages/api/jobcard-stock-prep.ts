@@ -34,7 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const card = await prisma.jobCard.findFirst({
     where: { id: jobCardId, group_id: scope.groupId },
-    select: { id: true, site_id: true, vehicle_id: true, stock_item_id: true, invoice: { select: { id: true } } },
+    select: {
+      id: true, site_id: true, vehicle_id: true, stock_item_id: true, customer_id: true,
+      customer: { select: { name: true } }, invoice: { select: { id: true } },
+    },
   });
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
 
@@ -76,16 +79,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.jobCard.update({ where: { id: jobCardId }, data: { stock_item_id: wanted } });
+      /**
+       * ── LINKING BLANKS THE CUSTOMER ───────────────────────────────────────────
+       *
+       * A car we own has no customer, and leaving a name there is the garage-as-Customer trap arriving
+       * from the card instead of the stock record. The field is CLEARED, not filled with a placeholder:
+       * absent is the honest value, and every reader renders it as "Stock — no customer".
+       *
+       * UNLINKING DOES NOT PUT IT BACK, deliberately. We know who was removed — it is in the audit diff
+       * below — but restoring would silently re-attach a person to a card whose history since is work
+       * on our own car, and the name may have been wrong to begin with (it was, in the case this was
+       * built for: the owner's own). The field comes back EMPTY and the response says so.
+       */
+      await tx.jobCard.update({
+        where: { id: jobCardId },
+        data: { stock_item_id: wanted, ...(wanted ? { customer_id: null } : {}) },
+      });
       await writeAudit(tx, {
         groupId: scope.groupId, userId: scope.userId, jobCardId,
         action: wanted ? 'stock_prep.linked' : 'stock_prep.unlinked',
-        diff: { stockItemId: { from: card.stock_item_id, to: wanted } },
+        diff: {
+          stockItemId: { from: card.stock_item_id, to: wanted },
+          // WHO WAS REMOVED, recorded at the moment of removal — the only place it survives, because
+          // unlinking will not restore it.
+          ...(wanted && card.customer_id
+            ? { customerCleared: { id: card.customer_id, name: card.customer?.name ?? null } }
+            : {}),
+        },
       });
     });
   } catch (e) {
     console.error('stock prep link error:', e);
     return res.status(500).json({ message: 'Could not update this card.' });
   }
-  return res.status(200).json({ message: wanted ? 'This card is now internal prep.' : 'This card bills the customer again.' });
+  return res.status(200).json({
+    message: wanted
+      ? (card.customer_id
+        ? `This card is now internal prep, and ${card.customer?.name ?? 'the customer'} has been removed from it — a car we own has no customer.`
+        : 'This card is now internal prep.')
+      : 'This card bills a customer again. It has no customer on it — choose one. Unlinking does not put back the name that was removed.',
+    customerCleared: !!(wanted && card.customer_id),
+  });
 }

@@ -43,6 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     select: {
       id: true, site_id: true, status: true, vehicle_id: true,
       stage_details_done: true, stage_intake_done: true, stage_injob_done: true, stage_complete_done: true,
+      stock_item_id: true,
       stage_intake_skipped: true, stage_injob_skipped: true, stage_complete_skipped: true,
       vehicle: { select: { registration: true } },
     },
@@ -64,6 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } as Record<StageKey, boolean>,
     skipped: { intake: card.stage_intake_skipped, injob: card.stage_injob_skipped, complete: card.stage_complete_skipped },
     hasOwner: !!ownerId,
+    // A car WE OWN has no customer by design — the rule lives in detailsMinDataMet, not here.
+    isStockPrep: !!card.stock_item_id,
     hasRegistration: !!(card.vehicle?.registration && String(card.vehicle.registration).trim()),
   };
   const tabs = computeTabs(gate);

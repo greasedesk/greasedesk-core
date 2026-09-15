@@ -14,13 +14,28 @@ import { getServerSession } from 'next-auth';
 import { useTranslation } from 'next-i18next';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-import { resolveColour, blockTint, RESOURCE_PALETTE, GHOST_COLOUR, GHOST_FILL } from '@/lib/diary-colours';
+import { resolveColour, blockTint, RESOURCE_PALETTE, GHOST_COLOUR, GHOST_FILL, STOCK_COLOUR, STOCK_FILL, STOCK_TEXT } from '@/lib/diary-colours';
+import { STOCK_NO_CUSTOMER } from '@/lib/stock-prep';
 import { bandColour, statusBand, STATUS_BANDS, resolveStatusColours, DEFAULT_STATUS_COLOURS, type StatusBand } from '@/lib/status-colours';
 
 const BAND_LABEL: Record<StatusBand, string> = Object.fromEntries(STATUS_BANDS.map((b) => [b.key, b.label])) as Record<StatusBand, string>;
 // The status-band label pill. NON-gated (shown to every user) — the colour REINFORCES this label, it
 // never replaces it (red/green colour-blindness ≈ 1 in 12 men). Tinted by the band's own colour.
-function BandPill({ status, isComeback, colours, className }: { status: string; isComeback?: boolean; colours: Record<StatusBand, string>; className?: string }) {
+function BandPill({ status, isComeback, isStock, colours, className }: { status: string; isComeback?: boolean; isStock?: boolean; colours: Record<StatusBand, string>; className?: string }) {
+  /**
+   * STOCK IS NOT A BAND — it takes precedence over the lifecycle the way warranty does, and its colour
+   * comes from lib/diary-colours rather than the tenant map, so it cannot be reconfigured away from the
+   * sticker on the windscreen. On a solid orange block this pill is the one white-on-fill pill there
+   * is, which is what makes it legible at distance.
+   */
+  if (isStock) {
+    return (
+      <span className={`inline-block shrink-0 rounded-full border px-1.5 font-semibold whitespace-nowrap ${className ?? ''}`}
+        style={{ color: STOCK_COLOUR, borderColor: STOCK_TEXT, backgroundColor: STOCK_TEXT }} data-testid="band-pill-stock">
+        STOCK
+      </span>
+    );
+  }
   const band = statusBand(status, isComeback);
   const colour = colours[band];
   return (
@@ -77,7 +92,7 @@ function PayPill({ status, isComeback, t, className }: { status: string; isComeb
 }
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { priceUnconfirmed?: { agreedPennies: number; sentPennies: number; differencePennies: number; agreedVersion: number; sentVersion: number } | null; id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; valuePennies: number; segments: Segment[] };
+type DiaryCard = { priceUnconfirmed?: { agreedPennies: number; sentPennies: number; differencePennies: number; agreedVersion: number; sentVersion: number } | null; id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; /** A car WE OWN — not a status; takes precedence over the band (lib/diary-colours). */ isStock?: boolean; valuePennies: number; segments: Segment[] };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type DiaryView = 'day' | 'week' | 'month' | 'year';
@@ -255,6 +270,16 @@ function StatusKey({ colours, view, t }: { colours: Record<StatusBand, string>; 
           {label}
         </span>
       ))}
+      {/*
+        STOCK sits AFTER the configurable bands and is drawn from the fixed constant, never from
+        `colours` — the legend must show the same orange the sticker on the windscreen is, and a
+        tenant cannot recolour it. Its swatch is SOLID and the others are solid too at this size, so
+        the row says "solid block" in words: that is the distinction the board actually carries.
+      */}
+      <span data-key-band="stock" className="inline-flex items-center gap-1 whitespace-nowrap">
+        <span data-key-swatch="stock" className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: STOCK_COLOUR, border: '1px solid rgba(0,0,0,0.12)' }} />
+        Stock — our own car (solid block)
+      </span>
       {/* The block OUTLINE is the lift colour — day/week only (month has no outline). */}
       {(view === 'day' || view === 'week') && (
         <span className="whitespace-nowrap text-muted/80">· {t('statusKey.outlineNote')}</span>
@@ -608,11 +633,16 @@ export default function DiaryPage(props: PageProps) {
         onTouchEnd={cancelPress}
         onTouchMove={cancelPress}
         data-testid={ghost ? 'diary-ghost-block' : undefined}
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : blockTint(fill as string), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
+        data-stock={c.isStock ? '1' : undefined}
+        /* SOLID for stock, a ~13% tint for everything else. The difference a fitter reads from ten
+           feet is lightness, not hue — see lib/diary-colours for why that decides it. The 2px LIFT
+           border is kept: it still separates against a solid ground. */
+        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : (c.isStock ? STOCK_FILL : blockTint(fill as string)), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
         className={`diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}${ghost ? ` · ${t('ghost.title')}` : ''}`}
       >
-        <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : 'text-ink'}`}>{c.reg}</span>
+        <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : c.isStock ? '' : 'text-ink'}`}
+          style={c.isStock ? { color: STOCK_TEXT } : undefined}>{c.reg}</span>
         {ghost && height > 28 && (
           <span className="inline-block ml-1 mt-0.5 text-[8px] leading-none py-0.5 rounded-full border px-1.5 font-medium whitespace-nowrap"
             style={{ color: GHOST_COLOUR, borderColor: GHOST_COLOUR, backgroundColor: GHOST_FILL }}>
@@ -622,7 +652,7 @@ export default function DiaryPage(props: PageProps) {
         {/* Status-band label — THE single status word, always present (non-gated; the colour reinforces
             it, never replaces it). Shown wherever a pill fits (>28, matching where the pay pill used to
             appear) so short blocks still carry the word. */}
-        {!ghost && height > 28 && <BandPill status={c.status} isComeback={c.isComeback} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
+        {!ghost && height > 28 && <BandPill status={c.status} isComeback={c.isComeback} isStock={c.isStock} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
         {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
             overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
         {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
@@ -778,10 +808,10 @@ export default function DiaryPage(props: PageProps) {
           <div className="hidden md:flex flex-wrap items-center justify-between gap-3 mb-4 bg-surface-muted border border-line rounded-xl px-4 py-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
               {showMoney && finance.canSeeValues && (
-                <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums">{money(finance.bookedPennies)}{exVatSuffix}</span></span>
+                <span><span className="text-muted">{t('finance.booked')}: </span><span className="text-ink font-semibold tabular-nums" data-testid="finance-booked">{money(finance.bookedPennies)}{exVatSuffix}</span></span>
               )}
               {showMoney && finance.canSeeMargin && (
-                <span><span className="text-muted">{t('finance.margin')}: </span><span className={`font-semibold tabular-nums ${finance.marginPennies < 0 ? 'text-danger' : 'text-ink'}`}>{money(finance.marginPennies)}{exVatSuffix}</span></span>
+                <span><span className="text-muted">{t('finance.margin')}: </span><span className={`font-semibold tabular-nums ${finance.marginPennies < 0 ? 'text-danger' : 'text-ink'}`} data-testid="finance-margin">{money(finance.marginPennies)}{exVatSuffix}</span></span>
               )}
               {!showValues && <span className="text-muted italic">{t('finance.hidden')}</span>}
             </div>
@@ -886,15 +916,17 @@ export default function DiaryPage(props: PageProps) {
                     {listItems.map((it) => it.kind === 'job' ? (
                       <button key={`j-${it.card.id}`} onClick={() => openCard(it.card.id)}
                         className="w-full text-left rounded-xl p-3 flex gap-3 items-start active:bg-surface-muted"
-                        style={{ backgroundColor: blockTint(cardFill(it.card)), border: `2px solid ${resolveColour(it.card.resourceColour)}` }}>
-                        <div className="shrink-0 text-sm text-muted tabular-nums pt-0.5 w-14">{hhmm(it.card.startAt)}<br /><span className="text-xs">{hhmm(it.card.endAt)}</span></div>
-                        <div className="min-w-0 flex-1">
+                        data-stock={it.card.isStock ? '1' : undefined}
+                        style={{ backgroundColor: it.card.isStock ? STOCK_FILL : blockTint(cardFill(it.card)), border: `2px solid ${resolveColour(it.card.resourceColour)}` }}>
+                        <div className={`shrink-0 text-sm tabular-nums pt-0.5 w-14 ${it.card.isStock ? '' : 'text-muted'}`}
+                          style={it.card.isStock ? { color: STOCK_TEXT } : undefined}>{hhmm(it.card.startAt)}<br /><span className="text-xs">{hhmm(it.card.endAt)}</span></div>
+                        <div className="min-w-0 flex-1" style={it.card.isStock ? { color: STOCK_TEXT } : undefined}>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-ink">{it.card.reg}</span>
-                            <BandPill status={it.card.status} isComeback={it.card.isComeback} colours={statusColours} className="text-[10px] py-0.5" />
+                            <span className={`font-semibold ${it.card.isStock ? '' : 'text-ink'}`}>{it.card.reg}</span>
+                            <BandPill status={it.card.status} isComeback={it.card.isComeback} isStock={it.card.isStock} colours={statusColours} className="text-[10px] py-0.5" />
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-muted whitespace-nowrap">{it.card.resourceName}</span>
                           </div>
-                          <div className="text-sm text-ink">{it.card.customer}</div>
+                          <div className={`text-sm ${it.card.isStock ? 'italic' : 'text-ink'}`}>{it.card.customer}</div>
                           {it.card.services.map((s, i) => <div key={i} className="text-xs text-muted">{s}</div>)}
                           {/* Payment pill only where it adds to the band: warranty/settled "No charge". */}
                           {finance.canSeeValues && paymentState(it.card.status, it.card.isComeback) === 'settled' && <div className="mt-1"><PayPill status={it.card.status} isComeback={it.card.isComeback} t={t} className="text-[10px] py-0.5" /></div>}
@@ -1844,7 +1876,19 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
     // HMRC, input VAT on purchases reclaimed). Booked = ex-VAT revenue (labour + parts sold); Margin =
     // ex-VAT revenue − ex-VAT parts cost (labour EXCLUDED — fixed overhead). A comeback = £0 revenue,
     // still its parts-cost drag. Period-matched by BOOKING day (no cross-period double-count).
-    const revenueEx = c.is_comeback ? 0 : (totals.labour_pennies + totals.parts_pennies);
+    /**
+     * A CAR WE OWN EARNS NOTHING. Zeroed the way a comeback is, and for a stronger reason: a comeback
+     * is real work for a real customer at £0, while this has no customer at all. Counting it put
+     * fictional revenue in Booked and Margin for a car the garage already owns.
+     *
+     * AND ITS PARTS ARE NOT A DRAG EITHER — unlike a comeback, which subtracts its parts cost here.
+     * A stock car's parts are CAPITALISED into the car and come back at sale; subtracting them from
+     * this month's margin as well as adding them to the car's cost base counts the same turbo twice,
+     * in opposite directions. The spend shows against the car in the yard. See lib/stock-prep.
+     */
+    const isStock = !!c.stock_item_id;
+    const revenueEx = (c.is_comeback || isStock) ? 0 : (totals.labour_pennies + totals.parts_pennies);
+    const partsCostEx = isStock ? 0 : totals.parts_cost_pennies;
     const startMs = (c.start_at as Date).getTime();
     // GHOSTS ARE EXCLUDED FROM THE MONEY. A no-show renders (the display list keeps it) but earns
     // nothing — counting it here would add the wasted slot back into "Booked" through the display
@@ -1854,14 +1898,18 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
     const ghost = c.status === 'no_show';
     if (!ghost && startMs >= rangeStartMs && startMs < rangeEndMs) {
       bookedPennies += revenueEx;
-      marginPennies += revenueEx - totals.parts_cost_pennies;
+      marginPennies += revenueEx - partsCostEx;
       const dk = ymd(new Date(startMs));
       const d = (dayAgg[dk] ??= { booked: 0, margin: 0 });
-      d.booked += revenueEx; d.margin += revenueEx - totals.parts_cost_pennies;
+      d.booked += revenueEx; d.margin += revenueEx - partsCostEx;
     }
     return {
       id: c.id, resourceId: c.resource_id as string, resourceName: c.resource?.name ?? '—', resourceColour: c.resource?.colour ?? null,
-      reg: c.vehicle?.registration ?? '—', customer: c.customer?.name ?? '—', serviceSummary, services,
+      reg: c.vehicle?.registration ?? '—',
+      // NOT a dash. A dash reads as missing data and invites somebody to "fix" it by typing a name,
+      // which is the garage-as-Customer trap arriving from the other end. See lib/stock-prep.
+      customer: isStock ? STOCK_NO_CUSTOMER : (c.customer?.name ?? '—'), serviceSummary, services,
+      isStock,
       startAt, endAt: fp.endISO, // endAt = TRUE wrapped end (tooltip shows the real end, not raw 20:00)
       status: c.status as string,
       isComeback: !!c.is_comeback, // the pay pill reads `settled` for a comeback from invoiced onward
@@ -1869,7 +1917,8 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       // matching what the margin total subtracts. Totals compute from `totals` directly, unaffected.
       // A ghost's value is 0 unconditionally — nothing will be earned, and a £ on the block
       // would read as live work.
-      valuePennies: fin.seeValues && !ghost ? (c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
+      // A stock block shows £0, NOT the negative a comeback shows: its parts are capitalised, not lost.
+      valuePennies: fin.seeValues && !ghost ? (isStock ? 0 : c.is_comeback ? -totals.parts_cost_pennies : revenueEx) : 0,
       // Agreed one price, sent another. Gated with the other money grain: a chip naming two totals
       // is a money disclosure, so it follows the same see-values permission as the block value.
       priceUnconfirmed: fin.seeValues ? quotePriceUnconfirmed(c.quoteVersions ?? []) : null,

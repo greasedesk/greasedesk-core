@@ -49,6 +49,13 @@ export type CardGateState = {
   skipped?: Partial<Record<StageKey, boolean>>;
   hasOwner: boolean;         // a current owner resolves via the VehicleOwnership edge
   hasRegistration: boolean;  // the car has a registration
+  /**
+   * THIS CARD IS PREP ON A CAR WE OWN, so it has no customer BY DESIGN and must not be gated on one.
+   * Carried into the gate state rather than OR-ed into `hasOwner` at each of the three call sites,
+   * because three copies of one rule is three chances for them to disagree — and the one that would
+   * have disagreed is the server, which refuses the stage transition the client had already allowed.
+   */
+  isStockPrep?: boolean;
 };
 
 // The stage flag that backs each stage-gated tab (Quote/Invoice gate on status, not a flag → absent).
@@ -56,9 +63,16 @@ export const TAB_STAGE: Partial<Record<TabKey, StageKey>> = {
   details: 'details', intake: 'intake', injob: 'injob', completion: 'complete',
 };
 
-/** Customer Details may only be marked complete when the minimum owner + vehicle data is present. */
-export function detailsMinDataMet(s: Pick<CardGateState, 'hasOwner' | 'hasRegistration'>): boolean {
-  return s.hasOwner && s.hasRegistration;
+/**
+ * Customer Details may only be marked complete when the minimum owner + vehicle data is present.
+ *
+ * A STOCK-PREP CARD SATISFIES THE OWNER HALF BY NOT NEEDING IT. Without this the first stage can never
+ * complete on such a card and the whole process path is dead behind it — the feature would look
+ * finished and be unusable on the second car. The REGISTRATION half still applies: that is what
+ * identifies the car, and a stock card has one by construction.
+ */
+export function detailsMinDataMet(s: Pick<CardGateState, 'hasOwner' | 'hasRegistration' | 'isStockPrep'>): boolean {
+  return (s.hasOwner || !!s.isStockPrep) && s.hasRegistration;
 }
 
 export function computeTabs(s: CardGateState): Record<TabKey, TabState> {

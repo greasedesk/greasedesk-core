@@ -20,6 +20,8 @@ export function fetchDayBookings(siteId: string, rangeStart: Date, rangeEnd: Dat
     where: { site_id: siteId, resource_id: { not: null }, status: { notIn: HIDDEN_FROM_DIARY }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
     select: {
       id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true, held_on_lift: true,
+      // A car WE OWN. Not a status — a statement about whose car it is; see lib/diary-colours.
+      stock_item_id: true,
       resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },
       items: { select: { item_type: true, description: true, qty: true, unit_price: true, unit_cost: true, vat_rate: true }, orderBy: { created_at: 'asc' } },
       // The version series, so the board can say when the customer has NOT agreed to the price it

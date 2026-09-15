@@ -92,7 +92,7 @@ type PageProps = {
   flags: string[];
   isComeback: boolean;
   /** Is this car in our stock, and is this card preparing it? See lib/stock-prep. */
-  stockPrep: { linkedTo: string | null; openStockItemId: string | null };
+  stockPrep: { linkedTo: string | null; openStockItemId: string | null; prepPence: number | null; prepLabel: string };
   duplicatedFrom: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
   vehicleIdLabel: string;
   vehicleLookupProvider: LookupProviderName;

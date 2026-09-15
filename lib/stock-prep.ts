@@ -27,6 +27,15 @@ export const INTERNAL_STOCK_INVOICE_REFUSAL =
   + 'against that car in the stock book. If this work really is being billed to a customer, unlink '
   + 'it from the stock item first — that is a different job from raising the invoice.';
 
+/**
+ * WHAT A STOCK CARD SHOWS WHERE A CUSTOMER NAME WOULD GO.
+ *
+ * Not a dash. A dash reads as missing data — somebody forgot to fill it in — and invites the exact
+ * repair that caused this: typing the owner's own name into the customer field, which is the
+ * garage-as-Customer trap arriving from the other end. This says the absence is the answer.
+ */
+export const STOCK_NO_CUSTOMER = 'Stock — no customer';
+
 export type PrepLine = {
   item_type: 'labour' | 'part' | 'misc' | 'fixed';
   qty: unknown;

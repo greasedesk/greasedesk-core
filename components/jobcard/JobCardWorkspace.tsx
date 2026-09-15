@@ -8,6 +8,8 @@
  * Tabs: Customer Details (edge-resolved owner) → Quote (renamed estimate + accept-&-book) → Intake →
  * In-Job → Completion photos (gated stages; upload is a placeholder until the R2 slice) → Invoice.
  */
+import { STOCK_COLOUR } from '@/lib/diary-colours';
+import { STOCK_NO_CUSTOMER } from '@/lib/stock-prep';
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -35,7 +37,7 @@ import { RefundPanel } from '@/components/refund/RefundPanel';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import JobClock, { type JobClockProps } from '@/components/jobcard/JobClock';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
-import { TAB_KEYS, TabKey, TabState, computeTabs, tabForStage } from '@/lib/jobcard-tabs';
+import { TAB_KEYS, TabKey, TabState, computeTabs, detailsMinDataMet, tabForStage } from '@/lib/jobcard-tabs';
 import { stagesRemaining } from '@/lib/jobcard-status';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
@@ -123,7 +125,7 @@ type Props = {
   };
   flags: string[];
   isComeback: boolean;
-  stockPrep: { linkedTo: string | null; openStockItemId: string | null };
+  stockPrep: { linkedTo: string | null; openStockItemId: string | null; prepPence: number | null; prepLabel: string };
   // Duplicate provenance (both nullable/absent on ordinary cards). ownershipChanged drives the
   // prominent vehicle-reowned notice; costsInherited drives the Quote-tab stale-cost advisory.
   duplicatedFrom?: { registration: string | null; ownershipChanged: boolean; previousCustomerName: string | null } | null;
@@ -220,6 +222,7 @@ export default function JobCardWorkspace(p: Props) {
     stages: patch.stages ?? eff.stages,
     skipped: patch.skipped ?? eff.skipped,
     hasOwner: !!(eff.owner.name && eff.owner.name !== '—'),
+    isStockPrep: !!eff.stockPrepLinkedTo,
     hasRegistration: !!(eff.vehicle.registration && eff.vehicle.registration !== '—'),
   });
   async function refreshCard() {
@@ -511,7 +514,19 @@ export default function JobCardWorkspace(p: Props) {
     const isSkipped = skippable && !done && eff.skipped[stage === 'complete' ? 'complete' : stage as 'intake' | 'injob'];
     const [skipOpen, setSkipOpen] = useState(false);
     const [skipReason, setSkipReason] = useState('');
-    const detailsBlocked = stage === 'details' && !(p.owner.name && p.owner.name !== '—' && p.vehicle.registration && p.vehicle.registration !== '—');
+    /**
+     * DETAILS IS A DATA GATE — and a car we own has no customer BY DESIGN, so the gate must not demand
+     * one. Without this exemption a stock card can never complete its first stage and the whole process
+     * path is dead behind it: the feature would look finished and be unusable on the second card.
+     *
+     * The REGISTRATION half still applies. That is the half that identifies the car, and a stock card
+     * has one by construction (it is linked to a StockItem, which is linked to a vehicle).
+     */
+    const detailsBlocked = stage === 'details' && !detailsMinDataMet({
+      hasOwner: !!(p.owner.name && p.owner.name !== '—'),
+      hasRegistration: !!(p.vehicle.registration && p.vehicle.registration !== '—'),
+      isStockPrep: !!eff.stockPrepLinkedTo,
+    });
     return (
       <div className="flex flex-col items-stretch sm:items-end gap-2">
         <div className="flex flex-wrap gap-2 justify-end">
@@ -586,12 +601,59 @@ export default function JobCardWorkspace(p: Props) {
 
   const detailsPane = (
       <div className="space-y-5">
+        {/*
+          ── WHOSE CAR IS THIS? FIRST QUESTION ON THE TAB WHERE THE CAR ARRIVES ───────────────────
+          Moved here 2026-09-15 from the bottom of the Quote tab. The evidence that the old position
+          was wrong is plain: 0 of 321 cards linked against 2 open stock items, and one car sitting on
+          a lift billing its owner £300. The control that decides whether a card HAS a price does not
+          belong underneath the pricing — it belongs where you are when the car comes in, above the
+          customer form it is going to empty.
+
+          ONLY WHEN THE CAR IS ACTUALLY OURS. Offering this on a customer's car invites a mistake
+          nobody would notice until a debtor went missing, so it does not exist unless this vehicle
+          has an OPEN stock record.
+        */}
+        {p.canOperate && !inactive && p.stockPrep.openStockItemId && (
+          <label className="flex items-start gap-3 rounded-xl p-4 text-sm cursor-pointer border"
+            style={eff.stockPrepLinkedTo ? { borderColor: STOCK_COLOUR, backgroundColor: `${STOCK_COLOUR}1A` } : undefined}
+            data-testid="stock-prep-toggle">
+            <input type="checkbox" className="w-5 h-5 mt-0.5" checked={!!eff.stockPrepLinkedTo}
+              disabled={busy !== null} onChange={(e) => setStockPrep(e.target.checked)} />
+            <span>
+              <span className="font-semibold text-ink">This is prep on a car we own</span>
+              <span className="block text-xs text-muted mt-0.5">
+                Nobody is invoiced and it earns nothing on the diary. Parts count against this car in the
+                stock book at trade cost — labour is not costed, because there is no measured workshop
+                rate to cost it at. Ticking this <strong>removes the customer</strong> from the card.
+              </span>
+              {eff.stockPrepLinkedTo && p.stockPrep.prepPence !== null && (
+                <a href="/admin/stock" className="block mt-2 text-xs font-semibold underline text-ink"
+                  data-testid="stock-prep-spend">
+                  {p.stockPrep.prepLabel}
+                </a>
+              )}
+            </span>
+          </label>
+        )}
         {/* Missed-booking history, derived server-side — in front of whoever is looking at this
             customer, because the next booking is decided here or in the diary (which shows the
             same fact via the reg lookup). */}
         {(eff.owner.noShowDates?.length ?? 0) > 0 && (
           <div className="bg-warn-soft text-warn rounded-xl px-4 py-3 text-sm font-semibold" data-testid="no-show-history">
             {t('noShow.history', { count: eff.owner.noShowDates!.length, dates: eff.owner.noShowDates!.slice(0, 3).join(', ') })}
+          </div>
+        )}
+        {/*
+          WHERE A CUSTOMER NAME WOULD GO. Said in words, not left blank and not shown as a dash: a
+          dash reads as missing data and invites the repair that caused this — typing the owner's own
+          name into the customer field. The form stays below it, because unlinking is allowed and the
+          person may then genuinely need it.
+        */}
+        {eff.stockPrepLinkedTo && (
+          <div className="rounded-xl border px-4 py-3 text-sm font-semibold"
+            style={{ borderColor: STOCK_COLOUR, color: STOCK_COLOUR, backgroundColor: `${STOCK_COLOUR}14` }}
+            data-testid="stock-no-customer">
+            {STOCK_NO_CUSTOMER}
           </div>
         )}
         <CustomerDetailsForm
@@ -920,23 +982,6 @@ export default function JobCardWorkspace(p: Props) {
             <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer">
               <input type="checkbox" className="w-5 h-5 mt-0.5" checked={eff.isComeback} disabled={busy !== null} onChange={(e) => setComeback(e.target.checked)} />
               <span><span className="font-semibold text-ink">{t('comeback.label')}</span><span className="block text-xs text-muted mt-0.5">{t('comeback.hint')}</span></span>
-            </label>
-          )}
-          {/* ONLY WHEN THE CAR IS ACTUALLY OURS. Offering "this is stock prep" on a customer's car is
-              an invitation to a mistake nobody would notice until a debtor went missing — so the
-              control does not exist unless this vehicle has an OPEN stock record. */}
-          {p.canOperate && !inactive && p.stockPrep.openStockItemId && (
-            <label className="flex items-start gap-3 bg-surface border border-line rounded-xl p-4 text-sm cursor-pointer mt-3"
-              data-testid="stock-prep-toggle">
-              <input type="checkbox" className="w-5 h-5 mt-0.5" checked={!!eff.stockPrepLinkedTo}
-                disabled={busy !== null} onChange={(e) => setStockPrep(e.target.checked)} />
-              <span>
-                <span className="font-semibold text-ink">This is prep on a car we own</span>
-                <span className="block text-xs text-muted mt-0.5">
-                  Nobody is invoiced. The parts count against this car in the stock book, at trade cost —
-                  labour is not costed, because there is no measured workshop rate to cost it at.
-                </span>
-              </span>
             </label>
           )}
       </div>

@@ -13,7 +13,11 @@ const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
 const SI = await import('../lib/stock-intake.ts');
 const SP = await import('../lib/stock-prep.ts');
+const { STOCK_NO_CUSTOMER: SP_LABEL } = SP;
 const RA = await import('../lib/stock-reacquisition.ts');
+const DC = await import('../lib/diary-colours.ts');
+const SC = await import('../lib/status-colours.ts');
+const TABS = await import('../lib/jobcard-tabs.ts');
 const { hasKey } = await import('../lib/anchored-match.ts');
 const DV = await import('../lib/dvsa.ts');
 const OD = await import('../lib/odometer.ts');
@@ -27,7 +31,7 @@ const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 
 let prisma;
 let browser = null;
-let made = { items: [], vehicles: [], cards: [] };
+let made = { items: [], vehicles: [], cards: [], customers: [] };
 try {
   prisma = await gatePrisma();
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
@@ -820,12 +824,219 @@ try {
       && (await prisma.stockDisposal.findUnique({ where: { id: foundPrior.disposalId }, select: { sale_pence: true } })).sale_pence === 899500,
     'a re-acquisition is a new row, never an undo');
 
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  A STOCK CAR ON THE BOARD — orange, earning nothing, and with nobody to bill
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the colour is fixed, and cannot be reconfigured away from the sticker —');
+  check('stock orange is NOT one of the tenant-configurable status bands',
+    !SC.STATUS_BANDS.some((b) => b.key === 'stock') && !('stock' in SC.DEFAULT_STATUS_COLOURS),
+    'a colour that means "this is ours" must not be re-colourable in Settings');
+  check('  …and resolveStatusColours cannot produce it, whatever is stored',
+    !Object.values(SC.resolveStatusColours({ stock: DC.STOCK_COLOUR, in_progress: DC.STOCK_COLOUR }))
+      .includes(DC.STOCK_COLOUR) === false || !('stock' in SC.resolveStatusColours({ stock: '#F97316' })),
+    'the tenant map has no stock key to write');
+  check('it does not collide with the in-progress default', DC.STOCK_COLOUR !== SC.DEFAULT_STATUS_COLOURS.in_progress,
+    `stock ${DC.STOCK_COLOUR} vs in_progress ${SC.DEFAULT_STATUS_COLOURS.in_progress}`);
+  check('  …and the distinction does NOT rest on hue alone — the fill is SOLID, not a tint',
+    DC.STOCK_FILL === DC.STOCK_COLOUR && DC.blockTint(DC.STOCK_COLOUR) !== DC.STOCK_FILL,
+    'every other block is a ~13% tint; amber and orange are adjacent hues at wall-screen distance');
+
+  console.log('\n— a stock card is not gated on a customer it cannot have —');
+  check('detailsMinDataMet BLOCKS an ordinary card with no owner',
+    TABS.detailsMinDataMet({ hasOwner: false, hasRegistration: true }) === false);
+  check('  …and PASSES a stock-prep card with no owner',
+    TABS.detailsMinDataMet({ hasOwner: false, hasRegistration: true, isStockPrep: true }) === true,
+    'without this the first stage never completes and the whole process path is dead behind it');
+  check('  …but a registration is still required of both',
+    TABS.detailsMinDataMet({ hasOwner: true, hasRegistration: false }) === false
+      && TABS.detailsMinDataMet({ hasOwner: false, hasRegistration: false, isStockPrep: true }) === false);
+  const stageSrc = readFileSync('pages/api/jobcard-stage.ts', 'utf8');
+  check('the SERVER stage gate reads the same predicate, not its own copy',
+    hasKey(stageSrc, 'isStockPrep', /!!card\.stock_item_id/) && /detailsMinDataMet\(gate\)/.test(stageSrc),
+    'a client that allows what the server refuses is two rules wearing one name');
+
+  console.log('\n— linking removes the customer, and unlinking does not bring them back —');
+  const regS = `ZZYARD${Math.floor(Math.random() * 900 + 100)}S`;
+  const vS = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regS, acquiredAt: bought });
+  if ('refused' in vS) throw new Error(vS.refused);
+  made.vehicles.push(vS.id);
+  const itemS = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vS.id, acquiredAt: bought,
+    purchasePence: 214300, vatStatus: 'margin', source: 'trade',
+  });
+  if ('refused' in itemS) throw new Error(itemS.refused);
+  made.items.push(itemS.id);
+  const cust = await prisma.customer.create({
+    data: { group_id: ZZ_GROUP, name: 'ZZ Wrongly Named Owner' }, select: { id: true, name: true },
+  });
+  made.customers = [...(made.customers ?? []), cust.id];
+  const siteS = await prisma.site.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const cardS = await prisma.jobCard.create({
+    data: {
+      group_id: ZZ_GROUP, site_id: siteS.id, vehicle_id: vS.id, customer_id: cust.id, status: 'accepted',
+      items: { create: [
+        { item_type: 'labour', description: 'ZZ remove DPF', qty: 4, unit_cost: null, unit_price: 75 },
+        { item_type: 'part', description: 'ZZ turbo', qty: 2, unit_cost: 410, unit_price: 900 },
+      ] },
+    },
+    select: { id: true },
+  });
+  made.cards = [...(made.cards ?? []), cardS.id];
+
+  const origin = gateOrigin();
+  const ctx = await browser.newContext();
+  const pg = await ctx.newPage();
+  await pg.goto(`${origin}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await pg.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await pg.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([pg.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), pg.click('button[type="submit"]')]);
+
+  const link = await ctx.request.patch(`${origin}/api/jobcard-stock-prep`, {
+    data: { jobCardId: cardS.id, stockItemId: itemS.id },
+  });
+  const linkBody = await link.json().catch(() => ({}));
+  check('linking succeeds', link.status() === 200, `${link.status()}`);
+  const afterLink = await prisma.jobCard.findUnique({
+    where: { id: cardS.id }, select: { customer_id: true, stock_item_id: true },
+  });
+  check('THE CUSTOMER IS GONE from the card', afterLink.customer_id === null,
+    'a car we own has no customer — the garage-as-Customer trap, arriving from the card');
+  check('  …and the response NAMES who was removed', /ZZ Wrongly Named Owner/.test(linkBody.message ?? ''),
+    'a silent removal is indistinguishable from a bug');
+  const auditRow = await prisma.auditLog.findFirst({
+    where: { entity: 'job_card', entity_id: cardS.id, action: 'stock_prep.linked' },
+    select: { diff_json: true },
+  });
+  check('  …and the audit keeps the name, which is now the only place it survives',
+    JSON.stringify(auditRow?.diff_json ?? {}).includes('ZZ Wrongly Named Owner'));
+
+  const unlink = await ctx.request.patch(`${origin}/api/jobcard-stock-prep`, {
+    data: { jobCardId: cardS.id, stockItemId: null },
+  });
+  const unlinkBody = await unlink.json().catch(() => ({}));
+  const afterUnlink = await prisma.jobCard.findUnique({ where: { id: cardS.id }, select: { customer_id: true } });
+  check('UNLINKING DOES NOT SILENTLY RESTORE the customer', afterUnlink.customer_id === null,
+    'the name may have been wrong in the first place — re-choosing is a deliberate act');
+  check('  …and the refusal to restore is SAID, not left to be discovered',
+    /does not put back/i.test(unlinkBody.message ?? ''));
+  await prisma.jobCard.update({ where: { id: cardS.id }, data: { stock_item_id: itemS.id, customer_id: null } });
+
+  console.log('\n— and it reads as stock everywhere a customer name would be —');
+  await pg.goto(`${origin}/admin/jobcards/${cardS.id}`, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('[data-testid="stock-no-customer"]', { timeout: 25000 });
+  const said = (await pg.textContent('[data-testid="stock-no-customer"]')).trim();
+  check('the card page says it in words', said === SP_LABEL, said);
+  check('  …and never renders a bare dash where the customer was',
+    !(await pg.$('[data-testid="stock-no-customer"] >> text="—"')));
+  check('the prep spend is reachable FROM THE CARD', !!(await pg.$('[data-testid="stock-prep-spend"]')));
+  /**
+   * ── WHERE THE TOGGLE IS, WHICH NOTHING ASSERTED UNTIL NOW ────────────────────────────────────
+   *
+   * It was moved out of the Quote tab on 2026-09-15 because 0 of 321 cards were linked against 2 open
+   * stock items, and one car sat on a lift billing its owner £300. Moving it and asserting nothing
+   * would leave the next person free to move it back with no gate noticing — which is exactly what a
+   * red-proof of this change found: renaming the control changed no result at all.
+   *
+   * Driven by ?tab=, the state the component reads, not by clicking chrome that may be off-screen.
+   */
+  await pg.goto(`${origin}/admin/jobcards/${cardS.id}?tab=details`, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('[data-testid="stock-prep-toggle"]', { timeout: 25000 });
+  check('the toggle is on the CUSTOMER DETAILS tab — where you are when the car arrives',
+    await pg.isVisible('[data-testid="stock-prep-toggle"]'));
+  check('  …ABOVE the customer form it is going to empty', await pg.evaluate(() => {
+    const t = document.querySelector('[data-testid="stock-prep-toggle"]');
+    const c = document.querySelector('[data-testid="stock-no-customer"]');
+    return !!t && !!c && (t.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }), 'the question "whose car is this?" comes before the answer it changes');
+  /**
+   * COMPLETE THE DETAILS STAGE THROUGH THE REAL SERVER, on a card with NO CUSTOMER. This is the
+   * end-to-end proof of the gate exemption — the pure-function clauses above say detailsMinDataMet
+   * allows it, and this says the API actually does. It is also what makes the Quote tab reachable,
+   * without which the tab-placement clause below silently tests the details tab twice.
+   */
+  const stageRes = await ctx.request.post(`${origin}/api/jobcard-stage`, {
+    data: { jobCardId: cardS.id, stage: 'details', done: true },
+  });
+  check('the SERVER completes the details stage on a card with no customer', stageRes.status() === 200,
+    `${stageRes.status()} — ${(await stageRes.text()).slice(0, 90)}`);
+
+  await pg.goto(`${origin}/admin/jobcards/${cardS.id}?tab=quote`, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('[data-testid="stock-prep-toggle"]', { state: 'attached', timeout: 25000 }).catch(() => {});
+  check('  …and NOT at the bottom of the Quote tab any more',
+    !(await pg.isVisible('[data-testid="stock-prep-toggle"]').catch(() => false)),
+    'the control deciding whether a card HAS a price does not belong underneath the pricing');
+  await pg.goto(`${origin}/admin/jobcards/${cardS.id}?tab=details`, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('[data-testid="stock-prep-toggle"]', { timeout: 25000 });
+
+  const spend = await pg.textContent('[data-testid="stock-prep-spend"]');
+  check('  …and it is the PARTS cost, not the retail price', /820\.00/.test(spend),
+    `${spend.trim()} — 2 turbos at £410 trade, not £900 retail; the £300 of labour is not costed`);
+
+  console.log('\n— ON THE BOARD: orange, and earning nothing —');
+  /**
+   * A REAL SLOT ON A REAL LIFT. Without a resource and a time the card never reaches the diary query
+   * at all, and every clause below would pass on a board that had never heard of it.
+   */
+  const lift = await prisma.resource.findFirst({ where: { site_id: siteS.id }, select: { id: true } });
+  const day = new Date(); day.setUTCHours(10, 0, 0, 0);
+  const dayEnd = new Date(day.getTime() + 2 * 3600 * 1000);
+  const dayKey = day.toISOString().slice(0, 10);
+  await prisma.jobCard.update({
+    where: { id: cardS.id },
+    data: { resource_id: lift.id, start_at: day, end_at: dayEnd, booking_duration_minutes: 120 },
+  });
+
+  const boardMoney = async () => {
+    await pg.goto(`${origin}/admin/diary?view=day&anchor=${dayKey}`, { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('[data-testid="finance-booked"]', { timeout: 25000 });
+    const txt = async (sel) => (await pg.textContent(sel)).replace(/[^0-9.]/g, '');
+    return { booked: Number(await txt('[data-testid="finance-booked"]')), margin: Number(await txt('[data-testid="finance-margin"]')) };
+  };
+
+  const asStock = await boardMoney();
+  // THE DAY BLOCK specifically. `[data-stock="1"]` alone also matches the list-view row, which carries
+  // no title — the first version of this clause read a null off the wrong element.
+  const block = await pg.$('.diary-block[data-stock="1"]');
+  check('the stock card is ON the board', !!block,
+    'every clause below is about a block that must exist to be wrong');
+  check('  …painted SOLID orange, not a tint',
+    (await block.evaluate((el) => getComputedStyle(el).backgroundColor)) === 'rgb(249, 115, 22)',
+    'the one channel nothing else on the board uses — readable across a workshop');
+  check('  …carrying the STOCK pill, so the colour is never the only signal',
+    !!(await pg.$('[data-testid="band-pill-stock"]')));
+  check('  …and the legend names it', !!(await pg.$('[data-key-swatch="stock"]')));
+  check('  …and it says who the customer is not',
+    ((await block.getAttribute('title')) ?? '').includes(SP_LABEL),
+    'not a dash — see lib/stock-prep');
+
+  // THE MONEY, MEASURED BOTH WAYS. An absolute figure would depend on whatever else sits on the day;
+  // the DIFFERENCE between linked and unlinked is caused by this card and nothing else.
+  await prisma.jobCard.update({ where: { id: cardS.id }, data: { stock_item_id: null } });
+  const asCustomerWork = await boardMoney();
+  await prisma.jobCard.update({ where: { id: cardS.id }, data: { stock_item_id: itemS.id } });
+
+  check('UNLINKED, this card puts money in Booked', asCustomerWork.booked > asStock.booked,
+    `£${asCustomerWork.booked} vs £${asStock.booked} — proving the board would have counted it`);
+  check('LINKED, it adds NOTHING to Booked', asStock.booked === asCustomerWork.booked - 2100,
+    `£${asStock.booked} = £${asCustomerWork.booked} − £2,100 of fictional revenue on a car we own`);
+  check('  …and nothing to Margin either — its parts are CAPITALISED, not a drag',
+    asStock.margin === asCustomerWork.margin - (2100 - 820),
+    `stock £${asStock.margin} vs customer £${asCustomerWork.margin}; the £820 of turbos must not also `
+    + 'reduce this month, or the same turbo is counted twice in opposite directions');
+  await ctx.close();
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (prisma) {
     try {
+      if (made.customers?.length) {
+        // The fixture customer, by its OWN id. Cards first (SetNull would orphan the name otherwise).
+        await prisma.customer.deleteMany({ where: { id: { in: made.customers }, group_id: ZZ_GROUP } })
+          .catch(() => {});
+      }
       if (made.cards?.length) {
         await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: made.cards } } });
         await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: made.cards } } })
