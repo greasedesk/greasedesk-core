@@ -569,6 +569,7 @@ model Group {
   stockItems            StockItem[]
   stockDisposals        StockDisposal[]
   stockCostSnapshots    StockCostSnapshot[]
+  stockCosts            StockCost[]
 }
 
 /**
@@ -5285,6 +5286,7 @@ model StockItem {
   vehicle  Vehicle   @relation(fields: [vehicle_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   disposal StockDisposal?
   costs    StockCostSnapshot[]
+  liveCosts StockCost[]
 
   @@index([group_id, acquired_at])
 }
@@ -5325,6 +5327,55 @@ model StockDisposal {
 ///
 /// COSTS NEVER TOUCH THE MARGIN. Under the margin scheme prep may not be added to the purchase price,
 /// so these rows are management information sitting beside the compliance figures, never inside them.
+/// ── WHAT A CAR COST BESIDES ITS PARTS ───────────────────────────────────────────────────────────
+///
+/// Delivery in, valeting, MOT — money out, attributable to ONE car, on a date. Deliberately NOT in the
+/// Cost/CostInstance overhead register: that is keyed on a period with no subject, and booking a car's
+/// delivery there as well as here would reduce profit twice — once as this month's overhead and again
+/// as cost of sale. A car's delivery-in is part of the cost of an asset held for resale.
+///
+/// LIVE while the car is in stock; frozen into StockCostSnapshot at disposal beside the prep-card rows.
+model StockCost {
+  id            String @id @default(uuid())
+  group_id      String
+  stock_item_id String
+
+  /// 'delivery_in' | 'valeting' | 'mot' — a vocabulary in lib/stock-cost, not a database CHECK, so a
+  /// later kind is a deploy rather than a two-push cycle. Advertising and warranty are deliberately
+  /// absent: advertising is an apportioned slot share, and a warranty provision is a forecast.
+  kind          String
+  description   String
+  /// GROSS, like every money figure here, and ALWAYS POSITIVE — including on a credit. The sign is
+  /// carried by `reverses_id`, never by a negative number, which is the rule lib/credit-note already
+  /// states: a negative amount is how a reader double-negates.
+  amount_pence  Int
+  /// THE DATE IT WAS INCURRED, stated by the garage — not created_at, which is when it was typed.
+  incurred_on   DateTime @db.Date
+  /// How the supplier charges VAT. Mirrors lib/purchase-model VAT_TREATMENTS exactly, so one car's
+  /// recovery is computed by the same costPosition the model uses. A CREDIT inherits this from the
+  /// cost it reverses and may not choose its own — otherwise you could reclaim VAT you never paid.
+  vat_treatment String
+
+  /// THIS ROW IS A CREDIT AGAINST THAT COST. NULL = an ordinary cost, which is nearly all of them.
+  ///
+  /// The credited row STAYS. A supplier warrantying a failed turbo does not mean the car never had
+  /// one: the truth is £410 out and £410 back, and a cost base that simply forgot the £410 would be a
+  /// car carrying a part it did not pay for — in the other direction.
+  ///
+  /// No foreign key to itself: self-referencing ADD CONSTRAINT buys nothing here, and the writer
+  /// already refuses a credit that names a row on another car, a credit of a credit, or credits
+  /// totalling more than was paid.
+  reverses_id   String?
+
+  created_by_user_id String
+  created_at         DateTime @default(now())
+
+  group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([group_id, stock_item_id])
+}
+
 model StockCostSnapshot {
   id            String @id @default(uuid())
   group_id      String

@@ -16,6 +16,7 @@ const SP = await import('../lib/stock-prep.ts');
 const { STOCK_NO_CUSTOMER: SP_LABEL } = SP;
 const RA = await import('../lib/stock-reacquisition.ts');
 const PJ = await import('../lib/stock-projection.ts');
+const SCST = await import('../lib/stock-cost.ts');
 const PM = await import('../lib/purchase-model.ts');
 const DC = await import('../lib/diary-colours.ts');
 const SC = await import('../lib/status-colours.ts');
@@ -1125,9 +1126,13 @@ try {
     hasKey(projSrc, 'prepHours', '0') && hasKey(projSrc, 'workshopCostPerHourPence', '0'),
     'either one alone would do it; both are zeroed so no later default can reintroduce a labour cost');
   check('  …and the note SAYS all of that, beside the number',
-    /not costed/i.test(PJ.PROJECTION_BASIS_NOTE) && /delivery in/i.test(PJ.PROJECTION_BASIS_NOTE)
-      && /better than the truth/i.test(PJ.PROJECTION_BASIS_NOTE),
+    /not costed/i.test(PJ.PROJECTION_BASIS_NOTE) && /better than the truth/i.test(PJ.PROJECTION_BASIS_NOTE)
+      && /advertising/i.test(PJ.PROJECTION_BASIS_NOTE) && /warranty/i.test(PJ.PROJECTION_BASIS_NOTE),
     'optimistic in a way the reader cannot see is worse than absent');
+  check('  …and it no longer claims delivery is missing, now that it is not',
+    !/delivery in (is|are) not/i.test(PJ.PROJECTION_BASIS_NOTE)
+      && /net of anything credited back/i.test(PJ.PROJECTION_BASIS_NOTE),
+    'a note listing a gap that has been filled is a note nobody will trust about the gaps that remain');
 
   console.log('\n— what may be corrected, refused by the WRITER and not merely hidden —');
   const regD = `ZZYARD${Math.floor(Math.random() * 900 + 100)}D`;
@@ -1187,11 +1192,161 @@ try {
   await page.waitForSelector('[data-testid="detail-reg"]', { timeout: 25000 });
   check('  …and it lands on that car', (await page.textContent('[data-testid="detail-reg"]')).trim() === regS);
   check('the page says labour is not costed', /not costed/i.test(await page.textContent('[data-testid="labour-note"]')));
+  const missingTxt = await page.textContent('[data-testid="missing-costs"]');
   check('  …and names the costs it cannot yet record',
-    /delivery in/i.test(await page.textContent('[data-testid="missing-costs"]')));
+    /advertising/i.test(missingTxt) && /warranty/i.test(missingTxt) && !/delivery/i.test(missingTxt),
+    `"${missingTxt.trim()}" — delivery has a home now and must drop off this list`);
   check('the frozen pair is SHOWN and explained, not silently absent',
     /accountant/i.test(await page.textContent('[data-testid="frozen-fields"]')),
     'a person hunting for a control that is deliberately missing has been told nothing');
+
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  WHAT A CAR COST BESIDES ITS PARTS — and the credit that takes it back off
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the vocabulary is the three DIRECT costs, and only those —');
+  check('delivery in, valeting and MOT', JSON.stringify([...SCST.STOCK_COST_KINDS]) === JSON.stringify(['delivery_in', 'valeting', 'mot']));
+  check('  …advertising is NOT one — it is an apportioned slot share, not a direct cost',
+    !SCST.isStockCostKind('advertising'));
+  check('  …and neither is warranty — a provision is a forecast until a claim is PAID',
+    !SCST.isStockCostKind('warranty'));
+  check('  …and both are still named as absent from the projection',
+    PJ.MISSING_COST_KINDS.includes('Advertising') && PJ.MISSING_COST_KINDS.includes('Warranty')
+      && !PJ.MISSING_COST_KINDS.includes('Delivery in'),
+    'the ones that now have a home must stop being listed as missing, or the note goes stale');
+
+  console.log('\n— a credit is a ROW, and it cannot invent money —');
+  const target = { id: 'c1', kind: 'delivery_in', description: 'Turbo delivery', amountPence: 41000, incurredOn: bought, vatTreatment: 'standard_recoverable', reversesId: null };
+  check('a credit must NAME the cost it reverses', 'refused' in SCST.checkCredit(null, 41000, 0),
+    'a free-floating negative is exactly the thing that massages a total');
+  check('a credit may not exceed what was paid',
+    /only credit back what was paid/i.test(SCST.checkCredit(target, 60000, 0).refused ?? ''),
+    'you cannot credit £600 against a £410 turbo');
+  check('  …counting what has already come back',
+    'refused' in SCST.checkCredit(target, 30000, 20000)
+      && 'ok' in SCST.checkCredit(target, 20000, 20000),
+    '£200 already credited leaves £210, so £300 is refused and £200 is not');
+  check('a credit may not credit a credit',
+    'refused' in SCST.checkCredit({ ...target, reversesId: 'c1' }, 100, 0),
+    'otherwise the ceiling becomes a sum over a cycle');
+  check('the VAT treatment is INHERITED, never chosen',
+    SCST.checkCredit(target, 10000, 0).vatTreatment === 'standard_recoverable',
+    'choosing it would let a credit reclaim input tax the cost never paid');
+  check('a full credit nets to nothing, and never below',
+    SCST.netCosts([target, { ...target, id: 'c2', amountPence: 41000, reversesId: 'c1' }], true).netPence === 0);
+  check('  …and the VAT reclaim is reversed with it',
+    SCST.netCosts([target, { ...target, id: 'c2', amountPence: 41000, reversesId: 'c1' }], true).reclaimablePence === 0,
+    'a credit that kept the reclaim would leave VAT recovered on money that came back');
+  check('an uncredited standard-rated cost DOES reclaim, so the clause above is not vacuous',
+    SCST.netCosts([target], true).reclaimablePence === Math.round(41000 / 6));
+
+  console.log('\n— through the real writer, on a real car —');
+  const regC = `ZZYARD${Math.floor(Math.random() * 900 + 100)}C`;
+  const vC = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regC, acquiredAt: bought });
+  if ('refused' in vC) throw new Error(vC.refused);
+  made.vehicles.push(vC.id);
+  const itemC = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vC.id, acquiredAt: bought,
+    purchasePence: 214300, vatStatus: 'margin', source: 'trade',
+  });
+  if ('refused' in itemC) throw new Error(itemC.refused);
+  made.items.push(itemC.id);
+
+  const noDesc = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'delivery_in',
+    description: '  ', amountPence: 12000, incurredOn: bought, vatTreatment: 'no_vat',
+  });
+  check('a cost with no description is refused', 'refused' in noDesc,
+    'a figure with no description is unauditable');
+  const costNoDate = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'delivery_in',
+    description: 'Recovery man', amountPence: 12000, incurredOn: null, vatTreatment: 'no_vat',
+  });
+  check('  …and one with no date, because the date is what puts it in a quarter', 'refused' in costNoDate);
+
+  const del = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'delivery_in',
+    description: 'Recovery from auction', amountPence: 25000, incurredOn: bought, vatTreatment: 'no_vat',
+  });
+  if ('refused' in del) throw new Error(del.refused);
+  const turbo = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'mot',
+    description: 'MOT', amountPence: 5400, incurredOn: bought, vatTreatment: 'standard_recoverable',
+  });
+  if ('refused' in turbo) throw new Error(turbo.refused);
+  let totals = await ST.stockCostTotals(ZZ_GROUP, itemC.id, true);
+  check('both costs are on the car', totals.netPence === 30400, `${totals.netPence}p`);
+  check('  …and only the standard-rated one reclaims VAT',
+    totals.reclaimablePence === Math.round(5400 / 6),
+    'the recovery man is not VAT registered, so there is nothing to reclaim on £250');
+
+  const over = await ST.creditStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id,
+    reversesId: del.id, amountPence: 99999, incurredOn: bought,
+  });
+  check('the writer refuses a credit bigger than the cost', 'refused' in over);
+  const back = await ST.creditStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id,
+    reversesId: del.id, amountPence: 25000, incurredOn: bought,
+  });
+  if ('refused' in back) throw new Error(back.refused);
+  totals = await ST.stockCostTotals(ZZ_GROUP, itemC.id, true);
+  check('THE CREDIT TAKES IT BACK OFF', totals.netPence === 5400,
+    `${totals.netPence}p — £250 out and £250 back leaves the MOT`);
+  check('  …and the original row STAYS, so the car’s history is money out AND money back',
+    (await ST.stockCostRows(ZZ_GROUP, itemC.id)).filter((r) => !r.reversesId).length === 2,
+    'a cost base that simply forgot the £250 is a car carrying something it did not pay for');
+  check('  …and it can never go negative', totals.netPence >= 0);
+  /**
+   * THE STORED TREATMENT, not the netted answer. netCosts re-reads the source row's treatment as a
+   * defence, so a credit written with the WRONG one still nets correctly — which is right for the
+   * arithmetic and leaves the writer's inheritance untested. Measured: mutating the writer to store
+   * 'standard_recoverable' scored 0 failures. So this clause reads the row.
+   */
+  const creditRow = (await ST.stockCostRows(ZZ_GROUP, itemC.id)).find((r) => r.reversesId === del.id);
+  const delRow = (await ST.stockCostRows(ZZ_GROUP, itemC.id)).find((r) => r.id === del.id);
+  check('the credit STORED the treatment it inherited, not one of its own',
+    creditRow.vatTreatment === delRow.vatTreatment && creditRow.vatTreatment === 'no_vat',
+    `credit ${creditRow.vatTreatment} vs cost ${delRow.vatTreatment} — a credit choosing its own could `
+    + 'reclaim input tax the cost never paid');
+
+  console.log('\n— and the freeze holds, in both directions —');
+  const projBefore = (await ST.stockDetail(ZZ_GROUP, itemC.id, new Date(), { vatRegistered: true }));
+  check('the live costs reach the detail page', projBefore.costs.netPence === 5400
+    && projBefore.costRows.length === 3, `${projBefore.costRows.length} rows`);
+  await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemC.id, projectedSalePence: 400000 });
+  const withCost = (await ST.stockDetail(ZZ_GROUP, itemC.id, new Date(), { vatRegistered: true })).projection;
+  const noCost = PJ.projectStock({
+    purchasePence: 214300, premiumPence: 0, servicesPence: 0, vatStatus: 'margin', source: 'trade',
+    daysInStock: withCost ? 0 : 0, partsPence: 0, projectedSalePence: 400000, otherCostsPence: 0,
+  }, { vatRegistered: true });
+  check('the costs REACH the projection and reduce it', withCost.grossProfitPence < noCost.grossProfitPence,
+    `${withCost.grossProfitPence}p vs ${noCost.grossProfitPence}p with no costs`);
+
+  const soldC = await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id,
+    disposedAt: new Date('2026-09-01T12:00:00Z'), kind: 'sold', salePence: 400000, costs: [],
+  });
+  if ('refused' in soldC) throw new Error(soldC.refused);
+  const frozen = await prisma.stockCostSnapshot.findMany({
+    where: { stock_item_id: itemC.id, job_card_id: null },
+    select: { amount_pence: true, description: true, kind: true },
+  });
+  check('disposal froze the costs NET of the credit',
+    frozen.length === 1 && frozen[0].amount_pence === 5400,
+    `${frozen.length} row(s): ${frozen.map((f) => `${f.kind} ${f.amount_pence}p`).join(', ')} — the fully credited delivery froze as nothing at all`);
+  const lateCost = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'valeting',
+    description: 'Late valet', amountPence: 5000, incurredOn: new Date('2026-09-10T12:00:00Z'), vatTreatment: 'no_vat',
+  });
+  check('a cost added AFTER disposal is refused', 'refused' in lateCost);
+  const lateCredit = await ST.creditStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id,
+    reversesId: turbo.id, amountPence: 5400, incurredOn: new Date('2026-09-10T12:00:00Z'),
+  });
+  check('  …and so is a credit, WITH somewhere else to put it',
+    'refused' in lateCredit && /purchase ledger/i.test(lateCredit.refused),
+    'the car did cost that when it was sold; a later credit belongs to the period it arrived in');
 
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));

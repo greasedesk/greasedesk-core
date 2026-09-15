@@ -17,6 +17,10 @@ import { recordOdometerReadings } from '@/lib/odometer';
 import { prepCost, type PrepCost } from '@/lib/stock-prep';
 import { projectStock, type Projection } from '@/lib/stock-projection';
 import {
+  CREDIT_AFTER_DISPOSAL_REFUSAL, checkCredit, isStockCostKind, isVatTreatment, netCosts,
+  type CostRow, type CostTotals,
+} from '@/lib/stock-cost';
+import {
   MUST_CHOOSE_REFUSAL, isReacquisition, reacquisitionCostBase, type PriorSale,
 } from '@/lib/stock-reacquisition';
 
@@ -218,6 +222,44 @@ export async function recordDisposal(a: {
         job_card_id: c.id,
       }));
     if (prepRows.length) await tx.stockCostSnapshot.createMany({ data: prepRows });
+
+    /**
+     * ── AND THE NON-PARTS COSTS, NETTED, FROZEN BESIDE THEM ──────────────────────────────
+     *
+     * Delivery in, valeting, MOT — and the credits that reversed any of them. Frozen here for the
+     * same reason the prep cards are: the book is a query, and re-running last year's quarter must
+     * give what it gave then.
+     *
+     * ONE ROW PER COST, and credits FOLD INTO the cost they reverse rather than arriving as separate
+     * negative snapshots. StockCostSnapshot.amount_pence has no negative convention and a reader
+     * summing it would otherwise have to know about reversal — so the netting happens HERE, once.
+     * A cost credited in full freezes as nothing at all rather than a zero row, because a £0 line
+     * invites "why is this here".
+     */
+    const liveRows = await tx.stockCost.findMany({
+      where: { group_id: a.groupId, stock_item_id: a.stockItemId },
+      select: { id: true, kind: true, description: true, amount_pence: true, reverses_id: true },
+    });
+    const creditedBy = new Map();
+    for (const r of liveRows) {
+      if (!r.reverses_id) continue;
+      creditedBy.set(r.reverses_id, (creditedBy.get(r.reverses_id) ?? 0) + r.amount_pence);
+    }
+    const costRows = liveRows
+      .filter((r) => !r.reverses_id)
+      .map((r) => {
+        const back = creditedBy.get(r.id) ?? 0;
+        return {
+          group_id: a.groupId, stock_item_id: a.stockItemId, kind: r.kind,
+          description: back > 0
+            ? `${r.description} (net of £${(back / 100).toFixed(2)} credited back)`
+            : r.description,
+          amount_pence: r.amount_pence - back,
+          job_card_id: null,
+        };
+      })
+      .filter((r) => r.amount_pence > 0);
+    if (costRows.length) await tx.stockCostSnapshot.createMany({ data: costRows });
     return d;
   });
   return { id: created.id };
@@ -679,6 +721,8 @@ export type StockDetail = {
   mileageWarranted: boolean | null;
   projectedSalePence: number | null;
   prep: PrepCost & { cards: number };
+  costRows: CostRow[];
+  costs: CostTotals;
   projection: Projection | null;
   /** Disposed cars are READ-ONLY: their costs are frozen and the book must reproduce. */
   disposedAt: Date | null;
@@ -702,6 +746,8 @@ export async function stockDetail(
   });
   if (!it) return null;
   const prep = await liveStockCosts(groupId, it.id);
+  const costRows = await stockCostRows(groupId, it.id);
+  const costs = netCosts(costRows, opts.vatRegistered);
   const days = daysInStock(it.acquired_at, it.disposal?.disposed_at ?? asOf);
   return {
     stockItemId: it.id,
@@ -718,12 +764,16 @@ export async function stockDetail(
     mileageWarranted: it.mileage_warranted,
     projectedSalePence: it.projected_sale_pence,
     prep,
+    costRows,
+    costs,
     // A SOLD car has no projection: the real sale price is the answer, and showing what we used to
     // think beside what happened invites reading the guess as a result.
     projection: it.disposal ? null : projectStock({
       purchasePence: it.purchase_pence, premiumPence: it.premium_pence, servicesPence: it.services_pence,
       vatStatus: it.vat_status, source: it.source, daysInStock: days,
       partsPence: prep.partsPence, projectedSalePence: it.projected_sale_pence,
+      // NET of credits and NET of recoverable VAT — the cost actually borne, not the cash that moved.
+      otherCostsPence: costs.costPence,
     }, opts),
     disposedAt: it.disposal?.disposed_at ?? null,
     disposalKind: it.disposal?.kind ?? null,
@@ -799,4 +849,108 @@ export async function updateStockItem(a: {
   if (!Object.keys(data).length) return { id: it.id };
   await prisma.stockItem.update({ where: { id: it.id }, data });
   return { id: it.id };
+}
+
+
+/** The car's non-parts costs, as rows, oldest first. Live while in stock; frozen at disposal. */
+export async function stockCostRows(groupId: string, stockItemId: string): Promise<CostRow[]> {
+  const rows = await prisma.stockCost.findMany({
+    where: { group_id: groupId, stock_item_id: stockItemId },
+    orderBy: [{ incurred_on: 'asc' }, { created_at: 'asc' }],
+    select: {
+      id: true, kind: true, description: true, amount_pence: true, incurred_on: true,
+      vat_treatment: true, reverses_id: true,
+    },
+  });
+  return rows.map((r) => ({
+    id: r.id, kind: r.kind, description: r.description, amountPence: r.amount_pence,
+    incurredOn: r.incurred_on, vatTreatment: r.vat_treatment, reversesId: r.reverses_id,
+  }));
+}
+
+/**
+ * ADD A COST TO A CAR. Refused after disposal for the reason everything else is: the figures froze,
+ * and a past quarter has to reproduce.
+ */
+export async function addStockCost(a: {
+  groupId: string; userId: string; stockItemId: string;
+  kind: unknown; description: unknown; amountPence: unknown; incurredOn: Date | null; vatTreatment: unknown;
+}): Promise<{ id: string } | { refused: string }> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+  if (it.disposal) {
+    return {
+      refused: 'This car has been sold and its costs froze at disposal, so nothing can be added to it '
+        + 'now — re-running that quarter has to give what it gave then.',
+    };
+  }
+  if (!isStockCostKind(a.kind)) return { refused: 'Say what kind of cost this is.' };
+  if (!isVatTreatment(a.vatTreatment)) return { refused: 'Say how the supplier charged VAT on it.' };
+  if (!a.incurredOn) return { refused: 'Say when you paid it. The date is what puts it in a quarter.' };
+  const amount = asMoney(a.amountPence);
+  if (!(amount > 0)) return { refused: 'Say how much it cost.' };
+  const description = String(a.description ?? '').trim().slice(0, 200);
+  if (!description) return { refused: 'Say what it was for — a figure with no description is unauditable.' };
+
+  const row = await prisma.stockCost.create({
+    data: {
+      group_id: a.groupId, stock_item_id: a.stockItemId, created_by_user_id: a.userId,
+      kind: a.kind, description, amount_pence: amount, incurred_on: a.incurredOn,
+      vat_treatment: a.vatTreatment, reverses_id: null,
+    },
+    select: { id: true },
+  });
+  return { id: row.id };
+}
+
+/**
+ * CREDIT A COST BACK OFF. Its own row naming what it reverses — never an edit, never a deletion.
+ * Every rule that stops this massaging a cost base is in lib/stock-cost::checkCredit; this function
+ * supplies the facts that rule needs and writes the row.
+ */
+export async function creditStockCost(a: {
+  groupId: string; userId: string; stockItemId: string;
+  reversesId: string; amountPence: unknown; incurredOn: Date | null; description?: unknown;
+}): Promise<{ id: string } | { refused: string }> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+  if (it.disposal) return { refused: CREDIT_AFTER_DISPOSAL_REFUSAL };
+  if (!a.incurredOn) return { refused: 'Say when the credit came back.' };
+
+  const rows = await stockCostRows(a.groupId, a.stockItemId);
+  // SCOPED TO THIS CAR by construction: the target is looked up in this item's own rows, so a credit
+  // cannot reach a cost on another car even if its id is supplied.
+  const target = rows.find((r) => r.id === a.reversesId) ?? null;
+  const already = rows.filter((r) => r.reversesId === a.reversesId).reduce((n, r) => n + r.amountPence, 0);
+  const verdict = checkCredit(target, asMoney(a.amountPence), already);
+  if ('refused' in verdict) return verdict;
+
+  const row = await prisma.stockCost.create({
+    data: {
+      group_id: a.groupId, stock_item_id: a.stockItemId, created_by_user_id: a.userId,
+      kind: (target as CostRow).kind,
+      description: String(a.description ?? '').trim().slice(0, 200)
+        || `Credit against ${(target as CostRow).description}`,
+      amount_pence: asMoney(a.amountPence),
+      incurred_on: a.incurredOn,
+      // INHERITED, never chosen — otherwise a credit could reclaim VAT the cost never paid.
+      vat_treatment: verdict.vatTreatment,
+      reverses_id: a.reversesId,
+    },
+    select: { id: true },
+  });
+  return { id: row.id };
+}
+
+/** The netted totals for one car, through the same costPosition the purchase model uses. */
+export async function stockCostTotals(
+  groupId: string, stockItemId: string, vatRegistered: boolean,
+): Promise<CostTotals> {
+  return netCosts(await stockCostRows(groupId, stockItemId), vatRegistered);
 }

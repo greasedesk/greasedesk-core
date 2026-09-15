@@ -19,9 +19,17 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCE_RULES, type PurchaseSource } from '@/lib/purchase-model';
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import { MISSING_COST_KINDS } from '@/lib/stock-projection';
+import { STOCK_COST_KINDS, STOCK_COST_LABELS, type StockCostKind } from '@/lib/stock-cost';
+import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
 const money = (p: number) => `£${(p / 100).toFixed(2)}`;
 const iso = (d: string) => d.slice(0, 10);
+const VAT_LABEL: Record<string, string> = {
+  standard_recoverable: 'Standard rated — VAT reclaimable',
+  standard_not_recoverable: 'Standard rated — not reclaimable',
+  no_vat: 'No VAT on the invoice',
+};
+
 
 type Detail = {
   stockItemId: string; vehicleId: string; registration: string; description: string | null;
@@ -29,6 +37,8 @@ type Detail = {
   servicesPence: number; vatStatus: string; source: string; mileageWarranted: boolean | null;
   projectedSalePence: number | null;
   prep: { partsPence: number; unknownCostLines: number; labourLines: number; cards: number };
+  costRows: { id: string; kind: string; description: string; amountPence: number; incurredOn: string; vatTreatment: string; reversesId: string | null }[];
+  costs: { netPence: number; reclaimablePence: number; costPence: number; grossOutPence: number; creditedPence: number; rows: number };
   projection: null | {
     salePence: number; grossProfitPence: number; totalCostsPence: number; vatDuePence: number;
     partsPence: number; missingCostKinds: string[]; note: string;
@@ -43,6 +53,8 @@ export default function StockCarPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ acquiredAt: '', purchase: '', premium: '', services: '', warranted: 'unknown', projected: '' });
+  const [cost, setCost] = useState({ kind: 'delivery_in' as StockCostKind, description: '', amount: '', incurredOn: '', vatTreatment: 'standard_not_recoverable' });
+  const [credit, setCredit] = useState<{ id: string; amount: string; on: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -86,6 +98,36 @@ export default function StockCarPage() {
       setBusy(false);   // cleared in finally, per the standing rule
     }
   }
+
+  /** One poster for both cost writes — same clamp, same reload, same finally. */
+  async function post(body: Record<string, unknown>, onOk?: () => void) {
+    setBusy(true); setMsg(null);
+    try {
+      const res = await fetch('/api/stock', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, stockItemId: id }),
+      });
+      const b = await res.json().catch(() => ({}));
+      setMsg(res.ok ? 'Saved.' : (b.message ?? 'Could not save that.'));
+      if (res.ok) { onOk?.(); await load(); }
+    } catch {
+      setMsg('Could not save that.');
+    } finally {
+      setBusy(false);   // cleared in finally, per the standing rule
+    }
+  }
+
+  const saveCost = () => post({
+    action: 'add-cost', kind: cost.kind, description: cost.description,
+    amountPence: Math.round(Number(cost.amount || 0) * 100),
+    incurredOn: cost.incurredOn, vatTreatment: cost.vatTreatment,
+  }, () => setCost({ ...cost, description: '', amount: '' }));
+
+  const saveCredit = () => credit && post({
+    action: 'credit-cost', reversesId: credit.id,
+    amountPence: Math.round(Number(credit.amount || 0) * 100),
+    incurredOn: credit.on,
+  }, () => setCredit(null));
 
   const input = 'mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink';
   const sold = !!d?.disposedAt;
@@ -155,7 +197,106 @@ export default function StockCarPage() {
             </section>
 
             {/* ── WHAT CAN BE CORRECTED ──────────────────────────────────────────────────────── */}
-            <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="edit-section">
+                    {/* ── WHAT ELSE IT HAS COST ───────────────────────────────────────────────────── */}
+            <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="costs-section">
+              <h2 className="text-sm font-semibold text-ink">Costs besides parts</h2>
+              {d.costRows.length === 0 ? (
+                <p className="text-sm text-muted mt-1" data-testid="costs-empty">Nothing recorded yet.</p>
+              ) : (
+                <table className="w-full text-sm mt-2" data-testid="costs-table">
+                  <tbody>
+                    {d.costRows.map((c) => (
+                      <tr key={c.id} className="border-b border-line/50" data-testid={`cost-row-${c.id}`}>
+                        <td className="py-1.5 text-muted tabular-nums w-24">{iso(c.incurredOn)}</td>
+                        <td className="py-1.5">
+                          <span className="text-ink">{c.description}</span>
+                          <span className="ml-2 text-xs text-muted">{STOCK_COST_LABELS[c.kind as StockCostKind] ?? c.kind}</span>
+                          {/* A CREDIT IS NOT A NEGATIVE NUMBER. It is a row that says what it reverses,
+                              and it reads that way here too. */}
+                          {c.reversesId && <span className="ml-2 text-xs font-semibold text-accent" data-testid="cost-is-credit">credited back</span>}
+                        </td>
+                        <td className={`py-1.5 text-right tabular-nums ${c.reversesId ? 'text-accent' : 'text-ink'}`}>
+                          {c.reversesId ? '−' : ''}{money(c.amountPence)}
+                        </td>
+                        <td className="py-1.5 pl-2 text-right w-20">
+                          {!sold && !c.reversesId && (
+                            <button type="button" className="text-xs underline text-muted"
+                              data-testid={`credit-${c.id}`}
+                              onClick={() => setCredit({ id: c.id, amount: '', on: new Date().toISOString().slice(0, 10) })}>
+                              Credit
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {d.costs.rows > 0 && (
+                <p className="mt-2 text-sm text-ink" data-testid="costs-total">
+                  {money(d.costs.netPence)} net of credits
+                  {d.costs.reclaimablePence > 0 && <> · {money(d.costs.reclaimablePence)} of that is VAT you can reclaim, so the car bears {money(d.costs.costPence)}</>}.
+                </p>
+              )}
+
+              {credit && (
+                <div className="mt-3 rounded-lg border border-line p-3" data-testid="credit-form">
+                  <p className="text-sm text-ink font-medium">Credit against this cost</p>
+                  <p className="text-xs text-muted">
+                    The original stays. A supplier taking a failed part back does not mean the car never had one —
+                    what is true is that the money went out and came back. You cannot credit more than was paid.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2 items-end">
+                    <label className="text-sm text-muted">Amount back
+                      <input type="number" step="0.01" min={0} value={credit.amount} data-testid="credit-amount"
+                        onChange={(e) => setCredit({ ...credit, amount: e.target.value })} className={input} />
+                    </label>
+                    <label className="text-sm text-muted">On
+                      <input type="date" value={credit.on} data-testid="credit-date"
+                        onChange={(e) => setCredit({ ...credit, on: e.target.value })} className={input} />
+                    </label>
+                    <button onClick={() => void saveCredit()} disabled={busy} data-testid="credit-save"
+                      className="min-h-[44px] px-4 rounded-lg bg-accent text-white font-semibold disabled:opacity-60">Record it</button>
+                    <button onClick={() => setCredit(null)} className="min-h-[44px] px-3 text-sm text-muted underline">Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {!sold && !credit && (
+                <div className="mt-3 grid grid-cols-2 gap-3" data-testid="add-cost-form">
+                  <label className="text-sm text-muted">Kind
+                    <select value={cost.kind} data-testid="cost-kind" className={input}
+                      onChange={(e) => setCost({ ...cost, kind: e.target.value as StockCostKind })}>
+                      {STOCK_COST_KINDS.map((k) => <option key={k} value={k}>{STOCK_COST_LABELS[k]}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm text-muted">What was it for
+                    <input value={cost.description} data-testid="cost-description" className={input}
+                      onChange={(e) => setCost({ ...cost, description: e.target.value })} />
+                  </label>
+                  <label className="text-sm text-muted">Amount paid
+                    <input type="number" step="0.01" min={0} value={cost.amount} data-testid="cost-amount" className={input}
+                      onChange={(e) => setCost({ ...cost, amount: e.target.value })} />
+                  </label>
+                  <label className="text-sm text-muted">On
+                    <input type="date" value={cost.incurredOn} data-testid="cost-date" className={input}
+                      onChange={(e) => setCost({ ...cost, incurredOn: e.target.value })} />
+                  </label>
+                  <label className="text-sm text-muted col-span-2">VAT on the supplier's invoice
+                    <select value={cost.vatTreatment} data-testid="cost-vat" className={input}
+                      onChange={(e) => setCost({ ...cost, vatTreatment: e.target.value })}>
+                      {VAT_TREATMENTS.map((v) => <option key={v} value={v}>{VAT_LABEL[v]}</option>)}
+                    </select>
+                  </label>
+                  <div className="col-span-2">
+                    <button onClick={() => void saveCost()} disabled={busy} data-testid="cost-save"
+                      className="min-h-[44px] px-4 rounded-lg bg-accent text-white font-semibold disabled:opacity-60">Add this cost</button>
+                  </div>
+                </div>
+              )}
+            </section>
+
+    <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="edit-section">
               <h2 className="text-sm font-semibold text-ink">Correct the record</h2>
               <div className="mt-2 grid grid-cols-2 gap-3">
                 <label className="text-sm text-muted">Bought on

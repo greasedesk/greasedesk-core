@@ -24,10 +24,12 @@
  *
  * ── AND THE COSTS THAT HAVE NOWHERE TO LIVE YET ─────────────────────────────────────────────────
  *
- * Delivery in, valeting, MOT, advertising and warranty are all sliders in the purchase model and have
- * no home on a stock item, so they enter here as ZERO. That makes this projection OPTIMISTIC by
- * whatever those come to, and a number that is optimistic in a way the reader cannot see is worse than
- * no number. So `missingCostKinds` names them and the surface must print them beside the figure.
+ * Delivery in, valeting and MOT now have a home (lib/stock-cost) and arrive REAL, net of credits and
+ * net of recoverable VAT. Two do not, each for its own reason: ADVERTISING is an apportioned share of
+ * a platform's slots rather than a direct cost, and a WARRANTY PROVISION is a forecast until a claim
+ * is paid. Both enter as ZERO, so this projection is still OPTIMISTIC by whatever they come to — and a
+ * number optimistic in a way the reader cannot see is worse than no number, so `missingCostKinds`
+ * names them and the surface prints them beside the figure.
  */
 import {
   computeModel, defaultCostVat, type ModelInputs, type ModelResult, type PurchaseSource, type VatStatus,
@@ -35,12 +37,12 @@ import {
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 
 /** The cost kinds the purchase model can price and a stock item currently cannot record. */
-export const MISSING_COST_KINDS = ['Delivery in', 'Valeting', 'MOT', 'Advertising', 'Warranty'] as const;
+export const MISSING_COST_KINDS = ['Advertising', 'Warranty'] as const;
 
 export const PROJECTION_BASIS_NOTE =
-  'Purchase, fees and parts are what this car has actually cost. '
+  'Purchase, fees, parts and costs are what this car has actually cost, net of anything credited back. '
   + `${LABOUR_AT_ZERO_NOTE} `
-  + `And ${MISSING_COST_KINDS.join(', ').toLowerCase()} are not yet recorded against a car at all, so they are not in this figure — it is better than the truth by whatever they come to.`;
+  + `And ${MISSING_COST_KINDS.join(' and ').toLowerCase()} are not recorded against a car: advertising is an apportioned slot share rather than a direct cost, and a warranty provision is a forecast until a claim is paid. So this figure is better than the truth by whatever those come to.`;
 
 export type ProjectionSubject = {
   purchasePence: number;
@@ -51,6 +53,12 @@ export type ProjectionSubject = {
   daysInStock: number;
   /** REAL accrued parts, at trade cost, from lib/stock-prep. */
   partsPence: number;
+  /**
+   * REAL non-parts costs — delivery in, valeting, MOT — NET of credits and NET of recoverable VAT
+   * (lib/stock-cost). Already the cost BORNE, so it enters the model as a no-VAT figure: putting a
+   * net number through a recoverable treatment would reclaim the VAT a second time.
+   */
+  otherCostsPence?: number;
   /** The garage's estimate. NULL = no projection. */
   projectedSalePence: number | null;
 };
@@ -86,7 +94,9 @@ export function projectStock(s: ProjectionSubject, opts: { vatRegistered: boolea
     // A margin car has no reclaimable VAT in its purchase by definition, and a qualifying car's
     // purchase price is captured gross like every other figure in this product.
     purchaseIncludesVat: true,
-    costVat: defaultCostVat(),
+    // deliveryInPence carries the real non-parts costs and is forced to no_vat, because that figure
+    // arrives NET of recovery from lib/stock-cost. Everything else keeps the conservative defaults.
+    costVat: { ...defaultCostVat(), deliveryInPence: 'no_vat' },
     // UNKNOWN, so NOT MODELLED. The stock record does not say how the car was paid for and inventing
     // a funding plan would put an interest charge on a car somebody bought with cash.
     funding: { kind: 'cash' },
@@ -98,7 +108,7 @@ export function projectStock(s: ProjectionSubject, opts: { vatRegistered: boolea
     workshopCostPerHourPence: 0,       // …and belt-and-braces, so a default cannot reintroduce it
     advertisingPence: 0,
     warrantyPence: 0,
-    deliveryInPence: 0,
+    deliveryInPence: Math.max(0, Math.round(s.otherCostsPence ?? 0)),
     deliveryOutPence: 0,
     costOfMoneyAnnualPct: 0,
   };

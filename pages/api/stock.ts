@@ -16,8 +16,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantApi } from '@/lib/admin-guard';
 import {
-  findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal, stockDetail, stockList,
-  takeIntoStock, updateStockItem,
+  addStockCost, creditStockCost, findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal,
+  stockDetail, stockList, takeIntoStock, updateStockItem,
 } from '@/lib/stock-store';
 import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
@@ -66,6 +66,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         stockItemId: String(b.stockItemId ?? ''), disposedAt,
         kind: b.kind, salePence: b.salePence, note: b.note,
         costs: Array.isArray(b.costs) ? (b.costs as never[]) : [],
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    if (b.action === 'add-cost') {
+      const out = await addStockCost({
+        groupId: scope.groupId, userId: scope.userId, stockItemId: String(b.stockItemId ?? ''),
+        kind: b.kind, description: b.description, amountPence: b.amountPence,
+        incurredOn: parseDate(b.incurredOn), vatTreatment: b.vatTreatment,
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    if (b.action === 'credit-cost') {
+      const out = await creditStockCost({
+        groupId: scope.groupId, userId: scope.userId, stockItemId: String(b.stockItemId ?? ''),
+        reversesId: String(b.reversesId ?? ''), amountPence: b.amountPence,
+        incurredOn: parseDate(b.incurredOn), description: b.description,
       });
       if ('refused' in out) return res.status(409).json({ message: out.refused });
       return res.status(200).json({ ok: true, id: out.id });
