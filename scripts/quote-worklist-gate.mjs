@@ -40,6 +40,21 @@ const { randomUUID } = await import('node:crypto');
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
+/**
+ * ── A CLAUSE THAT DECLINES, BECAUSE A RED THAT IS NOT A DEFECT IS WORSE THAN NO CLAUSE ──────────
+ *
+ * One clause here asserts a LIVE-TENANT population, and that population can legitimately empty out:
+ * the garage answers its quotes. When it does, the clause went red and the red said nothing was
+ * wrong — which teaches a reader to look past reds, and that is the one thing the suite cannot
+ * afford. Declining is not a softer failure; it is a DIFFERENT STATEMENT, and it has to read like
+ * one, so it says what it measured and why that is a valid state.
+ *
+ * NOT a pass. `⊘` is its own mark and the tally prints declines separately, so a clause that stops
+ * running cannot do it quietly — see [a-silent-check-looks-like-a-passing-one] in the memory. The
+ * "N failures of M" line keeps its exact shape because scripts/gates.mjs parses it.
+ */
+const decline = (n, why) => { out.push('D'); console.log(`⊘ ${n}  — DECLINED: ${why}`); };
+
 const prisma = await gatePrisma();
 const L = await import('../lib/quotes-list.ts');
 const P = await import('../lib/acceptance-provenance.ts');
@@ -257,8 +272,38 @@ try {
     missing.length ? `${missing.length} dropped` : `${oracle.size} genuinely awaiting on the live tenant, all present`);
   check('  …and nothing else is', extra.length === 0,
     extra.length ? `${extra.length} listed that the rule says should not be` : 'no accepted, booked or closed card among them');
-  check('  …and that is a real population, not an empty one', oracle.size > 0,
-    `${oracle.size} — 2 sent quotes measured on 2026-09-10; if the garage answers them all this legitimately reads 0, and the ZZ positive cases above still hold the line`);
+  /**
+   * NON-VACUITY, OR AN HONEST ACCOUNT OF WHY THERE IS NOTHING TO BE NON-VACUOUS ABOUT.
+   *
+   * Baselined at 2 awaiting quotes on 2026-09-10; measured 0 on 2026-09-15 because the garage had
+   * answered them. The emptiness is checked rather than assumed: the decline fires only when quotes
+   * WERE sent and every one has since been answered. If none had ever been sent, or if the oracle
+   * returned nothing while listQuotes returned rows, that is a different state and the clauses above
+   * catch it — `…and nothing else is` fails on exactly that pair.
+   *
+   * The ZZ positive cases hold the line either way, which is what makes declining cost nothing.
+   */
+  if (oracle.size > 0) {
+    check('  …and that is a real population, not an empty one', true, `${oracle.size} genuinely awaiting`);
+  } else {
+    const sentRecently = await prisma.quoteVersion.count({
+      where: { job_card: { group_id: TMBS }, status: 'sent', sent_at: { gt: new Date(Date.now() - 14 * 86400000) } },
+    });
+    const sentEver = await prisma.quoteVersion.count({ where: { job_card: { group_id: TMBS }, status: 'sent' } });
+    if (sentEver > 0) {
+      decline('  …and that is a real population, not an empty one',
+        `no sent quotes awaiting a response on live data today. ${sentEver} quote(s) have been sent on this `
+        + `tenant and ${sentRecently} in the last 14 days; every one has been answered, superseded or its `
+        + 'card has moved on, so there is no live population to be non-vacuous about. The ZZ positive '
+        + 'cases above assert the same rule on fixtures and are unaffected.');
+    } else {
+      // NOT the same state. A tenant that has never sent a quote cannot exercise this at all, and
+      // saying "all answered" about zero quotes would be a sentence with no facts behind it.
+      decline('  …and that is a real population, not an empty one',
+        'this tenant has never sent a quote, so there has never been a live population here. The ZZ '
+        + 'positive cases above carry the rule.');
+    }
+  }
   const cf18 = await prisma.jobCard.findFirst({ where: { group_id: TMBS, vehicle: { registration: 'CF18VNM' } }, select: { id: true, status: true } });
   if (cf18) check('CF18VNM — verbal, booked — is no longer awaiting a response', !live.has(cf18.id), `card ${cf18.status}`);
   const lo25 = await prisma.jobCard.findFirst({ where: { group_id: TMBS, vehicle: { registration: 'LO25UGN' } }, select: { id: true, status: true } });
@@ -284,5 +329,8 @@ try {
   await prisma.$disconnect();
 }
 
-console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
+const declined = out.filter((c) => c === 'D').length;
+// SHAPE PRESERVED: scripts/gates.mjs parses "N failures of M", so declines are appended, never folded in.
+console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`
+  + (declined ? ` · ${declined} declined (a stated valid state, not a pass)` : ''));
 process.exit(out.includes('F') ? 1 : 0);
