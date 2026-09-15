@@ -15,6 +15,8 @@ const SI = await import('../lib/stock-intake.ts');
 const SP = await import('../lib/stock-prep.ts');
 const { STOCK_NO_CUSTOMER: SP_LABEL } = SP;
 const RA = await import('../lib/stock-reacquisition.ts');
+const PJ = await import('../lib/stock-projection.ts');
+const PM = await import('../lib/purchase-model.ts');
 const DC = await import('../lib/diary-colours.ts');
 const SC = await import('../lib/status-colours.ts');
 const TABS = await import('../lib/jobcard-tabs.ts');
@@ -34,6 +36,40 @@ let browser = null;
 let made = { items: [], vehicles: [], cards: [], customers: [] };
 try {
   prisma = await gatePrisma();
+
+  /**
+   * ── SWEEP BEFORE, NOT ONLY AFTER ──────────────────────────────────────────────────────────────
+   *
+   * A teardown that must run will one day not run — SIGKILL skips `finally`, and a red-proof that
+   * breaks a refusal can abort the run part-way. When that happens the NEXT run fails for a reason
+   * that has nothing to do with what it tests: a fixture VIN is "already on ZZSTK602A", and the
+   * failure names a car nobody recognises. That happened twice while this gate was being written.
+   *
+   * So the run starts by removing anything wearing its own naming. Same prefixes, same FK order as
+   * the teardown, and it cannot reach a real car because no real registration starts with them.
+   */
+  const FIXTURE_PREFIXES = ['ZZSTK', 'ZZYARD', 'ZZNODATE', 'ZZNOSUCH'];
+  const sweepFixtures = async () => {
+    const cars = await prisma.vehicle.findMany({
+      where: { group_id: ZZ_GROUP, OR: FIXTURE_PREFIXES.map((x) => ({ registration: { startsWith: x } })) },
+      select: { id: true },
+    });
+    if (!cars.length) return 0;
+    const ids = cars.map((c) => c.id);
+    const cards = (await prisma.jobCard.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } })).map((c) => c.id);
+    if (cards.length) {
+      await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: cards } } });
+      await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: cards } } }).catch(() => {});
+      await prisma.jobCard.deleteMany({ where: { id: { in: cards } } });
+    }
+    await prisma.stockItem.deleteMany({ where: { vehicle_id: { in: ids } } });
+    await prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: { in: ids } } });
+    await prisma.vehicle.deleteMany({ where: { id: { in: ids }, group_id: ZZ_GROUP } });
+    return ids.length;
+  };
+  const sweptBefore = await sweepFixtures();
+  if (sweptBefore) console.log(`  (swept ${sweptBefore} fixture car(s) left by an earlier run)`);
+
   const owner = await prisma.user.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
   if (!owner) throw new Error('no ZZ user to attribute fixtures to');
 
@@ -1026,6 +1062,137 @@ try {
     + 'reduce this month, or the same turbo is counted twice in opposite directions');
   await ctx.close();
 
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  THE DETAIL PAGE, AND WHAT THIS CAR WILL MAKE
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the projection is the purchase model, not a second arithmetic —');
+  const subj = {
+    purchasePence: 214300, premiumPence: 0, servicesPence: 0, vatStatus: 'margin', source: 'trade',
+    daysInStock: 54, partsPence: 108000, projectedSalePence: 400000,
+  };
+  const proj = PJ.projectStock(subj, { vatRegistered: true });
+  check('a car with no expected price has NO projection — not a £0 one',
+    PJ.projectStock({ ...subj, projectedSalePence: null }, { vatRegistered: true }) === null,
+    'a loss on every unestimated car is a confident wrong answer');
+  check('  …and neither does one priced at zero',
+    PJ.projectStock({ ...subj, projectedSalePence: 0 }, { vatRegistered: true }) === null);
+  check('the figure IS computeModel’s, arrived at independently',
+    proj.grossProfitPence === PM.computeModel({
+      ...PM.defaultInputs(), purchasePence: 214300, salePence: 400000, vatStatus: 'margin',
+      source: 'trade', premiumPence: 0, servicesPence: 0, purchaseIncludesVat: true,
+      funding: { kind: 'cash' }, slotCostPerMonthPence: 0, costVat: PM.defaultCostVat(),
+      partsPence: 108000, daysInStock: 54, prepHours: 0, workshopCostPerHourPence: 0,
+      advertisingPence: 0, warrantyPence: 0, deliveryInPence: 0, deliveryOutPence: 0,
+      costOfMoneyAnnualPct: 0,
+    }, { vatRegistered: true }).grossProfitPence,
+    `£${(proj.grossProfitPence / 100).toFixed(2)} — reimplementing this arithmetic is the failure the clause prevents`);
+  check('the MARGIN SCHEME is honoured — VAT is (sale − purchase)/6 on the margin, not on the sale',
+    proj.vatDuePence === Math.round((400000 - 214300) / 6),
+    `${proj.vatDuePence}p vs ${Math.round((400000 - 214300) / 6)}p`);
+  /**
+   * MARGIN AND QUALIFYING AGREE ON A CAR WITH NO FEES, AND THAT IS CORRECT — pinned so nobody
+   * "fixes" it. For a VAT-registered dealer with gross prices both come to (sale − purchase)/6:
+   * margin taxes the margin; qualifying charges sale/6 and reclaims purchase/6. The real difference
+   * is who may reclaim and what the invoice shows, not the dealer's net position.
+   *
+   * Written after this clause asserted the opposite and went red against correct arithmetic.
+   */
+  check('with no fees, margin and qualifying agree — and that is the right answer',
+    PJ.projectStock({ ...subj, vatStatus: 'qualifying' }, { vatRegistered: true }).grossProfitPence
+      === proj.grossProfitPence,
+    'both are (sale − purchase)/6 on gross prices; a difference here would be the error');
+  /** WHERE THEY MUST DIVERGE: the buyer's premium sits INSIDE the margin base and nowhere else. */
+  const withFee = (vs) => PJ.projectStock(
+    { ...subj, source: 'auction', premiumPence: 26520, vatStatus: vs }, { vatRegistered: true });
+  check('  …but a BUYER\u2019S PREMIUM separates them, because it is inside the margin base',
+    withFee('margin').vatDuePence < withFee('qualifying').vatDuePence
+      && withFee('margin').grossProfitPence !== withFee('qualifying').grossProfitPence,
+    `margin VAT ${withFee('margin').vatDuePence}p vs qualifying ${withFee('qualifying').vatDuePence}p — `
+    + 'if these ever agree, the premium has stopped reaching the margin base');
+  check('parts move the projection; nothing else on a prep card does',
+    PJ.projectStock({ ...subj, partsPence: 0 }, { vatRegistered: true }).grossProfitPence
+      > proj.grossProfitPence);
+  /**
+   * LABOUR IS NOT COSTED, asserted STRUCTURALLY — and it has to be, because the two inputs cancel:
+   * hours × rate, both zero, so mutating EITHER changes no answer and a behavioural clause sees
+   * nothing. Measured: setting prepHours to 4 scored 0 failures against the whole suite. Belt-and-
+   * braces zeroing is right for the code and blind for the clause, so the clause reads the literals.
+   */
+  const projSrc = readFileSync('lib/stock-projection.ts', 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('LABOUR IS NOT COSTED — prep hours AND the workshop rate are both zeroed',
+    hasKey(projSrc, 'prepHours', '0') && hasKey(projSrc, 'workshopCostPerHourPence', '0'),
+    'either one alone would do it; both are zeroed so no later default can reintroduce a labour cost');
+  check('  …and the note SAYS all of that, beside the number',
+    /not costed/i.test(PJ.PROJECTION_BASIS_NOTE) && /delivery in/i.test(PJ.PROJECTION_BASIS_NOTE)
+      && /better than the truth/i.test(PJ.PROJECTION_BASIS_NOTE),
+    'optimistic in a way the reader cannot see is worse than absent');
+
+  console.log('\n— what may be corrected, refused by the WRITER and not merely hidden —');
+  const regD = `ZZYARD${Math.floor(Math.random() * 900 + 100)}D`;
+  const vD = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regD, acquiredAt: bought });
+  if ('refused' in vD) throw new Error(vD.refused);
+  made.vehicles.push(vD.id);
+  const itemD = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vD.id, acquiredAt: bought,
+    purchasePence: 214300, vatStatus: 'margin', source: 'trade',
+  });
+  if ('refused' in itemD) throw new Error(itemD.refused);
+  made.items.push(itemD.id);
+
+  const badVat = await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, vatStatus: 'qualifying' });
+  check('the VAT treatment is REFUSED, and the refusal says why',
+    'refused' in badVat && /margin scheme/i.test(badVat.refused) && /filed return/i.test(badVat.refused),
+    'a car bought on the margin scheme stays one; the choice may already be in a VAT return');
+  const badSrc = await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, source: 'auction' });
+  check('  …and so is the source, because it decides which treatments are allowed',
+    'refused' in badSrc);
+  const okEdit = await ST.updateStockItem({
+    groupId: ZZ_GROUP, stockItemId: itemD.id, purchasePence: 220000, projectedSalePence: 400000,
+  });
+  check('a price correction and an expected sale price ARE allowed', 'id' in okEdit);
+  const detail = await ST.stockDetail(ZZ_GROUP, itemD.id, new Date(), { vatRegistered: true });
+  check('  …and the detail reader shows them back', detail.purchasePence === 220000
+    && detail.projectedSalePence === 400000 && detail.projection !== null);
+  const cleared = await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, projectedSalePence: 0 });
+  check('clearing the expected price returns it to NOT ESTIMATED, not to zero',
+    'id' in cleared
+      && (await ST.stockDetail(ZZ_GROUP, itemD.id, new Date(), { vatRegistered: true })).projectedSalePence === null,
+    'a mistyped estimate that can only be replaced by another estimate is a trap');
+
+  await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, projectedSalePence: 400000 });
+  const soldD = await ST.recordDisposal({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemD.id,
+    disposedAt: new Date('2026-08-20T12:00:00Z'), kind: 'sold', salePence: 385000, costs: [],
+  });
+  if ('refused' in soldD) throw new Error(soldD.refused);
+  const afterSale = await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, purchasePence: 999999 });
+  check('a SOLD car is read-only entirely — its figures froze at disposal',
+    'refused' in afterSale && /frozen at disposal/i.test(afterSale.refused));
+  const soldDetail = await ST.stockDetail(ZZ_GROUP, itemD.id, new Date(), { vatRegistered: true });
+  check('  …and it shows no projection: what it fetched is the answer, not what we expected',
+    soldDetail.projection === null && soldDetail.salePence === 385000,
+    'showing a guess beside a result invites reading the guess as one');
+
+  console.log('\n— and the yard reaches the car, through the real pages —');
+  await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stock-list"]', { timeout: 25000 });
+  // regS — still IN STOCK. regP and regD are disposed by now and are not on the yard list at all,
+  // so a link check against either would fail for a reason that has nothing to do with links.
+  const openLink = await page.$(`[data-testid="open-${regS}"]`);
+  check('every row is a way in to its car', !!openLink,
+    'a yard list whose rows go nowhere is how the last feature went unused');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }), openLink.click()]);
+  await page.waitForSelector('[data-testid="detail-reg"]', { timeout: 25000 });
+  check('  …and it lands on that car', (await page.textContent('[data-testid="detail-reg"]')).trim() === regS);
+  check('the page says labour is not costed', /not costed/i.test(await page.textContent('[data-testid="labour-note"]')));
+  check('  …and names the costs it cannot yet record',
+    /delivery in/i.test(await page.textContent('[data-testid="missing-costs"]')));
+  check('the frozen pair is SHOWN and explained, not silently absent',
+    /accountant/i.test(await page.textContent('[data-testid="frozen-fields"]')),
+    'a person hunting for a control that is deliberately missing has been told nothing');
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
@@ -1069,11 +1236,33 @@ try {
           where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE', 'ZZNOSUCH'].map((x) => ({ registration: { startsWith: x } })) },
           select: { id: true },
         });
-        const orphans = await prisma.stockItem.deleteMany({
-          where: { group_id: ZZ_GROUP, vehicle_id: { in: [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])] } },
-        });
         made.vehicles = [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])];
+        const orphans = await prisma.stockItem.deleteMany({
+          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } },
+        });
         if (orphans.count) check('  …including a stock row the run did not track', true, `${orphans.count} swept`);
+
+        /**
+         * AND THE JOB CARDS, which the backstop did not sweep until 2026-09-15 and which are the other
+         * thing that can hold a fixture vehicle: JobCard.vehicle is onDelete NoAction, so ONE untracked
+         * card makes the vehicle delete throw P2003 and the whole teardown abandons — leaving every
+         * fixture behind for the next run to collide with. That is exactly what happened: an aborted
+         * run left 15 cars and 2 cards, and the next run failed on a VIN the previous one still owned.
+         *
+         * Scoped to the fixture vehicles, so it cannot reach a real card: those ids came from the
+         * prefix match above, and no real registration starts with them.
+         */
+        const strayCards = await prisma.jobCard.findMany({
+          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } }, select: { id: true },
+        });
+        if (strayCards.length) {
+          const ids = strayCards.map((c) => c.id);
+          await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: ids } } });
+          await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: ids } } }).catch(() => {});
+          const gone = await prisma.jobCard.deleteMany({ where: { id: { in: ids }, group_id: ZZ_GROUP } });
+          check('  …and a job card the run did not track', gone.count === ids.length, `${gone.count} swept`);
+        }
+        await prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: { in: made.vehicles } } });
         const v = await prisma.vehicle.deleteMany({ where: { id: { in: made.vehicles }, group_id: ZZ_GROUP } });
         check('  …and the fixture vehicles', v.count === made.vehicles.length, `${v.count} of ${made.vehicles.length}`);
       }

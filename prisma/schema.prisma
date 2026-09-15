@@ -5271,6 +5271,12 @@ model StockItem {
   ///
   /// NO FOREIGN KEY: StockItem is a live table, so ADD CONSTRAINT would be a two-push migration.
   reacquired_from_disposal_id String?
+  /// WHAT WE EXPECT TO GET FOR IT. An estimate the garage states, not a measurement — NULL means
+  /// nobody has said, and the projection then shows nothing rather than a £0 sale implying a loss.
+  ///
+  /// Editable for as long as the car is in stock, and meaningless afterwards: once disposed, the real
+  /// sale price on StockDisposal is the answer and this is only what we used to think.
+  projected_sale_pence Int?
   created_by_user_id String
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt

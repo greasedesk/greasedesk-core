@@ -15,6 +15,7 @@ import {
 } from '@/lib/stock-intake';
 import { recordOdometerReadings } from '@/lib/odometer';
 import { prepCost, type PrepCost } from '@/lib/stock-prep';
+import { projectStock, type Projection } from '@/lib/stock-projection';
 import {
   MUST_CHOOSE_REFUSAL, isReacquisition, reacquisitionCostBase, type PriorSale,
 } from '@/lib/stock-reacquisition';
@@ -286,6 +287,9 @@ export type StockListRow = {
   source: string;
   /** LIVE prep spend: parts at TRADE COST from linked internal cards. Frozen at disposal, not before. */
   prepPence: number;
+  /** NULL when no sale price has been estimated — not £0, which would read as a loss on every car. */
+  projectedSalePence: number | null;
+  projectedProfitPence: number | null;
   /** Lines with no trade cost recorded — counted, never valued at zero. */
   prepUnknownLines: number;
   prepCards: number;
@@ -298,11 +302,14 @@ export type StockListRow = {
  * second. Ordered OLDEST FIRST: the car that has been there longest is the one costing money, and
  * putting it at the bottom of a list of forty would be filing the answer where nobody looks.
  */
-export async function stockList(groupId: string, asOf: Date): Promise<StockListRow[]> {
+export async function stockList(
+  groupId: string, asOf: Date, opts: { vatRegistered?: boolean } = {},
+): Promise<StockListRow[]> {
   const rows = await prisma.stockItem.findMany({
     where: { group_id: groupId, disposal: { is: null } },
     select: {
       id: true, vehicle_id: true, acquired_at: true, purchase_pence: true, vat_status: true, source: true,
+      premium_pence: true, services_pence: true, projected_sale_pence: true,
       vehicle: { select: { registration: true, make: true, model: true } },
     },
     orderBy: { acquired_at: 'asc' },
@@ -347,6 +354,14 @@ export async function stockList(groupId: string, asOf: Date): Promise<StockListR
     prepPence: prepByItem.get(r.id)?.partsPence ?? 0,
     prepUnknownLines: prepByItem.get(r.id)?.unknownCostLines ?? 0,
     prepCards: prepByItem.get(r.id)?.cards ?? 0,
+    projectedSalePence: r.projected_sale_pence,
+    // THE SAME MAPPER the detail page uses. A second arithmetic for the column would be a second
+    // answer, and the one on the list is the one a person compares cars with.
+    projectedProfitPence: projectStock({
+      purchasePence: r.purchase_pence, premiumPence: r.premium_pence, servicesPence: r.services_pence,
+      vatStatus: r.vat_status, source: r.source, daysInStock: daysInStock(r.acquired_at, asOf),
+      partsPence: prepByItem.get(r.id)?.partsPence ?? 0, projectedSalePence: r.projected_sale_pence,
+    }, { vatRegistered: opts.vatRegistered === true })?.grossProfitPence ?? null,
   }));
 }
 
@@ -646,4 +661,142 @@ export async function liveStockCosts(
     };
   }, { partsPence: 0, unknownCostLines: 0, labourLines: 0 });
   return { ...totals, cards: cards.length };
+}
+
+
+export type StockDetail = {
+  stockItemId: string;
+  vehicleId: string;
+  registration: string;
+  description: string | null;
+  acquiredAt: Date;
+  daysInStock: number;
+  purchasePence: number;
+  premiumPence: number;
+  servicesPence: number;
+  vatStatus: string;
+  source: string;
+  mileageWarranted: boolean | null;
+  projectedSalePence: number | null;
+  prep: PrepCost & { cards: number };
+  projection: Projection | null;
+  /** Disposed cars are READ-ONLY: their costs are frozen and the book must reproduce. */
+  disposedAt: Date | null;
+  disposalKind: string | null;
+  salePence: number | null;
+};
+
+/** ONE car, everything the detail page shows, including the projection run on real figures. */
+export async function stockDetail(
+  groupId: string, stockItemId: string, asOf: Date, opts: { vatRegistered: boolean },
+): Promise<StockDetail | null> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: stockItemId, group_id: groupId },
+    select: {
+      id: true, vehicle_id: true, acquired_at: true, purchase_pence: true, premium_pence: true,
+      services_pence: true, vat_status: true, source: true, mileage_warranted: true,
+      projected_sale_pence: true,
+      vehicle: { select: { registration: true, make: true, model: true } },
+      disposal: { select: { disposed_at: true, kind: true, sale_pence: true } },
+    },
+  });
+  if (!it) return null;
+  const prep = await liveStockCosts(groupId, it.id);
+  const days = daysInStock(it.acquired_at, it.disposal?.disposed_at ?? asOf);
+  return {
+    stockItemId: it.id,
+    vehicleId: it.vehicle_id,
+    registration: it.vehicle?.registration ?? '—',
+    description: [it.vehicle?.make, it.vehicle?.model].filter(Boolean).join(' ') || null,
+    acquiredAt: it.acquired_at,
+    daysInStock: days,
+    purchasePence: it.purchase_pence,
+    premiumPence: it.premium_pence,
+    servicesPence: it.services_pence,
+    vatStatus: it.vat_status,
+    source: it.source,
+    mileageWarranted: it.mileage_warranted,
+    projectedSalePence: it.projected_sale_pence,
+    prep,
+    // A SOLD car has no projection: the real sale price is the answer, and showing what we used to
+    // think beside what happened invites reading the guess as a result.
+    projection: it.disposal ? null : projectStock({
+      purchasePence: it.purchase_pence, premiumPence: it.premium_pence, servicesPence: it.services_pence,
+      vatStatus: it.vat_status, source: it.source, daysInStock: days,
+      partsPence: prep.partsPence, projectedSalePence: it.projected_sale_pence,
+    }, opts),
+    disposedAt: it.disposal?.disposed_at ?? null,
+    disposalKind: it.disposal?.kind ?? null,
+    salePence: it.disposal?.sale_pence ?? null,
+  };
+}
+
+/**
+ * ── WHAT MAY BE CORRECTED, AND WHAT MAY NOT ─────────────────────────────────────────────────────
+ *
+ * REFUSED HERE, not merely hidden on the page. A field absent from a form is a field a later form can
+ * put back; a field the writer refuses stays refused.
+ *
+ *  - `vatStatus` is FROZEN. A car bought under the margin scheme stays a margin car whatever the
+ *    tenant's own status does later, and recovering input VAT on a car forecloses the margin scheme
+ *    for it — the choice is effectively made at purchase and may already be in a filed VAT return.
+ *    Changing it is not a correction, it is a different car, and it needs its own deliberate path with
+ *    the accountant's answer attached. See the accountant list.
+ *  - `source` is FROZEN with it, because source decides which VAT statuses are even available
+ *    (SOURCE_RULES): editing it could leave a stored vat_status the source does not permit.
+ *  - A DISPOSED item is READ-ONLY entirely. Its costs froze at disposal so that re-running last
+ *    year's quarter gives what it gave then; editing the purchase price afterwards would move a
+ *    figure the book has already reported.
+ *
+ * EDITABLE: the acquisition date, the money actually paid, whether the mileage was warranted, and the
+ * projected sale price. Those are things a person can simply have typed wrong.
+ */
+export async function updateStockItem(a: {
+  groupId: string; stockItemId: string;
+  acquiredAt?: Date | null; purchasePence?: unknown; premiumPence?: unknown; servicesPence?: unknown;
+  mileageWarranted?: unknown; projectedSalePence?: unknown;
+  /** Present ONLY so the refusal can name them. Never written. */
+  vatStatus?: unknown; source?: unknown;
+}): Promise<{ id: string } | { refused: string }> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, vat_status: true, source: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+
+  if (it.disposal) {
+    return {
+      refused: 'This car has been sold and its figures were frozen at disposal. Re-running a past '
+        + 'quarter has to give what it gave then, so nothing here can change now.',
+    };
+  }
+  if (a.vatStatus !== undefined && a.vatStatus !== it.vat_status) {
+    return {
+      refused: 'The VAT treatment was captured when you bought the car and cannot be changed here. '
+        + 'Reclaiming input VAT forecloses the margin scheme for this car and the choice may already '
+        + 'be in a filed return — ask your accountant before changing it.',
+    };
+  }
+  if (a.source !== undefined && a.source !== it.source) {
+    return {
+      refused: 'Where the car came from decides which VAT treatments it may have, so it is fixed '
+        + 'alongside the VAT treatment.',
+    };
+  }
+
+  const data: Record<string, unknown> = {};
+  if (a.acquiredAt) data.acquired_at = a.acquiredAt;
+  if (a.purchasePence !== undefined) data.purchase_pence = asMoney(a.purchasePence);
+  if (a.premiumPence !== undefined) data.premium_pence = asMoney(a.premiumPence);
+  if (a.servicesPence !== undefined) data.services_pence = asMoney(a.servicesPence);
+  if (a.mileageWarranted !== undefined) data.mileage_warranted = parseWarranted(a.mileageWarranted);
+  if (a.projectedSalePence !== undefined) {
+    // BLANK CLEARS IT, back to "nobody has said" — which is a different thing from £0 and must stay
+    // reachable, or a mistyped estimate can only ever be replaced by another estimate.
+    const n = asMoney(a.projectedSalePence);
+    data.projected_sale_pence = n > 0 ? n : null;
+  }
+  if (!Object.keys(data).length) return { id: it.id };
+  await prisma.stockItem.update({ where: { id: it.id }, data });
+  return { id: it.id };
 }

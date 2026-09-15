@@ -25,6 +25,7 @@ type Row = {
   stockItemId: string; vehicleId: string; registration: string; description: string | null;
   acquiredAt: string; daysInStock: number; purchasePence: number; vatStatus: string; source: string;
   prepPence: number; prepUnknownLines: number; prepCards: number;
+  projectedSalePence: number | null; projectedProfitPence: number | null;
 };
 
 const money = (p: number) => `£${(p / 100).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
@@ -414,6 +415,7 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                   <th className="text-right py-1">Paid</th>
                   <th className="text-right py-1">Prep</th>
                   <th className="text-right py-1">In it</th>
+                  <th className="text-right py-1">Projected</th>
                   <th className="text-left py-1 pl-3">VAT</th>
                 </tr>
               </thead>
@@ -421,7 +423,10 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                 {rows.map((r) => (
                   <tr key={r.stockItemId} className="border-b border-line/50" data-testid={`stock-row-${r.registration}`}>
                     <td className="py-2">
-                      <span className="font-medium text-ink">{r.registration}</span>
+                      {/* THE ROW IS THE WAY IN. A yard list whose rows go nowhere makes the detail
+                          page unreachable, which is how the internal-stock toggle went unused. */}
+                      <a href={`/admin/stock/${r.stockItemId}`} className="font-medium text-ink underline"
+                        data-testid={`open-${r.registration}`}>{r.registration}</a>
                       {r.description && <span className="ml-2 text-muted">{r.description}</span>}
                     </td>
                     <td className="py-2 text-muted tabular-nums">{r.acquiredAt.slice(0, 10)}</td>
@@ -445,6 +450,13 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                         at a yard: what has to come back before this one has made anything. */}
                     <td className="py-2 text-right text-ink font-medium tabular-nums" data-testid={`inv-${r.registration}`}>
                       {money(r.purchasePence + r.prepPence)}
+                    </td>
+                    {/* GROSS PROFIT if it sells for what you expect. Blank — not £0 — when nobody has
+                        estimated: a zero here would read as "this car makes nothing", which is a claim. */}
+                    <td className="py-2 text-right tabular-nums" data-testid={`projected-${r.registration}`}>
+                      {r.projectedProfitPence === null
+                        ? <span className="text-muted">—</span>
+                        : <span className={r.projectedProfitPence > 0 ? 'text-ink font-medium' : 'text-danger font-semibold'}>{money(r.projectedProfitPence)}</span>}
                     </td>
                     <td className="py-2 pl-3 text-muted">{r.vatStatus === 'margin' ? 'Margin' : 'Qualifying'}</td>
                   </tr>

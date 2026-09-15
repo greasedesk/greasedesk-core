@@ -15,7 +15,11 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantApi } from '@/lib/admin-guard';
-import { findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal, stockList, takeIntoStock } from '@/lib/stock-store';
+import {
+  findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal, stockDetail, stockList,
+  takeIntoStock, updateStockItem,
+} from '@/lib/stock-store';
+import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
 
@@ -38,8 +42,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const veh = await findVehicleByReg(scope.groupId, req.query.priorSaleFor);
       return res.status(200).json({ priorSale: veh ? await findPriorSale(scope.groupId, veh.id) : null });
     }
+    // THE TENANT's VAT status, not GreaseDesk's — the projection's margin-vs-qualifying arithmetic
+    // turns on it. getTaxProfile, never garageVatRegistered(), which is our own registration.
+    const vatRegistered = (await getTaxProfile(scope.groupId)).isRegistered;
+
+    if (typeof req.query.id === 'string' && req.query.id) {
+      const detail = await stockDetail(scope.groupId, req.query.id, new Date(), { vatRegistered });
+      if (!detail) return res.status(404).json({ message: 'That car is not on this account.' });
+      return res.status(200).json({ detail });
+    }
     // `asOf` is the server's clock, once, so every row's days-in-stock is counted from one instant.
-    return res.status(200).json({ stock: await stockList(scope.groupId, new Date()) });
+    return res.status(200).json({ stock: await stockList(scope.groupId, new Date(), { vatRegistered }) });
   }
 
   if (req.method === 'POST') {
@@ -53,6 +66,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         stockItemId: String(b.stockItemId ?? ''), disposedAt,
         kind: b.kind, salePence: b.salePence, note: b.note,
         costs: Array.isArray(b.costs) ? (b.costs as never[]) : [],
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    if (b.action === 'update') {
+      const out = await updateStockItem({
+        groupId: scope.groupId, stockItemId: String(b.stockItemId ?? ''),
+        acquiredAt: parseDate(b.acquiredAt),
+        purchasePence: b.purchasePence, premiumPence: b.premiumPence, servicesPence: b.servicesPence,
+        mileageWarranted: b.mileageWarranted, projectedSalePence: b.projectedSalePence,
+        // Passed through ONLY so the writer can refuse them by name — see updateStockItem.
+        vatStatus: b.vatStatus, source: b.source,
       });
       if ('refused' in out) return res.status(409).json({ message: out.refused });
       return res.status(200).json({ ok: true, id: out.id });
