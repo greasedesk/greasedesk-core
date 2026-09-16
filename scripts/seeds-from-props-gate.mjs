@@ -75,6 +75,12 @@ const DECLARED = {
     'mileage-out, deliberately NOT prefilled — see the comment at its declaration; a measurement, never a default',
   'components/messages/ConversationView.tsx:channel':
     'new-entry default (email); the composer’s channel, not a stored fact',
+  'components/stock/SellCarPanel.tsx:price':
+    'new-entry DEFAULT from the projected price — the sale price is what the person agrees and types; re-seeding would overwrite a price mid-negotiation, and the panel unmounts once the car is sold',
+  'components/stock/SellCarPanel.tsx:soldAt':
+    'new-entry default (today); re-seeding would move a date the user had chosen',
+  'components/stock/SellCarPanel.tsx:nb':
+    'a NEW buyer being typed — there is no saved value to be stale against',
   'components/messages/ConversationView.tsx:allowance':
     'an SMS quota shown beside the composer; refreshed by the send path, never posted back',
 };

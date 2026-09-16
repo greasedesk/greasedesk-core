@@ -10,6 +10,8 @@
  * refuses the VAT treatment, the source, and everything on a disposed car. This page only has to
  * explain the refusal; it does not enforce it.
  */
+import SellCarPanel from '@/components/stock/SellCarPanel';
+import type { OpenPrepCard } from '@/lib/stock-sale-rules';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
@@ -70,6 +72,7 @@ export default function StockCarPage() {
   const [cost, setCost] = useState({ kind: 'delivery_in' as StockCostKind, description: '', amount: '', incurredOn: '', vatTreatment: 'standard_not_recoverable' });
   const [credit, setCredit] = useState<{ id: string; amount: string; on: string } | null>(null);
   const [openCards, setOpenCards] = useState<Record<string, boolean>>({});
+  const [openPrep, setOpenPrep] = useState<OpenPrepCard[]>([]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -78,6 +81,7 @@ export default function StockCarPage() {
     const body = await res.json();
     const det: Detail = body.detail;
     setD(det);
+    setOpenPrep(Array.isArray(body.openPrepCards) ? body.openPrepCards : []);
     setForm({
       acquiredAt: iso(det.acquiredAt),
       purchase: (det.purchasePence / 100).toFixed(2),
@@ -198,6 +202,14 @@ export default function StockCarPage() {
                 </p>
               )}
             </section>
+
+            {/* ── SELL IT ──────────────────────────────────────────────────────────────────────
+                Below the profit, deliberately: the price is decided with the cost in view. Gone once
+                the car has left — a sold car's figures are frozen. */}
+            {!sold && (
+              <SellCarPanel stockItemId={id} registration={d.registration}
+                projectedSalePence={d.projectedSalePence} openPrepCards={openPrep} />
+            )}
 
             {/* ── WHAT HAS GONE INTO IT ──────────────────────────────────────────────────────── */}
             <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="prep-section">

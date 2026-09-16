@@ -3,7 +3,9 @@
  * THE ONE WRITER for stock, and the one reader of the book. Every scope is tenant-checked here rather
  * than by each caller — the same shape as lib/purchase-model-store.
  */
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { SALE_PATH_REFUSAL, TRADED_OUT_UNDEFINED_REFUSAL } from '@/lib/stock-sale-rules';
 import {
   DISPOSAL_KINDS, bookRow, daysInStock, daysOnForecourt, hasSalePrice, isStockStatus, sectionFor,
   vatPositionFor, type BookRow, type DisposalKind, type StockStatus,
@@ -158,7 +160,7 @@ export async function takeIntoStock(a: {
  * a book that was read in February. The book is a QUERY, and these frozen rows are what make
  * re-running last year's quarter give what it gave then.
  */
-export async function recordDisposal(a: {
+export async function recordDisposalInTx(tx: Prisma.TransactionClient, a: {
   groupId: string; userId: string; stockItemId: string; disposedAt: Date;
   kind: unknown; salePence?: unknown; note?: unknown;
   /** What prep cost, as the caller can see it TODAY. Frozen here and never recomputed. */
@@ -168,7 +170,7 @@ export async function recordDisposal(a: {
     ? (a.kind as DisposalKind) : null;
   if (!kind) return { refused: 'Say how the car left.' };
 
-  const item = await prisma.stockItem.findFirst({
+  const item = await tx.stockItem.findFirst({
     where: { id: a.stockItemId, group_id: a.groupId },
     select: { id: true, acquired_at: true, disposal: { select: { id: true } } },
   });
@@ -182,104 +184,119 @@ export async function recordDisposal(a: {
   // a scrapped car did not sell for nothing, it did not sell.
   const salePence = hasSalePrice(kind) ? asMoney(a.salePence) : null;
 
-  const created = await prisma.$transaction(async (tx) => {
-    const d = await tx.stockDisposal.create({
-      data: {
-        group_id: a.groupId, stock_item_id: a.stockItemId, created_by_user_id: a.userId,
-        disposed_at: a.disposedAt, kind, sale_pence: salePence,
-        note: typeof a.note === 'string' && a.note.trim() ? a.note.trim().slice(0, 500) : null,
-      },
-      select: { id: true },
-    });
-    const costs = (a.costs ?? [])
-      .map((c) => ({
-        group_id: a.groupId, stock_item_id: a.stockItemId,
-        kind: String(c.kind).slice(0, 40),
-        description: String(c.description).slice(0, 200),
-        amount_pence: asMoney(c.amountPence),
-        job_card_id: c.jobCardId ?? null,
-      }))
-      .filter((c) => c.amount_pence > 0 && c.description.length > 0);
-    if (costs.length) await tx.stockCostSnapshot.createMany({ data: costs });
-
-    /**
-     * ── AND FREEZE WHAT THE PREP CARDS CONSUMED, PER CARD ────────────────────────────────────────
-     *
-     * Prep costs are LIVE while the car is in stock — a card edited today changes what the car has
-     * cost today — and frozen here, in the same transaction as the disposal, for the reason invoice
-     * lines freeze at mint: re-running last year's quarter must give what it gave then.
-     *
-     * ONE SNAPSHOT PER CARD, not one total. A book entry saying "£1,240 of parts" cannot be checked
-     * against anything; one saying "£380, card 1043" can be walked back to the work. And a caller may
-     * ALSO pass costs by hand (a delivery invoice, an MOT) — those are kept, so this adds rather than
-     * replaces. Cards already snapshotted are skipped, so a re-disposal cannot double a car's costs.
-     */
-    const alreadyFrozen = new Set(
-      (await tx.stockCostSnapshot.findMany({
-        where: { stock_item_id: a.stockItemId, job_card_id: { not: null } },
-        select: { job_card_id: true },
-      })).map((r) => r.job_card_id as string),
-    );
-    const prepCards = await tx.jobCard.findMany({
-      where: { group_id: a.groupId, stock_item_id: a.stockItemId },
-      select: { id: true, items: { select: { item_type: true, qty: true, unit_cost: true } } },
-    });
-    const prepRows = prepCards
-      .filter((c) => !alreadyFrozen.has(c.id))
-      .map((c) => ({ id: c.id, cost: prepCost(c.items as never) }))
-      .filter((c) => c.cost.partsPence > 0)
-      .map((c) => ({
-        group_id: a.groupId, stock_item_id: a.stockItemId, kind: 'parts',
-        // The unknowns travel WITH the figure. A frozen £380 that silently omitted a £400 turbo is
-        // indistinguishable later from a car that only used £380 of parts.
-        description: c.cost.unknownCostLines
-          ? `Prep parts (${c.cost.unknownCostLines} line(s) with no trade cost, not included)`
-          : 'Prep parts',
-        amount_pence: c.cost.partsPence,
-        job_card_id: c.id,
-      }));
-    if (prepRows.length) await tx.stockCostSnapshot.createMany({ data: prepRows });
-
-    /**
-     * ── AND THE NON-PARTS COSTS, NETTED, FROZEN BESIDE THEM ──────────────────────────────
-     *
-     * Delivery in, valeting, MOT — and the credits that reversed any of them. Frozen here for the
-     * same reason the prep cards are: the book is a query, and re-running last year's quarter must
-     * give what it gave then.
-     *
-     * ONE ROW PER COST, and credits FOLD INTO the cost they reverse rather than arriving as separate
-     * negative snapshots. StockCostSnapshot.amount_pence has no negative convention and a reader
-     * summing it would otherwise have to know about reversal — so the netting happens HERE, once.
-     * A cost credited in full freezes as nothing at all rather than a zero row, because a £0 line
-     * invites "why is this here".
-     */
-    const liveRows = await tx.stockCost.findMany({
-      where: { group_id: a.groupId, stock_item_id: a.stockItemId },
-      select: { id: true, kind: true, description: true, amount_pence: true, reverses_id: true },
-    });
-    const creditedBy = new Map();
-    for (const r of liveRows) {
-      if (!r.reverses_id) continue;
-      creditedBy.set(r.reverses_id, (creditedBy.get(r.reverses_id) ?? 0) + r.amount_pence);
-    }
-    const costRows = liveRows
-      .filter((r) => !r.reverses_id)
-      .map((r) => {
-        const back = creditedBy.get(r.id) ?? 0;
-        return {
-          group_id: a.groupId, stock_item_id: a.stockItemId, kind: r.kind,
-          description: back > 0
-            ? `${r.description} (net of £${(back / 100).toFixed(2)} credited back)`
-            : r.description,
-          amount_pence: r.amount_pence - back,
-          job_card_id: null,
-        };
-      })
-      .filter((r) => r.amount_pence > 0);
-    if (costRows.length) await tx.stockCostSnapshot.createMany({ data: costRows });
-    return d;
+  // ONE TRANSACTION, THE CALLER'S. This used to open its own, which made it impossible to record a
+  // disposal in the same transaction as the invoice for that sale — and a disposal committed before
+  // its invoice is a sold car with no invoice the moment the mint fails.
+  const d = await tx.stockDisposal.create({
+    data: {
+      group_id: a.groupId, stock_item_id: a.stockItemId, created_by_user_id: a.userId,
+      disposed_at: a.disposedAt, kind, sale_pence: salePence,
+      note: typeof a.note === 'string' && a.note.trim() ? a.note.trim().slice(0, 500) : null,
+    },
+    select: { id: true },
   });
-  return { id: created.id };
+  const costs = (a.costs ?? [])
+    .map((c) => ({
+      group_id: a.groupId, stock_item_id: a.stockItemId,
+      kind: String(c.kind).slice(0, 40),
+      description: String(c.description).slice(0, 200),
+      amount_pence: asMoney(c.amountPence),
+      job_card_id: c.jobCardId ?? null,
+    }))
+    .filter((c) => c.amount_pence > 0 && c.description.length > 0);
+  if (costs.length) await tx.stockCostSnapshot.createMany({ data: costs });
+
+  /**
+   * ── AND FREEZE WHAT THE PREP CARDS CONSUMED, PER CARD ────────────────────────────────────────
+   *
+   * Prep costs are LIVE while the car is in stock — a card edited today changes what the car has
+   * cost today — and frozen here, in the same transaction as the disposal, for the reason invoice
+   * lines freeze at mint: re-running last year's quarter must give what it gave then.
+   *
+   * ONE SNAPSHOT PER CARD, not one total. A book entry saying "£1,240 of parts" cannot be checked
+   * against anything; one saying "£380, card 1043" can be walked back to the work. And a caller may
+   * ALSO pass costs by hand (a delivery invoice, an MOT) — those are kept, so this adds rather than
+   * replaces. Cards already snapshotted are skipped, so a re-disposal cannot double a car's costs.
+   */
+  const alreadyFrozen = new Set(
+    (await tx.stockCostSnapshot.findMany({
+      where: { stock_item_id: a.stockItemId, job_card_id: { not: null } },
+      select: { job_card_id: true },
+    })).map((r) => r.job_card_id as string),
+  );
+  const prepCards = await tx.jobCard.findMany({
+    where: { group_id: a.groupId, stock_item_id: a.stockItemId },
+    select: { id: true, items: { select: { item_type: true, qty: true, unit_cost: true } } },
+  });
+  const prepRows = prepCards
+    .filter((c) => !alreadyFrozen.has(c.id))
+    .map((c) => ({ id: c.id, cost: prepCost(c.items as never) }))
+    .filter((c) => c.cost.partsPence > 0)
+    .map((c) => ({
+      group_id: a.groupId, stock_item_id: a.stockItemId, kind: 'parts',
+      // The unknowns travel WITH the figure. A frozen £380 that silently omitted a £400 turbo is
+      // indistinguishable later from a car that only used £380 of parts.
+      description: c.cost.unknownCostLines
+        ? `Prep parts (${c.cost.unknownCostLines} line(s) with no trade cost, not included)`
+        : 'Prep parts',
+      amount_pence: c.cost.partsPence,
+      job_card_id: c.id,
+    }));
+  if (prepRows.length) await tx.stockCostSnapshot.createMany({ data: prepRows });
+
+  /**
+   * ── AND THE NON-PARTS COSTS, NETTED, FROZEN BESIDE THEM ──────────────────────────────
+   *
+   * Delivery in, valeting, MOT — and the credits that reversed any of them. Frozen here for the
+   * same reason the prep cards are: the book is a query, and re-running last year's quarter must
+   * give what it gave then.
+   *
+   * ONE ROW PER COST, and credits FOLD INTO the cost they reverse rather than arriving as separate
+   * negative snapshots. StockCostSnapshot.amount_pence has no negative convention and a reader
+   * summing it would otherwise have to know about reversal — so the netting happens HERE, once.
+   * A cost credited in full freezes as nothing at all rather than a zero row, because a £0 line
+   * invites "why is this here".
+   */
+  const liveRows = await tx.stockCost.findMany({
+    where: { group_id: a.groupId, stock_item_id: a.stockItemId },
+    select: { id: true, kind: true, description: true, amount_pence: true, reverses_id: true },
+  });
+  const creditedBy = new Map();
+  for (const r of liveRows) {
+    if (!r.reverses_id) continue;
+    creditedBy.set(r.reverses_id, (creditedBy.get(r.reverses_id) ?? 0) + r.amount_pence);
+  }
+  const costRows = liveRows
+    .filter((r) => !r.reverses_id)
+    .map((r) => {
+      const back = creditedBy.get(r.id) ?? 0;
+      return {
+        group_id: a.groupId, stock_item_id: a.stockItemId, kind: r.kind,
+        description: back > 0
+          ? `${r.description} (net of £${(back / 100).toFixed(2)} credited back)`
+          : r.description,
+        amount_pence: r.amount_pence - back,
+        job_card_id: null,
+      };
+    })
+    .filter((r) => r.amount_pence > 0);
+  if (costRows.length) await tx.stockCostSnapshot.createMany({ data: costRows });
+  return { id: d.id };
+}
+
+/**
+ * ── RECORDING A DISPOSAL THAT IS NOT A SALE ─────────────────────────────────────────────────────
+ *
+ * Scrapped, returned to the seller, taken into own use. A SALE REFUSES HERE and is sent to
+ * lib/stock-sale::sellCar, which writes the disposal, the ownership transfer, the sale card and the
+ * invoice in one transaction. Accepting `sold` here would record a sale with no invoice — reachable
+ * through the API though no screen called it, which is exactly how a half-state arrives six months
+ * later. `traded_out` refuses too: it has a label and no definition until part-exchange gives it one.
+ */
+export async function recordDisposal(a: Parameters<typeof recordDisposalInTx>[1]): Promise<{ id: string } | { refused: string }> {
+  if (String(a.kind) === 'sold') return { refused: SALE_PATH_REFUSAL };
+  if (String(a.kind) === 'traded_out') return { refused: TRADED_OUT_UNDEFINED_REFUSAL };
+  return prisma.$transaction((tx) => recordDisposalInTx(tx, a));
 }
 
 /**

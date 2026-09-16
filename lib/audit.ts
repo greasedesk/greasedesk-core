@@ -67,6 +67,7 @@ export type AuditAction =
   | 'comeback.cleared'      // comeback flag removed
   | 'stock_prep.linked'     // card marked as preparing a car WE OWN — bills nobody, costs the stock item
   | 'stock_prep.unlinked'   // back to an ordinary customer card, and invoiceable again
+  | 'stock.sold'            // a car sold out of stock: disposal, ownership to the buyer, sale card and invoice, one transaction
   | 'invoice.minted'
   // DVSA moved the expiry between the card being looked at and the document being frozen. Only
   // written when it actually CHANGED — "DVSA agrees with what we hold" is the common case and

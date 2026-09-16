@@ -25,6 +25,7 @@ import { ALL_TIME_FROM, SOLD_EXTRA_PRESET } from '@/lib/stock-sold';
 import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
+import { sellCar, openPrepCards } from '@/lib/stock-sale';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope = await requireTenantApi(req, res);
@@ -78,7 +79,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (typeof req.query.id === 'string' && req.query.id) {
       const detail = await stockDetail(scope.groupId, req.query.id, new Date(), { vatRegistered });
       if (!detail) return res.status(404).json({ message: 'That car is not on this account.' });
-      return res.status(200).json({ detail });
+      // OPEN PREP CARDS ride along for the sale panel's warning — a warning, never a refusal.
+      return res.status(200).json({ detail, openPrepCards: await openPrepCards(scope.groupId, req.query.id) });
     }
     // `asOf` is the server's clock, once, so every row's days-in-stock is counted from one instant.
     return res.status(200).json({ stock: await stockList(scope.groupId, new Date(), { vatRegistered }) });
@@ -87,6 +89,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'POST') {
     const b = (req.body || {}) as Record<string, unknown>;
 
+    /**
+     * ── SELL THIS CAR ──────────────────────────────────────────────────────────────────────────
+     * The disposal, the ownership transfer, the sale card and the invoice, in one transaction
+     * (lib/stock-sale). The site is where the user starts NEW work — activeSiteIds, never the read
+     * envelope, so a sale can never be booked to an archived location.
+     */
+    if (b.action === 'sell') {
+      const soldAt = parseDate(b.soldAt);
+      if (!soldAt) return res.status(400).json({ message: 'Say when the car was sold.' });
+      const vis = scope.vis;
+      const wanted = typeof b.siteId === 'string' ? b.siteId : null;
+      const siteId = wanted && vis.activeSiteIds.includes(wanted) ? wanted
+        : vis.primarySiteId && vis.activeSiteIds.includes(vis.primarySiteId) ? vis.primarySiteId
+        : vis.activeSiteIds.length === 1 ? vis.activeSiteIds[0] : null;
+      if (!siteId) return res.status(400).json({ message: 'Say which location sold this car.' });
+      const out = await sellCar({
+        groupId: scope.groupId, userId: scope.userId, siteId,
+        stockItemId: String(b.stockItemId ?? ''), soldAt, salePence: b.salePence,
+        buyer: (b.buyer ?? null) as never, note: b.note,
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, ...out });
+    }
+
+    // NOT A SALE. lib/stock-store::recordDisposal refuses `sold` and `traded_out` and points here.
     if (b.action === 'dispose') {
       const disposedAt = parseDate(b.disposedAt);
       if (!disposedAt) return res.status(400).json({ message: 'Say when it left.' });

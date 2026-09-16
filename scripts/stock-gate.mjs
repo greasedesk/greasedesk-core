@@ -11,6 +11,15 @@ const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.
 import './_ts.mjs';
 const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
+
+/**
+ * THE BOOK'S FIXTURES DISPOSE THROUGH THE IN-TRANSACTION WRITER. Since 2026-09-16 the public
+ * recordDisposal refuses `sold` and `traded_out`: a sale is recorded by lib/stock-sale::sellCar, which
+ * writes the invoice in the same transaction. These clauses are about what a disposal FREEZES and how
+ * the book reads it — not about how a sale is raised — so they call the writer the sale path itself
+ * calls. The refusal is proved in car-sale-gate.
+ */
+const disposeInTx = (args) => prisma.$transaction((tx) => ST.recordDisposalInTx(tx, args));
 const SI = await import('../lib/stock-intake.ts');
 const SP = await import('../lib/stock-prep.ts');
 const { STOCK_NO_CUSTOMER: SP_LABEL } = SP;
@@ -97,7 +106,7 @@ try {
   check('a car can be taken into stock', !!taken.id, taken.refused ?? taken.id);
   made.items.push(taken.id);
 
-  const disposed = await ST.recordDisposal({
+  const disposed = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: taken.id,
     disposedAt: new Date('2026-04-14'), kind: 'sold', salePence: 400000,
     // £800 of prep ON THE CAR — the whole point of this clause.
@@ -220,7 +229,7 @@ try {
   if (twice.id) made.items.push(twice.id);   // only reachable if the refusal broke — tracked so teardown still cleans
   check('  …but not while it is still in stock', !!twice.refused,
     `${twice.refused ?? 'ACCEPTED — "is this in stock?" would now have two answers'}`);
-  const backwards = await ST.recordDisposal({
+  const backwards = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: again.id,
     disposedAt: new Date('2026-04-01'), kind: 'sold', salePence: 200000,
   });
@@ -297,7 +306,7 @@ try {
   made.items.push(goneItem.id);
   const listBefore = await ST.stockList(ZZ_GROUP, new Date('2026-09-13'));
   check('a held car is in the yard', listBefore.some((r) => r.stockItemId === goneItem.id), `${listBefore.length} in stock`);
-  await ST.recordDisposal({
+  await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: goneItem.id,
     disposedAt: new Date('2026-04-01'), kind: 'traded_out', salePence: 120000,
   });
@@ -439,7 +448,7 @@ try {
     'refused before the vehicle is resolved, so a rejected form leaves nothing behind');
 
   // A DISPOSED CAR LEAVES THE YARD — the list is "in stock", not "ever bought".
-  await ST.recordDisposal({
+  await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: created.id,
     disposedAt: new Date('2026-08-01'), kind: 'sold', salePence: 400000,
   });
@@ -718,7 +727,7 @@ try {
     `list ${listed.prepPence}p vs library ${live.partsPence}p — two readers of one number must agree`);
 
   console.log('\n— frozen at disposal, once, per card —');
-  const soldP = await ST.recordDisposal({
+  const soldP = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemP.id,
     disposedAt: new Date('2026-07-01T12:00:00Z'), kind: 'sold', salePence: 300000, costs: [],
   });
@@ -802,7 +811,7 @@ try {
   });
   if ('refused' in oldItem) throw new Error(oldItem.refused);
   made.items.push(oldItem.id);
-  const oldSale = await ST.recordDisposal({
+  const oldSale = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: oldItem.id,
     disposedAt: new Date('2026-03-12T12:00:00Z'), kind: 'sold', salePence: 899500, costs: [],
   });
@@ -1191,7 +1200,7 @@ try {
     'a mistyped estimate that can only be replaced by another estimate is a trap');
 
   await ST.updateStockItem({ groupId: ZZ_GROUP, stockItemId: itemD.id, projectedSalePence: 400000 });
-  const soldD = await ST.recordDisposal({
+  const soldD = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemD.id,
     disposedAt: new Date('2026-08-20T12:00:00Z'), kind: 'sold', salePence: 385000, costs: [],
   });
@@ -1371,7 +1380,7 @@ try {
   check('the costs REACH the projection and reduce it', withCost.grossProfitPence < noCost.grossProfitPence,
     `${withCost.grossProfitPence}p vs ${noCost.grossProfitPence}p with no costs`);
 
-  const soldC = await ST.recordDisposal({
+  const soldC = await disposeInTx({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id,
     disposedAt: new Date('2026-09-01T12:00:00Z'), kind: 'sold', salePence: 400000, costs: [],
   });
