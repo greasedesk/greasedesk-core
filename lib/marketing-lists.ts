@@ -60,6 +60,7 @@ export const SNOOZE_DAYS = 30;
  * Precision here would need a registration date we do not store, and the number it feeds is a
  * coverage line, not a reminder.
  */
+/** UNCALLED in production since 2026-09-16 — see the note above estimateRevenue for why it stays. */
 export const MOT_EXEMPT_YEARS = 3;
 
 export type ContactRoute = { sms: boolean; email: boolean; phone: string | null };
@@ -303,6 +304,20 @@ export type RevenueEstimate =
   | { ok: true; pennies: number; cars: number; averagePennies: number; basis: string }
   | { ok: false; reason: 'no_history' | 'no_price' };
 
+/**
+ * ── UNCALLED IN PRODUCTION SINCE 2026-09-16, DELIBERATELY KEPT ──────────────────────────────────
+ * estimateRevenue and estimateMotRevenue below — and MOT_EXEMPT_YEARS near the top of this file —
+ * have NO production caller. Their
+ * only ones were lib/marketing-data::buildMotList and ::buildServiceList, deleted that day (dead
+ * since 440f53d). NOTHING DEPENDS ON THEM — do not read them as load-bearing, and do not preserve a
+ * behaviour here on the belief that a screen relies on it.
+ *
+ * Kept on the owner's ruling rather than by omission: they are pure, gated (marketing-lists-gate),
+ * and sit in a module that is otherwise live, and the board may yet grow a revenue figure. The cost
+ * of keeping them is small; the cost of deleting a thing the next slice wants is not. That is a
+ * different judgement from the two dead SCREENS, which were removed because keeping them correct
+ * cost somebody's attention for three weeks after the last caller vanished.
+ */
 /**
  * WHAT THE LIST IS WORTH — a rule of thumb, labelled as one.
  *
