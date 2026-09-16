@@ -178,6 +178,7 @@ const TIERS = {
     'products-gate',
     'mot-banner-gate',
     'customer-car-gate',
+    'sale-invoice-gate',
     'redaction-gate',
     'stock-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',

@@ -18,6 +18,8 @@
  * `bookRow` computes the margin from two figures and cannot see costs at all.
  */
 import { VAT_FRACTION_DIVISOR } from '@/lib/stock-vat-fraction';
+// TYPE ONLY: lib/purchase-model is pure (it imports nothing), so this keeps stock.ts a leaf.
+import type { VatStatus } from '@/lib/purchase-model';
 
 /**
  * HOW A CAR LEFT. Five ways, and only two of them are a sale — which is why `salePence` is nullable
@@ -109,12 +111,23 @@ export const DISPOSAL_LABELS: Record<DisposalKind, string> = {
  *              the accountant list, and the book says so rather than printing a figure that would be
  *              believed. See [the courtesy-car taint] — the same question, arriving from the other side.
  */
-export type VatPosition = 'margin' | 'none' | 'unsettled';
+export type VatPosition = 'margin' | 'qualifying' | 'none' | 'unsettled';
 
-export function vatPositionFor(kind: DisposalKind): VatPosition {
-  if (kind === 'sold' || kind === 'traded_out') return 'margin';
+/**
+ * HOW THE CAR LEFT **AND** WHAT IT WAS BOUGHT AS. Both, because either alone gives a wrong answer:
+ * the kind decides whether there is a supply at all, and StockItem.vat_status decides which scheme
+ * that supply falls under.
+ *
+ * `vatStatus` is REQUIRED and has no default. This function used to take the kind alone and return
+ * 'margin' for every sale, which is right for a margin car and wrong for a qualifying one by the
+ * whole of the purchase price. A default would put that back silently; making the caller state the
+ * scheme makes the omission a compile error. (Latent, never computed: at the time this was fixed
+ * every StockItem in the database was `margin` and no disposal existed.)
+ */
+export function vatPositionFor(kind: DisposalKind, vatStatus: VatStatus): VatPosition {
   if (kind === 'own_use') return 'unsettled';
-  return 'none';
+  if (!hasSalePrice(kind)) return 'none';
+  return vatStatus === 'qualifying' ? 'qualifying' : 'margin';
 }
 
 /** Does this way of leaving have a sale price at all? Three of the five do not. */
@@ -146,12 +159,14 @@ export type BookRow = {
  */
 export function bookRow(args: {
   purchasePence: number;
+  /** WHICH SCHEME THE CAR WAS BOUGHT UNDER. No default — see vatPositionFor. */
+  vatStatus: VatStatus;
   disposal: { kind: DisposalKind; salePence: number | null } | null;
 }): BookRow {
   if (!args.disposal) {
     return { marginPence: null, vatDuePence: null, vatPosition: null, inStock: true };
   }
-  const position = vatPositionFor(args.disposal.kind);
+  const position = vatPositionFor(args.disposal.kind, args.vatStatus);
   const sale = args.disposal.salePence;
   if (sale == null || !hasSalePrice(args.disposal.kind)) {
     // No consideration, so no margin to speak of. Scrapped and returned are not sales; own use is a
@@ -161,8 +176,20 @@ export function bookRow(args: {
   const margin = sale - args.purchasePence;
   return {
     marginPence: margin,
-    // FLOORED HERE AND NOWHERE ELSE.
-    vatDuePence: position === 'margin' ? Math.round(Math.max(0, margin) / VAT_FRACTION_DIVISOR) : null,
+    /**
+     * TWO SCHEMES, TWO BASES, AND ONLY ONE OF THEM HAS A FLOOR.
+     *
+     *   margin      VAT on the MARGIN, floored at zero per car. No VAT is due on a loss and losses
+     *               cannot offset one another. FLOORED HERE AND NOWHERE ELSE — marginPence above
+     *               keeps the loss, because a book showing zero would hide what this exists to show.
+     *   qualifying  VAT on the WHOLE CONSIDERATION, and NOT floored. Input tax was reclaimed when
+     *               the car was bought, so output tax is due on the full selling price whether the
+     *               car made money or lost it. Flooring this on the margin would be the same
+     *               arithmetic as a margin car and wrong by a sixth of the purchase price.
+     */
+    vatDuePence: position === 'margin' ? Math.round(Math.max(0, margin) / VAT_FRACTION_DIVISOR)
+      : position === 'qualifying' ? Math.round(sale / VAT_FRACTION_DIVISOR)
+      : null,
     vatPosition: position,
     inStock: false,
   };

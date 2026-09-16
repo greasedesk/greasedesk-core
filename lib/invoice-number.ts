@@ -3,6 +3,8 @@
  * THE chokepoints for invoice numbering — nowhere else mints or renders a number.
  *
  *  assignInvoiceNumber(tx, groupId)   → mints the next CHARGEABLE sequence value.
+ *  assignVehicleSaleNumber(tx, groupId) → mints the next VEHICLE SALE value (a car sold out of
+ *    stock — a second origin, hanging off a StockDisposal rather than a job card).
  *  assignWarrantyNumber(tx, groupId)  → mints the next WARRANTY sequence value (comeback £0
  *    invoices). Fully independent counter — a comeback never burns a chargeable number, and
  *    both series stay independently gapless.
@@ -42,6 +44,26 @@ export async function assignHistoricalNumber(tx: Prisma.TransactionClient, group
     RETURNING "historical_last_value";
   `;
   return Number(rows[0].historical_last_value);
+}
+
+/**
+ * The FIFTH counter: the sale of a car out of stock. Independent of every other for the reason the
+ * historical one is — selling a car must never advance the garage's chargeable counter — and because
+ * these documents have a SECOND ORIGIN: they hang off a StockDisposal, not a job card, so there is
+ * no card whose number they could inherit.
+ *
+ * NOT a signal about VAT. A margin-scheme car and a qualifying one both mint here and are taxed
+ * differently; Invoice.vat_position carries that, and nothing may infer it from the series.
+ */
+export async function assignVehicleSaleNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
+  const rows = await tx.$queryRaw<Array<{ vehicle_sale_last_value: number | bigint }>>`
+    INSERT INTO "InvoiceSequence" ("group_id", "vehicle_sale_last_value")
+    VALUES (${groupId}, 1)
+    ON CONFLICT ("group_id") DO UPDATE
+      SET "vehicle_sale_last_value" = "InvoiceSequence"."vehicle_sale_last_value" + 1, "updated_at" = now()
+    RETURNING "vehicle_sale_last_value";
+  `;
+  return Number(rows[0].vehicle_sale_last_value);
 }
 
 export async function assignWarrantyNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
@@ -99,4 +121,71 @@ export function formatInvoiceNumber(fmt: InvoiceNumberFormat, sequenceValue: num
     fy = `${fyDigits === 2 ? y.slice(-2) : y}-`;
   }
   return `${fmt.prefix || ''}${fy}${padded}`;
+}
+
+// ── WHICH COUNTER AND WHICH PREFIX, FOR EVERY SERIES ────────────────────────────────────────────
+/**
+ * THE SERIES, AS VALUES. Matches the InvoiceSeries pg_enum; `seriesNumbering` below is a Record over
+ * this union, so adding a series without giving it a counter and a prefix is a COMPILE error rather
+ * than a silent fallthrough.
+ *
+ * That fallthrough was real: the prefix used to be a ternary chain ending in `invoice_prefix`, so any
+ * series it did not name would have rendered under the CHARGEABLE prefix while burning its own
+ * counter — a document that looks like a garage invoice and is numbered from somewhere else. Nobody
+ * would have found that from the number.
+ */
+export const INVOICE_SERIES = ['chargeable', 'warranty', 'historical', 'vehicle_sale'] as const;
+export type InvoiceSeriesName = (typeof INVOICE_SERIES)[number];
+
+/** The tenant's numbering settings — the only Group columns any of this reads. */
+export type NumberingProfile = {
+  invoice_prefix: string;
+  invoice_warranty_prefix: string;
+  invoice_historical_prefix: string;
+  invoice_vehicle_sale_prefix: string;
+  invoice_pad_width: number;
+  invoice_fy_digits: number;
+  fy_start_month: number;
+};
+
+const seriesNumbering: Record<InvoiceSeriesName, {
+  assign: (tx: Prisma.TransactionClient, groupId: string) => Promise<number>;
+  prefix: (g: NumberingProfile) => string;
+}> = {
+  chargeable: { assign: assignInvoiceNumber, prefix: (g) => g.invoice_prefix },
+  warranty: { assign: assignWarrantyNumber, prefix: (g) => g.invoice_warranty_prefix },
+  historical: { assign: assignHistoricalNumber, prefix: (g) => g.invoice_historical_prefix },
+  vehicle_sale: { assign: assignVehicleSaleNumber, prefix: (g) => g.invoice_vehicle_sale_prefix },
+};
+
+/** Which prefix a series renders under. Pure, so a gate can pin all four without a database. */
+export function prefixForSeries(series: InvoiceSeriesName, g: NumberingProfile): string {
+  return seriesNumbering[series].prefix(g);
+}
+
+/**
+ * MINT A NUMBER FOR ANY SERIES — one path, whatever the document's origin.
+ *
+ * A vehicle sale hangs off a StockDisposal and a garage invoice off a job card, and the numbering
+ * must not care: two origins reaching for their own copy of this is how a counter and a prefix drift
+ * out of step. MUST run inside the caller's transaction, like the assigners it calls.
+ */
+export async function mintSeriesNumber(
+  tx: Prisma.TransactionClient,
+  groupId: string,
+  series: InvoiceSeriesName,
+  g: NumberingProfile,
+  issuedAt: Date,
+): Promise<{ sequenceValue: number; number: string }> {
+  const sequenceValue = await seriesNumbering[series].assign(tx, groupId);
+  return {
+    sequenceValue,
+    number: formatInvoiceNumber({
+      prefix: prefixForSeries(series, g),
+      padWidth: g.invoice_pad_width,
+      fyDigits: g.invoice_fy_digits,
+      fyStartMonth: g.fy_start_month,
+      issuedAt,
+    }, sequenceValue),
+  };
 }

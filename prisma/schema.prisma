@@ -113,6 +113,12 @@ enum InvoiceSeries {
   // read names `series: 'chargeable'`, so a historical entry can never re-declare output tax
   // already declared elsewhere.
   historical
+  // VEHICLE_SALE: the sale of a car out of stock. A SECOND ORIGIN — this document hangs off a
+  // StockDisposal, not a job card — and its own counter, for the reason the third one exists: a car
+  // sale must never advance the chargeable counter. The VAT treatment is not implied by the series:
+  // a margin-scheme car and a qualifying one are both vehicle_sale and are taxed differently, which
+  // is what Invoice.vat_position records.
+  vehicle_sale
 }
 
 // Payment-method clearance behaviour: instant = no window (cash in the till); windowed = the
@@ -308,6 +314,7 @@ model Group {
   // Historical-series prefix. Deliberately distinct so a historical number can never be mistaken
   // for a VAT invoice number at a glance, in the list or on a document.
   invoice_historical_prefix String   @default("H")
+  invoice_vehicle_sale_prefix String @default("VS")
   invoice_credit_note_prefix String  @default("CN")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
   invoice_email_footer      Boolean  @default(true)
@@ -3245,6 +3252,13 @@ model Invoice {
   /// constraint comes later, in a migration containing nothing but foreign keys, once the code that
   /// writes this is deployed. NULL on every garage invoice, which is all of them today.
   stock_disposal_id String?
+  /// WHICH VAT TREATMENT THIS DOCUMENT CARRIES — 'margin' | 'qualifying' | 'none' | 'unsettled'
+  /// (lib/stock::VatPosition), frozen at issue like every other snapshot on this row. NOT implied by
+  /// the series: a margin-scheme car and a qualifying one are both vehicle_sale and are taxed
+  /// differently, and what prints on the document differs too — a margin sale may not show VAT
+  /// separately at all. TEXT, not a second enum: a pg_enum drifting from its TypeScript union has
+  /// already cost a 500 here, and the union is the single authority. NULL on every garage invoice.
+  vat_position String?
 
   // PROVENANCE. external_ref carries the ORIGINAL system's number (Xero) — the GreaseDesk series
   // is still minted normally and stays gapless; on imported invoices the UI shows external_ref as
@@ -3626,6 +3640,9 @@ model InvoiceSequence {
   /// the chargeable counter. HMRC VATREC13040 requires a credit note to carry its own identifying
   /// number; sharing the invoice sequence would make the two indistinguishable in the series.
   credit_note_last_value Int     @default(0)
+  /// VEHICLE SALE counter — the fourth independent series. Same guarantees as the other three:
+  /// selling a car must never advance the garage's chargeable number.
+  vehicle_sale_last_value Int    @default(0)
   updated_at            DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)

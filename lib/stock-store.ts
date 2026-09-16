@@ -683,7 +683,9 @@ export async function stockBook(groupId: string, periodStart: Date, periodEnd: D
     const disposed = section === 'disposed' && it.disposal
       ? { kind: it.disposal.kind as DisposalKind, salePence: it.disposal.sale_pence }
       : null;
-    const row = bookRow({ purchasePence: it.purchase_pence, disposal: disposed });
+    // vat_status rides along because the SCHEME decides the basis, not just the kind — a qualifying
+    // car owes VAT on the whole price, a margin car on the margin. See lib/stock::vatPositionFor.
+    const row = bookRow({ purchasePence: it.purchase_pence, vatStatus: it.vat_status as VatStatus, disposal: disposed });
     const entry: BookEntry = {
       stockItemId: it.id,
       registration: it.vehicle?.registration ?? null,

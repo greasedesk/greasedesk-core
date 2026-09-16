@@ -121,6 +121,7 @@ try {
   check('  …and bookRow cannot see costs at all, by signature', (() => {
     const src = readFileSync('lib/stock.ts', 'utf8');
     const fn = src.slice(src.indexOf('export function bookRow'), src.indexOf('\n}', src.indexOf('export function bookRow')));
+    // vatStatus joined the arguments when the qualifying scheme landed; costs still may not.
     return !/cost/i.test(fn);
   })(), 'a later reader netting prep off the margin would have to change the arguments — a visible edit, not an invisible one');
 
@@ -146,15 +147,15 @@ try {
 
   /** ── THE FLOOR IS A VAT RULE, AND THE BOOK STILL SHOWS THE LOSS ───────────────────────────── */
   console.log('\n— a loss-making car —');
-  const loser = S.bookRow({ purchasePence: 400000, disposal: { kind: 'sold', salePence: 300000 } });
+  const loser = S.bookRow({ purchasePence: 400000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } });
   check('the book shows the real loss', loser.marginPence === -100000, gbp(loser.marginPence));
   check('  …and no VAT is owed on it', loser.vatDuePence === 0, gbp(loser.vatDuePence));
   check('  …the floor is on the VAT, never on the reported margin', loser.marginPence < 0 && loser.vatDuePence === 0,
     'a book showing zero instead of −£1,000 would hide the thing this feature exists to surface');
   check('  …and two losses cannot offset a profit', (() => {
     const rows = [
-      S.bookRow({ purchasePence: 400000, disposal: { kind: 'sold', salePence: 300000 } }),
-      S.bookRow({ purchasePence: 100000, disposal: { kind: 'sold', salePence: 400000 } }),
+      S.bookRow({ purchasePence: 400000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } }),
+      S.bookRow({ purchasePence: 100000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 400000 } }),
     ];
     const due = rows.reduce((a, r) => a + (r.vatDuePence ?? 0), 0);
     return due === Math.round(300000 / 6);
@@ -163,7 +164,7 @@ try {
   /** ── THREE OF THE FIVE WAYS OUT ARE NOT SALES ─────────────────────────────────────────────── */
   console.log('\n— how a car left, which is not always a sale —');
   for (const k of ['scrapped', 'returned']) {
-    const r = S.bookRow({ purchasePence: 125000, disposal: { kind: k, salePence: null } });
+    const r = S.bookRow({ purchasePence: 125000, vatStatus: 'margin', disposal: { kind: k, salePence: null } });
     check(`  …${k}: no supply, so no VAT and no margin`, r.vatPosition === 'none' && r.vatDuePence === null
       && r.marginPence === null, 'a scrapped car did not sell for nothing — it did not sell');
   }
@@ -193,7 +194,7 @@ try {
   check('a sale price handed to a SCRAPPED disposal is dropped', scrapRow?.sale_pence === null,
     `stored ${scrapRow?.sale_pence === null ? 'null' : scrapRow?.sale_pence} — a scrapped car did not sell for £500, it did not sell`);
 
-  const ownUse = S.bookRow({ purchasePence: 125000, disposal: { kind: 'own_use', salePence: null } });
+  const ownUse = S.bookRow({ purchasePence: 125000, vatStatus: 'margin', disposal: { kind: 'own_use', salePence: null } });
   check('own use is recorded and marked UNSETTLED, with no figure', ownUse.vatPosition === 'unsettled'
     && ownUse.vatDuePence === null,
     'a deemed supply whose treatment we cannot state — any figure would be believed');

@@ -25,7 +25,7 @@ import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
 import { INTERNAL_STOCK_INVOICE_REFUSAL, isInternalStock } from '@/lib/stock-prep';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
-import { assignInvoiceNumber, assignWarrantyNumber, assignHistoricalNumber, formatInvoiceNumber } from '@/lib/invoice-number';
+import { mintSeriesNumber, type InvoiceSeriesName } from '@/lib/invoice-number';
 import { resolveCompanyIdentity, resolveBilledParty } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { dueDateFor } from '@/lib/account-terms';
@@ -37,7 +37,7 @@ const CARD_SELECT = {
   // The reading the car LEAVES on, for the due-items block: a target the car has already passed
   // must not print as still ahead of it. visitEndMileage decides in/out, so this file does not.
   odometer_out: true,
-  group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true } },
+  group: { select: { group_name: true, trading_name: true, company_number: true, vat_number: true, address: true, vat_registered: true, invoice_prefix: true, invoice_pad_width: true, invoice_fy_digits: true, fy_start_month: true, invoice_warranty_prefix: true, invoice_historical_prefix: true, invoice_vehicle_sale_prefix: true } },
   site: { select: { company_number: true, vat_number: true, address: true } },
   customer: { select: { name: true, address: true, account_terms_days: true, account_name: true, account_address: true } },
   // mot_expiry rides along because it PRINTS on the due-items block and must freeze with it.
@@ -48,28 +48,18 @@ async function createInvoiceRow(
   tx: Prisma.TransactionClient,
   jobCardId: string,
   groupId: string,
-  series: 'chargeable' | 'warranty' | 'historical',
+  series: InvoiceSeriesName,
 ): Promise<string> {
   const card = (await tx.jobCard.findUnique({ where: { id: jobCardId }, select: CARD_SELECT })) as any;
   if (!card) throw new Error('CARD_NOT_FOUND');
 
   const identity = resolveCompanyIdentity(card.group, card.site);
   const issuedAt = new Date();
-  const seq = series === 'warranty' ? await assignWarrantyNumber(tx, groupId)
-    : series === 'historical' ? await assignHistoricalNumber(tx, groupId)
-    : await assignInvoiceNumber(tx, groupId);
-  const number = formatInvoiceNumber(
-    {
-      prefix: series === 'warranty' ? card.group.invoice_warranty_prefix
-        : series === 'historical' ? card.group.invoice_historical_prefix
-        : card.group.invoice_prefix,
-      padWidth: card.group.invoice_pad_width,
-      fyDigits: card.group.invoice_fy_digits,
-      fyStartMonth: card.group.fy_start_month,
-      issuedAt,
-    },
-    seq,
-  );
+  // ONE NUMBERING PATH FOR EVERY SERIES (lib/invoice-number::mintSeriesNumber). This used to be a
+  // ternary chain per counter and per prefix, ending in the chargeable prefix — so a series the chain
+  // did not name would have rendered as a garage invoice while burning its own counter. A vehicle
+  // sale mints through the same function from a different origin, and neither can drift.
+  const { sequenceValue: seq, number } = await mintSeriesNumber(tx, groupId, series, card.group, issuedAt);
 
   // Built BEFORE the row is created, from what is true at this instant — the open findings on this
   // car plus the DVSA MOT expiry as it stands today. Same tx, so it cannot describe a different
