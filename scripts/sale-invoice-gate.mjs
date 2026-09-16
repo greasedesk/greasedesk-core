@@ -273,6 +273,35 @@ try {
     invQ?.series === invA?.series && invQ?.vat_position === 'qualifying',
     `${invQ?.series}/${invQ?.vat_position} vs ${invA?.series}/${invA?.vat_position} — nothing may infer the tax from the series`);
 
+  console.log('\n— A CAR SALE IS NOT WORKSHOP REVENUE —');
+  /**
+   * LIVE ONCE THE BUTTON WAS USED, and caught before it was. The workshop ledger took every invoice
+   * in the period, so a sale's line — the car at full price, no trade cost — read as an uncosted part
+   * and raised gross margin by the whole price. Proved on the two sales minted just above, which are
+   * genuinely in this month's window, so the clause can fail.
+   */
+  const LEDGER = await import('/Users/hugh/Developer/greasedesk-core/lib/charged-labour.ts');
+  check('the ledger rule states EVERY series, so a fifth cannot arrive by default',
+    JSON.stringify(Object.keys(LEDGER.IN_WORKSHOP_LEDGER).sort()) === JSON.stringify([...NUM.INVOICE_SERIES].sort()),
+    Object.entries(LEDGER.IN_WORKSHOP_LEDGER).map(([k, v]) => `${k}=${v}`).join(', '));
+  const now0 = new Date();
+  const monthFrom = new Date(Date.UTC(now0.getUTCFullYear(), now0.getUTCMonth(), 1));
+  const monthTo = new Date(Date.UTC(now0.getUTCFullYear(), now0.getUTCMonth() + 1, 1));
+  const ledgerSites = (await prisma.site.findMany({ where: { group_id: ZZ_GROUP }, select: { id: true } })).map((x) => x.id);
+  const salesInWindow = await prisma.invoice.findMany({
+    where: { id: { in: [idA, idQ].filter(Boolean) }, date_issued: { gte: monthFrom, lt: monthTo } },
+    select: { id: true, series: true, lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true } } },
+  });
+  check('the fixture sales really are in this month’s window', salesInWindow.length === 2, `${salesInWindow.length} of 2`);
+  const ledger = await LEDGER.fetchLedgerInvoices({ groupId: ZZ_GROUP, siteIds: ledgerSites, from: monthFrom, to: monthTo });
+  check('no car sale reaches the workshop ledger', !ledger.some((i) => i.series === 'vehicle_sale'),
+    `${ledger.filter((i) => i.series === 'vehicle_sale').length} vehicle_sale invoice(s) in the ledger read`);
+  const rev = LEDGER.labourGrossMargin(ledger);
+  const revIfIncluded = LEDGER.labourGrossMargin([...ledger, ...salesInWindow]);
+  check('…so the P&L is not raised by the sales — and this is what it would have been',
+    revIfIncluded.grossMargin - rev.grossMargin >= 800000 + 666667 - 1,
+    `gross margin would have risen by ${gbp(revIfIncluded.grossMargin - rev.grossMargin)} on two cars with no cost of sale`);
+
   console.log('\n— WHAT IT REFUSES —');
   const refuse = async (label, cardId, re) => {
     let msg = null;

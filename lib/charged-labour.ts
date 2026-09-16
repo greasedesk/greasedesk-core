@@ -16,6 +16,30 @@ import { prisma } from '@/lib/db';
 import { effectiveIssueDateWhere, computeInvoiceLinePennies } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
 import { notVoided } from '@/lib/invoice-void';
+import type { InvoiceSeriesName } from '@/lib/invoice-number';
+
+/**
+ * ── WHICH SERIES ARE WORKSHOP LEDGER, EVERY ONE STATED ─────────────────────────────────────────
+ *
+ * A CAR SALE IS NOT WORKSHOP REVENUE. Its line is the car, at the full price, with no trade cost —
+ * so in this ledger it read as an uncosted part and raised gross margin by the WHOLE sale price. One
+ * £4,000 car would have added roughly £4,000 to the profit strip and the effective hourly rate, while
+ * the stock book reported the same car with its real margin: two different profits for one sale.
+ * The cost of a car lives in the stock book, and so does its margin. Introduced by the sale entry
+ * point (1af3e6b) and fixed before any car was sold through it.
+ *
+ * A Record over the series union, not a `not: 'vehicle_sale'`: a fifth series fails to COMPILE here
+ * until somebody decides whether it is workshop revenue, rather than arriving in the P&L by default.
+ * Warranty stays in (its parts cost is real drag; its revenue is skipped by labourGrossMargin) and
+ * historical stays in (imported work is the garage's own past revenue).
+ */
+export const IN_WORKSHOP_LEDGER: Record<InvoiceSeriesName, boolean> = {
+  chargeable: true,
+  warranty: true,
+  historical: true,
+  vehicle_sale: false,
+};
+const LEDGER_SERIES = (Object.keys(IN_WORKSHOP_LEDGER) as InvoiceSeriesName[]).filter((k) => IN_WORKSHOP_LEDGER[k]);
 
 export type LedgerInvoice = {
   series: string;
@@ -31,7 +55,7 @@ export type LedgerInvoice = {
  *  row by the 2026-07-12 backfill + every new snapshot. */
 export function fetchLedgerInvoices(ctx: { groupId: string; siteIds: string[]; from: Date; to: Date }): Promise<LedgerInvoice[]> {
   return prisma.invoice.findMany({
-    where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, ...notVoided, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
+    where: { group_id: ctx.groupId, site_id: { in: ctx.siteIds }, series: { in: LEDGER_SERIES }, ...notVoided, ...effectiveIssueDateWhere(ctx.from, ctx.to) },
     select: { series: true, id: true, invoice_number: true, lines: { select: { item_type: true, qty: true, unit_price: true, unit_cost: true, labour_hours: true, labour_outsourced: true, catalogue_item_id: true } } },
   }) as unknown as Promise<LedgerInvoice[]>;
 }
