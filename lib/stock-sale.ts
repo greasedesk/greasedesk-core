@@ -38,7 +38,7 @@ import { writeAudit } from '@/lib/audit';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import {
-  buyerRefusal, isOpenPrepStatus, PICKED_BUYER_NO_ADDRESS, saleLine, saleLineDescription,
+  buyerRefusal, isOpenPrepStatus, PICKED_BUYER_NO_ADDRESS, SALE_DATE_IN_FUTURE_REFUSAL, saleLine, saleLineDescription,
   type BuyerInput, type OpenPrepCard,
 } from '@/lib/stock-sale-rules';
 
@@ -82,6 +82,9 @@ export async function sellCar(a: {
   const price = typeof a.salePence === 'number' ? a.salePence : Number(a.salePence);
   if (!Number.isInteger(price) || price <= 0) return { refused: 'Say what the car sold for.' };
   if (!(a.soldAt instanceof Date) || Number.isNaN(a.soldAt.getTime())) return { refused: 'Say when the car was sold.' };
+  // DATE-GRAINED, UTC, like every document-date guard: a sale later today is not in the future.
+  const utcDay = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  if (utcDay(a.soldAt) > utcDay(new Date())) return { refused: SALE_DATE_IN_FUTURE_REFUSAL };
   const noBuyer = buyerRefusal(a.buyer as never);
   if (noBuyer) return { refused: noBuyer };
 

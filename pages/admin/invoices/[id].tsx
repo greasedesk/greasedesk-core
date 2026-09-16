@@ -34,6 +34,7 @@ import { vatPresentation, singleTotalPennies, MARGIN_SCHEME_STATEMENT } from '@/
 import { quoteRefund, refundConfirmationLines } from '@/lib/refund-quote';
 import { refundLines } from '@/lib/invoice-refund-state';
 import { RefundPanel } from '@/components/refund/RefundPanel';
+import { SALE_INVOICE_DATE_LOCKED } from '@/lib/stock-sale-rules';
 
 type Line = { description: string; qty: number; unitPricePennies: number; vatRate: number; netPennies: number };
 type Totals = { breakdown: Array<{ rate: number; netPennies: number; vatPennies: number }>; netPennies: number; vatPennies: number; grossPennies: number };
@@ -579,8 +580,12 @@ export default function InvoicePage(props: PageProps) {
         {/* A voided invoice's dates are historical fact — the endpoint refuses the edit, so the
             editor would only ever produce a 409. */}
         {/* A historical record's printed date is a fact about someone else's document. */}
-        {props.canManage && props.status !== 'void' && props.series !== 'historical' && (
+        {/* A car sale is dated by the sale — the endpoint refuses the edit, so say why instead. */}
+        {props.canManage && props.status !== 'void' && props.series !== 'historical' && props.series !== 'vehicle_sale' && (
           <DateIssuedEditor invoiceId={props.invoiceId} initial={props.dateIssued} t={t} onSaved={() => router.replace(router.asPath)} />
+        )}
+        {props.series === 'vehicle_sale' && props.status !== 'void' && (
+          <p className="text-xs text-muted mb-3" data-testid="sale-date-locked">{SALE_INVOICE_DATE_LOCKED}</p>
         )}
         {(props.status === 'paid' || props.status === 'paid_pending') && props.canManage && (
           <DatePaidEditor invoiceId={props.invoiceId} initial={props.datePaid} t={t} onSaved={() => router.replace(router.asPath)} />

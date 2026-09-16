@@ -70,6 +70,22 @@ export function buyerRefusal(b: Partial<{ customerId: unknown; name: unknown; ad
 export const PICKED_BUYER_NO_ADDRESS =
   'That customer has no address on file, and the invoice needs one. Add it to the customer, then sell.';
 
+/** A sale is a fact that has happened. The same guardrail as any document date. */
+export const SALE_DATE_IN_FUTURE_REFUSAL = 'A sale cannot be dated in the future.';
+
+/**
+ * ── THE SALE INVOICE IS DATED BY THE SALE, AND STAYS THAT WAY ───────────────────────────────────
+ *
+ * Two dates for one sale — the disposal in the stock book and the invoice's document date — can fall in
+ * different quarters: a car sold on the last Saturday of March and recorded on the Monday. That is a
+ * defect waiting for a quarter end. So the invoice takes its date FROM the disposal when it is minted,
+ * and the manager's "edit issue date" refuses on a car sale rather than letting the two part again with
+ * one click. Which of the two is the legal tax point is the accountant's call; that they agree is ours.
+ */
+export const SALE_INVOICE_DATE_LOCKED =
+  'This invoice is dated by the sale itself, so the stock book and the invoice fall in the same period. '
+  + 'Its date cannot be changed here.';
+
 export type OpenPrepCard = { id: string; status: string };
 
 /**

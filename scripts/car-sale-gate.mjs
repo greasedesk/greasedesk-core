@@ -193,6 +193,43 @@ try {
   const wipIds = (await prisma.jobCard.findMany({ where: WIP.wipCardsWhere([site.id]), select: { id: true } })).map((c) => c.id);
   check('  …and the sale card is not counted as work in progress', !wipIds.includes(A.cardId));
 
+  console.log('\n— THE INVOICE IS DATED BY THE SALE —');
+  /**
+   * TWO DATES FOR ONE SALE can fall in different quarters: sold on the Saturday, recorded on the Monday.
+   * The invoice now takes its DOCUMENT date from the disposal, and issued_at stays the mint instant.
+   */
+  const dated = await prisma.invoice.findUnique({ where: { id: A.invoiceId }, select: { date_issued: true, issued_at: true } });
+  check('the invoice’s document date IS the sale date', dated?.date_issued?.toISOString() === soldAt.toISOString(),
+    `document ${dated?.date_issued?.toISOString?.().slice(0, 10)}, sold ${soldAt.toISOString().slice(0, 10)}`);
+  check('  …while issued_at stays the moment it was actually minted', !!dated && dated.issued_at.toISOString().slice(0, 10) !== soldAt.toISOString().slice(0, 10),
+    `minted ${dated?.issued_at?.toISOString?.().slice(0, 10)} — the attestation is never moved`);
+  const future = await car();
+  const refFuture = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: future.itemId,
+    soldAt: new Date(Date.now() + 3 * 86_400_000), salePence: 500000, buyer: { name: `${PREFIX} Future Buyer`, address: '4 Tomorrow Lane' } });
+  check('a sale dated in the future refuses', 'refused' in refFuture && refFuture.refused === RULES.SALE_DATE_IN_FUTURE_REFUSAL,
+    'refused' in refFuture ? refFuture.refused : 'SOLD');
+
+  /** THE QUARTER BOUNDARY — the case the defect was about. Recorded today, sold last quarter: it belongs there. */
+  const { resolveRange } = await import(`${R}/lib/dashboard-periods.ts`);
+  const VS = await import(`${R}/lib/vat-summary.ts`);
+  const fy = (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { fy_start_month: true } }))?.fy_start_month ?? 4;
+  const lastQ = resolveRange({ preset: 'last_quarter' }, fy);
+  const thisQ = resolveRange({ preset: 'this_quarter' }, fy);
+  const lastQuarterEnd = new Date(lastQ.to.getTime() - 86_400_000);
+  const acct = await prisma.customer.create({ data: { group_id: ZZ_GROUP, site_id: site.id, name: `${PREFIX} Quarter Buyer`, address: '5 Year End Road', account_terms_days: 30 }, select: { id: true } });
+  const qEnd = await car();
+  const sEnd = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: qEnd.itemId, soldAt: lastQuarterEnd, salePence: 610000, buyer: { customerId: acct.id } });
+  const E = ids(sEnd);
+  const eInv = await prisma.invoice.findUnique({ where: { id: E.invoiceId }, select: { invoice_number: true, due_date: true, date_issued: true } });
+  const inLast = (await VS.getVatSummary(ZZ_GROUP, [site.id], lastQ.from, lastQ.to)).marginScheme.rows.some((r) => r.invoiceNumber === eInv?.invoice_number);
+  const inThis = (await VS.getVatSummary(ZZ_GROUP, [site.id], thisQ.from, thisQ.to)).marginScheme.rows.some((r) => r.invoiceNumber === eInv?.invoice_number);
+  check('a car sold last quarter and recorded today is in LAST quarter’s VAT summary', inLast && !inThis,
+    `sold ${lastQuarterEnd.toISOString().slice(0, 10)}: last quarter ${inLast ? 'yes' : 'NO'}, this quarter ${inThis ? 'YES' : 'no'}`);
+  const dueDays = eInv?.due_date && eInv?.date_issued ? Math.round((eInv.due_date - eInv.date_issued) / 86_400_000) : null;
+  check('  …and an account buyer’s terms run from the SALE date, not the day it was typed in', dueDays === 30
+    && eInv.due_date.toISOString().slice(0, 10) === new Date(lastQuarterEnd.getTime() + 30 * 86_400_000).toISOString().slice(0, 10),
+    `due ${eInv?.due_date?.toISOString?.().slice(0, 10)}, ${dueDays} day(s) after the sale`);
+
   console.log('\n— A SALE TO SOMEONE ALREADY ON THE BOOKS —');
   const q = await car('qualifying');
   const known = await mkCustomer('Known Customer', '5 Regular Lane');
@@ -323,6 +360,20 @@ try {
   check('  …which prints as a margin sale: the statement, and no VAT line', shown.statement && shown.rateLines === 0,
     `statement ${shown.statement ? 'present' : 'ABSENT'}, ${shown.rateLines} VAT line(s)`);
   check('  …addressed to the Saturday buyer', shown.body.includes(`${PREFIX} Saturday Buyer`));
+  const locked = await page.locator('[data-testid="sale-date-locked"]').count();
+  // An UNPAID invoice shows no paid-date editor either, so any date input on this page would be the
+  // issue-date editor a car sale must not offer.
+  const dateInputs = await page.locator('input[type="date"]').count();
+  check('  …which says its date is set by the sale, and offers no date editor', locked === 1 && dateInputs === 0,
+    `${locked} lock note(s), ${dateInputs} date input(s)`);
+  const invId = page.url().split('/admin/invoices/')[1]?.split(/[?#]/)[0] ?? NONE;
+  const dateBefore = await prisma.invoice.findUnique({ where: { id: invId }, select: { date_issued: true } });
+  const tryEdit = await ctx.request.post(`${origin}/api/invoice-date-issued`, { data: { invoiceId: invId, dateIssued: '2026-09-01' } });
+  const afterEdit = await prisma.invoice.findUnique({ where: { id: invId }, select: { date_issued: true } });
+  /** THE ENDPOINT IS THE AUTHORITY, not the hidden button: a direct call must be refused too. */
+  check('the issue-date endpoint REFUSES to move a car sale’s date', tryEdit.status() === 409
+    && afterEdit?.date_issued?.toISOString() === dateBefore?.date_issued?.toISOString(),
+    `HTTP ${tryEdit.status()}, date ${afterEdit?.date_issued?.toISOString?.().slice(0, 10)} (was ${dateBefore?.date_issued?.toISOString?.().slice(0, 10)})`);
   const prepStill = await prisma.jobCard.findUnique({ where: { id: prep.id }, select: { status: true } });
   check('the prep card was left exactly as it was', prepStill?.status === 'accepted', String(prepStill?.status));
   await page.goto(`${origin}/admin/stock/${ui.itemId}`, { waitUntil: 'domcontentloaded' });

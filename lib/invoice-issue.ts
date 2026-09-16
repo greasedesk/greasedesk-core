@@ -55,6 +55,12 @@ async function createInvoiceRow(
   /** Columns only one origin has. Written in the SAME create as everything else, so a sale invoice
    *  can never exist for an instant without the treatment it is taxed under. */
   extra: { vat_position?: string; stock_disposal_id?: string } = {},
+  /**
+   * THE DOCUMENT'S DATE, when it is not the moment of minting. Only a car sale passes one — the date of the
+   * disposal — so the invoice and the stock book fall in the same period. issued_at stays the mint instant:
+   * it is the attestation of when the document was created, and is never moved.
+   */
+  documentDate?: Date,
 ): Promise<string> {
   const card = (await tx.jobCard.findUnique({ where: { id: jobCardId }, select: CARD_SELECT })) as any;
   if (!card) throw new Error('CARD_NOT_FOUND');
@@ -82,14 +88,15 @@ async function createInvoiceRow(
       sequence_value: seq,
       invoice_number: number,
       issued_at: issuedAt,
-      date_issued: issuedAt, // the DOCUMENT date starts as the mint date; manager-editable thereafter
+      date_issued: documentDate ?? issuedAt, // the DOCUMENT date: the mint date, or the sale's own date for a car sale
       // FROZEN HERE, once, from the terms as they stand at this moment (lib/account-terms).
       // CHARGEABLE ONLY: a warranty invoice is settled at £0 and collects nothing, and a historical
       // import records work already paid for elsewhere — neither can fall due, so neither gets a
       // date that would put it on a chase list.
       // CAN IT BE OWED (lib/invoice-series-scope::IS_DEBT) — so a car sold to an ACCOUNT customer
       // gets their terms and can fall overdue, and a retail buyer, like retail workshop work, gets none.
-      due_date: allows(IS_DEBT, series) ? dueDateFor(card.customer, issuedAt) : null,
+      // Terms run from the DOCUMENT date — a sale recorded on Monday for Saturday falls due from Saturday.
+      due_date: allows(IS_DEBT, series) ? dueDateFor(card.customer, documentDate ?? issuedAt) : null,
       company_name_snapshot: identity.name,
       // FROZEN AT ISSUE, like every other snapshot on this row. A rebrand must not rewrite the name
       // on documents already in customers' hands.
@@ -425,8 +432,8 @@ export async function issueVehicleSaleInvoice(tx: Prisma.TransactionClient, jobC
 
   const item = (await tx.stockItem.findUnique({
     where: { id: card!.sale_of_stock_item_id as string },
-    select: { id: true, group_id: true, vat_status: true, disposal: { select: { id: true, kind: true } } },
-  })) as { id: string; group_id: string; vat_status: string; disposal: { id: string; kind: string } | null } | null;
+    select: { id: true, group_id: true, vat_status: true, disposal: { select: { id: true, kind: true, disposed_at: true } } },
+  })) as { id: string; group_id: string; vat_status: string; disposal: { id: string; kind: string; disposed_at: Date } | null } | null;
   // TENANT SCOPE ON THE WAY IN, not assumed from the card: the id is a plain column with no foreign
   // key yet, so nothing in the database stops it naming another tenant's car.
   if (!item || item.group_id !== groupId) throw new Error(`IMPORT_ASSERT:${NOT_A_SALE_CARD_REFUSAL}`);
@@ -435,10 +442,12 @@ export async function issueVehicleSaleInvoice(tx: Prisma.TransactionClient, jobC
   if (!hasSalePrice(kind)) throw new Error(`IMPORT_ASSERT:${NOT_A_SALE_DISPOSAL_REFUSAL(kind)}`);
 
   const vatPosition = vatPositionFor(kind, item.vat_status as VatStatus);
+  // DATED BY THE DISPOSAL — read from it here, not handed in by the caller, so there is one source for the
+  // sale's date and nothing that could pass a second one.
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'vehicle_sale', {
     vat_position: vatPosition,
     stock_disposal_id: item.disposal.id,
-  });
+  }, item.disposal.disposed_at);
   // TYPED, not `as any`: the cast is where the compiler stops noticing a forgotten select, and this
   // row is handed straight to the freeze.
   const inv = await tx.invoice.findUnique({

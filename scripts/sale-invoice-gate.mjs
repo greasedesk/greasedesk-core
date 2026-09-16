@@ -245,7 +245,9 @@ try {
   // A sold MARGIN car with a sale card.
   const vA = await mkVeh('SALEA'); const itA = await mkItem(vA.id, 'margin');
   await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: itA.id,
-    disposed_at: new Date('2026-06-01'), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
+    // DATED TODAY: since the sale invoice takes its document date from the disposal, a June disposal would
+    // mint a June invoice and put these sales outside the month the ledger clauses below read.
+    disposed_at: new Date(), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
   const cardA = await mkCard(vA.id, { sale_of_stock_item_id: itA.id });
 
   let idA = null, errA = null;
@@ -265,7 +267,7 @@ try {
   // A QUALIFYING car: same series, different treatment.
   const vQ = await mkVeh('SALEQ'); const itQ = await mkItem(vQ.id, 'qualifying');
   await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: itQ.id,
-    disposed_at: new Date('2026-06-02'), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
+    disposed_at: new Date(), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
   const cardQ = await mkCard(vQ.id, { sale_of_stock_item_id: itQ.id });
   const idQ = await prisma.$transaction((tx) => ISS.issueVehicleSaleInvoice(tx, cardQ.id, ZZ_GROUP), { timeout: 20000 });
   const invQ = await prisma.invoice.findUnique({ where: { id: idQ }, select: { series: true, vat_position: true } });
@@ -440,9 +442,13 @@ try {
     // broken code the compiler would reject, but a clause that cannot fail is not a clause.
     check(`${name} reads the shared rule, in CODE and not in a comment`,
       /from '@\/lib\/margin-scheme'/.test(c) && /vatPresentation|singleTotalPennies|MARGIN_SCHEME_STATEMENT/.test(c), f);
+    // NARROWED 2026-09-16 to the lines that DECIDE the presentation. The whole-file version was satisfied only
+    // while nothing else on the page named the series — and the car-sale date lock legitimately does. What must
+    // never happen is the VAT decision reading the series; that is what is asserted.
+    const deciding = c.split('\n').filter((l) => /vatPresentation\(|margin_scheme/.test(l));
     check(`  …and decides nothing about VAT from the series itself`,
-      !/series\s*===\s*['"]vehicle_sale['"]/.test(c),
-      'a margin car and a qualifying one are both vehicle_sale');
+      deciding.length > 0 && !deciding.some((l) => /\bseries\b/.test(l)),
+      `${deciding.length} deciding line(s) — a margin car and a qualifying one are both vehicle_sale`);
   }
   /**
    * THE VAT COLUMN GOES WITH THE TOTALS. A row reading "20%" beside a margin total is the same false

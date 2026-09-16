@@ -16,6 +16,7 @@ import { canManageSite } from '@/lib/admin-guard';
 import { writeAudit } from '@/lib/audit';
 import { validateIssueDate } from '@/lib/invoice';
 import { refuseIfVoid } from '@/lib/invoice-void';
+import { SALE_INVOICE_DATE_LOCKED } from '@/lib/stock-sale-rules';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -36,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const invoice = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: user.group_id },
     select: {
-      id: true, status: true, site_id: true, job_card_id: true, invoice_number: true,
+      id: true, status: true, site_id: true, job_card_id: true, invoice_number: true, series: true,
       date_issued: true, issued_at: true,
       job_card: { select: { start_at: true } },
     },
@@ -45,6 +46,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // RESURRECTION GUARD. A void is a retained document, not a draft — nothing may bring it back.
   const voided = refuseIfVoid(invoice);
   if (voided) return res.status(409).json(voided);
+  // A CAR SALE IS DATED BY THE SALE. Moving the invoice's date would let it fall in a different period from
+  // the disposal in the stock book — the two-date defect this closes. Refused before any permission question,
+  // because the answer is the same for everyone.
+  if (invoice.series === 'vehicle_sale') return res.status(409).json({ message: SALE_INVOICE_DATE_LOCKED });
   const vis = await getVisibility(user.id as string);
   if (!canManageSite(vis, invoice.site_id)) return res.status(403).json({ message: 'Only a manager or admin can make this change.' });
 
