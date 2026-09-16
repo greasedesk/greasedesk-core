@@ -20,6 +20,7 @@ import { SOURCE_RULES, type PurchaseSource } from '@/lib/purchase-model';
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import { MISSING_COST_KINDS } from '@/lib/stock-projection';
 import { STOCK_COST_KINDS, STOCK_COST_LABELS, type StockCostKind } from '@/lib/stock-cost';
+import { FROZEN_DETAIL_NOTE, PREP_EXPAND_THRESHOLD } from '@/lib/stock-prep';
 import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
 const money = (p: number) => `£${(p / 100).toFixed(2)}`;
@@ -45,6 +46,11 @@ type Detail = {
   servicesPence: number; vatStatus: string; source: string; mileageWarranted: boolean | null;
   projectedSalePence: number | null;
   prep: { partsPence: number; unknownCostLines: number; labourLines: number; cards: number };
+  prepDetail: null | { mode: 'live'; groups: Array<{
+      cardId: string; createdAt: string; subtotalPence: number; labourLines: number; unknownCostLines: number;
+      lines: Array<{ description: string; itemType: string; qty: number; unitCostPence: number | null;
+        linePence: number | null; excludedBecause: string | null }>;
+    }> } | { mode: 'frozen'; rows: Array<{ kind: string; description: string; amountPence: number; jobCardId: string | null }> };
   costRows: { id: string; kind: string; description: string; amountPence: number; incurredOn: string; vatTreatment: string; reversesId: string | null }[];
   costs: { netPence: number; reclaimablePence: number; costPence: number; grossOutPence: number; creditedPence: number; rows: number };
   projection: null | {
@@ -63,6 +69,7 @@ export default function StockCarPage() {
   const [form, setForm] = useState({ acquiredAt: '', purchase: '', premium: '', services: '', warranted: 'unknown', projected: '' });
   const [cost, setCost] = useState({ kind: 'delivery_in' as StockCostKind, description: '', amount: '', incurredOn: '', vatTreatment: 'standard_not_recoverable' });
   const [credit, setCredit] = useState<{ id: string; amount: string; on: string } | null>(null);
+  const [openCards, setOpenCards] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -137,6 +144,8 @@ export default function StockCarPage() {
     incurredOn: credit.on,
   }, () => setCredit(null));
 
+  /** The live line groups, or none when the car has gone (then the frozen rows render instead). */
+  const liveGroups = d?.prepDetail?.mode === 'live' ? d.prepDetail.groups : [];
   const input = 'mt-1 w-full min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink';
   const sold = !!d?.disposedAt;
 
@@ -200,6 +209,90 @@ export default function StockCarPage() {
                   <span className="text-danger" data-testid="prep-unknown"> {d.prep.unknownCostLines} line(s) have no trade cost recorded, so the figure is a floor, not a total.</span>
                 )}
               </p>
+
+              {/* ── THE LINES THEMSELVES ─────────────────────────────────────────────────────────
+                  Grouped by CARD, because a card is the unit of work and thirty lines across five
+                  cards read as five things. Collapsed past a threshold so the page stays readable as
+                  a car accumulates work over months. */}
+              {d.prepDetail?.mode === 'live' && d.prepDetail.groups.length > 0 && (
+                <div className="mt-3 space-y-2" data-testid="prep-lines">
+                  {liveGroups.map((grp, gi) => {
+                    /* BELOW THE THRESHOLD everything is open: collapsing two cards is chrome for no
+                       gain. At or above it they arrive summarised and the reader opens what they want. */
+                    const open = openCards[grp.cardId] ?? (liveGroups.length < PREP_EXPAND_THRESHOLD);
+                    return (
+                      <div key={grp.cardId} className="rounded-lg border border-line" data-testid={`prep-card-${gi}`}>
+                        <button type="button" className="w-full flex items-center justify-between gap-2 p-2 text-left"
+                          data-testid={`prep-card-toggle-${gi}`}
+                          onClick={() => setOpenCards((o) => ({ ...o, [grp.cardId]: !open }))}>
+                          <span className="text-sm text-ink">
+                            <span aria-hidden className="text-muted mr-1">{open ? '▾' : '▸'}</span>
+                            {iso(grp.createdAt)}
+                            {/* A REFERENCE NOBODY CAN FOLLOW IS DECORATION. It lands on the workshop
+                                screen, which is where the work was. */}
+                            <a href={`/admin/jobcards/${grp.cardId}`} onClick={(e) => e.stopPropagation()}
+                              className="ml-2 font-mono text-xs underline text-accent"
+                              data-testid={`prep-card-link-${gi}`}>card {grp.cardId.slice(0, 8)}</a>
+                          </span>
+                          <span className="text-sm text-ink tabular-nums shrink-0">{money(grp.subtotalPence)}</span>
+                        </button>
+                        {open && (
+                          <table className="w-full text-sm border-t border-line">
+                            <tbody>
+                              {grp.lines.map((l, i) => (
+                                <tr key={i} className="border-b border-line/40 last:border-0" data-testid={`prep-line-${gi}-${i}`}>
+                                  <td className="py-1.5 px-2">
+                                    <span className={l.excludedBecause ? 'text-muted' : 'text-ink'}>{l.description}</span>
+                                    <span className="ml-2 text-xs text-muted">×{l.qty}</span>
+                                    {/* THE REASON IN PLACE — which line is holding the figure down,
+                                        not merely that some line is. */}
+                                    {l.excludedBecause && (
+                                      <span className="block text-[11px] text-muted" data-testid={`prep-line-why-${gi}-${i}`}>
+                                        {l.excludedBecause}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right tabular-nums whitespace-nowrap">
+                                    {l.linePence === null
+                                      ? <span className="text-muted">—</span>
+                                      : l.linePence === 0
+                                        ? <span className="text-muted">not costed</span>
+                                        : <span className="text-ink">{money(l.linePence)}</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* A SOLD CAR SHOWS CARD-LEVEL TOTALS ONLY, and says why — the freeze rule holding. */}
+              {d.prepDetail?.mode === 'frozen' && (
+                <div className="mt-3" data-testid="prep-frozen">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {d.prepDetail.rows.map((r, i) => (
+                        <tr key={i} className="border-b border-line/40 last:border-0">
+                          <td className="py-1.5"><span className="text-ink">{r.description}</span>
+                            {r.jobCardId && (
+                              <a href={`/admin/jobcards/${r.jobCardId}`} className="ml-2 font-mono text-xs underline text-accent">
+                                card {r.jobCardId.slice(0, 8)}
+                              </a>
+                            )}
+                          </td>
+                          <td className="py-1.5 text-right text-ink tabular-nums">{money(r.amountPence)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="mt-2 text-xs text-muted" data-testid="frozen-note">{FROZEN_DETAIL_NOTE}</p>
+                </div>
+              )}
+
               <p className="mt-1 text-xs text-muted" data-testid="labour-note">{LABOUR_AT_ZERO_NOTE}</p>
               <p className="mt-1 text-xs text-muted" data-testid="missing-costs">
                 Not yet recordable against a car at all: {MISSING_COST_KINDS.join(', ').toLowerCase()}.
@@ -215,21 +308,34 @@ export default function StockCarPage() {
               ) : (
                 <table className="w-full text-sm mt-2" data-testid="costs-table">
                   <tbody>
-                    {d.costRows.map((c) => (
+                    {/*
+                      CREDITS NEST UNDER THE COST THEY REVERSE, never as siblings. A reader scanning a
+                      column of amounts sees £250 and −£250 as two unrelated events; indented under
+                      their parent they read as one thing that happened and came back.
+
+                      A FULLY CREDITED COST STAYS VISIBLE while the car is in stock, struck through.
+                      In stock the reader is asking why the total is lower than the spend, and an
+                      invisible row cannot answer that. It vanishes from the FROZEN snapshot at
+                      disposal, where a £0 line would only invite "why is this here".
+                    */}
+                    {d.costRows.filter((c) => !c.reversesId).map((c) => {
+                      const credits = d.costRows.filter((x) => x.reversesId === c.id);
+                      const back = credits.reduce((a, x) => a + x.amountPence, 0);
+                      const fully = back >= c.amountPence && c.amountPence > 0;
+                      return (
+                      <>
                       <tr key={c.id} className="border-b border-line/50" data-testid={`cost-row-${c.id}`}>
                         <td className="py-1.5 text-muted tabular-nums w-24">{iso(c.incurredOn)}</td>
                         <td className="py-1.5">
-                          <span className="text-ink">{c.description}</span>
+                          <span className={fully ? 'text-muted line-through' : 'text-ink'}>{c.description}</span>
                           <span className="ml-2 text-xs text-muted">{STOCK_COST_LABELS[c.kind as StockCostKind] ?? c.kind}</span>
-                          {/* A CREDIT IS NOT A NEGATIVE NUMBER. It is a row that says what it reverses,
-                              and it reads that way here too. */}
-                          {c.reversesId && <span className="ml-2 text-xs font-semibold text-accent" data-testid="cost-is-credit">credited back</span>}
+                          {fully && <span className="ml-2 text-xs text-muted" data-testid={`fully-credited-${c.id}`}>credited in full</span>}
                         </td>
-                        <td className={`py-1.5 text-right tabular-nums ${c.reversesId ? 'text-accent' : 'text-ink'}`}>
-                          {c.reversesId ? '−' : ''}{money(c.amountPence)}
+                        <td className={`py-1.5 text-right tabular-nums ${fully ? 'text-muted line-through' : 'text-ink'}`}>
+                          {money(c.amountPence)}
                         </td>
                         <td className="py-1.5 pl-2 text-right w-20">
-                          {!sold && !c.reversesId && (
+                          {!sold && !fully && (
                             <button type="button" className="text-xs underline text-muted"
                               data-testid={`credit-${c.id}`}
                               onClick={() => setCredit({ id: c.id, amount: '', on: new Date().toISOString().slice(0, 10) })}>
@@ -238,7 +344,22 @@ export default function StockCarPage() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      {/* INDENTED, AND ATTACHED. A credit is not a negative number: it is a row that
+                          says what it reverses, and it reads that way here. */}
+                      {credits.map((x) => (
+                        <tr key={x.id} className="border-b border-line/50" data-testid={`credit-row-${x.id}`}>
+                          <td className="py-1.5 text-muted tabular-nums w-24 pl-4">{iso(x.incurredOn)}</td>
+                          <td className="py-1.5 pl-4">
+                            <span className="text-accent text-xs font-semibold mr-1">↳ credited back</span>
+                            <span className="text-muted text-xs">{x.description}</span>
+                          </td>
+                          <td className="py-1.5 text-right tabular-nums text-accent">−{money(x.amountPence)}</td>
+                          <td className="py-1.5 pl-2 w-20" />
+                        </tr>
+                      ))}
+                      </>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

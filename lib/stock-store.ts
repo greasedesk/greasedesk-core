@@ -14,7 +14,9 @@ import {
   parseWarranted, vinAtIntake,
 } from '@/lib/stock-intake';
 import { recordOdometerReadings } from '@/lib/odometer';
-import { prepCost, type PrepCost } from '@/lib/stock-prep';
+import {
+  groupPrepLines, prepCost, type PrepCardGroup, type PrepCost,
+} from '@/lib/stock-prep';
 import { projectStock, type Projection } from '@/lib/stock-projection';
 import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
 import {
@@ -757,6 +759,8 @@ export type StockDetail = {
   mileageWarranted: boolean | null;
   projectedSalePence: number | null;
   prep: PrepCost & { cards: number };
+  /** The lines themselves — live while in stock, frozen card-level rows once gone. */
+  prepDetail: PrepDetail | null;
   costRows: CostRow[];
   costs: CostTotals;
   projection: Projection | null;
@@ -783,6 +787,7 @@ export async function stockDetail(
   if (!it) return null;
   const prep = await liveStockCosts(groupId, it.id);
   const costRows = await stockCostRows(groupId, it.id);
+  const prepDetail = await stockPrepDetail(groupId, it.id);
   const costs = netCosts(costRows, opts.vatRegistered);
   // SAME CLOCK as the list: arrival, not purchase, and null for a car that has not turned up.
   const days = daysOnForecourt(
@@ -806,6 +811,7 @@ export async function stockDetail(
     mileageWarranted: it.mileage_warranted,
     projectedSalePence: it.projected_sale_pence,
     prep,
+    prepDetail,
     costRows,
     costs,
     // A SOLD car has no projection: the real sale price is the answer, and showing what we used to
@@ -1085,4 +1091,61 @@ export async function soldInPeriod(
   // Sorted by when they left — a period report reads chronologically, not by when they were bought.
   rows.sort((a, b) => a.disposedAt.getTime() - b.disposedAt.getTime());
   return { rows, summary: summariseSold(rows) };
+}
+
+
+/** One frozen row, as the book holds it. Card-level, because that is what disposal recorded. */
+export type FrozenCostRow = {
+  kind: string; description: string; amountPence: number; jobCardId: string | null;
+};
+
+export type PrepDetail =
+  | { mode: 'live'; groups: PrepCardGroup[] }
+  | { mode: 'frozen'; rows: FrozenCostRow[] };
+
+/**
+ * ── WHAT WENT INTO THIS CAR, IN DETAIL ──────────────────────────────────────────────────────────
+ *
+ * TWO MODES, and which one you get is decided by whether the car has gone — not by a flag the caller
+ * passes, because a caller that could ask for live lines on a sold car would eventually do it.
+ *
+ *   live    the car is in stock: the actual lines, grouped by card. The figures move as work is done,
+ *           which is correct — nothing is frozen yet.
+ *   frozen  the car has gone: the snapshot rows, one per card. The lines still exist on the cards but
+ *           the frozen record does not reference them, and reading them back could disagree with what
+ *           the car was reported to have cost. See FROZEN_DETAIL_NOTE.
+ */
+export async function stockPrepDetail(groupId: string, stockItemId: string): Promise<PrepDetail | null> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: stockItemId, group_id: groupId },
+    select: { id: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return null;
+
+  if (it.disposal) {
+    const rows = await prisma.stockCostSnapshot.findMany({
+      where: { group_id: groupId, stock_item_id: it.id },
+      orderBy: { captured_at: 'asc' },
+      select: { kind: true, description: true, amount_pence: true, job_card_id: true },
+    });
+    return {
+      mode: 'frozen',
+      rows: rows.map((r) => ({
+        kind: r.kind, description: r.description, amountPence: r.amount_pence, jobCardId: r.job_card_id,
+      })),
+    };
+  }
+
+  const cards = await prisma.jobCard.findMany({
+    where: { group_id: groupId, stock_item_id: it.id },
+    orderBy: { created_at: 'asc' },
+    select: {
+      id: true, created_at: true,
+      items: {
+        orderBy: { created_at: 'asc' },
+        select: { item_type: true, description: true, qty: true, unit_cost: true },
+      },
+    },
+  });
+  return { mode: 'live', groups: groupPrepLines(cards as never) };
 }

@@ -100,3 +100,112 @@ export function unknownCostNote(c: PrepCost): string | null {
   return `${c.unknownCostLines} line${c.unknownCostLines === 1 ? '' : 's'} on this car have no trade cost recorded, `
     + 'so they are not in the figure. A cost base missing a part reads as a better margin than the car earned.';
 }
+
+
+/**
+ * ── THE LINES, GROUPED BY CARD ──────────────────────────────────────────────────────────────────
+ *
+ * "£657.13 of parts across 1 card" tells a person nothing. What they want is the turbo and the DPF,
+ * each at its trade cost, with the card it came from — and they want that to stay readable when the
+ * car has accumulated thirty lines over six months.
+ *
+ * GROUPED BY CARD, NOT BY DATE. A card is the unit of work — "the turbo job", "the MOT prep" — and it
+ * already carries a date and an identity. Thirty lines across five cards read as five things; thirty
+ * lines in date order read as thirty.
+ *
+ * LABOUR IS LISTED AND VALUED AT NOTHING. Omitting it would make a card's subtotal look like the whole
+ * job; showing it at a rate would be the invented number the book refuses. So it appears in place,
+ * priced at nothing, and the card says so.
+ *
+ * AN UNKNOWN TRADE COST IS LISTED IN PLACE, with its reason. Counting it in an aggregate elsewhere
+ * tells you a figure is a floor; showing the line tells you WHICH line is holding it down.
+ */
+export type PrepLineDetail = {
+  description: string;
+  itemType: string;
+  qty: number;
+  /** NULL = no trade cost recorded. Never 0 — 0 means genuinely free. */
+  unitCostPence: number | null;
+  /** qty × unit cost, in pence. NULL when the cost is unknown, and 0 for labour by rule. */
+  linePence: number | null;
+  /** Why this line contributes nothing, when it does not. Null on an ordinary costed part. */
+  excludedBecause: string | null;
+};
+
+export type PrepCardGroup = {
+  cardId: string;
+  createdAt: Date;
+  /** What this card put into the car — parts at trade cost only. */
+  subtotalPence: number;
+  labourLines: number;
+  unknownCostLines: number;
+  lines: PrepLineDetail[];
+};
+
+const numOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === 'number' ? v : Number(String(v));
+  return Number.isFinite(n) ? n : null;
+};
+
+export function groupPrepLines(
+  cards: Array<{ id: string; created_at: Date; items: PrepLine[] & Array<{ description?: unknown }> }>,
+): PrepCardGroup[] {
+  return cards.map((c) => {
+    const lines: PrepLineDetail[] = (c.items ?? []).map((l) => {
+      const qty = numOrNull((l as { qty: unknown }).qty) ?? 1;
+      const cost = numOrNull((l as { unit_cost: unknown }).unit_cost);
+      const description = String((l as { description?: unknown }).description ?? '').slice(0, 120);
+      if (l.item_type === 'labour') {
+        return {
+          description, itemType: 'labour', qty, unitCostPence: null, linePence: 0,
+          excludedBecause: LABOUR_AT_ZERO_NOTE,
+        };
+      }
+      if (cost === null) {
+        return {
+          description, itemType: l.item_type, qty, unitCostPence: null, linePence: null,
+          excludedBecause: 'No trade cost recorded, so this line is not in the figure.',
+        };
+      }
+      if (l.item_type !== 'part') {
+        return {
+          description, itemType: l.item_type, qty, unitCostPence: Math.round(cost * 100), linePence: null,
+          excludedBecause: l.item_type === 'fixed'
+            ? 'A fixed-price service is a SELLING price with optional cost — valuing it as a cost would invent a number.'
+            : 'Miscellaneous lines carry no trade cost we can rely on.',
+        };
+      }
+      return {
+        description, itemType: 'part', qty, unitCostPence: Math.round(cost * 100),
+        linePence: Math.round(cost * qty * 100), excludedBecause: null,
+      };
+    });
+    const totals = prepCost(c.items ?? []);
+    return {
+      cardId: c.id, createdAt: c.created_at, subtotalPence: totals.partsPence,
+      labourLines: totals.labourLines, unknownCostLines: totals.unknownCostLines, lines,
+    };
+  }).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+/**
+ * HOW MANY CARDS BEFORE THE LIST COLLAPSES. Below this every card is open, because collapsing two
+ * cards is chrome for no gain; at or above it they arrive summarised and the reader opens what they
+ * want. Four is the point at which the page stops fitting a screen at typical card sizes.
+ */
+export const PREP_EXPAND_THRESHOLD = 4;
+
+/**
+ * A SOLD CAR SHOWS CARD-LEVEL TOTALS ONLY, and the page says why.
+ *
+ * The snapshot froze one row per card, not the lines — so the lines still exist on the card, but the
+ * FROZEN RECORD does not reference them. Reading the live lines back against a frozen total is exactly
+ * the drift the freeze exists to prevent: a card edited next March would change what last year’s
+ * quarter appears to have cost. The detail is richer in stock than after sale, and that is honest —
+ * it reflects what was actually frozen.
+ */
+export const FROZEN_DETAIL_NOTE =
+  'This car has gone, so these are the figures frozen at disposal — one row per card, not the '
+  + 'individual lines. The lines still exist on the cards, but the frozen record does not reference '
+  + 'them, and reading them back now could disagree with what this car was reported to have cost.';

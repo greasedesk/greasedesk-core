@@ -1667,6 +1667,103 @@ try {
   check('all_time is the one addition, and it is a STOCK preset not a dashboard one',
     SS.SOLD_EXTRA_PRESET === 'all_time' && !/all_time/.test(readFileSync('lib/dashboard-periods.ts', 'utf8')),
     'every dashboard preset assumes enough history for a month to mean something');
+  console.log('\n— DETAIL, NOT TOTALS: the lines, grouped by card —');
+  const grouped = SP.groupPrepLines([{
+    id: 'card-1', created_at: new Date('2026-09-15T10:00:00Z'),
+    items: [
+      { item_type: 'labour', description: 'Refit DPF and Turbo', qty: 8, unit_cost: null },
+      { item_type: 'part', description: 'Supply Turbo', qty: 1, unit_cost: 226.55 },
+      { item_type: 'part', description: 'Supply Second hand DPF', qty: 1, unit_cost: 430.58 },
+      { item_type: 'part', description: 'Uncatalogued bracket', qty: 2, unit_cost: null },
+    ],
+  }]);
+  const g0 = grouped[0];
+  check('every line is LISTED, not summarised away', g0.lines.length === 4,
+    `${g0.lines.length} lines — “£657.13 across 1 card” told the owner nothing`);
+  check('the card subtotal is the PARTS at trade cost', g0.subtotalPence === 65713,
+    `${g0.subtotalPence}p = 226.55 + 430.58`);
+  check('LABOUR is listed and valued at nothing, with the reason ON THE LINE',
+    (() => { const l = g0.lines.find((x) => x.itemType === 'labour');
+             return l && l.linePence === 0 && /not costed/i.test(l.excludedBecause ?? ''); })(),
+    'omitting it would make the subtotal look like the whole job');
+  check('an UNKNOWN trade cost is listed IN PLACE with its reason',
+    (() => { const l = g0.lines.find((x) => /bracket/.test(x.description));
+             return l && l.linePence === null && /no trade cost/i.test(l.excludedBecause ?? ''); })(),
+    'an aggregate says the figure is a floor; the line says WHICH line holds it down');
+  check('a costed part carries no reason, because nothing excluded it',
+    g0.lines.find((x) => /^Supply Turbo/.test(x.description)).excludedBecause === null,
+    'the LABOUR line is called “Refit DPF and Turbo” and matched a loose /Turbo/ first');
+  check('cards are ordered oldest first, so a car reads as a history',
+    (() => { const two = SP.groupPrepLines([
+      { id: 'b', created_at: new Date('2026-09-20'), items: [] },
+      { id: 'a', created_at: new Date('2026-09-01'), items: [] }]);
+      return two[0].cardId === 'a'; })());
+  check('the collapse threshold exists and is small', SP.PREP_EXPAND_THRESHOLD >= 3 && SP.PREP_EXPAND_THRESHOLD <= 6,
+    `${SP.PREP_EXPAND_THRESHOLD} — collapsing two cards is chrome for no gain`);
+
+  console.log('\n— and a SOLD car shows card-level totals only —');
+  // itemS is IN STOCK and has a linked prep card; itemC was disposed and froze its costs.
+  const liveDetail = await ST.stockPrepDetail(ZZ_GROUP, itemS.id);
+  check('a car IN STOCK gets the live lines', liveDetail.mode === 'live' && liveDetail.groups.length >= 1,
+    `${liveDetail.mode}`);
+  const goneDetail = await ST.stockPrepDetail(ZZ_GROUP, itemC.id);
+  check('a car that has GONE gets the FROZEN rows instead', goneDetail.mode === 'frozen',
+    'reading live lines against a frozen total is the drift the freeze exists to prevent');
+  check('  …and the mode is decided by the DISPOSAL, not by what the caller asked for',
+    !hasKey(readFileSync('lib/stock-store.ts', 'utf8').split('export async function stockPrepDetail')[1].split('\nexport ')[0], 'mode?'),
+    'a caller that could ask for live lines on a sold car would eventually do it');
+  check('  …and the page says WHY the detail is thinner after sale',
+    /frozen record does not reference/i.test(SP.FROZEN_DETAIL_NOTE)
+      && /data-testid="frozen-note"/.test(readFileSync('pages/admin/stock/[id].tsx', 'utf8')));
+
+  console.log('\n— credits nest under the cost they reverse —');
+  const pageSrc = readFileSync('pages/admin/stock/[id].tsx', 'utf8');
+  check('the cost table iterates only NON-credit rows at the top level',
+    /costRows\.filter\(\(c\) => !c\.reversesId\)\.map/.test(pageSrc),
+    'siblings read as two unrelated events; nested they read as one thing that came back');
+  check('  …and each cost gathers its own credits beneath it',
+    /costRows\.filter\(\(x\) => x\.reversesId === c\.id\)/.test(pageSrc)
+      && /data-testid=\{`credit-row-/.test(pageSrc));
+  /**
+   * DRIVEN, NOT SCANNED. The first version tested `/line-through/` against the whole file — which
+   * still matched because the class also sits on the amount cell, so removing it from the description
+   * changed nothing the clause could see. Measured: 0 failures. A real fully-credited cost on a real
+   * in-stock car, rendered on the real page, is the only thing that answers this.
+   */
+  const costOnS = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemS.id, kind: 'valeting',
+    description: 'ZZ valet, credited in full', amountPence: 9000, incurredOn: bought, vatTreatment: 'no_vat',
+  });
+  if ('refused' in costOnS) throw new Error(costOnS.refused);
+  const fullCredit = await ST.creditStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemS.id,
+    reversesId: costOnS.id, amountPence: 9000, incurredOn: bought,
+  });
+  if ('refused' in fullCredit) throw new Error(fullCredit.refused);
+  await page.goto(`${gateOrigin()}/admin/stock/${itemS.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="costs-section"]', { timeout: 25000 });
+  const fullyRow = await page.$(`[data-testid="cost-row-${costOnS.id}"]`);
+  check('a fully credited cost stays VISIBLE while in stock', !!fullyRow,
+    'in stock the reader is asking why the total is lower than the spend; an invisible row cannot answer that');
+  check('  …marked as credited in full', !!(await page.$(`[data-testid="fully-credited-${costOnS.id}"]`)));
+  check('  …struck through on the DESCRIPTION, not only on the amount',
+    await page.evaluate((id) => {
+      const row = document.querySelector(`[data-testid="cost-row-${id}"]`);
+      const desc = row?.querySelectorAll('td')[1]?.querySelector('span');
+      return !!desc && getComputedStyle(desc).textDecorationLine.includes('line-through');
+    }, costOnS.id),
+    'a scan for the class matched the amount cell and saw nothing');
+  check('  …and its credit is nested beneath it, not a sibling',
+    !!(await page.$(`[data-testid="credit-row-${fullCredit.id}"]`)));
+  check('  …and the net total shows the credit came back',
+    /net of credits/.test((await page.textContent('[data-testid="costs-total"]')) ?? ''));
+  check('  …and vanishes from the FROZEN snapshot, where a £0 line invites “why is this here”',
+    /\.filter\(\(r\) => r\.amount_pence > 0\)/.test(readFileSync('lib/stock-store.ts', 'utf8')));
+  check('every line links to the card it came from',
+    /href=\{`\/admin\/jobcards\/\$\{grp\.cardId\}`\}/.test(pageSrc),
+    'a reference nobody can follow is decoration');
+
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
