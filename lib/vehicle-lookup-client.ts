@@ -25,6 +25,9 @@ export type LookupVehicleFields = {
 };
 export type LookupOwnerFields = { name: string; phone: string; email: string };
 export type LookupMotMeta = { motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null };
+/** What we ALREADY HOLD about this car's MOT — for display only. Never sent back on save: see the
+ *  note in pages/api/vehicle-lookup for why our own record must not stamp mot_checked_at. */
+export type StoredMot = { motExpiry: string | null; motCheckedAt: string | null; firstRegistered: string | null; year: number | null };
 
 export type VehicleLookupResult =
   | { ok: true; reg: string; source: 'records' | 'dvsa'; vehicle: LookupVehicleFields; owner: LookupOwnerFields | null; mot: LookupMotMeta | null;
@@ -34,7 +37,9 @@ export type VehicleLookupResult =
       dueItems?: Array<{ id: string; description: string; dueBasis: string; dueDate: string | null; dueMileage: number | null; customerResponse: string }> | null;
       /** Cards already open for this car — see lib/duplicate-cards for which statuses count.
        *  Empty array when there are none; absent only from the DVSA branch, which has no cards. */
-      openCards?: OpenCardSummary[] | null }
+      openCards?: OpenCardSummary[] | null;
+      /** The car's own MOT record — records hits only. DISPLAY ONLY (see StoredMot). */
+      storedMot?: StoredMot | null }
   | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
@@ -75,6 +80,9 @@ export async function lookupVehicleByReg(
           dueItems: Array.isArray(data.dueItems) && data.dueItems.length ? data.dueItems : null,
           openCards: Array.isArray(data.openCards) ? data.openCards : null,
           mot: null,
+          // A returning car used to arrive with NOTHING about its MOT, so a booking form could not
+          // warn about the very cars it knows best. Display-only; see StoredMot.
+          storedMot: (data.storedMot ?? null) as StoredMot | null,
         };
       }
     }

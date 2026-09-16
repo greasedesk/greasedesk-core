@@ -88,6 +88,7 @@ type PageProps = {
     registration: string; vin: string | null; mileageIn: number | null; mileageOut: number | null;
     make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
     motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
+    motCheckedAt: string | null; firstRegistered: string | null;
   };
   flags: string[];
   isComeback: boolean;

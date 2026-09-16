@@ -54,10 +54,11 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { layoutOverlap } from '@/lib/diary-layout';
 import { formatMoney } from '@/lib/format-money';
 import JobCardWorkspace from '@/components/jobcard/JobCardWorkspace';
+import MotBanner from '@/components/MotBanner';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill, type StoredMot } from '@/lib/vehicle-lookup-client';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -1200,6 +1201,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   // car's record rather than anything the person booking should be editing. See the reversal note
   // in the lookup handler for why they are kept at all.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null }>({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
+  /** WHAT WE ALREADY HOLD about this car's MOT, from a records hit. Separate from `mot` above,
+   *  which is DVSA's answer: this is never sent back on save, because writing our own record
+   *  back would stamp mot_checked_at and claim a verification nobody performed. Banner only. */
+  const [storedMot, setStoredMot] = useState<StoredMot | null>(null);
   const [vin, setVin] = useState(''); const [phone, setPhone] = useState(''); const [email, setEmail] = useState('');
   // Vehicle data — make/colour/year/fuel/engine auto-fill from DVLA VES on a new reg; model is manual.
   const [make, setMake] = useState(''); const [model, setModel] = useState(''); const [vColour, setVColour] = useState('');
@@ -1270,6 +1275,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     setNoShows(r.ok ? (r.noShows ?? null) : null);
     setDueItems(r.ok ? (r.dueItems ?? null) : null);
     setOpenCards(r.ok ? (r.openCards ?? null) : null);
+    setStoredMot(r.ok ? (r.storedMot ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
     if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
     // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
@@ -1375,6 +1381,25 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
 
         {mode === 'job' && (
           <div className="space-y-3">
+            {/* THE SAME BANNER AND THE SAME PREDICATE AS THE JOB CARD (lib/mot-banner), read against
+                the slot being booked rather than today — a car whose MOT runs out next Tuesday is
+                fine today and cannot be driven here on the day it is coming. Held back until there
+                is a plate: with an empty field there is no car to make a claim about. */}
+            {!!regCanon && (
+              <MotBanner
+                vehicle={{
+                  // DVSA's answer wins over our record; otherwise the record is all we have.
+                  motExpiry: mot.motExpiry ?? storedMot?.motExpiry ?? null,
+                  // A DVSA answer THIS SESSION counts as checked (fill.mot is set only by that path).
+                  motCheckedAt: fill?.mot ? new Date().toISOString() : (storedMot?.motCheckedAt ?? null),
+                  firstRegistered: storedMot?.firstRegistered ?? null,
+                  year: storedMot?.year ?? (year.trim() ? Number(year) : null),
+                }}
+                bookingAt={startAt || null}
+                lookupBusy={lookBusy || busy}
+                onLookup={lookupKeyFor(vehicleLookupProvider) === 'registration' ? lookupVehicle : undefined}
+              />
+            )}
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
             <div>
@@ -1398,6 +1423,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                     setVin(values.vin); setMileage(values.mileage); setMake(values.make); setModel(values.model);
                     setVColour(values.colour); setFuel(values.fuel); setYear(values.year); setEngineCc(values.engineCc);
                     setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
+                    setStoredMot(null);
                     setNoShows(null); setDueItems(null); setOpenCards(null);
                     setFill(null);
                   }}
@@ -1511,7 +1537,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted pt-1">{t('create.groupBooking')}</div>
             {pickWhen && (
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={labelCls}>{t('create.date')}</label><input className={inputCls} type="date" value={whenDate} onChange={(e) => setWhenDate(e.target.value)} /></div>
+                <div><label className={labelCls}>{t('create.date')}</label><input className={inputCls} data-testid="create-date" type="date" value={whenDate} onChange={(e) => setWhenDate(e.target.value)} /></div>
                 <div><label className={labelCls}>{t('create.startTime')}</label><input className={inputCls} data-testid="create-time" type="time" value={whenTime} onChange={(e) => setWhenTime(e.target.value)} /></div>
               </div>
             )}

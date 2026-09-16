@@ -10,6 +10,7 @@ import { useTranslation } from 'next-i18next';
 import { lookupVehicleByReg, lookupVehicleByVin, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
+import MotBanner from '@/components/MotBanner';
 
 // phoneE164 is DERIVED and read-only on this form — shown so staff can see whether the number is
 // actually dialable. smsOptOut/emailOptOut are THREE-STATE: null = no record (unknown), never
@@ -29,8 +30,12 @@ type Vehicle = {
   registration: string; vin: string | null; mileageIn: number | null;
   make: string | null; model: string | null; colour: string | null; year: number | null; fuel: string | null; engineCc: number | null;
   motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null;
+  motCheckedAt?: string | null; firstRegistered?: string | null;
 };
 type Props = { jobCardId: string; vehicleId?: string | null; owner: Owner; vehicle: Vehicle; canEdit: boolean; locale: string; onSaved: () => void;
+  /** The booking's start, when this card has one. The MOT banner reads against the day the car is
+   *  COMING, not today — see lib/mot-banner. */
+  bookingAt?: string | null;
   // Country-shaped vehicle identity (ruling 2026-07-29); defaults keep every existing caller working.
   vehicleIdLabel?: string; vehicleLookupProvider?: LookupProviderName;
   /**
@@ -58,7 +63,7 @@ function contactPrefSummary(o: { smsOptOut?: boolean | null; emailOptOut?: boole
   return o.smsOptOut == null && o.emailOptOut == null && o.smsMarketingOptOut == null && o.emailMarketingOptOut == null ? t('field.optOutNoRecord') : t('field.optOutNone');
 }
 
-export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehicle, canEdit, locale, onSaved, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
+export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehicle, canEdit, locale, onSaved, bookingAt, vehicleIdLabel = 'Registration', vehicleLookupProvider = 'none', stageAction }: Props) {
   const { t } = useTranslation('jobcard');
   const [name, setName] = useState(owner.name === '—' ? '' : owner.name);
   const [phone, setPhone] = useState(owner.phone ?? '');
@@ -154,6 +159,12 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
     motExpiry: mot ? mot.motExpiry : vehicle.motExpiry,
     lastMotMileage: mot ? mot.lastMotMileage : vehicle.lastMotMileage,
     lastMotDate: mot ? mot.lastMotDate : vehicle.lastMotDate,
+    // A lookup that ran THIS SESSION is an answer from DVSA, whether or not it carried an expiry
+    // (lib/vehicle-lookup-client returns `mot` whenever found, with nulls inside when there are no
+    // tests). Without this the banner would still say "nobody has asked" one second after asking.
+    motCheckedAt: mot ? new Date().toISOString() : (vehicle.motCheckedAt ?? null),
+    firstRegistered: vehicle.firstRegistered ?? null,
+    year: vehicle.year,
   };
 
   async function submit(confirmReg: boolean) {
@@ -203,6 +214,8 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
     return (
       <div className="bg-surface border border-line rounded-xl p-5">
         <h2 className="text-lg font-semibold text-ink mb-4">{t('tab.details')}</h2>
+        {/* No lookup offered here: this reader has no operational authority to change the car. */}
+        <MotBanner vehicle={motShow} bookingAt={bookingAt ?? null} />
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Row label={vehicleIdLabel} value={vehicle.registration} />
           <Row label={t('field.make')} value={vehicle.make} />
@@ -230,6 +243,10 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
     <div className="bg-surface border border-line rounded-xl p-5">
       <h2 className="text-lg font-semibold text-ink mb-1">{t('tab.details')}</h2>
       <p className="text-xs text-muted mb-4">{t('field.ownerFromEdge')}</p>
+      {/* TOP OF THE FORM. Deliberately not next to the MOT line further down: this is the fact that
+          decides whether the car can be driven here, and it must be impossible to miss. */}
+      <MotBanner vehicle={motShow} bookingAt={bookingAt ?? null} lookupBusy={lookBusy || busy}
+        onLookup={lookupKeyFor(vehicleLookupProvider) === 'registration' && registration.trim() ? dvsaLookup : undefined} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls} data-testid="veh-id-label">{vehicleIdLabel}</label>

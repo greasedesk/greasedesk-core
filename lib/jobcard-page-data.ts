@@ -73,7 +73,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // DERIVED from INTAKE_SWITCH. Four literals here made oil_level unreachable: the column
       // was never loaded, so the switch read `undefined` and the item could never be prompted.
       site: { select: { ...INTAKE_PROMPT_SELECT, intake_offer_dismissed_at: true } },
-      vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true } },
+      vehicle: { select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, year: true, fuel_type: true, engine_cc: true, mot_expiry: true, last_mot_mileage: true, last_mot_date: true, mot_checked_at: true, first_registered: true } },
       // POSITION FIRST, created_at as the fallback — the same ordering the invoice freeze uses, so
       // the builder shows the estimator what the document will print. created_at alone is a tie:
       // every line on a card is written in one statement and shares the transaction's timestamp.
@@ -673,6 +673,12 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       motExpiry: row.vehicle?.mot_expiry ? (row.vehicle.mot_expiry as Date).toISOString().slice(0, 10) : null,
       lastMotMileage: row.vehicle?.last_mot_mileage ?? null,
       lastMotDate: row.vehicle?.last_mot_date ? (row.vehicle.last_mot_date as Date).toISOString().slice(0, 10) : null,
+      // PROVENANCE, not just the value (lib/mot-banner). mot_checked_at means DVSA ANSWERED, so the
+      // pair separates "no MOT on record" from "nobody has ever asked" — two absences the banner
+      // must not collapse into one silence. first_registered dates the first MOT exactly when we
+      // have it; year is the hedge when we do not.
+      motCheckedAt: row.vehicle?.mot_checked_at ? (row.vehicle.mot_checked_at as Date).toISOString() : null,
+      firstRegistered: row.vehicle?.first_registered ? (row.vehicle.first_registered as Date).toISOString().slice(0, 10) : null,
     },
     flags, isComeback: !!row.is_comeback,
     /**

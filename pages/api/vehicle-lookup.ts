@@ -32,7 +32,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vehicle = (await prisma.vehicle.findFirst({
     where: { group_id: user.group_id, registration_normalized: reg },
     orderBy: { created_at: 'desc' },
-    select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, fuel_type: true, year: true, engine_cc: true },
+    select: { id: true, registration: true, vin: true, mileage_at_create: true, make: true, model: true, colour: true, fuel_type: true, year: true, engine_cc: true,
+              mot_expiry: true, mot_checked_at: true, first_registered: true },
   })) as any;
   if (!vehicle) return res.status(200).json({ found: false });
 
@@ -66,6 +67,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       registration: vehicle.registration, vin: vehicle.vin ?? '', mileage: vehicle.mileage_at_create ?? null,
       make: vehicle.make ?? '', model: vehicle.model ?? '', colour: vehicle.colour ?? '',
       fuel: vehicle.fuel_type ?? '', year: vehicle.year ?? null, engineCc: vehicle.engine_cc ?? null,
+    },
+    /**
+     * THE CAR'S OWN MOT RECORD, for the banner (lib/mot-banner) — and kept SEPARATE from the `mot`
+     * a DVSA lookup returns, deliberately. This is what we already hold, not an answer from DVSA;
+     * folding it into `mot` would send it back on save and stamp mot_checked_at, which means DVSA
+     * ANSWERED. Reading our own record and calling it a verification is the one thing that column
+     * must never say. So: displayed, never written back.
+     */
+    storedMot: {
+      motExpiry: vehicle.mot_expiry ? vehicle.mot_expiry.toISOString().slice(0, 10) : null,
+      motCheckedAt: vehicle.mot_checked_at ? vehicle.mot_checked_at.toISOString() : null,
+      firstRegistered: vehicle.first_registered ? vehicle.first_registered.toISOString().slice(0, 10) : null,
+      year: vehicle.year ?? null,
     },
     owner: { name: owner?.name ?? '', phone: owner?.phone ?? '', email: owner?.email ?? '' },
     noShows,

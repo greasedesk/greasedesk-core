@@ -176,6 +176,7 @@ const TIERS = {
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'credential-residue-gate',
     'products-gate',
+    'mot-banner-gate',
     'redaction-gate',
     'stock-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
