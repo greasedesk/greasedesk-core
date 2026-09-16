@@ -24,6 +24,14 @@ import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
 const money = (p: number) => `£${(p / 100).toFixed(2)}`;
 const iso = (d: string) => d.slice(0, 10);
+
+/**
+ * ONE PLACE THESE WORDS COME FROM. The form and the breakdown both ask SOURCE_RULES, so a figure
+ * cannot be called "Indemnities" in one and something else in the other. Falls back to the slot's own
+ * name rather than to a generic word — an unknown source should read oddly, not read as "Fees".
+ */
+const feeLabel = (source: string, slot: 'premium' | 'services'): string =>
+  SOURCE_RULES[source as PurchaseSource]?.fees.find((f) => f.slot === slot)?.label ?? slot;
 const VAT_LABEL: Record<string, string> = {
   standard_recoverable: 'Standard rated — VAT reclaimable',
   standard_not_recoverable: 'Standard rated — not reclaimable',
@@ -162,8 +170,10 @@ export default function StockCarPage() {
                   </p>
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                     <dt className="text-muted">Paid for the car</dt><dd className="text-right text-ink tabular-nums">{money(d.purchasePence)}</dd>
-                    {d.premiumPence > 0 && (<><dt className="text-muted">Buyer’s premium</dt><dd className="text-right text-ink tabular-nums">{money(d.premiumPence)}</dd></>)}
-                    {d.servicesPence > 0 && (<><dt className="text-muted">Fees</dt><dd className="text-right text-ink tabular-nums">{money(d.servicesPence)}</dd></>)}
+                    {/* THE SAME NAMES AS THE FIELDS ABOVE, from the same rules. A breakdown that calls
+                        a figure something the form does not is two names for one number. */}
+                    {d.premiumPence > 0 && (<><dt className="text-muted">{feeLabel(d.source, 'premium')}</dt><dd className="text-right text-ink tabular-nums">{money(d.premiumPence)}</dd></>)}
+                    {d.servicesPence > 0 && (<><dt className="text-muted">{feeLabel(d.source, 'services')}</dt><dd className="text-right text-ink tabular-nums">{money(d.servicesPence)}</dd></>)}
                     <dt className="text-muted">Parts fitted (trade cost)</dt><dd className="text-right text-ink tabular-nums" data-testid="detail-prep">{money(d.prep.partsPence)}</dd>
                     <dt className="text-muted">VAT due on the sale</dt><dd className="text-right text-ink tabular-nums">{money(d.projection.vatDuePence)}</dd>
                   </dl>
@@ -307,14 +317,34 @@ export default function StockCarPage() {
                   <input type="number" step="0.01" min={0} value={form.purchase} disabled={sold} data-testid="edit-purchase"
                     onChange={(e) => setForm({ ...form, purchase: e.target.value })} className={input} />
                 </label>
-                <label className="text-sm text-muted">Buyer’s premium
-                  <input type="number" step="0.01" min={0} value={form.premium} disabled={sold} data-testid="edit-premium"
-                    onChange={(e) => setForm({ ...form, premium: e.target.value })} className={input} />
-                </label>
-                <label className="text-sm text-muted">Fees
-                  <input type="number" step="0.01" min={0} value={form.services} disabled={sold} data-testid="edit-services"
-                    onChange={(e) => setForm({ ...form, services: e.target.value })} className={input} />
-                </label>
+                {/*
+                  ── THE LABELS COME FROM SOURCE_RULES, NOT FROM THIS FILE ──────────────────────
+                  This page said "Buyer's premium" and "Fees". The second is not a thing that appears
+                  on any invoice, and it told the owner nothing — so £250 of recovery went into it,
+                  which is a cost besides parts and not an acquisition service at all.
+
+                  lib/purchase-model already names these per SOURCE, and differently: an auction's
+                  second slot is INDEMNITIES (Simulcast, SureCheck), a dealer's is an ADMIN OR
+                  DELIVERY FEE. A page that types its own generic word cannot be right for both, and
+                  was right for neither. The intake form reads these rules; this one now does too.
+
+                  A source with no fee slots (private, part-exchange, return, buyback) renders none —
+                  an empty box labelled "Fees" is an invitation to put something in it.
+                */}
+                {(SOURCE_RULES[d.source as PurchaseSource]?.fees ?? []).map((f) => (
+                  <label key={f.slot} className="text-sm text-muted sm:col-span-2">{f.label}
+                    <input type="number" step="0.01" min={0} disabled={sold}
+                      value={f.slot === 'premium' ? form.premium : form.services}
+                      data-testid={`edit-${f.slot}`}
+                      onChange={(e) => setForm(f.slot === 'premium'
+                        ? { ...form, premium: e.target.value }
+                        : { ...form, services: e.target.value })}
+                      className={input} />
+                    {/* THE INVOICE'S OWN WORDS, from the same rule as the label — so the note cannot
+                        drift from the field it explains. */}
+                    <span className="block mt-1 text-xs text-muted">{f.note}</span>
+                  </label>
+                ))}
                 <label className="text-sm text-muted">Mileage warranted
                   <select value={form.warranted} disabled={sold} data-testid="edit-warranted"
                     onChange={(e) => setForm({ ...form, warranted: e.target.value })} className={input}>
@@ -329,6 +359,19 @@ export default function StockCarPage() {
                     onChange={(e) => setForm({ ...form, projected: e.target.value })} className={input} />
                 </label>
               </div>
+
+              {/*
+                WHERE THE OTHER MONEY GOES, said HERE rather than left to be worked out. The two
+                fields above are what the SELLER charged on the purchase invoice. A recovery man's
+                invoice, a valet, an MOT — different supplier, different VAT treatment, its own date —
+                is a cost besides parts and belongs in the section above, where each row carries its
+                own recoverability. Putting it here would fold it into the acquisition and lose that.
+              */}
+              <p className="mt-2 text-xs text-muted" data-testid="fees-vs-costs">
+                Those are what the seller charged you on the purchase invoice. Delivery by someone
+                else, valeting, an MOT — anything on a separate invoice — goes in <strong>Costs besides
+                parts</strong> above, where each has its own date and its own VAT treatment.
+              </p>
 
               {/* THE FROZEN PAIR, SHOWN AND EXPLAINED. Hiding them would leave a person hunting for a
                   control that is deliberately absent; saying why is the whole point. */}

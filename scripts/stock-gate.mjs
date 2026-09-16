@@ -1199,6 +1199,30 @@ try {
     soldDetail.projection === null && soldDetail.salePence === 385000,
     'showing a guess beside a result invites reading the guess as one');
 
+  console.log('\n— the fee fields are named by the SOURCE, not by this page —');
+  const detailSrc = readFileSync('pages/admin/stock/[id].tsx', 'utf8');
+  check('the detail page no longer invents the word “Fees”',
+    !/>Fees\b/.test(detailSrc),
+    'it appears on no invoice, and £250 of recovery went into it because it said nothing');
+  check('  …it reads the labels from SOURCE_RULES, the same rules the intake form uses',
+    /SOURCE_RULES\[d\.source as PurchaseSource\]\?\.fees/.test(detailSrc),
+    'one source of these words, so the two screens cannot disagree');
+  check('  …and the note travels with the label, from the same rule',
+    /\{f\.note\}/.test(detailSrc) && /\{f\.label\}/.test(detailSrc),
+    'a note typed separately drifts from the field it explains');
+  check('an AUCTION calls it Indemnities and names Simulcast and SureCheck',
+    PM.SOURCE_RULES.auction.fees.some((f) => f.slot === 'services' && f.label === 'Indemnities'
+      && /Simulcast/.test(f.note) && /SureCheck/.test(f.note)));
+  check('  …and a TRADE purchase calls the same slot something else entirely',
+    PM.SOURCE_RULES.trade.fees.some((f) => f.slot === 'services' && f.label !== 'Indemnities'),
+    `trade: ${PM.SOURCE_RULES.trade.fees.map((f) => f.label).join(', ')} — one generic word cannot be right for both`);
+  check('a source with NO fee slots renders no fee fields at all',
+    PM.SOURCE_RULES.private.fees.length === 0 && PM.SOURCE_RULES.part_exchange.fees.length === 0,
+    'an empty box labelled “Fees” is an invitation to put something in it');
+  check('and the page says where a SEPARATE invoice goes instead',
+    /data-testid="fees-vs-costs"/.test(detailSrc) && /Costs besides\s*\n?\s*parts/.test(detailSrc),
+    'delivery by someone else is a cost with its own date and VAT treatment, not an acquisition fee');
+
   console.log('\n— and the yard reaches the car, through the real pages —');
   await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="stock-list"]', { timeout: 25000 });
