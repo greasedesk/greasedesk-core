@@ -76,9 +76,15 @@ try {
   // caller shape.
   check('dueLabel still prints the absolute for the board', D.dueLabel(withCd, OUT) === 'due at 99,767 miles or by June 2030, whichever comes first',
     D.dueLabel(withCd, OUT));
-  const board = readFileSync('lib/marketing-data.ts', 'utf8');
-  check('  …and the board still calls dueLabel, not the printed one', /dueLabel\(\{/.test(board) && !/printedDueLabel/.test(board),
-    'a countdown on a row read weeks later describes an odometer the car has left behind');
+  // THIS USED TO READ lib/marketing-data.ts and call it "the board". It never was: the file held the
+  // two per-reason LISTS, which the board replaced at 440f53d and which were deleted 2026-09-16.
+  // Nothing on the marketing surface calls dueLabel any more — a board row's words come from
+  // lib/marketing-pipeline::leadReasons — so the surviving claim is the one that always mattered:
+  // NO marketing surface may reach for the countdown label.
+  const MKT = ['lib/marketing-board.ts', 'lib/marketing-pipeline.ts', 'lib/marketing-lists.ts', 'pages/admin/marketing.tsx'];
+  const reaching = MKT.filter((f) => /printedDueLabel/.test(readFileSync(f, 'utf8')));
+  check('  …and no marketing surface reaches for the printed one', reaching.length === 0,
+    reaching.length ? reaching.join(', ') : 'a countdown on a row read weeks later describes an odometer the car has left behind');
 
   // ── 5. ONLY THE TWO BLOCK BUILDERS USE IT ────────────────────────────────────────────────────
   const di = readFileSync('lib/due-items.ts', 'utf8');

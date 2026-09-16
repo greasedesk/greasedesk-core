@@ -18,6 +18,7 @@ import { batteryState, type BatteryState } from '@/lib/battery';
 import { deriveQuoteStatus, deriveVersionlessStatus, quoteExpiry, QUOTE_CLOSED_CARD_STATUSES } from '@/lib/quotes-list';
 import { isBookedCard } from '@/lib/jobcard-status';
 import { leadStack, unansweredPrompt, type Stack, type LeadReason } from '@/lib/marketing-pipeline';
+import { CUSTOMER_CARS } from '@/lib/customer-car';
 
 export type BoardRow = {
   vehicleId: string;
@@ -70,12 +71,21 @@ export type Board = {
 };
 
 export async function buildBoard(groupId: string, now: Date = new Date()): Promise<Board> {
-  // EVERY CAR WITH A REASON TO RING: an MOT date, an open finding, or a battery test. A car with
-  // none of the three is not a lead and is not fetched — the fleet count says how many those are.
+  // EVERY CUSTOMER'S CAR WITH A REASON TO RING: an MOT date, an open finding, or a battery test. A
+  // car with none of the three is not a lead and is not fetched — the fleet count says how many
+  // those are.
+  //
+  // CUSTOMER_CARS (lib/customer-car) EXCLUDES THE GARAGE'S OWN CARS, and it is applied at the QUERY on
+  // both reads rather than filtered afterwards — the board once took 15.8s and query depth is the
+  // latency currency on this stack. This page was written before stock existed and treated every
+  // Vehicle as a customer's: measured 2026-09-16, three of twelve Hot leads were the owner's own
+  // cars with expired MOTs, so the board was telling him to ring himself and the number a garage
+  // reads as "people worth ringing today" was wrong by a quarter.
   const [vehicles, fleet, contacts] = await Promise.all([
     prisma.vehicle.findMany({
       where: {
         group_id: groupId,
+        ...CUSTOMER_CARS,
         OR: [
           { mot_expiry: { not: null } },
           { due_items: { some: { closed_at: null } } },
@@ -92,7 +102,9 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
         tyre_readings: { select: { depth_outer_tenths: true, depth_centre_tenths: true, depth_inner_tenths: true, measured_at: true, corner: true } },
       },
     }),
-    prisma.vehicle.count({ where: { group_id: groupId } }),
+    // THE SAME EXCLUSION ON THE DENOMINATOR. A fleet figure that counts cars the stacks cannot is
+    // arithmetic that stops adding up, and the tile says so (FLEET_EXCLUDES_STOCK).
+    prisma.vehicle.count({ where: { group_id: groupId, ...CUSTOMER_CARS } }),
     prisma.marketingContact.findMany({
       where: { group_id: groupId },
       select: { vehicle_id: true, state: true, for_date: true, snooze_until: true, created_at: true, channel: true },

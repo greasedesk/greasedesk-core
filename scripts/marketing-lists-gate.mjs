@@ -145,7 +145,11 @@ try {
   check('the MOT tab refuses an average-job figure', M.estimateMotRevenue(11, null).ok === false,
     'an MOT is a fixed-price product; £178 × 11 would overstate it threefold');
   check('  …and takes a real MOT price when there is one', M.estimateMotRevenue(11, 5_400).pennies === 59_400);
-  check('the reason the MOT tab differs is written down', /overstate this list threefold/.test(prose(readFileSync('lib/marketing-data.ts', 'utf8'))));
+  // WAS READING lib/marketing-data.ts, which held a COPY of this reasoning inside buildMotList. That
+  // function was deleted 2026-09-16 (dead since 440f53d) and the clause went red about prose, not
+  // about a rule. The reasoning belongs beside the function it explains, and now only lives there.
+  check('the reason the MOT tab differs is written down BESIDE THE RULE',
+    /overstate the list by a factor of three/.test(prose(readFileSync('lib/marketing-lists.ts', 'utf8'))));
 
   // ── 6. ON THE SERVED PAGE ────────────────────────────────────────────────────────────────────
   console.log('\n— and on the page a garage opens —');

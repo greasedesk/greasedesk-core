@@ -38,7 +38,6 @@ const T = await import('../lib/notification-templates.ts');
 const O = await import('../lib/send-outcome.ts');
 const M = await import('../lib/marketing-lists.ts');
 const BOARD = await import('../lib/marketing-board.ts');
-const DATA = await import('../lib/marketing-data.ts');
 if (N.channelConfigured('email') || N.channelConfigured('sms')) declineToRun('a message provider is configured in this process — refusing to run a gate that sends to fixtures');
 
 const out = [];
@@ -156,17 +155,17 @@ try {
   const cf = O.describeSendFailure(mFail, { channel: 'email', customerName: 'Dana' });
   check('"could not check": retryable, and says to try again', cf.code === 'marketing_check_failed' && cf.retryable === true && /Try again/.test(cf.message), cf.message);
 
-  // ── 7. THE BOARD, THE MOT LIST AND THE PREVIEW STOP OFFERING — AND KEEP THE CAR ────────────────
+  // ── 7. THE BOARD AND THE PREVIEW STOP OFFERING — AND KEEP THE CAR ─────────────────────────────
   console.log('\n— the board and the preview stop offering an offer, and keep the car —');
   const rowAfter = await boardRow();
   check('the car STAYS on the board (its destination is not "gone")', !!rowAfter && rowAfter.reasons.length > 0, rowAfter ? `stack ${rowAfter.stack}` : 'the car vanished');
   check('  …with no text and no email offered', rowAfter?.canSms === false && rowAfter?.canEmail === false);
   check('  …the phone number still shown — a call is not an electronic message', rowAfter?.phone === mobile, String(rowAfter?.phone));
   check('  …and labelled with WHICH refusal', rowAfter?.noContact === 'No offers', String(rowAfter?.noContact));
-  const mot = await DATA.buildMotList(ZZ, new Date());
-  const motRow = [...mot.due, ...mot.expired].find((r) => r.vehicleId === veh);
-  check('the MOT list says the same, by the same rule', !!motRow && motRow.canSms === false && motRow.canEmail === false && motRow.noContact === 'No offers' && motRow.phone === mobile,
-    motRow ? `canSms ${motRow.canSms}, canEmail ${motRow.canEmail}, "${motRow.noContact}"` : 'not on the MOT list');
+  // THE MOT LIST WAS THE THIRD SURFACE, and this clause asserted it agreed with the board. It was
+  // lib/marketing-data::buildMotList, superseded by the board at 440f53d and deleted 2026-09-16 —
+  // so there are now TWO surfaces to keep in step, not three, and a guard for a removed hazard is
+  // a blindfold. The board is asserted above and the preview below; nothing else offers a channel.
   // THE PREVIEW, reached the way the page reaches it: a signed-in GET.
   const B = gateOrigin();
   const csrfRes = await fetch(`${B}/api/auth/csrf`);

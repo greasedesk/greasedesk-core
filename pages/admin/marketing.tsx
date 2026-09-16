@@ -42,6 +42,7 @@ import { buildBoard, type Board, type BoardRow } from '@/lib/marketing-board';
 import { WINDOW_DAYS } from '@/lib/marketing-lists';
 import { CarHistoryPane, CardDetailPane, type CarDetail } from '@/components/marketing/CarPanes';
 import { checkedLabel } from '@/lib/mot-refresh';
+import { FLEET_EXCLUDES_STOCK } from '@/lib/customer-car';
 
 type PageProps = { board: Board };
 
@@ -449,7 +450,10 @@ export default function MarketingPage({ board }: PageProps) {
         <p className="text-2xl font-bold text-ink tabular-nums">
           {board.hot.length} <span className="text-base font-medium text-muted">worth ringing today</span>
         </p>
-        <p className="text-xs text-muted mt-0.5">{board.fleet} cars on the books</p>
+        {/* The figure EXCLUDES the garage's own stock (lib/customer-car). Said on the face of it:
+            a denominator that counted cars no stack can contain would not add up against the tabs. */}
+        <p className="text-xs text-muted mt-0.5" data-testid="fleet-count">{board.fleet} customer cars on the books</p>
+        <p className="text-[11px] text-muted mt-0.5" data-testid="fleet-excludes-stock">{FLEET_EXCLUDES_STOCK}</p>
         {board.prompt && (
           <p className="text-xs text-accent mt-2" data-testid="board-prompt">{board.prompt}</p>
         )}

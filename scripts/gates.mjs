@@ -177,6 +177,7 @@ const TIERS = {
     'credential-residue-gate',
     'products-gate',
     'mot-banner-gate',
+    'customer-car-gate',
     'redaction-gate',
     'stock-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',
