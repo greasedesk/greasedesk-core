@@ -112,6 +112,18 @@ export const saleSchemeLabel = (vatStatus: string): string =>
 
 export const SALE_NUMBER_PERMANENT = 'This invoice number is permanent.';
 
+/**
+ * ── THE PROJECTION IS AN ESTIMATE; THE SALE PRICE IS A FACT ─────────────────────────────────────
+ *
+ * The price box used to be PRE-FILLED from the car's projected price. On the first real sale that put
+ * £2,000 in the box where £1,200 had been agreed — one untouched field away from a permanent invoice at
+ * the wrong price. An estimate sitting in the field for a fact reads as a decision nobody made. So the box
+ * starts EMPTY, and the projection is shown BESIDE it, labelled as what it is: useful while settling a
+ * price, and impossible to submit by doing nothing.
+ */
+export const projectionHint = (pence: number): string =>
+  `Projected ${salePriceLabel(pence)} — an estimate, not this sale’s price.`;
+
 export function saleConfirmation(a: {
   registration: string; description?: string | null; buyerName: string; buyerAddress: string;
   pricePence: number; soldAtIsoDay: string; vatStatus: string;

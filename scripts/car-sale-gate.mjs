@@ -358,16 +358,27 @@ try {
   console.log('\n— NOTHING IS MINTED UNTIL THE SALE HAS BEEN READ —');
   check('there is no mint button on the form — only "Review the sale"',
     (await page.locator('[data-testid="sale-submit"]').count()) === 0 && (await page.locator('[data-testid="sale-review"]').count()) === 1);
-  /** THE NEAR-MISS, REPRODUCED: whatever sits in the price box untouched is what the sentence must say. */
+  /**
+   * THE NEAR-MISS, REMOVED AT SOURCE. This car is PROJECTED at £5,000, as LC09XFU was projected at £2,000
+   * against an agreed £1,200. The box used to arrive holding the projection; it must arrive EMPTY, with the
+   * projection beside it named as an estimate — and nothing may be reviewed until a price is typed.
+   */
   const untouched = await page.locator('[data-testid="sale-price"]').inputValue();
+  check('the price box starts EMPTY, even with a projected price on the car', untouched === '', `box held "${untouched}"`);
+  const hint = await page.locator('[data-testid="sale-projection"]').textContent().catch(() => null);
+  check('  …with the projection BESIDE it, named as an estimate and not a price',
+    !!hint && hint.includes('£5,000.00') && /an estimate, not this sale/.test(hint), hint ?? 'NO PROJECTION SHOWN');
+  check('  …and nothing can be reviewed until a price is typed',
+    (await page.locator('[data-testid="sale-review"]').isEnabled()) === false
+      && /Say what the car sold for/.test((await page.locator('[data-testid="sale-blocker"]').textContent().catch(() => '')) ?? ''));
+  await page.fill('[data-testid="sale-price"]', '4500');
   const reviewEnabled = await page.locator('[data-testid="sale-review"]').isEnabled();
   /** WARN, NOT REFUSE. A buyer with cash on a Saturday does not wait for a card to be closed. */
   check('the prep warning does not block — review is live with the card still open', reviewEnabled);
   if (reviewEnabled) await page.click('[data-testid="sale-review"]').catch(() => {});
   const firstRead = await page.locator('[data-testid="sale-confirm-sentence"]').textContent().catch(() => null);
-  check('an untouched pre-filled price is SPELLED OUT before anything is minted',
-    !!firstRead && untouched !== '' && firstRead.includes(RULES.salePriceLabel(Math.round(Number(untouched) * 100))),
-    `box held "${untouched}"; sentence: ${(firstRead ?? 'NO CONFIRMATION').slice(0, 110)}`);
+  check('the typed price is spelled out before anything is minted', !!firstRead && firstRead.includes('£4,500.00'),
+    (firstRead ?? 'NO CONFIRMATION').slice(0, 110));
 
   // Change the price WHILE the confirmation is up: what was read no longer describes what would be sent.
   await page.fill('[data-testid="sale-price"]', '4000');

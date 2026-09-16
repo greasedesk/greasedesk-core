@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { buyerRefusal, openPrepWarning, PICKED_BUYER_NO_ADDRESS, saleConfirmation, type OpenPrepCard } from '@/lib/stock-sale-rules';
+import { buyerRefusal, openPrepWarning, PICKED_BUYER_NO_ADDRESS, saleConfirmation, projectionHint, type OpenPrepCard } from '@/lib/stock-sale-rules';
 
 type Found = { id: string; name: string; address: string | null; phone: string | null; email: string | null };
 
@@ -38,7 +38,8 @@ export default function SellCarPanel(p: {
   const [picked, setPicked] = useState<Found | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [nb, setNb] = useState({ name: '', address: '', phone: '', email: '' });
-  const [price, setPrice] = useState(p.projectedSalePence === null ? '' : (p.projectedSalePence / 100).toFixed(2));
+  // EMPTY, never pre-filled from the projection — see lib/stock-sale-rules::projectionHint for why.
+  const [price, setPrice] = useState('');
   const [soldAt, setSoldAt] = useState(today());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -142,8 +143,12 @@ export default function SellCarPanel(p: {
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="text-xs uppercase text-muted">Sale price, including any VAT
+        <label className="text-xs uppercase text-muted">Sale price agreed, including any VAT
           <input className={input} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} data-testid="sale-price" />
+          {/* BESIDE the box, never in it: an estimate cannot be submitted by leaving a field alone. */}
+          {p.projectedSalePence !== null && (
+            <span className="mt-1 block normal-case text-xs text-muted" data-testid="sale-projection">{projectionHint(p.projectedSalePence)}</span>
+          )}
         </label>
         <label className="text-xs uppercase text-muted">Date sold
           <input className={input} type="date" value={soldAt} onChange={(e) => setSoldAt(e.target.value)} data-testid="sale-date" />
