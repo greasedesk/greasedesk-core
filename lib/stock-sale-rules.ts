@@ -86,6 +86,52 @@ export const SALE_INVOICE_DATE_LOCKED =
   'This invoice is dated by the sale itself, so the stock book and the invoice fall in the same period. '
   + 'Its date cannot be changed here.';
 
+/**
+ * ── THE CONFIRMATION, BEFORE A PERMANENT NUMBER IS MINTED ───────────────────────────────────────
+ *
+ * The sale form's price box could arrive already filled — on the first real sale it read £2,000, the
+ * car's PROJECTED price, where the agreed one was £1,200. A form that goes straight from typing to
+ * minting lets a pre-filled figure through unread. This turns every field into a sentence that has to
+ * be read before the button that mints: the car, the buyer, the address, the price, the date, the
+ * scheme, and that the number is permanent.
+ *
+ * Months are written out by hand, not by toLocaleDateString: en-GB now prints September as "Sept", and
+ * a confirmation whose wording drifts with the runtime is not one sentence.
+ */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export function saleDateLabel(isoDay: string): string {
+  const [y, m, d] = isoDay.split('-').map(Number);
+  return y && m && d ? `${d} ${MONTHS[m - 1]} ${y}` : isoDay;
+}
+export function salePriceLabel(pence: number): string {
+  const pounds = Math.floor(pence / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `£${pounds}.${String(pence % 100).padStart(2, '0')}`;
+}
+export const saleSchemeLabel = (vatStatus: string): string =>
+  vatStatus === 'qualifying' ? 'VAT qualifying, with VAT shown on the invoice' : 'margin scheme';
+
+export const SALE_NUMBER_PERMANENT = 'This invoice number is permanent.';
+
+export function saleConfirmation(a: {
+  registration: string; description?: string | null; buyerName: string; buyerAddress: string;
+  pricePence: number; soldAtIsoDay: string; vatStatus: string;
+}): { sentence: string; rows: Array<[string, string]> } {
+  const address = a.buyerAddress.split(/\n+/).map((l) => l.trim()).filter(Boolean).join(', ');
+  const car = a.description ? `${a.registration} (${a.description})` : a.registration;
+  return {
+    sentence: `${a.registration} to ${a.buyerName.trim()}, ${address}, for ${salePriceLabel(a.pricePence)} on `
+      + `${saleDateLabel(a.soldAtIsoDay)}, ${saleSchemeLabel(a.vatStatus)}. ${SALE_NUMBER_PERMANENT}`,
+    rows: [
+      ['Car', car],
+      ['Buyer', a.buyerName.trim()],
+      ['Address', address],
+      ['Price', salePriceLabel(a.pricePence)],
+      ['Date sold', saleDateLabel(a.soldAtIsoDay)],
+      ['VAT', saleSchemeLabel(a.vatStatus)],
+    ],
+  };
+}
+
 export type OpenPrepCard = { id: string; status: string };
 
 /**

@@ -137,6 +137,7 @@ try {
     'pages/admin/invoices/[id].tsx | series !== \'vehicle_sale\'': [1, 'KIND — a car sale is dated by the sale, so the issue-date editor is not offered'],
     'pages/admin/invoices/[id].tsx | series === \'vehicle_sale\'': [1, 'KIND — and the page says why, in its place'],
     'pages/api/invoice-date-issued.ts | series === \'vehicle_sale\'': [1, 'KIND — the endpoint refuses to move a car sale’s date away from its disposal’s'],
+    'lib/invoice-void.ts | series === \'vehicle_sale\'': [1, 'KIND — a car sale cannot be voided: a void retires the invoice and cannot undo the sale behind it'],
     'pages/api/invoice-unlock.ts | series === \'warranty\'': [1, 'KIND — warranty re-freezes its goodwill shape; a car sale re-freezes its line'],
     'pages/api/historical-import.ts | series: \'chargeable\'': [1, 'DATA — the series recorded in a duplicate-cleanup audit diff'],
     'pages/api/jobcard-status.ts | series === \'warranty\'': [1, 'KIND — warranty is not payable; a car sale is'],

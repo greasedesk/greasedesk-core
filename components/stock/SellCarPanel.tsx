@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { buyerRefusal, openPrepWarning, PICKED_BUYER_NO_ADDRESS, type OpenPrepCard } from '@/lib/stock-sale-rules';
+import { buyerRefusal, openPrepWarning, PICKED_BUYER_NO_ADDRESS, saleConfirmation, type OpenPrepCard } from '@/lib/stock-sale-rules';
 
 type Found = { id: string; name: string; address: string | null; phone: string | null; email: string | null };
 
@@ -25,6 +25,10 @@ const today = () => new Date().toISOString().slice(0, 10);
 export default function SellCarPanel(p: {
   stockItemId: string;
   registration: string;
+  /** Make and model as the page shows them — named in the confirmation beside the plate. */
+  description?: string | null;
+  /** margin | qualifying — the scheme the confirmation states and the invoice will be taxed under. */
+  vatStatus: string;
   projectedSalePence: number | null;
   openPrepCards: OpenPrepCard[];
 }) {
@@ -38,6 +42,8 @@ export default function SellCarPanel(p: {
   const [soldAt, setSoldAt] = useState(today());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // TWO STAGES. Nothing is sent from 'form'; the mint button exists only once the sentence is on screen.
+  const [stage, setStage] = useState<'form' | 'confirm'>('form');
 
   // Search as the name is typed; stale answers are dropped rather than overwriting a newer one.
   useEffect(() => {
@@ -53,12 +59,22 @@ export default function SellCarPanel(p: {
     return () => { live = false; clearTimeout(t); };
   }, [q, isNew, picked]);
 
+  // A CHANGED FIELD INVALIDATES WHAT WAS READ. Editing anything while the confirmation is up returns to the
+  // form, so the sentence on screen can never describe different values from the ones that would be sent.
+  useEffect(() => { setStage('form'); }, [price, soldAt, nb.name, nb.address, picked?.id]);
+
   const warning = openPrepWarning(p.registration, p.openPrepCards);
   const buyer = picked ? { customerId: picked.id } : isNew ? nb : null;
   const pricePence = Math.round(Number(price) * 100);
   const blocker = buyerRefusal(buyer as never)
     ?? (picked && !(picked.address ?? '').trim() ? PICKED_BUYER_NO_ADDRESS : null)
     ?? (!(pricePence > 0) ? 'Say what the car sold for.' : null);
+
+  const confirmation = !blocker && buyer ? saleConfirmation({
+    registration: p.registration, description: p.description,
+    buyerName: picked ? picked.name : nb.name, buyerAddress: picked ? (picked.address ?? '') : nb.address,
+    pricePence, soldAtIsoDay: soldAt, vatStatus: p.vatStatus,
+  }) : null;
 
   async function sell() {
     setBusy(true); setErr(null);
@@ -68,7 +84,7 @@ export default function SellCarPanel(p: {
         body: JSON.stringify({ action: 'sell', stockItemId: p.stockItemId, soldAt, salePence: pricePence, buyer }),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(body.message ?? 'The sale was not recorded.'); return; }
+      if (!res.ok) { setErr(body.message ?? 'The sale was not recorded.'); setStage('form'); return; }
       await router.push(`/admin/invoices/${body.invoiceId}`);
     } catch {
       setErr('The sale was not recorded.');
@@ -135,14 +151,38 @@ export default function SellCarPanel(p: {
       </div>
 
       {err && <p className="mt-3 text-sm text-danger" data-testid="sale-error">{err}</p>}
-      <div className="mt-4 flex items-center gap-3">
-        <button type="button" disabled={busy || !!blocker} onClick={sell} data-testid="sale-submit"
-          className="min-h-[44px] px-4 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-50">
-          {busy ? 'Selling…' : 'Sell and raise invoice'}
-        </button>
-        {/* SAYS WHY it is disabled, rather than silently greying out. */}
-        {blocker && !busy && <span className="text-xs text-muted" data-testid="sale-blocker">{blocker}</span>}
-      </div>
+      {stage === 'form' ? (
+        <div className="mt-4 flex items-center gap-3">
+          <button type="button" disabled={!!blocker} onClick={() => { setErr(null); setStage('confirm'); }} data-testid="sale-review"
+            className="min-h-[44px] px-4 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-50">
+            Review the sale
+          </button>
+          {/* SAYS WHY it is disabled, rather than silently greying out. */}
+          {blocker && <span className="text-xs text-muted" data-testid="sale-blocker">{blocker}</span>}
+        </div>
+      ) : confirmation && (
+        /* ── READ THIS BEFORE THE NUMBER EXISTS ──────────────────────────────────────────────────
+           Every field as a sentence, then the only button that mints. The form's inputs stay above,
+           visible, but a change to any of them returns here only through "Go back". */
+        <div className="mt-4 rounded-lg border-2 border-ink p-4" data-testid="sale-confirm">
+          <p className="text-sm font-semibold text-ink" data-testid="sale-confirm-sentence">{confirmation.sentence}</p>
+          <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
+            {confirmation.rows.map(([k, v]) => (
+              <React.Fragment key={k}><dt className="text-muted">{k}</dt><dd className="text-ink font-medium">{v}</dd></React.Fragment>
+            ))}
+          </dl>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button type="button" disabled={busy} onClick={sell} data-testid="sale-submit"
+              className="min-h-[44px] px-4 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-50">
+              {busy ? 'Minting…' : 'Mint the invoice'}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setStage('form')} data-testid="sale-back"
+              className="min-h-[44px] px-4 rounded-lg border border-line text-ink">
+              Go back and change something
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

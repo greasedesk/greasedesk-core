@@ -333,7 +333,8 @@ export default function InvoicePage(props: PageProps) {
             )}
             {props.isAdmin && props.status !== 'void' && (() => {
               // ONE RULE, SHARED. `canVoid` is the endpoint's own precondition, imported.
-              const check = canVoid({ status: props.status, lineCount: props.lines.length });
+              // series too: on a car sale the refusal below is the page telling you what to do instead.
+              const check = canVoid({ status: props.status, lineCount: props.lines.length, series: props.series });
               // WHERE IT WOULD BE REFUSED, SAY SO. A vanished button teaches nothing; the reason
               // an unlocked invoice cannot be voided is the instruction for how to void it.
               if (!check.ok) return (

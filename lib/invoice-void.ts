@@ -60,8 +60,28 @@ export function isVoidCategory(v: unknown): v is VoidCategory {
  * having changed hands is a different conversation from a document issued in error, and silently
  * discarding the payment grain is what `unlock` does and what this must not.
  */
-export function canVoid(inv: { status: string; lineCount: number }): { ok: true } | { ok: false; code: string; message: string } {
+/**
+ * ── A CAR SALE CANNOT BE VOIDED ─────────────────────────────────────────────────────────────────
+ *
+ * A car sale is four writes in one transaction — the disposal, the ownership moving to the buyer, the
+ * sale card and the invoice (lib/stock-sale). A void retires the INVOICE ONLY. Measured on a real sale
+ * invoice before this refusal existed: the car stayed sold at the wrong price, stayed owned by the buyer,
+ * could not be sold again ("That car has already left stock"), and its margin VAT dropped out of the VAT
+ * summary without a word — not flagged, simply absent. That is the half-state the sale path was built to
+ * make impossible, reached around the side of it.
+ *
+ * So it refuses, and says what to do instead, because a refusal with no way forward is a dead end.
+ */
+export const CAR_SALE_VOID_REFUSAL =
+  'A car sale cannot be voided. Voiding would retire this invoice but could not undo the sale behind it: '
+  + 'the car would stay sold at this price, still owned by the buyer, unable to be sold again, and its '
+  + 'margin VAT would silently drop out of the VAT summary. To correct it, unlock the invoice and re-issue '
+  + 'it. If the sale price itself was wrong, the car’s recorded sale price needs correcting too — until it '
+  + 'is, the VAT summary names this invoice rather than guessing.';
+
+export function canVoid(inv: { status: string; lineCount: number; series?: string | null }): { ok: true } | { ok: false; code: string; message: string } {
   if (inv.status === 'void') return { ok: false, code: 'already_void', message: 'This invoice is already voided.' };
+  if (inv.series === 'vehicle_sale') return { ok: false, code: 'car_sale', message: CAR_SALE_VOID_REFUSAL };
   if (inv.status === 'paid' || inv.status === 'paid_pending') {
     return { ok: false, code: 'is_paid', message: 'This invoice is marked paid. Unmark or unlock the payment first — voiding must not silently discard a payment record.' };
   }

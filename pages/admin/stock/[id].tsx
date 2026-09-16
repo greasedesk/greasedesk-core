@@ -207,7 +207,7 @@ export default function StockCarPage() {
                 Below the profit, deliberately: the price is decided with the cost in view. Gone once
                 the car has left — a sold car's figures are frozen. */}
             {!sold && (
-              <SellCarPanel stockItemId={id} registration={d.registration}
+              <SellCarPanel stockItemId={id} registration={d.registration} description={d.description} vatStatus={d.vatStatus}
                 projectedSalePence={d.projectedSalePence} openPrepCards={openPrep} />
             )}
 

@@ -53,7 +53,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
 
-  const allowed = canVoid({ status: invoice.status, lineCount: invoice._count.lines });
+  // series rides along: a car sale refuses here, whatever its status (lib/invoice-void::CAR_SALE_VOID_REFUSAL).
+  const allowed = canVoid({ status: invoice.status, lineCount: invoice._count.lines, series: invoice.series });
   if (!allowed.ok) return res.status(409).json({ code: allowed.code, message: allowed.message });
 
   try {

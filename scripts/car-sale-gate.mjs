@@ -74,6 +74,19 @@ try {
     `${lq.unitPricePounds} + ${lq.vatAmountPounds}`);
   check('the line names the car the way its V5C will', RULES.saleLineDescription({ registration: 'AB12CDE', make: 'MINI', model: 'Cooper', year: 2012 }) === 'Sale of 2012 MINI Cooper, registration AB12CDE');
 
+  console.log('\n— THE CONFIRMATION’S WORDS —');
+  check('a price is spelled with pounds, commas and pence', RULES.salePriceLabel(120000) === '£1,200.00' && RULES.salePriceLabel(99) === '£0.99' && RULES.salePriceLabel(123456789) === '£1,234,567.89');
+  check('a date is spelled the same on every runtime', RULES.saleDateLabel('2026-09-16') === '16 Sep 2026', RULES.saleDateLabel('2026-09-16'));
+  const lc = RULES.saleConfirmation({ registration: 'LC09XFU', buyerName: 'A Buyer', buyerAddress: '1 High Street\nTipton', pricePence: 120000, soldAtIsoDay: '2026-09-16', vatStatus: 'margin' });
+  check('the sentence names every fact that goes on the document', lc.sentence === 'LC09XFU to A Buyer, 1 High Street, Tipton, for £1,200.00 on 16 Sep 2026, margin scheme. This invoice number is permanent.', lc.sentence);
+  check('  …and says the scheme of a qualifying car differently', /VAT qualifying/.test(RULES.saleConfirmation({ registration: 'X', buyerName: 'B', buyerAddress: 'C', pricePence: 1, soldAtIsoDay: '2026-01-01', vatStatus: 'qualifying' }).sentence));
+  const VOID = await import(`${R}/lib/invoice-void.ts`);
+  const cv = VOID.canVoid({ status: 'issued', lineCount: 1, series: 'vehicle_sale' });
+  check('a car sale cannot be voided — in the one rule the endpoint and the page both read', !cv.ok && cv.code === 'car_sale');
+  check('  …and the refusal says what it would have broken and what to do instead',
+    !cv.ok && /still owned by the buyer/.test(cv.message) && /silently drop out of the VAT summary/.test(cv.message) && /unlock the invoice and re-issue/.test(cv.message));
+  check('  …while a workshop invoice can still be voided', VOID.canVoid({ status: 'issued', lineCount: 1, series: 'chargeable' }).ok === true);
+
   console.log('\n— NO KIND TO CHOOSE, AND NO traded_out —');
   const saleSrc = code('lib/stock-sale.ts');
   const sig = saleSrc.slice(saleSrc.indexOf('export async function sellCar('), saleSrc.indexOf('}, deps: SaleDeps'));
@@ -316,6 +329,9 @@ try {
   console.log('\n— ON THE CAR’S OWN PAGE, WITH A PREP CARD STILL OPEN —');
   const ui = await car('margin');
   const prep = await prisma.jobCard.create({ data: { group_id: ZZ_GROUP, site_id: site.id, vehicle_id: ui.vehicleId, stock_item_id: ui.itemId, status: 'accepted' }, select: { id: true } });
+  // A PROJECTED PRICE ON THE CAR, as LC09XFU had (£2,000 projected, £1,200 agreed) — the near-miss this
+  // confirmation exists for.
+  await prisma.stockItem.update({ where: { id: ui.itemId }, data: { projected_sale_pence: 500000 } });
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status}`);
   const origin = gateOrigin();
@@ -337,14 +353,45 @@ try {
   await page.click('[data-testid="sale-buyer-new"]');
   await page.fill('[data-testid="sale-new-name"]', `${PREFIX} Saturday Buyer`);
   await page.fill('[data-testid="sale-new-address"]', '7 Cash Street\nDudley');
-  await page.fill('[data-testid="sale-price"]', '4000');
   await page.fill('[data-testid="sale-date"]', '2026-09-12');
-  const enabled = await page.locator('[data-testid="sale-submit"]').isEnabled();
+
+  console.log('\n— NOTHING IS MINTED UNTIL THE SALE HAS BEEN READ —');
+  check('there is no mint button on the form — only "Review the sale"',
+    (await page.locator('[data-testid="sale-submit"]').count()) === 0 && (await page.locator('[data-testid="sale-review"]').count()) === 1);
+  /** THE NEAR-MISS, REPRODUCED: whatever sits in the price box untouched is what the sentence must say. */
+  const untouched = await page.locator('[data-testid="sale-price"]').inputValue();
+  const reviewEnabled = await page.locator('[data-testid="sale-review"]').isEnabled();
   /** WARN, NOT REFUSE. A buyer with cash on a Saturday does not wait for a card to be closed. */
-  check('the warning does not block — the button is live with the card still open', enabled);
+  check('the prep warning does not block — review is live with the card still open', reviewEnabled);
+  if (reviewEnabled) await page.click('[data-testid="sale-review"]').catch(() => {});
+  const firstRead = await page.locator('[data-testid="sale-confirm-sentence"]').textContent().catch(() => null);
+  check('an untouched pre-filled price is SPELLED OUT before anything is minted',
+    !!firstRead && untouched !== '' && firstRead.includes(RULES.salePriceLabel(Math.round(Number(untouched) * 100))),
+    `box held "${untouched}"; sentence: ${(firstRead ?? 'NO CONFIRMATION').slice(0, 110)}`);
+
+  // Change the price WHILE the confirmation is up: what was read no longer describes what would be sent.
+  await page.fill('[data-testid="sale-price"]', '4000');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="sale-submit"]'), null, { timeout: 5000 }).catch(() => {});
+  check('changing a field while confirming takes the mint button away again',
+    (await page.locator('[data-testid="sale-submit"]').count()) === 0,
+    'the sentence on screen can never describe different values from the ones that would be sent');
+  if (await page.locator('[data-testid="sale-review"]').isEnabled().catch(() => false)) await page.click('[data-testid="sale-review"]').catch(() => {});
+  const sentence = await page.locator('[data-testid="sale-confirm-sentence"]').textContent().catch(() => null);
+  const expected = RULES.saleConfirmation({ registration: ui.reg, buyerName: `${PREFIX} Saturday Buyer`, buyerAddress: '7 Cash Street\nDudley',
+    pricePence: 400000, soldAtIsoDay: '2026-09-12', vatStatus: 'margin' }).sentence;
+  // NOT ONLY `=== expected`: that compares the page to the function that wrote it, so a broken function
+  // agrees with itself (red-proof: dropping the address and the permanence passed this clause). Each fact
+  // is also looked for directly, spelled by hand.
+  const facts = [ui.reg, `${PREFIX} Saturday Buyer`, '7 Cash Street, Dudley', '£4,000.00', '12 Sep 2026', 'margin scheme', 'permanent'];
+  const missing = facts.filter((f) => !(sentence ?? '').includes(f));
+  check('the confirmation reads: car, buyer, address, price, date, scheme, and that the number is permanent',
+    sentence === expected && missing.length === 0, missing.length ? `missing ${missing.join(' / ')} — ${sentence ?? 'NO CONFIRMATION'}` : `${sentence}`);
+  const back = await page.locator('[data-testid="sale-back"]').count();
+  check('  …with a way back that is not a refusal', back === 1);
+  const mintable = await page.locator('[data-testid="sale-submit"]').isEnabled().catch(() => false);
   // ONLY CLICK WHAT CAN BE CLICKED. Clicking a disabled button waits 30s and THROWS, which ended the
-  // run in red-proofing and hid every clause below. A disabled button is already a failure, recorded above.
-  if (enabled) {
+  // run in red-proofing and hid every clause below. A missing button is already a failure, recorded above.
+  if (mintable) {
     await Promise.all([
       page.waitForURL((u) => urlUnder(u.toString(), '/admin/invoices'), { timeout: 45000 }).catch(() => {}),
       page.click('[data-testid="sale-submit"]').catch(() => {}),
@@ -374,6 +421,24 @@ try {
   check('the issue-date endpoint REFUSES to move a car sale’s date', tryEdit.status() === 409
     && afterEdit?.date_issued?.toISOString() === dateBefore?.date_issued?.toISOString(),
     `HTTP ${tryEdit.status()}, date ${afterEdit?.date_issued?.toISOString?.().slice(0, 10)} (was ${dateBefore?.date_issued?.toISOString?.().slice(0, 10)})`);
+  console.log('\n— A CAR SALE CANNOT BE VOIDED, AND THE PAGE SAYS WHAT TO DO INSTEAD —');
+  const blocked = await page.locator('[data-testid="void-blocked"]').textContent().catch(() => null);
+  check('the invoice page offers no void, and explains it in place', (await page.locator('[data-testid="void-open"]').count()) === 0
+    && !!blocked && /cannot be voided/.test(blocked) && /unlock the invoice and re-issue/.test(blocked),
+    (blocked ?? 'NO EXPLANATION').slice(0, 110));
+  const dispBefore = await prisma.stockDisposal.findFirst({ where: { stock_item_id: ui.itemId }, select: { id: true, sale_pence: true } });
+  const tryVoid = await ctx.request.post(`${origin}/api/invoice-void`, { data: { invoiceId: invId, category: 'issued_in_error', reason: 'Typed the projected price instead of the agreed one' } });
+  const voidBody = await tryVoid.json().catch(() => ({}));
+  const invAfterVoid = await prisma.invoice.findUnique({ where: { id: invId }, select: { status: true } });
+  const dispAfter = await prisma.stockDisposal.findFirst({ where: { stock_item_id: ui.itemId }, select: { id: true, sale_pence: true } });
+  /**
+   * THE DOOR AROUND THE SIDE. Measured before this refusal: a void left the car sold at the wrong price,
+   * still the buyer's, unsellable, and its margin VAT silently ABSENT from the VAT summary.
+   */
+  check('the void endpoint REFUSES a car sale, whoever calls it', tryVoid.status() === 409 && voidBody.code === 'car_sale' && invAfterVoid?.status !== 'void',
+    `HTTP ${tryVoid.status()} ${voidBody.code ?? ''}; invoice ${invAfterVoid?.status}`);
+  check('  …and the sale behind it is untouched', dispAfter?.id === dispBefore?.id && dispAfter?.sale_pence === dispBefore?.sale_pence);
+
   const prepStill = await prisma.jobCard.findUnique({ where: { id: prep.id }, select: { status: true } });
   check('the prep card was left exactly as it was', prepStill?.status === 'accepted', String(prepStill?.status));
   await page.goto(`${origin}/admin/stock/${ui.itemId}`, { waitUntil: 'domcontentloaded' });
