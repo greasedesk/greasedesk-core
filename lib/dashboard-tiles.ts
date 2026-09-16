@@ -21,6 +21,8 @@ import { wipCardsWhere, wipCardValuePennies, wipLineValuesPennies, WIP_AGE_DAYS 
 import { notVoided } from '@/lib/invoice-void';
 import { FREES_THE_SLOT } from '@/lib/jobcard-status';
 import { noShowLostInPeriod } from '@/lib/no-show';
+// The workshop takings tiles — Revenue, Issued-vs-paid, Pending — read ONE rule, never car sales.
+import { IN_WORKSHOP_TAKINGS, seriesWhere } from '@/lib/invoice-series-scope';
 
 // `now` reaches EVERY compute (point-in-time cash tiles age their rows against it; month tiles use
 // it for the in-progress-month to-date window). Passed in — never `new Date()` inside a compute —
@@ -114,7 +116,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
     // Count stays INVOICE-shaped — "how many jobs did we get paid for" is not "how many payment
     // rows landed", and a part payment must not read as two jobs.
     const rows = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', series: 'chargeable' },
+      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', ...seriesWhere(IN_WORKSHOP_TAKINGS) },
       select: { date_paid: true, paid_at: true },
     })) as any[];
     const count = rows.filter((x) => { const d = effectivePaidDate(x); return d && d >= from && d < to; }).length;
@@ -132,12 +134,12 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   // Issued vs paid in the period — count + value each way.
   issuedVsPaid: async ({ groupId, siteIds, from, to }) => {
     const issued = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, series: 'chargeable', ...notVoided, ...effectiveIssueDateWhere(from, to) },
+      where: { group_id: groupId, site_id: { in: siteIds }, ...seriesWhere(IN_WORKSHOP_TAKINGS), ...notVoided, ...effectiveIssueDateWhere(from, to) },
       select: { status: true, lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
     const issuedPennies = issued.reduce((a, r) => a + grossOfPaid(r), 0); // frozen lines from mint — one gross for every status
     const paidRows = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', series: 'chargeable' },
+      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid', ...seriesWhere(IN_WORKSHOP_TAKINGS) },
       select: PAID_SELECT,
     })) as any[];
     const paidInPeriod = paidRows.filter((r) => { const d = effectivePaidDate(r); return d && d >= from && d < to; });
@@ -156,7 +158,7 @@ export const TILE_COMPUTES: Record<string, (ctx: TileContext) => Promise<unknown
   // live clearance money. Value from the frozen snapshot lines (pending IS frozen).
   pendingClearance: async ({ groupId, siteIds }) => {
     const rows = (await prisma.invoice.findMany({
-      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid_pending', series: 'chargeable' },
+      where: { group_id: groupId, site_id: { in: siteIds }, status: 'paid_pending', ...seriesWhere(IN_WORKSHOP_TAKINGS) },
       select: { lines: { select: { vat_rate: true, line_total: true, line_vat: true } } },
     })) as any[];
     return { grossPennies: rows.reduce((a, r) => a + grossOfPaid(r), 0), count: rows.length };

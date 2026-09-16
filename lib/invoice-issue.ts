@@ -32,6 +32,7 @@ import { resolveCompanyIdentity, resolveBilledParty } from '@/lib/invoice';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
 import { dueDateFor } from '@/lib/account-terms';
 import { visitEndMileage } from '@/lib/odometer';
+import { IS_DEBT, TRACKS_AGREED_QUOTE, allows } from '@/lib/invoice-series-scope';
 
 const CARD_SELECT = {
   site_id: true,
@@ -86,7 +87,9 @@ async function createInvoiceRow(
       // CHARGEABLE ONLY: a warranty invoice is settled at £0 and collects nothing, and a historical
       // import records work already paid for elsewhere — neither can fall due, so neither gets a
       // date that would put it on a chase list.
-      due_date: series === 'chargeable' ? dueDateFor(card.customer, issuedAt) : null,
+      // CAN IT BE OWED (lib/invoice-series-scope::IS_DEBT) — so a car sold to an ACCOUNT customer
+      // gets their terms and can fall overdue, and a retail buyer, like retail workshop work, gets none.
+      due_date: allows(IS_DEBT, series) ? dueDateFor(card.customer, issuedAt) : null,
       company_name_snapshot: identity.name,
       // FROZEN AT ISSUE, like every other snapshot on this row. A rebrand must not rewrite the name
       // on documents already in customers' hands.
@@ -213,7 +216,7 @@ export async function billingDivergence(
 ): Promise<BillingDivergence | null> {
   // Warranty settles at £0 by construction and a historical import records a document raised
   // elsewhere; neither is expected to track the live card.
-  if (opts.series && opts.series !== 'chargeable') return null;
+  if (opts.series && !allows(TRACKS_AGREED_QUOTE, opts.series)) return null;
 
   const accepted = (await db.quoteVersion.findFirst({
     where: { job_card_id: jobCardId, status: 'accepted' },

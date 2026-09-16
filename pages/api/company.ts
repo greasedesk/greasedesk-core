@@ -19,6 +19,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { deleteObject } from '@/lib/r2';
+import { USES_CHARGEABLE_COUNTER, seriesWhere } from '@/lib/invoice-series-scope';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PATCH') {
@@ -185,7 +186,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const changed = touchedFormat.filter((k) => String(data[k]) !== String(cur?.[k]));
     for (const k of touchedFormat) if (!changed.includes(k)) delete data[k]; // no-op resubmits pass through harmlessly
     if (changed.length) {
-      const minted = await prisma.invoice.count({ where: { group_id: groupId, series: 'chargeable' } });
+      const minted = await prisma.invoice.count({ where: { group_id: groupId, ...seriesWhere(USES_CHARGEABLE_COUNTER) } });
       if (minted > 0) {
         return res.status(409).json({ message: 'Invoices have been issued — the number format (prefix, padding, fiscal-year) is locked to protect the sequence. Reload the page to see the current settings.' });
       }
@@ -206,7 +207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (invoice_next_number !== undefined && String(invoice_next_number).trim() !== '') {
     const n = Math.trunc(Number(invoice_next_number));
     if (!Number.isFinite(n) || n < 1 || n > 100_000_000) return res.status(400).json({ message: 'The next invoice number must be a positive whole number.' });
-    const used = await prisma.invoice.count({ where: { group_id: groupId, series: 'chargeable' } });
+    const used = await prisma.invoice.count({ where: { group_id: groupId, ...seriesWhere(USES_CHARGEABLE_COUNTER) } });
     if (used > 0) return res.status(409).json({ message: 'Invoices have already been issued — the number sequence can no longer be re-seeded.' });
     seedTo = n - 1; // last_value; the next mint returns n
   }

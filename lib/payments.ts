@@ -26,6 +26,7 @@
  */
 import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { IN_WORKSHOP_TAKINGS, seriesWhere } from '@/lib/invoice-series-scope';
 
 type Tx = Prisma.TransactionClient;
 /** Reads may come from the client or a transaction; writes above take Tx explicitly. */
@@ -359,7 +360,9 @@ export async function receivedInPeriod(
   const invoiceScope = {
     group_id: args.groupId,
     site_id: { in: args.siteIds },   // Invoice.site_id — non-nullable, the authority
-    series: 'chargeable' as const,
+    // WORKSHOP TAKINGS (lib/invoice-series-scope): this feeds the Revenue and Issued-vs-paid tiles,
+    // which must agree with each other and with the profit strip beside them — so never car sales.
+    ...seriesWhere(IN_WORKSHOP_TAKINGS),
   };
 
   const [payments, refunds] = await Promise.all([

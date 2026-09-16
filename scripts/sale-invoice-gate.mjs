@@ -281,9 +281,10 @@ try {
    * genuinely in this month's window, so the clause can fail.
    */
   const LEDGER = await import('/Users/hugh/Developer/greasedesk-core/lib/charged-labour.ts');
+  const SCOPE = await import('/Users/hugh/Developer/greasedesk-core/lib/invoice-series-scope.ts');
   check('the ledger rule states EVERY series, so a fifth cannot arrive by default',
-    JSON.stringify(Object.keys(LEDGER.IN_WORKSHOP_LEDGER).sort()) === JSON.stringify([...NUM.INVOICE_SERIES].sort()),
-    Object.entries(LEDGER.IN_WORKSHOP_LEDGER).map(([k, v]) => `${k}=${v}`).join(', '));
+    JSON.stringify(Object.keys(SCOPE.IN_WORKSHOP_LEDGER).sort()) === JSON.stringify([...NUM.INVOICE_SERIES].sort()),
+    Object.entries(SCOPE.IN_WORKSHOP_LEDGER).map(([k, v]) => `${k}=${v}`).join(', '));
   const now0 = new Date();
   const monthFrom = new Date(Date.UTC(now0.getUTCFullYear(), now0.getUTCMonth(), 1));
   const monthTo = new Date(Date.UTC(now0.getUTCFullYear(), now0.getUTCMonth() + 1, 1));

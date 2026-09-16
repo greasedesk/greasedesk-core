@@ -18,6 +18,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { presignGet } from '@/lib/r2';
+import { USES_CHARGEABLE_COUNTER, seriesWhere } from '@/lib/invoice-series-scope';
 
 type PageProps = {
   replyTo: string; senderName: string; bcc: string; footerText: string; opsEmail: string;
@@ -334,7 +335,7 @@ export const getServerSideProps = withI18n(['company'])(async (ctx) => {
       invoice_sequence: { select: { last_value: true } },
     },
   })) as any;
-  const chargeableUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, series: 'chargeable' } });
+  const chargeableUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, ...seriesWhere(USES_CHARGEABLE_COUNTER) } });
   const warrantyUsed = await prisma.invoice.count({ where: { group_id: gate.vis.groupId as string, series: 'warranty' } });
   return {
     props: {

@@ -26,7 +26,7 @@ import { formatMoney } from '@/lib/format-money';
 
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
-  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty' | 'historical';
+  status: 'issued' | 'paid_pending' | 'paid' | 'settled' | 'void'; series: 'chargeable' | 'warranty' | 'historical' | 'vehicle_sale';
   issuedAt: string; receiptSent: boolean; manualPending?: boolean; refundKind?: 'none' | 'partial' | 'full'; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
   voidedAt?: string | null; voidReason?: string | null;
@@ -81,15 +81,17 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
   const [period, setPeriod] = useState<PeriodQS>(null);            // active period (from a tile)
   const [applied, setApplied] = useState<{ from: string; to: string } | null>(null); // server-resolved echo
   const [q, setQ] = useState('');
+  // WORKSHOP SCOPE arrives from a dashboard tile that never counts car sales — see lib/invoice-list-filters.
+  const [workshopOnly, setWorkshopOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  async function load(f: Filter, query: string, pd: PeriodQS) {
+  async function load(f: Filter, query: string, pd: PeriodQS, workshop: boolean = workshopOnly) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/invoices?status=${f}&q=${encodeURIComponent(query)}${periodToQS(pd)}`, { cache: 'no-store' });
+      const res = await fetch(`/api/invoices?status=${f}&q=${encodeURIComponent(query)}${periodToQS(pd)}${workshop ? '&scope=workshop' : ''}`, { cache: 'no-store' });
       if (res.ok) { const d = await res.json(); setRows(d.invoices || []); setApplied(d.period ?? null); }
     } catch { /* list stays; friendly enough */ }
     setLoading(false);
@@ -101,16 +103,17 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
     const st = String(qs.status || 'all');
     const f: Filter = (FILTERS as readonly string[]).includes(st) || st === 'issued' ? (st as Filter) : 'all';
     const pd: PeriodQS = qs.preset ? { preset: String(qs.preset) } : (qs.from && qs.to ? { from: String(qs.from), to: String(qs.to) } : null);
-    setFilter(f); setPeriod(pd);
-    load(f, '', pd);
+    const ws = qs.scope === 'workshop';
+    setFilter(f); setPeriod(pd); setWorkshopOnly(ws);
+    load(f, '', pd, ws);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady]);
   const setFilterAndLoad = (f: Filter) => { setFilter(f); load(f, q, period); };
   const clearPeriod = () => {
     const f: Filter = filter === 'issued' ? 'all' : filter; // 'issued' only means anything WITH a period
-    setPeriod(null); setApplied(null); setFilter(f);
+    setPeriod(null); setApplied(null); setFilter(f); setWorkshopOnly(false);
     router.replace('/admin/invoices', undefined, { shallow: true });
-    load(f, q, null);
+    load(f, q, null, false);
   };
   const onSearch = (v: string) => {
     setQ(v);
@@ -182,6 +185,12 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
               })}
             </span>
             <button onClick={clearPeriod} className="underline font-semibold">{t('periodClear')}</button>
+          </div>
+        )}
+        {workshopOnly && (
+          <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg mb-3 text-sm bg-surface-muted text-ink" data-testid="workshop-scope-banner">
+            <span>{t('workshopScopeBanner')}</span>
+            <button onClick={() => { setWorkshopOnly(false); load(filter, q, period, false); }} className="underline font-semibold">{t('workshopScopeClear')}</button>
           </div>
         )}
         {msg && <div className={`p-2 rounded-lg mb-3 text-sm ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}

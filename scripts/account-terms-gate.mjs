@@ -39,7 +39,19 @@ check('an unpaid one past its date IS overdue', daysOverdue({ due_date: new Date
 check('overdue is a listable key', isListStatusKey('overdue') && LIST_STATUS_KEYS.includes('overdue'));
 const ow = listWhere('overdue', null).where;
 check('overdue EXCLUDES a null due date — the whole back catalogue', ow.due_date?.not === null, JSON.stringify(ow.due_date));
-check('overdue keeps the chaser exclusions (imported, chargeable)', ow.is_imported === false && ow.series === 'chargeable');
+// RULING MOVED 2026-09-16: overdue is no longer "chargeable only". A car sold to an ACCOUNT customer is
+// money owed and can fall late, so the series part of the chaser exclusion is now
+// lib/invoice-series-scope::IS_DEBT. What it was FOR still holds, and is what is asserted: imported
+// records are never chased, and neither is anything that cannot be owed — warranty settles at £0,
+// historical was paid elsewhere.
+{
+  const { IS_DEBT, seriesIncluded } = await import('../lib/invoice-series-scope.ts');
+  const owed = [...(ow.series?.in ?? [])].sort();
+  check('overdue keeps the chaser exclusions: never imported, never a series that cannot be owed',
+    ow.is_imported === false && JSON.stringify(owed) === JSON.stringify(seriesIncluded(IS_DEBT).sort())
+      && !owed.includes('warranty') && !owed.includes('historical'),
+    `series ${JSON.stringify(owed)}`);
+}
 check('overdue only ever means UNPAID', ow.status === 'issued');
 const t1 = listWhere('overdue', null).where.due_date.lt;
 await new Promise((r) => setTimeout(r, 15));

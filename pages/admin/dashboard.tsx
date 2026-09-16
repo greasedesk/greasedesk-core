@@ -68,7 +68,7 @@ const TILE_RENDERERS: TileRenderer[] = [
   {
     key: 'revenue',
     render: (d, f) => (
-      <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
+      <Link href={`/admin/invoices?status=paid&scope=workshop${f.qs ? `&${f.qs}` : ''}`} className={tileLink}>
         <Figure className="text-3xl font-bold text-ink tabular-nums" data-testid="revenue-figure">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.revenueSub', { count: d.count })}</p>
         {/* ON THE FACE OF THE TILE, not a footnote elsewhere explaining a discrepancy. Only when
@@ -99,10 +99,11 @@ const TILE_RENDERERS: TileRenderer[] = [
     // chargeable issued-in-period, any status; Paid → the same list the Revenue tile opens).
     render: (d, f) => (
       <div className="space-y-1.5">
-        <Link href={`/admin/invoices?status=issued${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
+        {/* scope=workshop: these tiles never count car sales, so the list they open must not either. */}
+        <Link href={`/admin/invoices?status=issued&scope=workshop${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
           <span className="text-xs text-muted shrink-0 mr-2">{f.t('tiles.issued')}</span><Figure className="text-lg font-semibold text-ink tabular-nums text-right">{d.issuedCount} · {f.money(d.issuedPennies)}</Figure>
         </Link>
-        <Link href={`/admin/invoices?status=paid${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
+        <Link href={`/admin/invoices?status=paid&scope=workshop${f.qs ? `&${f.qs}` : ''}`} className="flex justify-between items-baseline rounded-md -mx-1.5 px-1.5 hover:bg-surface-muted/60 cursor-pointer transition-colors">
           <span className="text-xs text-muted shrink-0 mr-2">{f.t('tiles.paid')}</span><Figure className="text-lg font-semibold text-ok tabular-nums text-right">{d.paidCount} · {f.money(d.paidPennies)}</Figure>
         </Link>
       </div>
@@ -151,7 +152,7 @@ const TILE_RENDERERS: TileRenderer[] = [
     key: 'pendingClearance',
     pointInTime: true, // current clearance window — ignores the period selector BY DESIGN
     render: (d, f) => (
-      <Link href="/admin/invoices?status=pending" className={tileLink}>
+      <Link href="/admin/invoices?status=pending&scope=workshop" className={tileLink}>
         <Figure className="text-3xl font-bold text-warn tabular-nums">{f.money(d.grossPennies)}</Figure>
         <p className="text-xs text-muted mt-1">{f.t('tiles.pendingClearanceSub', { count: d.count })}</p>
       </Link>

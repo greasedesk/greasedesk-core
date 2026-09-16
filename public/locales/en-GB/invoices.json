@@ -53,5 +53,7 @@
   "periodClear": "Clear filter",
   "voidBanner": "Voided {{when}} — {{reason}}",
   "voidReasonLabel": "Voided",
-  "importHistorical": "Import a historical invoice"
+  "importHistorical": "Import a historical invoice",
+  "workshopScopeBanner": "Workshop invoices only, to match the dashboard tile you came from. Car sales are on the stock page.",
+  "workshopScopeClear": "Show car sales too"
 }

@@ -16,7 +16,7 @@ import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
 import { refundState } from '@/lib/invoice-refund-state';
 import { invoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
-import { isListStatusKey, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
+import { isListStatusKey, isListScope, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
 import { resolveRange } from '@/lib/dashboard-periods';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,7 +46,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       grp?.fy_start_month ?? 4,
     );
   }
-  const { where: statusWhere, paidRange } = listWhere(statusKey, range);
+  // SCOPE travels with a tile's link so the tile and the list it opens agree (lib/invoice-list-filters).
+  const scope = isListScope(req.query.scope) ? req.query.scope : null;
+  const { where: statusWhere, paidRange } = listWhere(statusKey, range, scope);
 
   const rows = (await prisma.invoice.findMany({
     where: {
