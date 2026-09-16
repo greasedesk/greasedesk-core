@@ -1,0 +1,18 @@
+-- @migration: additive
+--
+-- THE SALE CARD MARKER — a car being SOLD out of stock, as distinct from a car being PREPARED.
+--
+-- A SEPARATE COLUMN FROM stock_item_id, AND THAT IS THE WHOLE POINT. lib/invoice-issue's
+-- refuseIfInternalStock reads stock_item_id and refuses to raise an invoice, because a prep card has
+-- nobody to bill and its parts already count against the car in the stock book. A sale card MUST
+-- mint. Reusing stock_item_id for both would mean weakening that refusal to let one case through —
+-- and a refusal with an exception in it is one exception away from not being a refusal. Two columns
+-- means refuseIfInternalStock stays exactly as written and cannot be relaxed by accident.
+--
+-- NO FOREIGN KEY, following stock_disposal_id and PurchaseModel.vehicle_id: an FK from an existing
+-- table is ALTER TABLE ADD CONSTRAINT, which classifies CONSTRAINING and would cost this slice a
+-- second push for one column. The referential constraint comes later, in a migration containing
+-- nothing but foreign keys, once the code that writes this is deployed.
+--
+-- NULL on every card that exists today.
+ALTER TABLE "JobCard" ADD COLUMN "sale_of_stock_item_id" TEXT;

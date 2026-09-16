@@ -113,8 +113,9 @@ enum InvoiceSeries {
   // read names `series: 'chargeable'`, so a historical entry can never re-declare output tax
   // already declared elsewhere.
   historical
-  // VEHICLE_SALE: the sale of a car out of stock. A SECOND ORIGIN — this document hangs off a
-  // StockDisposal, not a job card — and its own counter, for the reason the third one exists: a car
+  // VEHICLE_SALE: the sale of a car out of stock. A SECOND ORIGIN — still carried by a JobCard, but
+  // one marked sale_of_stock_item_id, billing a vehicle rather than work — and its own counter, for
+  // the reason the third one exists: a car
   // sale must never advance the chargeable counter. The VAT treatment is not implied by the series:
   // a margin-scheme car and a qualifying one are both vehicle_sale and are taxed differently, which
   // is what Invoice.vat_position records.
@@ -2985,6 +2986,21 @@ model JobCard {
   /// pointing into StockItem would be a constraining migration on a shared database. Same precedent
   /// as Invoice.stock_disposal_id, decided for the same reason.
   stock_item_id     String?
+  /// THE CAR THIS CARD IS SELLING — set only on a SALE card, and DELIBERATELY NOT stock_item_id.
+  ///
+  /// stock_item_id above means this card is PREPARING a car we own, and lib/invoice-issue's
+  /// refuseIfInternalStock reads it to refuse an invoice: a prep card has nobody to bill and its
+  /// parts already count against the car in the stock book. A sale card must MINT. One column for
+  /// both would mean putting an exception inside that refusal, and a refusal with an exception in it
+  /// is one exception away from not being a refusal. Two columns, so the refusal stays as written.
+  ///
+  /// A card may carry one or the other, never both — enforced in code (lib/stock-prep), not by a
+  /// CHECK: see the column note on stock_disposal_id for why constraints arrive in their own push.
+  /// No FK yet, for the same reason.
+  ///
+  /// NULL means this card is not selling a car — which is every card that exists today and almost
+  /// every card that ever will. A deliberate value, not a missing one.
+  sale_of_stock_item_id String?
 
   // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
   stage_details_done     Boolean @default(false) // 1. Job Card (details/estimate)

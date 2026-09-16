@@ -22,6 +22,41 @@ export function isInternalStock(card: { stock_item_id?: string | null } | null |
  * leaves someone converting the card back to a customer card to get past it — which would put a
  * debtor on the books for a car the garage owns.
  */
+/**
+ * ── THE OTHER KIND OF STOCK CARD, AND WHY IT IS A DIFFERENT COLUMN ──────────────────────────────
+ *
+ * A SALE card sells a car out of stock. It reads `sale_of_stock_item_id`, never `stock_item_id`.
+ *
+ * isInternalStock above is what lib/invoice-issue::refuseIfInternalStock asks before minting, and a
+ * prep card is refused because there is nobody to bill. A sale card must MINT — and the temptation
+ * is to put the sale case inside that refusal as an exception. Do not. A refusal with an exception
+ * in it is one exception away from not being a refusal, and the exception would be sitting in the
+ * one function standing between a garage and a debtor invented for a car it owns.
+ *
+ * Two columns, two predicates, and refuseIfInternalStock stays exactly as written: it never hears
+ * about sale cards at all, so it cannot be weakened by someone reasoning about them.
+ */
+export function isSaleCard(card: { sale_of_stock_item_id?: string | null } | null | undefined): boolean {
+  return !!card?.sale_of_stock_item_id;
+}
+
+/** A card is one or the other. Both set is a contradiction, not a richer card. */
+export function isPrepAndSale(card: { stock_item_id?: string | null; sale_of_stock_item_id?: string | null } | null | undefined): boolean {
+  return isInternalStock(card) && isSaleCard(card);
+}
+
+export const SALE_AND_PREP_REFUSAL =
+  'This card is marked both as preparing a car and as selling one. Those are different jobs with '
+  + 'different money: prep costs count against the car, a sale bills a customer for it. Unlink '
+  + 'whichever is wrong before going on.';
+
+/**
+ * A SALE CARD IS NOT WORK. It bills a car, not hours, so it is not open work waiting to be done and
+ * must never be counted as such — see lib/wip, where the exclusion lives.
+ */
+export const SALE_CARD_NOT_WORK_NOTE =
+  'Selling a car, not a job — no workshop time is expected against this card.';
+
 export const INTERNAL_STOCK_INVOICE_REFUSAL =
   'This card is preparing a car we own, so there is nobody to invoice. Its parts already count '
   + 'against that car in the stock book. If this work really is being billed to a customer, unlink '

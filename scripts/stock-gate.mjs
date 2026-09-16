@@ -669,8 +669,12 @@ try {
 
   console.log('\n— and an internal card cannot be invoiced, by any door —');
   const issueSrc = readFileSync('lib/invoice-issue.ts', 'utf8');
-  const mintFns = issueSrc.split('\n').filter((l) => /^export async function issue\w*ForCard\(/.test(l));
-  check('every mint entry point is known to this clause', mintFns.length === 3, `${mintFns.length}`);
+  // WIDENED 2026-09-16. It read /issue\w*ForCard\(/ and issueVehicleSaleInvoice does not end in
+  // ForCard — so a new mint door would have been invisible to the clause whose whole job is to find
+  // every door. Matching every exported issue* function instead of a naming convention.
+  const mintFns = issueSrc.split('\n').filter((l) => /^export async function issue\w+\(/.test(l));
+  check('every mint entry point is known to this clause', mintFns.length === 4,
+    `${mintFns.length}: ${mintFns.map((l) => (/function (\w+)/.exec(l) ?? [])[1]).join(', ')}`);
   check('EVERY one of them refuses an internal card first',
     (issueSrc.match(/await refuseIfInternalStock\(tx, jobCardId\);/g) || []).length === mintFns.length,
     'guarding only the chargeable door leaves the warranty and historical sequences open');

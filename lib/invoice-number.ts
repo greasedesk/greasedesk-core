@@ -49,11 +49,16 @@ export async function assignHistoricalNumber(tx: Prisma.TransactionClient, group
 /**
  * The FIFTH counter: the sale of a car out of stock. Independent of every other for the reason the
  * historical one is — selling a car must never advance the garage's chargeable counter — and because
- * these documents have a SECOND ORIGIN: they hang off a StockDisposal, not a job card, so there is
- * no card whose number they could inherit.
+ * these documents have a SECOND ORIGIN: the card they are carried by is selling a car rather than
+ * recording work, so the garage's own numbering has nothing to do with them.
  *
  * NOT a signal about VAT. A margin-scheme car and a qualifying one both mint here and are taxed
  * differently; Invoice.vat_position carries that, and nothing may infer it from the series.
+ *
+ * CORRECTION to the first version of this note, which said the document "hangs off a StockDisposal,
+ * not a job card". It is still carried by a JobCard — Invoice.job_card_id is the spine every
+ * downstream reader follows. What differs is the card's ORIGIN: a sale card is marked by
+ * sale_of_stock_item_id and bills a vehicle, where every other card bills work.
  */
 export async function assignVehicleSaleNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
   const rows = await tx.$queryRaw<Array<{ vehicle_sale_last_value: number | bigint }>>`
@@ -166,9 +171,9 @@ export function prefixForSeries(series: InvoiceSeriesName, g: NumberingProfile):
 /**
  * MINT A NUMBER FOR ANY SERIES — one path, whatever the document's origin.
  *
- * A vehicle sale hangs off a StockDisposal and a garage invoice off a job card, and the numbering
- * must not care: two origins reaching for their own copy of this is how a counter and a prefix drift
- * out of step. MUST run inside the caller's transaction, like the assigners it calls.
+ * A vehicle sale is carried by a card that sells a car and a garage invoice by one that records
+ * work, and the numbering must not care: two origins reaching for their own copy of this is how a
+ * counter and a prefix drift out of step. MUST run inside the caller's transaction, like the assigners it calls.
  */
 export async function mintSeriesNumber(
   tx: Prisma.TransactionClient,

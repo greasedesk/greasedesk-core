@@ -27,6 +27,8 @@ import './_ts.mjs';
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
+const PREFIX = 'ZZSALE';
+const { readFileSync } = await import('node:fs');
 const gbp = (p) => (p == null ? 'null' : `£${(p / 100).toFixed(2)}`);
 
 const S = await import('/Users/hugh/Developer/greasedesk-core/lib/stock.ts');
@@ -155,7 +157,6 @@ try {
     marginLoss.marginPence === -300_00 && qualLoss.marginPence === -300_00);
 
   /** THE SIGNATURE, not a convention: a caller that forgets the scheme cannot compile. */
-  const { readFileSync } = await import('node:fs');
   const stockSrc = readFileSync('/Users/hugh/Developer/greasedesk-core/lib/stock.ts', 'utf8');
   const sig = stockSrc.slice(stockSrc.indexOf('export function vatPositionFor'), stockSrc.indexOf(')', stockSrc.indexOf('export function vatPositionFor')));
   // @anchored-ok: a TYPESCRIPT TYPE ANNOTATION, not a data key — `vatStatus: VatStatus` is a parameter and its type, and the clause is about the absent `= default`; hasKey matches the name alone and says nothing about either
@@ -178,11 +179,198 @@ try {
     /VS/.test(col('Group', 'invoice_vehicle_sale_prefix')?.column_default ?? ''), col('Group', 'invoice_vehicle_sale_prefix')?.column_default);
   check('InvoiceSequence.vehicle_sale_last_value starts at zero',
     /0/.test(col('InvoiceSequence', 'vehicle_sale_last_value')?.column_default ?? ''), col('InvoiceSequence', 'vehicle_sale_last_value')?.column_default);
-  const stray = await prisma.invoice.count({ where: { series: 'vehicle_sale' } });
-  check('no vehicle_sale invoice exists yet — the mint lands in the next step', stray === 0, `${stray}`);
+  /**
+   * WAS "no vehicle_sale invoice exists yet", which was true only because nothing could mint one.
+   * Step 2 minted the first, so that clause would now be measuring its own fixtures. The claim that
+   * SURVIVES is the one that still matters: the mint has no entry point outside this gate, so no
+   * REAL tenant can carry one — and until the code is deployed, a row on a real tenant would meet a
+   * production reader that has never heard of the value.
+   */
+  const strayReal = await prisma.invoice.count({ where: { series: 'vehicle_sale', group_id: { not: ZZ_GROUP } } });
+  check('no vehicle_sale invoice exists on any real tenant', strayReal === 0,
+    `${strayReal} — there is no UI that mints one, and a deployed reader has not met the value yet`);
+
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // STEP 2 — THE SALE CARD AND ITS MINT
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  const ISS = await import('/Users/hugh/Developer/greasedesk-core/lib/invoice-issue.ts');
+  const PREP = await import('/Users/hugh/Developer/greasedesk-core/lib/stock-prep.ts');
+  const WIP = await import('/Users/hugh/Developer/greasedesk-core/lib/wip.ts');
+
+  console.log('\n— TWO MARKERS, TWO COLUMNS, AND THE REFUSAL UNTOUCHED —');
+  check('a prep card is internal stock and NOT a sale card',
+    PREP.isInternalStock({ stock_item_id: 'x' }) === true && PREP.isSaleCard({ stock_item_id: 'x' }) === false);
+  check('a sale card is a sale and NOT internal stock',
+    PREP.isSaleCard({ sale_of_stock_item_id: 'y' }) === true && PREP.isInternalStock({ sale_of_stock_item_id: 'y' }) === false,
+    'one column each — refuseIfInternalStock never hears about sale cards, so it cannot be weakened by reasoning about them');
+  check('both at once is a contradiction with words', PREP.isPrepAndSale({ stock_item_id: 'x', sale_of_stock_item_id: 'y' }) === true
+    && /different jobs/.test(PREP.SALE_AND_PREP_REFUSAL));
+  /**
+   * THE REFUSAL IS THE SAME TEXT AS BEFORE THE SALE CARD EXISTED. If a later slice adds an exception
+   * to it for sales, this fails — which is the point of the separate column.
+   */
+  const issSrc = readFileSync('/Users/hugh/Developer/greasedesk-core/lib/invoice-issue.ts', 'utf8');
+  const refusal = issSrc.slice(issSrc.indexOf('async function refuseIfInternalStock'), issSrc.indexOf('export async function issueInvoiceForCard'));
+  // @anchored-ok: a PRISMA SELECT read out of the function's own source text — `stock_item_id: true` is the select clause being asserted, not a property looked up by name
+  const readsOneColumn = /stock_item_id: true/.test(refusal) && !/sale_of_stock_item_id/.test(refusal);
+  check('refuseIfInternalStock still reads ONE column and has no exception in it',
+    readsOneColumn && !/if \(.*sale/i.test(refusal),
+    'a refusal with an exception in it is one exception away from not being a refusal');
+
+  console.log('\n— NEITHER STOCK CARD IS WORK IN PROGRESS —');
+  const where = WIP.wipCardsWhere(['site-x']);
+  check('the WIP filter excludes prep cards at the QUERY', where.stock_item_id === null,
+    'measured on the live tenant before this line: one prep card, £897.13 of £11,244.64 — 8% of "work I am owed for" was the garage’s own car');
+  check('  …and sale cards too', where.sale_of_stock_item_id === null);
+  check('  …in the ONE place the tile and the list both read', /wipCardsWhere/.test(readFileSync('/Users/hugh/Developer/greasedesk-core/lib/dashboard-tiles.ts', 'utf8'))
+    && /wipCardsWhere/.test(readFileSync('/Users/hugh/Developer/greasedesk-core/pages/admin/jobcards/index.tsx', 'utf8')),
+    'so the count and the money cannot drift into disagreeing about which cards are open work');
+
+  console.log('\n— THE MINT —');
+  const site = await prisma.site.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const user = await prisma.user.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const cust = await prisma.customer.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const mkVeh = (sfx) => prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}${sfx}`,
+    registration_normalized: `${PREFIX}${sfx}`, make: 'ZZ', model: 'Sale' }, select: { id: true } });
+  const mkItem = (vehicleId, vat) => prisma.stockItem.create({ data: { group_id: ZZ_GROUP, vehicle_id: vehicleId,
+    acquired_at: new Date('2026-02-01'), status: 'advertised', purchase_pence: 500000, vat_status: vat,
+    source: 'auction', created_by_user_id: user.id }, select: { id: true } });
+  const mkCard = (vehicleId, data) => prisma.jobCard.create({ data: { group_id: ZZ_GROUP, site_id: site.id,
+    customer_id: cust?.id ?? null, vehicle_id: vehicleId, status: 'accepted', ...data,
+    items: { create: [{ item_type: 'misc', description: 'ZZ vehicle sale', qty: 1, unit_cost: null, unit_price: 8000 }] } }, select: { id: true } });
+
+  // A sold MARGIN car with a sale card.
+  const vA = await mkVeh('SALEA'); const itA = await mkItem(vA.id, 'margin');
+  await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: itA.id,
+    disposed_at: new Date('2026-06-01'), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
+  const cardA = await mkCard(vA.id, { sale_of_stock_item_id: itA.id });
+
+  let idA = null, errA = null;
+  try {
+    idA = await prisma.$transaction((tx) => ISS.issueVehicleSaleInvoice(tx, cardA.id, ZZ_GROUP), { timeout: 20000 });
+  } catch (e) { errA = describeError(e); }
+  check('a sale card MINTS', !!idA, errA ?? 'minted');
+  const invA = idA ? await prisma.invoice.findUnique({ where: { id: idA }, select: { series: true, invoice_number: true, vat_position: true, stock_disposal_id: true, job_card_id: true } }) : null;
+  check('  …on the vehicle_sale series, under its own prefix', invA?.series === 'vehicle_sale' && invA?.invoice_number?.startsWith('VS'),
+    `${invA?.series} ${invA?.invoice_number}`);
+  check('  …carrying the VAT treatment, frozen in the same create', invA?.vat_position === 'margin', String(invA?.vat_position));
+  check('  …and naming the disposal it is for', !!invA?.stock_disposal_id);
+  check('  …while still hanging on the card, which is the spine every reader follows', invA?.job_card_id === cardA.id);
+  const linesA = idA ? await prisma.invoiceLine.count({ where: { invoice_id: idA } }) : 0;
+  check('  …with the lines frozen like any other issue', linesA === 1, `${linesA} line(s)`);
+
+  // A QUALIFYING car: same series, different treatment.
+  const vQ = await mkVeh('SALEQ'); const itQ = await mkItem(vQ.id, 'qualifying');
+  await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: itQ.id,
+    disposed_at: new Date('2026-06-02'), kind: 'sold', sale_pence: 800000, created_by_user_id: user.id } });
+  const cardQ = await mkCard(vQ.id, { sale_of_stock_item_id: itQ.id });
+  const idQ = await prisma.$transaction((tx) => ISS.issueVehicleSaleInvoice(tx, cardQ.id, ZZ_GROUP), { timeout: 20000 });
+  const invQ = await prisma.invoice.findUnique({ where: { id: idQ }, select: { series: true, vat_position: true } });
+  check('a qualifying car mints on the SAME series with a DIFFERENT treatment',
+    invQ?.series === invA?.series && invQ?.vat_position === 'qualifying',
+    `${invQ?.series}/${invQ?.vat_position} vs ${invA?.series}/${invA?.vat_position} — nothing may infer the tax from the series`);
+
+  console.log('\n— WHAT IT REFUSES —');
+  const refuse = async (label, cardId, re) => {
+    let msg = null;
+    try { await prisma.$transaction((tx) => ISS.issueVehicleSaleInvoice(tx, cardId, ZZ_GROUP), { timeout: 20000 }); }
+    catch (e) { msg = describeError(e); }
+    check(label, !!msg && re.test(msg), msg ? msg.replace('IMPORT_ASSERT:', '').slice(0, 110) : 'IT MINTED');
+  };
+  const vP = await mkVeh('SALEP'); const itP = await mkItem(vP.id, 'margin');
+  const cardP = await mkCard(vP.id, { stock_item_id: itP.id });
+  /** THE CLAUSE THE SEPARATE COLUMN EXISTS FOR: a PREP card must still be refused, by this route too. */
+  await refuse('a PREP card is still refused, on the sale path as well', cardP.id, /nobody to invoice/);
+  const vN = await mkVeh('SALEN');
+  const cardN = await mkCard(vN.id, {});
+  await refuse('  …and an ordinary card cannot raise one', cardN.id, /not selling a car/);
+  const vU = await mkVeh('SALEU'); const itU = await mkItem(vU.id, 'margin');
+  const cardU = await mkCard(vU.id, { sale_of_stock_item_id: itU.id });
+  await refuse('  …nor a car not yet recorded as sold', cardU.id, /not been recorded as sold/);
+  const vS = await mkVeh('SALES'); const itS = await mkItem(vS.id, 'margin');
+  await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: itS.id,
+    disposed_at: new Date('2026-06-03'), kind: 'scrapped', created_by_user_id: user.id } });
+  const cardS = await mkCard(vS.id, { sale_of_stock_item_id: itS.id });
+  await refuse('  …nor a car that was SCRAPPED, which is not a sale', cardS.id, /not a sale/);
+
+  console.log('\n— billingDivergence RETURNS NULL, AND IT IS LOAD-BEARING —');
+  /**
+   * TWO INDEPENDENT GUARDS, BOTH INVISIBLE. A sale card has no accepted quote version — a car is not
+   * quoted — and the series is not chargeable. Either alone returns null; nothing asserted either,
+   * and if the early return went, the mint would compare a live card against a version that does not
+   * exist. Both pinned, and pinned SEPARATELY so removing one cannot hide behind the other.
+   */
+  /**
+   * THE SERIES GUARD NEEDS A CARD THAT WOULD OTHERWISE DIVERGE. Tested on a card with no accepted
+   * version it cannot fail — the second guard returns null first — and the red-proof caught exactly
+   * that: disabling the series line scored 0 failures. So cardA is given an accepted version whose
+   * lines differ from its own, and the two guards are then proved on different fixtures.
+   */
+  const qv = await prisma.quoteVersion.create({ data: {
+    group_id: ZZ_GROUP, job_card_id: cardA.id, version: 1, status: 'accepted',
+    net_pennies: 500000, vat_pennies: 100000, gross_pennies: 600000, vat_registered: true,
+    lines: { create: [{ position: 1, item_type: 'misc', description: 'ZZ agreed something else',
+      qty: 1, unit_price: 5000, vat_rate: 20, line_vat: 1000, line_total: 6000 }] },
+  }, select: { id: true } });
+  const divChargeable = await ISS.billingDivergence(prisma, cardA.id, { series: 'chargeable' });
+  check('the fixture really diverges, so the guard below has something to stop',
+    divChargeable !== null, divChargeable ? `agreed ${gbp(divChargeable.agreedPennies)} vs live ${gbp(divChargeable.livePennies)}` : 'IT DID NOT DIVERGE');
+  const divSeries = await ISS.billingDivergence(prisma, cardA.id, { series: 'vehicle_sale' });
+  check('  …and a vehicle_sale series is still not expected to track a card', divSeries === null, String(divSeries));
+
+  /** THE SECOND GUARD, on a card with no quote version at all — which is every real sale card. */
+  const acceptedQ = await prisma.quoteVersion.count({ where: { job_card_id: cardQ.id, status: 'accepted' } });
+  check('a real sale card has no accepted quote version at all', acceptedQ === 0, `${acceptedQ}`);
+  const divNoQuote = await ISS.billingDivergence(prisma, cardQ.id, { series: 'chargeable' });
+  check('  …and with none, it is null even when called as chargeable', divNoQuote === null,
+    'a car is never quoted, so this is the guard that actually carries a sale card — independently of the series');
+  await prisma.quoteVersionLine.deleteMany({ where: { quote_version_id: qv.id } });
+  await prisma.quoteVersion.delete({ where: { id: qv.id } });
+
+  console.log('\n— AND IT IS OUT OF THE WORK FIGURES —');
+  const zzSites = await prisma.site.findMany({ where: { group_id: ZZ_GROUP }, select: { id: true } });
+  const wipIds = (await prisma.jobCard.findMany({ where: WIP.wipCardsWhere(zzSites.map((x) => x.id)), select: { id: true } })).map((c) => c.id);
+  /**
+   * WRITTEN WRONG FIRST TIME, and it would have passed while sale cards leaked: the condition read
+   * `!includes(cardN) === false || !includes(cardU)`, which is satisfied by the ORDINARY card being
+   * in WIP and says nothing about either sale card. Asserted directly now, on both sale cards —
+   * cardU is accepted and unbilled, so it is in WIP by every rule except this one.
+   */
+  check('no sale card is counted as open work',
+    !wipIds.includes(cardU.id) && !wipIds.includes(cardA.id) && !wipIds.includes(cardQ.id),
+    `${wipIds.length} WIP card(s) on ZZ; sale cards present: ${[cardU.id, cardA.id, cardQ.id].filter((i) => wipIds.includes(i)).length}`);
+  check('  …and neither is the prep card', !wipIds.includes(cardP.id));
+  check('  …while an ordinary unbilled card still is', wipIds.includes(cardN.id),
+    'the exclusion must be about stock, not about everything');
 
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
+} finally {
+  if (prisma) {
+    try {
+      const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } }, select: { id: true } });
+      const ids = vs.map((v) => v.id);
+      if (ids.length) {
+        const cards = await prisma.jobCard.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } });
+        const cids = cards.map((c) => c.id);
+        const qvs = await prisma.quoteVersion.findMany({ where: { job_card_id: { in: cids } }, select: { id: true } });
+        await prisma.quoteVersionLine.deleteMany({ where: { quote_version_id: { in: qvs.map((q) => q.id) } } });
+        await prisma.quoteVersion.deleteMany({ where: { id: { in: qvs.map((q) => q.id) } } });
+        const invs = await prisma.invoice.findMany({ where: { job_card_id: { in: cids } }, select: { id: true } });
+        await prisma.invoiceLine.deleteMany({ where: { invoice_id: { in: invs.map((i) => i.id) } } });
+        await prisma.invoice.deleteMany({ where: { id: { in: invs.map((i) => i.id) } } });
+        await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: cids } } });
+        await prisma.jobCard.deleteMany({ where: { id: { in: cids } } });
+        const its = await prisma.stockItem.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } });
+        await prisma.stockDisposal.deleteMany({ where: { stock_item_id: { in: its.map((i) => i.id) } } });
+        await prisma.stockItem.deleteMany({ where: { id: { in: its.map((i) => i.id) } } });
+        await prisma.vehicle.deleteMany({ where: { id: { in: ids } } });
+      }
+      const left = await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } } });
+      check('teardown left ZZ with none of this gate’s cars', left === 0, `${ids.length} removed, ${left} left`);
+    } catch (e) { check('teardown completed', false, describeError(e).slice(0, 200)); }
+  }
 }
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 await prisma?.$disconnect();

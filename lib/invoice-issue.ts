@@ -22,7 +22,9 @@ import { printedNeedsBlock, printedMeasuredBlock, openDueItemsForVehicle } from 
 import { printedWorkDoneBlock } from '@/lib/due-item-closure';
 import { printedTyreLines } from '@/lib/tyres';
 import { printedBatteryLine, type CcaStandard } from '@/lib/battery';
-import { INTERNAL_STOCK_INVOICE_REFUSAL, isInternalStock } from '@/lib/stock-prep';
+import { INTERNAL_STOCK_INVOICE_REFUSAL, isInternalStock, isSaleCard, isPrepAndSale, SALE_AND_PREP_REFUSAL } from '@/lib/stock-prep';
+import { vatPositionFor, hasSalePrice, DISPOSAL_LABELS, type DisposalKind } from '@/lib/stock';
+import type { VatStatus } from '@/lib/purchase-model';
 import { Prisma } from '@prisma/client';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { mintSeriesNumber, type InvoiceSeriesName } from '@/lib/invoice-number';
@@ -49,6 +51,9 @@ async function createInvoiceRow(
   jobCardId: string,
   groupId: string,
   series: InvoiceSeriesName,
+  /** Columns only one origin has. Written in the SAME create as everything else, so a sale invoice
+   *  can never exist for an instant without the treatment it is taxed under. */
+  extra: { vat_position?: string; stock_disposal_id?: string } = {},
 ): Promise<string> {
   const card = (await tx.jobCard.findUnique({ where: { id: jobCardId }, select: CARD_SELECT })) as any;
   if (!card) throw new Error('CARD_NOT_FOUND');
@@ -96,6 +101,7 @@ async function createInvoiceRow(
       company_address_snapshot: identity.address,
       // WHO AND WHAT THIS DOCUMENT IS ABOUT — through the one shaper, so the mint and the re-issue
       // can never describe the same subject differently. See documentSubject below.
+      ...extra,
       ...documentSubject(card),
       vat_registered_at_issue: !!card.group.vat_registered,
     },
@@ -371,6 +377,71 @@ export async function issueInvoiceForCard(tx: Prisma.TransactionClient, jobCardI
   const id = await createInvoiceRow(tx, jobCardId, groupId, 'chargeable');
   const inv = (await tx.invoice.findUnique({ where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true } })) as any;
   await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' }); // texts unused on the chargeable branch
+  return id;
+}
+
+export const NOT_A_SALE_CARD_REFUSAL =
+  'This card is not selling a car, so it cannot raise a vehicle sale invoice. Link it to the stock '
+  + 'item being sold first — that is a different job from raising the invoice.';
+
+export const SALE_NOT_RECORDED_REFUSAL =
+  'This car has not been recorded as sold yet. Record the disposal on the stock item first: the '
+  + 'invoice states what the sale was, and there is nothing yet for it to state.';
+
+/** A car that left by scrapping, by going back to the seller, or into the garage's own use. */
+export const NOT_A_SALE_DISPOSAL_REFUSAL = (kind: DisposalKind) =>
+  `This car left as "${DISPOSAL_LABELS[kind]}", which is not a sale, so there is nobody to invoice `
+  + 'and no consideration to tax. If it really was sold, correct the disposal first.';
+
+/**
+ * ── THE SECOND ORIGIN: AN INVOICE FOR A CAR, NOT FOR WORK ───────────────────────────────────────
+ *
+ * Every other invoice on this system bills hours and parts against a job. This one bills a vehicle.
+ * It is still carried by a JobCard — Invoice.job_card_id is the spine and every downstream reader
+ * follows it — but the card's ORIGIN is a stock sale, marked by `sale_of_stock_item_id`.
+ *
+ * THE PREP REFUSAL IS UNCHANGED AND STILL RUNS FIRST. A card preparing a car we own must never mint
+ * by any route, including this one. That is why the sale marker is its own column: this function
+ * can be added without touching refuseIfInternalStock at all, so nobody has to reason about whether
+ * the refusal should now let something through.
+ *
+ * THE VAT TREATMENT IS RESOLVED HERE AND FROZEN. It takes the disposal KIND and the stock item's own
+ * vat_status, because either alone gives a wrong answer (lib/stock::vatPositionFor). A document that
+ * inferred it later from the series would get every qualifying car wrong.
+ */
+export async function issueVehicleSaleInvoice(tx: Prisma.TransactionClient, jobCardId: string, groupId: string): Promise<string> {
+  await refuseIfInternalStock(tx, jobCardId);
+
+  const card = (await tx.jobCard.findUnique({
+    where: { id: jobCardId }, select: { stock_item_id: true, sale_of_stock_item_id: true },
+  })) as { stock_item_id: string | null; sale_of_stock_item_id: string | null } | null;
+  // Unreachable while refuseIfInternalStock stands, and asserted anyway: if that refusal is ever
+  // narrowed, this says which contradiction arrived rather than minting something incoherent.
+  if (isPrepAndSale(card)) throw new Error(`IMPORT_ASSERT:${SALE_AND_PREP_REFUSAL}`);
+  if (!isSaleCard(card)) throw new Error(`IMPORT_ASSERT:${NOT_A_SALE_CARD_REFUSAL}`);
+
+  const item = (await tx.stockItem.findUnique({
+    where: { id: card!.sale_of_stock_item_id as string },
+    select: { id: true, group_id: true, vat_status: true, disposal: { select: { id: true, kind: true } } },
+  })) as { id: string; group_id: string; vat_status: string; disposal: { id: string; kind: string } | null } | null;
+  // TENANT SCOPE ON THE WAY IN, not assumed from the card: the id is a plain column with no foreign
+  // key yet, so nothing in the database stops it naming another tenant's car.
+  if (!item || item.group_id !== groupId) throw new Error(`IMPORT_ASSERT:${NOT_A_SALE_CARD_REFUSAL}`);
+  if (!item.disposal) throw new Error(`IMPORT_ASSERT:${SALE_NOT_RECORDED_REFUSAL}`);
+  const kind = item.disposal.kind as DisposalKind;
+  if (!hasSalePrice(kind)) throw new Error(`IMPORT_ASSERT:${NOT_A_SALE_DISPOSAL_REFUSAL(kind)}`);
+
+  const vatPosition = vatPositionFor(kind, item.vat_status as VatStatus);
+  const id = await createInvoiceRow(tx, jobCardId, groupId, 'vehicle_sale', {
+    vat_position: vatPosition,
+    stock_disposal_id: item.disposal.id,
+  });
+  // TYPED, not `as any`: the cast is where the compiler stops noticing a forgotten select, and this
+  // row is handed straight to the freeze.
+  const inv = await tx.invoice.findUnique({
+    where: { id }, select: { id: true, job_card_id: true, series: true, vat_registered_at_issue: true },
+  }) as { id: string; job_card_id: string; series: string; vat_registered_at_issue: boolean };
+  await snapshotInvoiceLines(tx, inv, { goodwill: '', noCharge: '' });
   return id;
 }
 

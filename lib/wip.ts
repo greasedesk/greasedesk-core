@@ -24,7 +24,28 @@ export const WIP_AGE_DAYS = 14; // a card open longer than this is the actual pr
  *  `invoice: { is: null }` is belt-and-braces (invoice is a to-one RELATION, not a scalar FK, so the
  *  filter is `{ is: null }`, never `invoice: null`). site_id ∈ siteIds already scopes to the tenant. */
 export function wipCardsWhere(siteIds: string[]): Prisma.JobCardWhereInput {
-  return { site_id: { in: siteIds }, status: { in: WIP_STATUSES as unknown as any[] }, invoice: { is: null } };
+  return {
+    site_id: { in: siteIds },
+    status: { in: WIP_STATUSES as unknown as any[] },
+    invoice: { is: null },
+    // ── NEITHER KIND OF STOCK CARD IS WORK IN PROGRESS ─────────────────────────────────────────
+    // WIP answers ONE question: how much agreed customer work is open and unbilled. Neither stock
+    // card is that.
+    //
+    // A PREP card is the garage working on its own asset. Its parts already count against that car
+    // in the stock book, so counting them here bills the same money twice — once as an asset the
+    // garage owns and once as revenue it expects. MEASURED on the live tenant 2026-09-16, before
+    // this line existed: WT16GMV sat in WIP at £897.13 of £11,244.64 — 8% of the figure a garage
+    // reads as "work I am owed for" was its own car on its own ramp. Pre-existing, found while
+    // adding the sale exclusion below, and fixed here because it is the same question.
+    //
+    // A SALE card bills a car, not hours. No workshop time is expected against it at all.
+    //
+    // AT THE QUERY, and in the ONE place both the tile and the list read — so the count and the
+    // money move together and cannot drift into disagreeing about which cards are open work.
+    stock_item_id: null,
+    sale_of_stock_item_id: null,
+  };
 }
 
 /**
