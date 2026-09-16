@@ -31,6 +31,8 @@ import DocumentCredit from '@/components/DocumentCredit';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import DocumentLines from '@/components/DocumentLines';
+// ONE RULE, THREE RENDERERS — this is the copy the customer opens from their link.
+import { vatPresentation } from '@/lib/margin-scheme';
 import { formatMoney } from '@/lib/format-money';
 import { refundLines } from '@/lib/invoice-refund-state';
 import { amountReceivedPennies, balanceOwedPennies } from '@/lib/invoice';
@@ -174,6 +176,7 @@ export default function CustomerInvoice({ doc: d, token, canPay, returningFromPa
                 lines={d.lines}
                 totals={d.totals}
                 showVat={d.vatRegistered}
+                vatPresentation={vatPresentation(d)}
                 currency={d.currency}
                 locale={d.locale}
                 labels={{

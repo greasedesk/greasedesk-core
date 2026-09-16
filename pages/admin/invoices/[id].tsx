@@ -30,6 +30,7 @@ import { canVoid, VOID_CATEGORIES, MIN_REASON_LENGTH, validateVoidReason } from 
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
+import { vatPresentation, singleTotalPennies, MARGIN_SCHEME_STATEMENT } from '@/lib/margin-scheme';
 import { quoteRefund, refundConfirmationLines } from '@/lib/refund-quote';
 import { refundLines } from '@/lib/invoice-refund-state';
 import { RefundPanel } from '@/components/refund/RefundPanel';
@@ -62,7 +63,9 @@ type PageProps = {
   amendedAt: string | null;
   amendedFromPennies: number | null;
   amendmentCount: number;
-  series: 'chargeable' | 'warranty' | 'historical';
+  series: 'chargeable' | 'warranty' | 'historical' | 'vehicle_sale';
+  /** lib/margin-scheme decides what the totals block may say. Null on every garage invoice. */
+  vatPosition: string | null;
   confirmDueAt: string | null;   // pending: when the clearance window elapses
   paymentMethod: string | null;
   manualPending: boolean;
@@ -113,6 +116,9 @@ export default function InvoicePage(props: PageProps) {
   const [amendOpen, setAmendOpen] = useState(false);
   const [amendText, setAmendText] = useState('');
   const reg = props.vatRegistered;
+  // ONE RULE, THREE RENDERERS (lib/margin-scheme). Not a local test on the series: a margin car and
+  // a qualifying one are both vehicle_sale and are presented differently.
+  const vatPres = vatPresentation({ vatRegistered: reg, vatPosition: props.vatPosition });
   // A warranty document shows NO VAT anywhere (not a supply for consideration — the lines render
   // at net retail and the goodwill line zeroes the total before VAT would arise). Also gates the
   // totals block to the loud AMOUNT DUE £0.00.
@@ -686,6 +692,16 @@ export default function InvoicePage(props: PageProps) {
                   <span className="text-ink uppercase tracking-wide">{t('amountDue')}</span>
                   <span className="text-ink tabular-nums">{fmt(0)}</span>
                 </div>
+              ) : vatPres === 'margin_scheme' ? (
+                /* ── A MARGIN SALE SHOWS ONE FIGURE AND NO VAT (lib/margin-scheme) ────────────
+                   The VAT exists, inside the price, and was accounted for on the MARGIN. Printing
+                   it would state a figure that was never charged and invite a VAT-registered buyer
+                   to reclaim tax nobody paid. The single total is the GROSS — the money handed
+                   over — not the net, which would under-state the car. */
+                <>
+                  <div className="flex justify-between text-base font-semibold"><span className="text-ink">{t('total')}</span><span className="text-ink tabular-nums" data-testid="margin-total">{fmt(singleTotalPennies(vatPres, props.totals))}</span></div>
+                  <p className="text-xs text-muted pt-2" data-testid="margin-scheme-statement">{MARGIN_SCHEME_STATEMENT}</p>
+                </>
               ) : reg ? (
                 <>
                   <div className="flex justify-between"><span className="text-muted">{t('subtotal', { label: props.taxLabel })}</span><span className="text-ink tabular-nums">{fmt(props.totals.netPennies)}</span></div>
@@ -835,6 +851,7 @@ const invoiceSsp: GetServerSideProps<PageProps> = async (ctx) => {
       isImported: (doc as any).isImported ?? false,
       status: doc.status,
       series: doc.series,
+      vatPosition: doc.vatPosition,
       hasFrozenLines: doc.lines.length > 0, // freeze-at-issue: empty = admin-unlocked, under correction
       // IS THERE ANYTHING TO PAY? The same predicate /api/invoice-sms refuses with, so the Text
       // button is never offered where the send could only 409. Computed HERE rather than in the

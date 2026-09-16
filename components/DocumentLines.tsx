@@ -12,6 +12,7 @@
 import React from 'react';
 import { formatMoney } from '@/lib/format-money';
 import { showVatTotalLine } from '@/lib/invoice';
+import { singleTotalPennies, MARGIN_SCHEME_STATEMENT, type VatPresentation } from '@/lib/margin-scheme';
 
 export type DocumentLine = {
   description: string;
@@ -47,6 +48,9 @@ type Props = {
   totals: DocumentTotals;
   /** Drives whether VAT columns/rows appear at all — frozen per document, never inferred live. */
   showVat: boolean;
+  /** How VAT may be presented (lib/margin-scheme). Absent = 'normal', which is every quote and
+   *  every garage invoice. A margin sale suppresses the VAT COLUMN as well as the totals. */
+  vatPresentation?: VatPresentation;
   currency: string;
   locale: string;
   labels: DocumentLabels;
@@ -54,7 +58,10 @@ type Props = {
   children?: React.ReactNode;
 };
 
-export default function DocumentLines({ lines, totals, showVat, currency, locale, labels, children }: Props) {
+export default function DocumentLines({ lines, totals, showVat, vatPresentation, currency, locale, labels, children }: Props) {
+  // The VAT COLUMN goes with the totals. A row reading "20%" beside a margin total would be the
+  // same false statement in a smaller font.
+  const showVatCols = showVat && vatPresentation !== 'margin_scheme';
   const fmt = (p: number) => formatMoney(p, { currency, locale });
   return (
     <>
@@ -65,8 +72,8 @@ export default function DocumentLines({ lines, totals, showVat, currency, locale
               <th className="text-left font-medium py-2">{labels.description}</th>
               <th className="text-right font-medium py-2 px-2">{labels.qty}</th>
               <th className="text-right font-medium py-2 px-2">{labels.unitPrice}</th>
-              {showVat && <th className="text-right font-medium py-2 px-2">{labels.vatRate}</th>}
-              <th className="text-right font-medium py-2">{showVat ? labels.net : labels.amount}</th>
+              {showVatCols && <th className="text-right font-medium py-2 px-2">{labels.vatRate}</th>}
+              <th className="text-right font-medium py-2">{showVatCols ? labels.net : labels.amount}</th>
             </tr>
           </thead>
           <tbody>
@@ -75,7 +82,7 @@ export default function DocumentLines({ lines, totals, showVat, currency, locale
                 <td className="py-2 text-ink whitespace-pre-line">{l.description}</td>
                 <td className="py-2 px-2 text-right text-ink tabular-nums">{l.qty}</td>
                 <td className="py-2 px-2 text-right text-ink tabular-nums">{fmt(l.unitPricePennies)}</td>
-                {showVat && <td className="py-2 px-2 text-right text-muted tabular-nums">{l.vatRate}%</td>}
+                {showVatCols && <td className="py-2 px-2 text-right text-muted tabular-nums">{l.vatRate}%</td>}
                 <td className="py-2 text-right text-ink tabular-nums">{fmt(l.netPennies)}</td>
               </tr>
             ))}
@@ -85,7 +92,16 @@ export default function DocumentLines({ lines, totals, showVat, currency, locale
 
       <div className="pt-4 border-t border-line flex justify-end">
         <div className="w-full sm:w-72 text-sm space-y-1">
-          {showVat ? (
+          {vatPresentation === 'margin_scheme' ? (
+            /* ── A MARGIN SALE SHOWS ONE FIGURE AND NO VAT (lib/margin-scheme) ────────────────
+               This is the page a customer opens from their link. The VAT exists inside the price
+               and was accounted for on the MARGIN; showing it would state a figure never charged.
+               The single total is the GROSS, not the net — the money actually handed over. */
+            <>
+              <div className="flex justify-between text-base font-semibold"><span className="text-ink">{labels.total}</span><span className="text-ink tabular-nums" data-testid="margin-total">{fmt(singleTotalPennies('margin_scheme', totals))}</span></div>
+              <p className="text-xs text-muted pt-2" data-testid="margin-scheme-statement">{MARGIN_SCHEME_STATEMENT}</p>
+            </>
+          ) : showVat ? (
             <>
               <div className="flex justify-between"><span className="text-muted">{labels.subtotal}</span><span className="text-ink tabular-nums">{fmt(totals.netPennies)}</span></div>
               {totals.breakdown.map((b) => (

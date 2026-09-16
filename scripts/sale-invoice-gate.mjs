@@ -1,6 +1,6 @@
 /**
  * File: scripts/sale-invoice-gate.mjs
- * @gate-requires: db
+ * @gate-requires: db, server
  *
  * THE SALE INVOICE — step 1: the series, and the VAT position.
  *
@@ -22,7 +22,8 @@
  * with no default, so the omission cannot come back quietly.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 import './_ts.mjs';
 
 const out = [];
@@ -35,6 +36,7 @@ const S = await import('/Users/hugh/Developer/greasedesk-core/lib/stock.ts');
 const NUM = await import('/Users/hugh/Developer/greasedesk-core/lib/invoice-number.ts');
 
 let prisma;
+let browser = null;
 try {
   prisma = await gatePrisma();
   /**
@@ -344,9 +346,154 @@ try {
   check('  …while an ordinary unbilled card still is', wipIds.includes(cardN.id),
     'the exclusion must be about stock, not about everything');
 
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // STEP 3 — MARGIN PRESENTATION, ACROSS THE THREE RENDERERS
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  const MS = await import('/Users/hugh/Developer/greasedesk-core/lib/margin-scheme.ts');
+
+  console.log('\n— WHAT A DOCUMENT MAY SAY ABOUT VAT —');
+  check('a margin sale suppresses the breakdown', MS.vatPresentation({ vatRegistered: true, vatPosition: 'margin' }) === 'margin_scheme');
+  check('a QUALIFYING sale is an ordinary VAT invoice', MS.vatPresentation({ vatRegistered: true, vatPosition: 'qualifying' }) === 'normal',
+    'both are vehicle_sale — the series cannot tell them apart, so the presentation must not read it');
+  check('a garage invoice is unchanged', MS.vatPresentation({ vatRegistered: true, vatPosition: null }) === 'normal',
+    'null on every invoice that is not a car sale, which is all of them today');
+  /**
+   * THE ORDER OF THE TWO TESTS IS LOAD-BEARING. A garage that is not VAT registered cannot be on the
+   * margin scheme, so a margin statement on its document would claim a registration it does not
+   * have — and vat_position can still read 'margin', because the stock book's arithmetic is about
+   * the car, not about the garage.
+   */
+  check('an UNREGISTERED garage never claims the margin scheme',
+    MS.vatPresentation({ vatRegistered: false, vatPosition: 'margin' }) === 'not_registered',
+    'the car may be a margin car; the garage is not registered, and the document must not say it is');
+  check('  …and shows no VAT and no statement either way',
+    !MS.showsVatBreakdown('not_registered') && !MS.showsMarginStatement('not_registered'));
+  check('only the margin presentation carries the statement',
+    MS.showsMarginStatement('margin_scheme') && !MS.showsMarginStatement('normal'));
+
+  /**
+   * THE FIGURE, AND THE TRAP. An unregistered garage's net IS its price. A margin document suppresses
+   * VAT that genuinely exists INSIDE the price, so its single total must be the GROSS — showing the
+   * net would under-state the car by a sixth of its margin and the document would not reconcile
+   * against the payment.
+   */
+  const tot = { netPennies: 666_667, grossPennies: 800_000 };
+  check('a margin total is the GROSS — the money handed over', MS.singleTotalPennies('margin_scheme', tot) === 800_000,
+    gbp(MS.singleTotalPennies('margin_scheme', tot)));
+  check('  …while an unregistered garage shows its net, which IS its price',
+    MS.singleTotalPennies('not_registered', tot) === 666_667, gbp(MS.singleTotalPennies('not_registered', tot)));
+  check('  …so the two single-total modes are NOT interchangeable',
+    MS.singleTotalPennies('margin_scheme', tot) !== MS.singleTotalPennies('not_registered', tot),
+    `${gbp(MS.singleTotalPennies('margin_scheme', tot))} vs ${gbp(MS.singleTotalPennies('not_registered', tot))} — a sixth of the margin`);
+
+  console.log('\n— ONE RULE, AND ALL THREE RENDERERS READ IT —');
+  /**
+   * ENUMERATED FROM THE FILES, NOT FROM A NAMING CONVENTION. The three renderers each build their own
+   * markup — React DOM, react-pdf primitives, and the shared table — so the rule is the only thing
+   * they can share. A renderer added later that skips it is the failure this is for.
+   */
+  const RENDERERS = {
+    'the admin invoice page': 'pages/admin/invoices/[id].tsx',
+    'the PDF the customer keeps': 'lib/invoice-pdf.tsx',
+    'the document behind their link': 'components/DocumentLines.tsx',
+  };
+  /**
+   * COMMENTS STRIPPED FIRST. Every one of these files SAYS "lib/margin-scheme" in a comment pointing
+   * at the rule — so a raw scan is satisfied by the note explaining the import and passes with the
+   * import gone. Red-proved: deleting the PDF's import scored 0 failures until this was added.
+   */
+  const code = (f) => readFileSync(`/Users/hugh/Developer/greasedesk-core/${f}`, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const [name, f] of Object.entries(RENDERERS)) {
+    const c = code(f);
+    // BOTH, not either. `||` let a file that USES the symbols without importing them pass — which is
+    // broken code the compiler would reject, but a clause that cannot fail is not a clause.
+    check(`${name} reads the shared rule, in CODE and not in a comment`,
+      /from '@\/lib\/margin-scheme'/.test(c) && /vatPresentation|singleTotalPennies|MARGIN_SCHEME_STATEMENT/.test(c), f);
+    check(`  …and decides nothing about VAT from the series itself`,
+      !/series\s*===\s*['"]vehicle_sale['"]/.test(c),
+      'a margin car and a qualifying one are both vehicle_sale');
+  }
+  /**
+   * THE VAT COLUMN GOES WITH THE TOTALS. A row reading "20%" beside a margin total is the same false
+   * statement in a smaller font — and nothing asserted it: the red-proof setting showVatCols back to
+   * showVat scored 0 failures.
+   */
+  const dl = code('components/DocumentLines.tsx');
+  check('the shared table derives its VAT COLUMN from the presentation, not from showVat alone',
+    /showVatCols\s*=\s*showVat\s*&&\s*vatPresentation\s*!==\s*'margin_scheme'/.test(dl)
+      && !/\{showVat &&/.test(dl),
+    'a 20% column beside a margin total says the same untrue thing as the line it replaced');
+  const msSrc = readFileSync('/Users/hugh/Developer/greasedesk-core/lib/margin-scheme.ts', 'utf8');
+  check('the statement has exactly one home', (msSrc.match(/Margin scheme — second-hand goods/g) ?? []).length === 1
+    && Object.values(RENDERERS).every((f) => !/Margin scheme/.test(readFileSync(`/Users/hugh/Developer/greasedesk-core/${f}`, 'utf8'))),
+    'a compliance sentence copied into three files is three sentences to change on an accountant’s advice');
+
+  console.log('\n— ON A REAL MINTED DOCUMENT —');
+  const DOC = await import('/Users/hugh/Developer/greasedesk-core/lib/invoice-doc.ts');
+  const docA = await DOC.buildInvoiceDoc(idA, ZZ_GROUP).catch((e) => ({ error: describeError(e) }));
+  check('the built document carries the treatment through', docA?.vatPosition === 'margin',
+    String(docA?.vatPosition ?? docA?.error));
+  check('  …and the shared rule turns it into a margin presentation',
+    MS.vatPresentation({ vatRegistered: !!docA?.vatRegistered, vatPosition: docA?.vatPosition ?? null }) === 'margin_scheme',
+    `registered=${docA?.vatRegistered}`);
+  const docQ = await DOC.buildInvoiceDoc(idQ, ZZ_GROUP).catch(() => null);
+  check('  …while the qualifying car’s document stays an ordinary VAT invoice',
+    MS.vatPresentation({ vatRegistered: !!docQ?.vatRegistered, vatPosition: docQ?.vatPosition ?? null }) === 'normal',
+    `vatPosition=${docQ?.vatPosition}`);
+  /** THE TOTAL A CUSTOMER SEES, on the real figures rather than a fixture. */
+  check('  …and the margin document’s single total is its gross',
+    !!docA && MS.singleTotalPennies('margin_scheme', docA.totals) === docA.totals.grossPennies
+      && docA.totals.grossPennies > 0,
+    gbp(docA?.totals?.grossPennies ?? 0));
+
+  console.log('\n— AND ON THE PAGE A PERSON ACTUALLY OPENS —');
+  /**
+   * A SOURCE SCAN IS NOT A RENDER. Everything above proves the rule and the wiring; this proves the
+   * document. Last, deliberately: a browser leg that throws ends the run, and every clause above is
+   * cheaper than this one.
+   */
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status}`);
+  const origin = gateOrigin();
+  browser = await chromium.launch({ channel: 'chrome' });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
+  const page = await ctx.newPage();
+  await page.goto(`${origin}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await page.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+
+  const readDoc = async (invoiceId) => {
+    await page.goto(`${origin}/admin/invoices/${invoiceId}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid="vat-rate-line"], [data-testid="margin-scheme-statement"]', { timeout: 25000 }).catch(() => {});
+    return page.evaluate(() => ({
+      rateLines: document.querySelectorAll('[data-testid="vat-rate-line"]').length,
+      totalLine: document.querySelectorAll('[data-testid="vat-total-line"]').length,
+      statement: document.querySelector('[data-testid="margin-scheme-statement"]')?.textContent ?? null,
+      marginTotal: document.querySelector('[data-testid="margin-total"]')?.textContent ?? null,
+      body: document.body.innerText,
+    }));
+  };
+  const shownA = await readDoc(idA);
+  check('the margin sale shows NO VAT line anywhere on the page',
+    shownA.rateLines === 0 && shownA.totalLine === 0,
+    `${shownA.rateLines} rate line(s), ${shownA.totalLine} total line(s)`);
+  check('  …carries the margin-scheme statement', shownA.statement === MS.MARGIN_SCHEME_STATEMENT,
+    (shownA.statement ?? 'ABSENT').slice(0, 90));
+  check('  …and its one figure is the gross the customer paid',
+    !!shownA.marginTotal && shownA.marginTotal.replace(/[^0-9.]/g, '') === (docA.totals.grossPennies / 100).toFixed(2),
+    `${shownA.marginTotal} against ${gbp(docA.totals.grossPennies)}`);
+  /** THE DISCRIMINATOR: the same page, the same series, a different scheme. */
+  const shownQ = await readDoc(idQ);
+  check('a QUALIFYING sale on the same series still shows its VAT',
+    shownQ.rateLines >= 1 && shownQ.statement === null,
+    `${shownQ.rateLines} rate line(s), statement ${shownQ.statement === null ? 'absent' : 'PRESENT'} — the presentation follows the treatment, not the series`);
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
+  await browser?.close().catch(() => {});
   if (prisma) {
     try {
       const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } }, select: { id: true } });

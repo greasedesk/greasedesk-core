@@ -12,6 +12,7 @@ import type { InvoiceDoc } from '@/lib/invoice-doc';
 import { formatMoney } from '@/lib/format-money';
 import { tServer } from '@/lib/server-i18n';
 import { showVatTotalLine } from '@/lib/invoice';
+import { vatPresentation, singleTotalPennies, MARGIN_SCHEME_STATEMENT } from '@/lib/margin-scheme';
 
 const S = StyleSheet.create({
   page: { padding: 48, fontSize: 10, fontFamily: 'Helvetica', color: '#111827' },
@@ -71,6 +72,9 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
   const reg = doc.vatRegistered;
   const isPaidState = doc.status === 'paid' || doc.status === 'paid_pending';
   const warranty = doc.series === 'warranty';
+  // ONE RULE, THREE RENDERERS (lib/margin-scheme) — never a local test on the series, because a
+  // margin car and a qualifying one are both vehicle_sale and print differently.
+  const vatPres = vatPresentation(doc);
   // NO VAT anywhere on a warranty document (lines at net retail, goodwill line zeroes the total
   // before VAT would arise); totals collapse to the loud AMOUNT DUE £0.00.
   const showVat = reg && !warranty;
@@ -189,6 +193,15 @@ function InvoicePdf({ doc, logo, pay }: { doc: InvoiceDoc; logo: Buffer | null; 
               /* The LOUDEST figure on the document — a customer must never read the goods value
                  above as money owed. */
               <View style={[S.totalRow, S.grand, { fontSize: 16 }]}><Text>{t('amountDue').toUpperCase()}</Text><Text>{fmt(0)}</Text></View>
+            ) : vatPres === 'margin_scheme' ? (
+              /* ── A MARGIN SALE SHOWS ONE FIGURE AND NO VAT (lib/margin-scheme) ───────────────
+                 The VAT exists inside the price and was accounted for on the MARGIN. Printing it
+                 would state a figure that was never charged, and this is the copy the customer
+                 keeps. The single total is the GROSS — the money handed over. */
+              <>
+                <View style={[S.totalRow, S.grand]}><Text>{t('total')}</Text><Text>{fmt(singleTotalPennies(vatPres, doc.totals))}</Text></View>
+                <Text style={[S.muted, { marginTop: 6, fontSize: 8 }]}>{MARGIN_SCHEME_STATEMENT}</Text>
+              </>
             ) : reg ? (
               <>
                 <View style={S.totalRow}><Text style={S.muted}>{t('subtotal', { label: doc.taxLabel })}</Text><Text>{fmt(doc.totals.netPennies)}</Text></View>

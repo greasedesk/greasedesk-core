@@ -85,7 +85,11 @@ export type InvoiceDoc = {
   footerText: string | null;    // payment terms / footer block (multi-line)
   logoUrl: string | null;       // presigned GET for the tenant logo (15-min; render-time use)
   logoFormat: 'png' | 'jpg' | null;
-  series: 'chargeable' | 'warranty' | 'historical';
+  series: 'chargeable' | 'warranty' | 'historical' | 'vehicle_sale';
+  /** WHICH VAT TREATMENT THIS DOCUMENT CARRIES (lib/margin-scheme). Null on every garage invoice.
+   *  Frozen at issue, read here, never re-derived: a car's scheme is a fact about the sale that
+   *  happened, not about the stock item as it stands today. */
+  vatPosition: string | null;
   issuedAt: Date;
   paidAt: Date | null;
   vatRegistered: boolean;
@@ -135,7 +139,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
   const inv = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: groupId },
     select: {
-      id: true, site_id: true, status: true, series: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true, amendments: true, amount_paid_pennies: true,
+      id: true, site_id: true, status: true, series: true, vat_position: true, invoice_number: true, is_imported: true, external_ref: true, issued_at: true, date_issued: true, paid_at: true, date_paid: true, confirm_due_at: true, receipt_sent_at: true, job_card_id: true, amendments: true, amount_paid_pennies: true,
       voided_at: true, void_reason: true, void_reason_corrections: true,
       group: { select: { tax_label: true, invoice_footer_text: true, logo_r2_key: true } },
       company_name_snapshot: true, company_vat_number_snapshot: true, company_address_snapshot: true,
@@ -213,6 +217,7 @@ export async function buildInvoiceDoc(invoiceId: string, groupId: string): Promi
     voidAmendedAt: (() => { const l = readVoidCorrections(inv.void_reason_corrections); return l.length ? l[l.length - 1].at : null; })(),
     voidCorrections: readVoidCorrections(inv.void_reason_corrections),
     series: inv.series,
+    vatPosition: inv.vat_position ?? null,
     // The PRINTED issue date = the effective DOCUMENT date (date_issued ?? issued_at) — the same
     // date the P&L recognises revenue by. One truth: the document and the accounts agree.
     issuedAt: new Date(effectiveIssueDate(inv)),

@@ -43,6 +43,8 @@ import DocumentCredit from '@/components/DocumentCredit';
 import { buildInvoiceDoc, type InvoiceDoc } from '@/lib/invoice-doc';
 import { canOfferCardPayment } from '@/lib/invoice-payment-intent';
 import { balanceOwedPennies } from '@/lib/invoice';
+// ONE RULE, THREE RENDERERS (lib/margin-scheme).
+import { vatPresentation } from '@/lib/margin-scheme';
 import DocumentLines from '@/components/DocumentLines';
 import CustomerInvoice, { type SerializedInvoiceDoc } from '@/components/customer/CustomerInvoice';
 import { useState } from 'react';
@@ -270,11 +272,14 @@ export default function CustomerLinkPage(props: Props) {
             </div>
           )}
 
-          {/* THE shared line table + totals — same component the invoice renders. */}
+          {/* THE shared line table + totals — same component the invoice renders.
+              A QUOTE has no vat_position, so vatPresentation resolves to 'normal' — the same answer
+              it gave before the field existed. Only an invoice can be a margin sale. */}
           <DocumentLines
             lines={d.lines}
             totals={d.totals}
             showVat={d.vatRegistered}
+            vatPresentation={vatPresentation({ vatRegistered: d.vatRegistered, vatPosition: (d as { vatPosition?: string | null }).vatPosition ?? null })}
             currency={d.currency}
             locale={d.locale}
             labels={{
